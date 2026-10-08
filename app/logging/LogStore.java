@@ -16,6 +16,12 @@ import java.util.*;
  * holding the store lock. The newest {@code memoryEntries} entries are also kept in memory so the
  * common case (tailing, polling for new lines) never touches the disk.
  *
+ * <p>Logging threads never wait on the disk: {@link #append} only queues the entry, and a single
+ * background thread writes queued entries in batches. Reads treat queued entries as part of the
+ * in-memory window, so nothing is missing between "evicted from memory" and "written to disk". If
+ * the writer falls more than {@code MAX_PENDING} entries behind, further entries are kept in
+ * memory only (and the drop is reported) rather than growing the queue without bound.
+ *
  * <p>Reads are windowed: {@link #before} pages backwards from a cursor and {@link #after} pages
  * forwards, each returning at most {@code limit} matching entries plus a cursor to continue
  * from. A single read scans at most {@code scanBudgetBytes} of log files, so a search over a
@@ -26,6 +32,8 @@ public class LogStore {
   private static final String SUFFIX = ".jsonl";
   private static final Charset UTF_8 = Charset.forName("UTF-8");
   private static final ObjectMapper mapper = new ObjectMapper();
+  private static final int MAX_PENDING = 100000;
+  private static final int MAX_BATCH = 1000;
 
   private final File dir;
   private final long maxFileBytes;
@@ -33,14 +41,21 @@ public class LogStore {
   private final int memoryEntries;
   private final long scanBudgetBytes;
 
+  // Guarded by this.
   private final ArrayDeque<LogEntry> recent = new ArrayDeque<LogEntry>();
+  /** Appended but not yet on disk, oldest first. Removed only once written, see writeLoop. */
+  private final ArrayDeque<LogEntry> pending = new ArrayDeque<LogEntry>();
   private long nextSeq = 1;
+  private long droppedFromDisk = 0;
+  private boolean diskFailed = false;
+  private boolean closed = false;
+  private volatile PrintStream errorSink = System.err;
+
+  // Owned by the writer thread (and the constructor, before it starts).
   private File currentFile;
   private OutputStream currentOut;
   private long currentBytes;
-  private boolean diskFailed = false;
-  private boolean closed = false;
-  private PrintStream errorSink = System.err;
+  private final Thread writer;
 
   public LogStore(File dir, long maxFileBytes, int maxFiles, int memoryEntries, long scanBudgetBytes) {
     this.dir = dir;
@@ -50,10 +65,17 @@ public class LogStore {
     this.scanBudgetBytes = scanBudgetBytes;
     dir.mkdirs();
     recover();
+    writer = new Thread(new Runnable() {
+      public void run() {
+        writeLoop();
+      }
+    }, "breadboard-log-writer");
+    writer.setDaemon(true);
+    writer.start();
   }
 
   /** Where disk-write failures are reported. Must not route back into this store. */
-  public synchronized void setErrorSink(PrintStream errorSink) {
+  public void setErrorSink(PrintStream errorSink) {
     this.errorSink = errorSink;
   }
 
@@ -63,7 +85,14 @@ public class LogStore {
     if (recent.size() > memoryEntries) {
       recent.removeFirst();
     }
-    writeToDisk(e);
+    if (!closed && !diskFailed) {
+      if (pending.size() >= MAX_PENDING) {
+        droppedFromDisk++;
+      } else {
+        pending.addLast(e);
+        if (pending.size() == 1) notifyAll();
+      }
+    }
     return e;
   }
 
@@ -71,10 +100,28 @@ public class LogStore {
     return nextSeq - 1;
   }
 
-  /** Stops disk writes for good; a capture stream that outlives its install can't reopen the file. */
-  public synchronized void close() {
-    closed = true;
-    closeCurrent();
+  /** Blocks until everything appended so far is on disk (or disk writes have failed). */
+  public synchronized void flush() throws InterruptedException {
+    while (!pending.isEmpty() && !diskFailed && writer.isAlive()) {
+      wait(100);
+    }
+  }
+
+  /**
+   * Writes out what is queued, then stops disk writes for good, so a capture stream that outlives
+   * its install can't reopen the file.
+   */
+  public void close() {
+    synchronized (this) {
+      if (closed) return;
+      closed = true;
+      notifyAll();
+    }
+    try {
+      writer.join(5000);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   // ---------------------------------------------------------------------------------------
@@ -127,12 +174,23 @@ public class LogStore {
     long memOldest;
   }
 
-  private synchronized Snapshot snapshot() {
+  private Snapshot snapshot() {
     Snapshot s = new Snapshot();
-    s.recent = new ArrayList<LogEntry>(recent);
+    synchronized (this) {
+      // Queued entries already evicted from `recent` aren't on disk yet: count them as in memory.
+      long recentOldest = recent.isEmpty() ? nextSeq : recent.peekFirst().seq;
+      s.recent = new ArrayList<LogEntry>();
+      for (LogEntry e : pending) {
+        if (e.seq >= recentOldest) break;
+        s.recent.add(e);
+      }
+      s.recent.addAll(recent);
+      s.latestSeq = nextSeq - 1;
+    }
+    // Listed after the memory snapshot and outside the lock: every entry below memOldest was
+    // written before this point, so its file is listed. Newer or since-pruned files are harmless.
     s.files = listFiles();
-    s.latestSeq = nextSeq - 1;
-    s.memOldest = s.recent.isEmpty() ? nextSeq : s.recent.get(0).seq;
+    s.memOldest = s.recent.isEmpty() ? s.latestSeq + 1 : s.recent.get(0).seq;
     s.oldestSeq = s.files.isEmpty() ? s.memOldest : Math.min(startSeqOf(s.files.get(0)), s.memOldest);
     return s;
   }
@@ -292,25 +350,69 @@ public class LogStore {
     }
   }
 
-  private void writeToDisk(LogEntry e) {
-    if (diskFailed || closed) return;
+  private void writeLoop() {
     try {
-      if (currentOut == null || currentBytes >= maxFileBytes) {
-        if (currentOut == null && currentFile != null && currentFile.length() < maxFileBytes) {
-          openCurrent(currentFile);
-        } else {
-          roll(e.seq);
+      while (true) {
+        List<LogEntry> batch = new ArrayList<LogEntry>();
+        long dropped;
+        synchronized (this) {
+          while (pending.isEmpty() && !closed) {
+            try {
+              wait();
+            } catch (InterruptedException e) {
+              return;
+            }
+          }
+          if (pending.isEmpty()) return;  // closed and drained
+          for (LogEntry e : pending) {
+            batch.add(e);
+            if (batch.size() >= MAX_BATCH) break;
+          }
+          dropped = droppedFromDisk;
+          droppedFromDisk = 0;
         }
+        if (dropped > 0) {
+          errorSink.println("Admin log store: " + dropped + " entries were not written to " + dir
+              + " because the disk writer fell behind");
+        }
+        boolean ok = writeBatch(batch);
+        synchronized (this) {
+          // Only now are these readable from disk, so only now do they leave the in-memory window.
+          for (int i = 0; i < batch.size(); i++) pending.removeFirst();
+          if (!ok) {
+            diskFailed = true;
+            pending.clear();
+          }
+          notifyAll();
+        }
+        if (!ok) return;
       }
-      byte[] bytes = (mapper.writeValueAsString(e.toMap()) + "\n").getBytes(UTF_8);
-      currentOut.write(bytes);
+    } finally {
+      closeCurrent();
+    }
+  }
+
+  private boolean writeBatch(List<LogEntry> batch) {
+    try {
+      for (LogEntry e : batch) {
+        if (currentOut == null || currentBytes >= maxFileBytes) {
+          if (currentOut == null && currentFile != null && currentFile.length() < maxFileBytes) {
+            openCurrent(currentFile);
+          } else {
+            roll(e.seq);
+          }
+        }
+        byte[] bytes = (mapper.writeValueAsString(e.toMap()) + "\n").getBytes(UTF_8);
+        currentOut.write(bytes);
+        currentBytes += bytes.length;
+      }
       currentOut.flush();
-      currentBytes += bytes.length;
+      return true;
     } catch (IOException ex) {
       // Keep serving from memory; don't retry (and re-report) on every line.
-      diskFailed = true;
       closeCurrent();
       errorSink.println("Admin log store: disabling disk persistence after write failure in " + dir + ": " + ex);
+      return false;
     }
   }
 
@@ -323,7 +425,7 @@ public class LogStore {
   private void openCurrent(File file) throws IOException {
     currentFile = file;
     currentBytes = file.length();
-    currentOut = new FileOutputStream(file, true);
+    currentOut = new BufferedOutputStream(new FileOutputStream(file, true), 64 * 1024);
     if (currentBytes > 0 && !endsWithNewline(file)) {
       // Terminate a line torn by a crash so the next entry starts cleanly.
       currentOut.write('\n');

@@ -43,3 +43,6 @@ run-dev.sh
 run-test.sh
 native
 .cache
+
+# The bare "logs" pattern above would also hide the Logs dialog source.
+!frontend/design/logs/

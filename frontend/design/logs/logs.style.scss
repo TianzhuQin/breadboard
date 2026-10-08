@@ -1,0 +1,123 @@
+#logsDiv {
+  overflow: hidden;
+}
+
+.logs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.logs-toolbar {
+  flex: none;
+  padding-bottom: 6px;
+
+  .logs-query {
+    width: 320px;
+  }
+
+  .logs-status {
+    margin-left: 8px;
+  }
+}
+
+.logs-message {
+  flex: none;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+}
+
+.logs-list {
+  flex: 1 1 auto;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-family: monospace;
+  font-size: 12px;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+
+.logs-edge {
+  text-align: center;
+  padding: 2px;
+}
+
+.logs-row {
+  display: flex;
+  align-items: baseline;
+  padding: 1px 4px;
+  border-bottom: 1px solid #f3f3f3;
+
+  &:hover {
+    background: #f7f7f7;
+  }
+
+  &:hover .logs-context {
+    visibility: visible;
+  }
+}
+
+.logs-time {
+  flex: none;
+  color: #888;
+  margin-right: 8px;
+}
+
+.logs-level {
+  flex: none;
+  width: 44px;
+  font-weight: bold;
+}
+
+.logs-src {
+  flex: none;
+  width: 110px;
+  margin-right: 8px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logs-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.logs-multiline .logs-msg {
+  cursor: pointer;
+}
+
+.logs-more {
+  color: #888;
+}
+
+.logs-context {
+  flex: none;
+  visibility: hidden;
+  padding: 0 4px;
+}
+
+.logs-level-DEBUG,
+.logs-level-TRACE {
+  color: #777;
+}
+
+.logs-level-WARN .logs-level {
+  color: #c77c02;
+}
+
+.logs-level-ERROR {
+  background: #fdf1f1;
+
+  .logs-level {
+    color: #c9302c;
+  }
+}
+
+.logs-highlight {
+  background: #fff6c8;
+}

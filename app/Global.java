@@ -31,7 +31,7 @@ public class Global extends GlobalSettings {
           (maxFileMB == null ? 5 : maxFileMB) * 1024L * 1024L,
           maxFiles == null ? 20 : maxFiles,
           5000,
-          64L * 1024L * 1024L);
+          16L * 1024L * 1024L);
       LogCapture.install(store);
       store.append(System.currentTimeMillis(), "INFO", "breadboard",
           "Breadboard " + conf.getString("application.version", "") + " started");

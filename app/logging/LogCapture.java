@@ -5,7 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.ThrowableProxyUtil;
 import ch.qos.logback.core.Appender;
-import ch.qos.logback.core.AppenderBase;
+import ch.qos.logback.core.UnsynchronizedAppenderBase;
 import ch.qos.logback.core.ConsoleAppender;
 import org.slf4j.ILoggerFactory;
 import org.slf4j.LoggerFactory;
@@ -114,7 +114,8 @@ public final class LogCapture {
     }
   }
 
-  static class StoreAppender extends AppenderBase<ILoggingEvent> {
+  /** Unsynchronized: LogStore.append is thread-safe, so logging threads only contend on the store lock. */
+  static class StoreAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
     private final LogStore target;
 
     StoreAppender(LogStore target) {

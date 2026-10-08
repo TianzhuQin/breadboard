@@ -46,7 +46,13 @@ public class LogStoreTest {
     return store(2000, 1000, 10, Long.MAX_VALUE);
   }
 
-  private static void fill(LogStore s, int n) {
+  /** Appends n entries and waits until they are on disk, so the reads below exercise the files. */
+  private static void fill(LogStore s, int n) throws InterruptedException {
+    append(s, n);
+    s.flush();
+  }
+
+  private static void append(LogStore s, int n) {
     for (int i = 1; i <= n; i++) {
       s.append(i, i % 10 == 0 ? "ERROR" : "INFO", "src", "line " + i);
     }
@@ -65,7 +71,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void tailReturnsNewestPageOldestFirst() {
+  public void tailReturnsNewestPageOldestFirst() throws Exception {
     LogStore s = smallStore();
     fill(s, 50);
 
@@ -78,7 +84,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void pagingBackwardsCoversEverythingAcrossMemoryAndFiles() {
+  public void pagingBackwardsCoversEverythingAcrossMemoryAndFiles() throws Exception {
     LogStore s = smallStore();
     fill(s, 300);
     assertTrue("test needs several files", dir.listFiles().length > 3);
@@ -96,7 +102,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void pagingForwardsCoversEverythingAcrossFilesAndMemory() {
+  public void pagingForwardsCoversEverythingAcrossFilesAndMemory() throws Exception {
     LogStore s = smallStore();
     fill(s, 300);
 
@@ -114,7 +120,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void afterLatestReturnsNothingThenNewEntries() {
+  public void afterLatestReturnsNothingThenNewEntries() throws Exception {
     LogStore s = smallStore();
     fill(s, 20);
     LogStore.Page empty = s.after(20, 100, LogStore.Filter.ALL);
@@ -128,7 +134,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void filterAppliesAcrossDiskAndCursorSkipsNonMatches() {
+  public void filterAppliesAcrossDiskAndCursorSkipsNonMatches() throws Exception {
     LogStore s = smallStore();
     fill(s, 300);
 
@@ -145,7 +151,26 @@ public class LogStoreTest {
   }
 
   @Test
-  public void restartContinuesSequenceAndKeepsHistory() {
+  public void readsHaveNoGapsWhileDiskWritesAreStillQueued() throws Exception {
+    // Memory holds only 10 entries, so most of these are either queued or on disk depending on
+    // how far the writer has got. Either way every entry must be readable exactly once.
+    LogStore s = smallStore();
+    append(s, 3000);
+
+    List<Long> all = new ArrayList<Long>();
+    long cursor = Long.MAX_VALUE;
+    boolean more = true;
+    while (more) {
+      LogStore.Page page = s.before(cursor, 50, LogStore.Filter.ALL);
+      all.addAll(0, seqs(page.entries));
+      cursor = page.cursor;
+      more = page.hasMore;
+    }
+    assertEquals(range(1, 3000), all);
+  }
+
+  @Test
+  public void restartContinuesSequenceAndKeepsHistory() throws Exception {
     LogStore first = smallStore();
     fill(first, 120);
     first.close();
@@ -160,7 +185,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void oldestFilesArePrunedBeyondMaxFiles() {
+  public void oldestFilesArePrunedBeyondMaxFiles() throws Exception {
     LogStore s = store(2000, 3, 10, Long.MAX_VALUE);
     fill(s, 300);
 
@@ -174,7 +199,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void tornLastLineIsSkippedAndNotGluedToTheNextEntry() throws IOException {
+  public void tornLastLineIsSkippedAndNotGluedToTheNextEntry() throws Exception {
     LogStore first = smallStore();
     fill(first, 3);
     first.close();
@@ -193,7 +218,7 @@ public class LogStoreTest {
   }
 
   @Test
-  public void scanBudgetSplitsALongSearchIntoResumablePages() {
+  public void scanBudgetSplitsALongSearchIntoResumablePages() throws Exception {
     LogStore s = store(2000, 1000, 10, 1);  // one file per request
     fill(s, 300);
 
