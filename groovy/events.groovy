@@ -1,5 +1,7 @@
 import com.tinkerpop.blueprints.Vertex
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CopyOnWriteArraySet
 
 final CUSTOM_EVENT = "CustomEvent"
 final PLAYER_ACTION_PROP = "eventName"
@@ -25,7 +27,34 @@ eventLog = { Object ...vals ->
   }
 }
 
-Vertex.metaClass.playerEvents = [].toSet()
+// Event names each player has registered a listener for, keyed by vertex id.
+//
+// This was `Vertex.metaClass.playerEvents = [].toSet()`, which is ONE plain HashSet shared by
+// every vertex, and it caused two separate bugs:
+//
+//   - Sharing: clearListeners() for one player removed names from the shared set, so the next
+//     player's clearListeners() never iterated those names and their listeners leaked.
+//   - Thread safety: player threads and timer threads mutated it with no synchronisation,
+//     corrupting the HashSet's size counter. A negative size made clearListeners() throw
+//     "IllegalArgumentException: Illegal Capacity: -1" out of toList(), which aborts
+//     removePlayers() part way through its loop.
+//
+// One set per vertex fixes the sharing; CopyOnWriteArraySet fixes the race. These sets hold a
+// handful of names and are written a few times per player, but are iterated while other threads
+// are still registering listeners - exactly what copy-on-write is for, and the same choice the
+// event bus already makes for its own handler lists. The map is only ever added to; it is
+// rebuilt from scratch on each engine reload, and one small set per participant is noise.
+_playerEventNames = new ConcurrentHashMap()
+
+_playerEventNamesFor = { vertexId ->
+  def names = _playerEventNames.get(vertexId)
+  if (names != null) return names
+  def created = new CopyOnWriteArraySet()
+  def won = _playerEventNames.putIfAbsent(vertexId, created)
+  return won != null ? won : created
+}
+
+Vertex.metaClass.getPlayerEvents = { -> _playerEventNamesFor(delegate.id) }
 Vertex.metaClass.on = { String eventName, Closure cb ->
   eventLog("vertex.on", delegate.id, eventName)
   try {
@@ -49,7 +78,7 @@ Vertex.metaClass.once = { String eventName, Closure cb ->
 
 // Method overloads
 Vertex.metaClass.off = { String eventName, Closure cb ->
-  wasRemoved = events.off(makePlayerEventHash(delegate.id, eventName), cb)
+  def wasRemoved = events.off(makePlayerEventHash(delegate.id, eventName), cb)
   if (wasRemoved) {
     delegate.playerEvents.remove(eventName)
   }
@@ -57,7 +86,7 @@ Vertex.metaClass.off = { String eventName, Closure cb ->
   return wasRemoved
 }
 Vertex.metaClass.off << { String eventName ->
-  wasRemoved = events.off(makePlayerEventHash(delegate.id, eventName))
+  def wasRemoved = events.off(makePlayerEventHash(delegate.id, eventName))
   if (wasRemoved) {
     delegate.playerEvents.remove(eventName)
   }
@@ -70,7 +99,6 @@ Vertex.metaClass.send = { String eventName, Object ...data ->
 }
 Vertex.metaClass.clearListeners = {
   eventLog("vertex.clearListeners", delegate.id)
-  playerId = delegate.id
   delegate.playerEvents.toList().each{ String event ->
     delegate.off(event)
   }
