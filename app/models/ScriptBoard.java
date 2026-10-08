@@ -10,6 +10,7 @@ import com.tinkerpop.blueprints.Vertex;
 import com.tinkerpop.gremlin.groovy.GremlinGroovyPipeline;
 import groovy.util.ObservableMap;
 import groovy.lang.Closure;
+import logging.LogCapture;
 import org.apache.commons.io.output.ByteArrayOutputStream;
 import org.apache.commons.lang3.StringUtils;
 import org.codehaus.groovy.control.CompilationFailedException;
@@ -24,6 +25,7 @@ import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -186,6 +188,8 @@ public class ScriptBoard extends UntypedActor {
     });
 
     engine = manager.getEngineByName("gremlin-groovy");
+    // Groovy println goes to the context writer: record it in the admin Logs dialog as "script".
+    engine.getContext().setWriter(new PrintWriter(LogCapture.scriptOutput(), true));
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("r", rand);
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("results", results);
 

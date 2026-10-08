@@ -13,6 +13,7 @@ import '../parameters/parameters.directive';
 import '../images/images.directive';
 import '../steps/steps.directive';
 import '../testing/testing.directive';
+import '../logs/logs.directive';
 import '../content/content.directive';
 import '../directives/instance-parameters/instance-parameters.directive';
 import '../create-first-user/create-first-user.directive';
@@ -36,6 +37,7 @@ angular.module('breadboard', [
   'breadboard.instance-parameters',
   'breadboard.steps',
   'breadboard.testing',
+  'breadboard.logs',
   'breadboard.content',
   'breadboard.experiment-import',
   'ui.utils',

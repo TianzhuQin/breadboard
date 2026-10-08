@@ -553,6 +553,15 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
     buttons: {}
   };
 
+  $scope.logsDialogOptions = {
+    title: 'Logs',
+    autoOpen: false,
+    width: windowWidth,
+    height: windowHeight,
+    position: [margin, topDivHeight],
+    buttons: {}
+  };
+
   /* START These three dialogs auto-open */
   $scope.outputDialogOptions = {
     title: 'Output',

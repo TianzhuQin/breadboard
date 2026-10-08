@@ -71,6 +71,9 @@ PUT         /experiment                                                         
 POST        /experiment/import/:name                                             controllers.ExperimentController.importExperiment(name: String, experimentId: Long ?= 0, force: Boolean ?= false)
 GET         /experiment/export/:experimentId                                     controllers.ExperimentController.exportExperiment(experimentId: Long)
 
+# Logs dialog
+GET         /logs                                                                controllers.LogsController.getLogs()
+
 # Languages
 GET         /languages                                                           controllers.LanguageController.getLanguages()
 POST        /languages                                                           controllers.LanguageController.addLanguage()

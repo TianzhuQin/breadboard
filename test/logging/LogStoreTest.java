@@ -1,0 +1,255 @@
+package logging;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineManager;
+
+import static org.junit.Assert.*;
+
+/** Unit tests for {@link LogStore} windowed reads and {@link LogCapture.LineCaptureStream}. No app or DB needed. */
+public class LogStoreTest {
+
+  private File dir;
+  private List<LogStore> stores = new ArrayList<LogStore>();
+
+  @Before
+  public void setUp() throws IOException {
+    dir = Files.createTempDirectory("logstore-test").toFile();
+  }
+
+  @After
+  public void tearDown() {
+    for (LogStore s : stores) s.close();
+    File[] files = dir.listFiles();
+    if (files != null) for (File f : files) f.delete();
+    dir.delete();
+  }
+
+  /** Tiny files and memory so a few hundred entries span many files and mostly live on disk. */
+  private LogStore store(long maxFileBytes, int maxFiles, int memoryEntries, long scanBudget) {
+    LogStore s = new LogStore(dir, maxFileBytes, maxFiles, memoryEntries, scanBudget);
+    stores.add(s);
+    return s;
+  }
+
+  private LogStore smallStore() {
+    return store(2000, 1000, 10, Long.MAX_VALUE);
+  }
+
+  private static void fill(LogStore s, int n) {
+    for (int i = 1; i <= n; i++) {
+      s.append(i, i % 10 == 0 ? "ERROR" : "INFO", "src", "line " + i);
+    }
+  }
+
+  private static List<Long> seqs(List<LogEntry> entries) {
+    List<Long> out = new ArrayList<Long>();
+    for (LogEntry e : entries) out.add(e.seq);
+    return out;
+  }
+
+  private static List<Long> range(long from, long to) {
+    List<Long> out = new ArrayList<Long>();
+    for (long i = from; i <= to; i++) out.add(i);
+    return out;
+  }
+
+  @Test
+  public void tailReturnsNewestPageOldestFirst() {
+    LogStore s = smallStore();
+    fill(s, 50);
+
+    LogStore.Page page = s.before(Long.MAX_VALUE, 5, LogStore.Filter.ALL);
+
+    assertEquals(range(46, 50), seqs(page.entries));
+    assertTrue(page.hasMore);
+    assertEquals(46, page.cursor);
+    assertEquals(50, page.latestSeq);
+  }
+
+  @Test
+  public void pagingBackwardsCoversEverythingAcrossMemoryAndFiles() {
+    LogStore s = smallStore();
+    fill(s, 300);
+    assertTrue("test needs several files", dir.listFiles().length > 3);
+
+    List<Long> all = new ArrayList<Long>();
+    long cursor = Long.MAX_VALUE;
+    boolean more = true;
+    while (more) {
+      LogStore.Page page = s.before(cursor, 7, LogStore.Filter.ALL);
+      all.addAll(0, seqs(page.entries));
+      cursor = page.cursor;
+      more = page.hasMore;
+    }
+    assertEquals(range(1, 300), all);
+  }
+
+  @Test
+  public void pagingForwardsCoversEverythingAcrossFilesAndMemory() {
+    LogStore s = smallStore();
+    fill(s, 300);
+
+    List<Long> all = new ArrayList<Long>();
+    long cursor = 0;
+    boolean more = true;
+    while (more) {
+      LogStore.Page page = s.after(cursor, 7, LogStore.Filter.ALL);
+      all.addAll(seqs(page.entries));
+      cursor = page.cursor;
+      more = page.hasMore;
+    }
+    assertEquals(range(1, 300), all);
+    assertEquals(300, cursor);
+  }
+
+  @Test
+  public void afterLatestReturnsNothingThenNewEntries() {
+    LogStore s = smallStore();
+    fill(s, 20);
+    LogStore.Page empty = s.after(20, 100, LogStore.Filter.ALL);
+    assertTrue(empty.entries.isEmpty());
+    assertFalse(empty.hasMore);
+
+    s.append(0, "INFO", "src", "new");
+    LogStore.Page page = s.after(empty.cursor, 100, LogStore.Filter.ALL);
+    assertEquals(range(21, 21), seqs(page.entries));
+    assertEquals("new", page.entries.get(0).msg);
+  }
+
+  @Test
+  public void filterAppliesAcrossDiskAndCursorSkipsNonMatches() {
+    LogStore s = smallStore();
+    fill(s, 300);
+
+    LogStore.Page errors = s.before(Long.MAX_VALUE, 1000, new LogStore.Filter(null, "WARN"));
+    assertEquals(30, errors.entries.size());
+    assertFalse(errors.hasMore);
+    for (LogEntry e : errors.entries) assertEquals("ERROR", e.level);
+
+    // "line 15" matches 15 and 150..159; the page stops at the limit with a resumable cursor.
+    LogStore.Page first = s.before(Long.MAX_VALUE, 3, new LogStore.Filter("LINE 15", null));
+    assertEquals(java.util.Arrays.asList(157L, 158L, 159L), seqs(first.entries));
+    LogStore.Page rest = s.before(first.cursor, 100, new LogStore.Filter("line 15", null));
+    assertEquals(java.util.Arrays.asList(15L, 150L, 151L, 152L, 153L, 154L, 155L, 156L), seqs(rest.entries));
+  }
+
+  @Test
+  public void restartContinuesSequenceAndKeepsHistory() {
+    LogStore first = smallStore();
+    fill(first, 120);
+    first.close();
+
+    LogStore second = smallStore();
+    assertEquals(120, second.latestSeq());
+    LogEntry e = second.append(0, "INFO", "src", "after restart");
+    assertEquals(121, e.seq);
+
+    LogStore.Page page = second.before(Long.MAX_VALUE, 1000, LogStore.Filter.ALL);
+    assertEquals(range(1, 121), seqs(page.entries));
+  }
+
+  @Test
+  public void oldestFilesArePrunedBeyondMaxFiles() {
+    LogStore s = store(2000, 3, 10, Long.MAX_VALUE);
+    fill(s, 300);
+
+    assertTrue(dir.listFiles().length <= 3);
+    LogStore.Page page = s.before(Long.MAX_VALUE, 1000, LogStore.Filter.ALL);
+    assertFalse(page.hasMore);
+    List<Long> got = seqs(page.entries);
+    assertEquals(300L, (long) got.get(got.size() - 1));
+    assertTrue("oldest entries pruned", got.get(0) > 1);
+    assertEquals(range(got.get(0), 300), got);
+  }
+
+  @Test
+  public void tornLastLineIsSkippedAndNotGluedToTheNextEntry() throws IOException {
+    LogStore first = smallStore();
+    fill(first, 3);
+    first.close();
+    File file = dir.listFiles()[0];
+    FileOutputStream out = new FileOutputStream(file, true);
+    out.write("{\"seq\":4,\"ts\":1,\"lev".getBytes("UTF-8"));
+    out.close();
+
+    LogStore second = smallStore();
+    second.append(0, "INFO", "src", "next");
+    second.close();
+
+    List<LogEntry> onDisk = LogStore.readFile(file);
+    assertEquals(range(1, 4), seqs(onDisk));
+    assertEquals("next", onDisk.get(3).msg);
+  }
+
+  @Test
+  public void scanBudgetSplitsALongSearchIntoResumablePages() {
+    LogStore s = store(2000, 1000, 10, 1);  // one file per request
+    fill(s, 300);
+
+    LogStore.Filter none = new LogStore.Filter("no such text", null);
+    LogStore.Page page = s.before(Long.MAX_VALUE, 100, none);
+    assertTrue(page.entries.isEmpty());
+    assertTrue(page.hasMore);
+
+    int requests = 1;
+    while (page.hasMore) {
+      long previous = page.cursor;
+      page = s.before(page.cursor, 100, none);
+      assertTrue("cursor must advance", page.cursor < previous);
+      requests++;
+    }
+    assertTrue(requests > 3);
+  }
+
+  @Test
+  public void lineCaptureRecordsWholeLinesAndPassesBytesThrough() throws IOException {
+    LogStore s = smallStore();
+    ByteArrayOutputStream console = new ByteArrayOutputStream();
+    LogCapture.LineCaptureStream capture = new LogCapture.LineCaptureStream(s, "INFO", "stdout", console);
+
+    capture.write("hello wo".getBytes("UTF-8"));
+    capture.write("rld\r\n\nsecond\n".getBytes("UTF-8"));
+    capture.write("partial".getBytes("UTF-8"));
+
+    assertEquals("hello world\r\n\nsecond\npartial", console.toString("UTF-8"));
+    LogStore.Page page = s.before(Long.MAX_VALUE, 100, LogStore.Filter.ALL);
+    assertEquals(2, page.entries.size());
+    assertEquals("hello world", page.entries.get(0).msg);
+    assertEquals("stdout", page.entries.get(0).source);
+    assertEquals("second", page.entries.get(1).msg);
+
+    capture.close();
+    assertEquals("partial", s.before(Long.MAX_VALUE, 1, LogStore.Filter.ALL).entries.get(0).msg);
+  }
+
+  @Test
+  public void groovyPrintlnIsRecordedThroughTheEngineWriter() throws Exception {
+    LogStore s = smallStore();
+    ScriptEngine engine = new ScriptEngineManager().getEngineByName("gremlin-groovy");
+    ByteArrayOutputStream console = new ByteArrayOutputStream();
+    // Same wiring as ScriptBoard.resetEngine, with a capture stream standing in for scriptOutput().
+    engine.getContext().setWriter(new java.io.PrintWriter(
+        new LogCapture.LineCaptureStream(s, "INFO", "script", console), true));
+
+    engine.eval("println 'from eval'");
+    engine.eval("later = { println 'from closure' }");
+    engine.eval("later()");
+
+    List<LogEntry> entries = s.before(Long.MAX_VALUE, 100, LogStore.Filter.ALL).entries;
+    assertEquals(2, entries.size());
+    assertEquals("from eval", entries.get(0).msg);
+    assertEquals("script", entries.get(0).source);
+    assertEquals("from closure", entries.get(1).msg);
+  }
+}

@@ -307,4 +307,60 @@ public class ControllerTest extends BaseTest {
         Result result = route(fakeRequest(POST, "/saveUserSettings"));
         assertEquals("Save settings should require auth", UNAUTHORIZED, status(result));
     }
+
+    // === Logs ===
+
+    @Test
+    public void logsRequireAuth() {
+        Result result = route(fakeRequest(GET, "/logs"));
+        assertEquals("Logs should require auth", UNAUTHORIZED, status(result));
+    }
+
+    @Test
+    public void logsReportDisabledWhenCaptureIsNotInstalled() {
+        Language lang = createLanguage("eng", "English");
+        User user = createUser("logs-off@test.com", "Logs User", "pass", lang);
+
+        Result result = route(fakeRequest(GET, "/logs").withSession("uid", user.uid));
+        assertEquals(OK, status(result));
+        assertFalse(Json.parse(contentAsString(result)).get("enabled").asBoolean());
+    }
+
+    @Test
+    public void logsPageAndFilterCapturedOutput() throws Exception {
+        Language lang = createLanguage("eng", "English");
+        User user = createUser("logs@test.com", "Logs User", "pass", lang);
+        java.io.File dir = java.nio.file.Files.createTempDirectory("logs-controller-test").toFile();
+        logging.LogStore store = new logging.LogStore(dir, 1024 * 1024, 5, 1000, 1024 * 1024);
+        logging.LogCapture.install(store);
+        try {
+            System.out.println("logs-test stdout line");
+            play.Logger.error("logs-test logger error");
+            store.append(System.currentTimeMillis(), "DEBUG", "src", "logs-test debug");
+
+            JsonNode all = Json.parse(contentAsString(route(
+                fakeRequest(GET, "/logs?q=logs-test&limit=2").withSession("uid", user.uid))));
+            assertTrue(all.get("enabled").asBoolean());
+            assertEquals("limit should cap the page", 2, all.get("entries").size());
+            assertTrue(all.get("hasMore").asBoolean());
+            assertEquals("logs-test logger error", all.get("entries").get(0).get("msg").asText());
+            assertEquals("ERROR", all.get("entries").get(0).get("level").asText());
+            assertEquals("application", all.get("entries").get(0).get("src").asText());
+
+            JsonNode older = Json.parse(contentAsString(route(
+                fakeRequest(GET, "/logs?q=logs-test&before=" + all.get("cursor").asLong())
+                    .withSession("uid", user.uid))));
+            assertEquals(1, older.get("entries").size());
+            assertEquals("logs-test stdout line", older.get("entries").get(0).get("msg").asText());
+            assertEquals("stdout", older.get("entries").get(0).get("src").asText());
+
+            JsonNode errors = Json.parse(contentAsString(route(
+                fakeRequest(GET, "/logs?q=logs-test&level=ERROR").withSession("uid", user.uid))));
+            assertEquals(1, errors.get("entries").size());
+        } finally {
+            logging.LogCapture.uninstall();
+            for (java.io.File f : dir.listFiles()) f.delete();
+            dir.delete();
+        }
+    }
 }

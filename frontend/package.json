@@ -12,7 +12,8 @@
     "build": "cross-env NODE_ENV=production NODE_OPTIONS='--openssl-legacy-provider' webpack --config webpack.config.js",
     "build:all": "pnpm -r run build && pnpm run build",
     "test:all": "pnpm -r run test",
-    "start": "cross-env NODE_OPTIONS='--openssl-legacy-provider' webpack serve"
+    "start": "cross-env NODE_OPTIONS='--openssl-legacy-provider' webpack serve",
+    "dev": "pnpm start"
   },
   "dependencies": {
     "@human-nature-lab/breadboard-client": "workspace:*",
