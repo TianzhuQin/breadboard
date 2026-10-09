@@ -5,6 +5,9 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.*;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.charset.Charset;
 import java.util.*;
 
@@ -60,6 +63,8 @@ public class LogStore {
   private long currentBytes;
   private final ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream(512);
   private final Thread writer;
+  /** Held for the store's lifetime; null when another store owns {@code dir} (memory-only mode). */
+  private final FileLock dirLock;
 
   public LogStore(File dir, long maxFileBytes, int maxFiles, int memoryEntries, long scanBudgetBytes) {
     this.dir = dir;
@@ -68,7 +73,15 @@ public class LogStore {
     this.memoryEntries = Math.max(1, memoryEntries);
     this.scanBudgetBytes = scanBudgetBytes;
     dir.mkdirs();
-    recover();
+    dirLock = lockDir(dir);
+    if (dirLock != null) {
+      recover();
+    } else {
+      // Another store (a second server, or a test run, on the same directory) is writing here.
+      // Sharing it would hand out duplicate seqs, so keep this one in memory only.
+      diskFailed = true;
+      System.err.println("Admin log store: " + dir + " is in use by another process; keeping logs in memory only");
+    }
     writer = new Thread(new Runnable() {
       public void run() {
         writeLoop();
@@ -126,6 +139,27 @@ public class LogStore {
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
+    if (dirLock != null) {
+      try { dirLock.channel().close(); } catch (IOException ignored) { }
+    }
+  }
+
+  /** An exclusive lock on {@code dir/.lock}, or null if another store (in any process) holds it. */
+  private static FileLock lockDir(File dir) {
+    FileChannel channel = null;
+    try {
+      channel = new RandomAccessFile(new File(dir, ".lock"), "rw").getChannel();
+      FileLock lock = channel.tryLock();
+      if (lock != null) return lock;
+    } catch (OverlappingFileLockException e) {
+      // Held by another store in this JVM, e.g. a dev-mode reload that hasn't closed the old one.
+    } catch (IOException e) {
+      // Can't create the lock file: treat like a write failure.
+    }
+    if (channel != null) {
+      try { channel.close(); } catch (IOException ignored) { }
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------------------------
@@ -332,6 +366,8 @@ public class LogStore {
   // Files
 
   private List<File> listFiles() {
+    // Without the lock the files belong to another store, whose seqs overlap ours.
+    if (dirLock == null) return new ArrayList<File>();
     File[] files = dir.listFiles(new FilenameFilter() {
       public boolean accept(File d, String name) {
         return name.startsWith(PREFIX) && name.endsWith(SUFFIX) && startSeqOf(name) >= 0;

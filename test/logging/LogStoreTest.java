@@ -58,6 +58,15 @@ public class LogStoreTest {
     }
   }
 
+  /** The store's log files, without its .lock file. */
+  private File[] logFiles() {
+    return dir.listFiles(new java.io.FilenameFilter() {
+      public boolean accept(File d, String name) {
+        return name.endsWith(".jsonl");
+      }
+    });
+  }
+
   private static List<Long> seqs(List<LogEntry> entries) {
     List<Long> out = new ArrayList<Long>();
     for (LogEntry e : entries) out.add(e.seq);
@@ -87,7 +96,7 @@ public class LogStoreTest {
   public void pagingBackwardsCoversEverythingAcrossMemoryAndFiles() throws Exception {
     LogStore s = smallStore();
     fill(s, 300);
-    assertTrue("test needs several files", dir.listFiles().length > 3);
+    assertTrue("test needs several files", logFiles().length > 3);
 
     List<Long> all = new ArrayList<Long>();
     long cursor = Long.MAX_VALUE;
@@ -176,8 +185,8 @@ public class LogStoreTest {
     s.append(7, "INFO", null, "quote \" slash \\ tab \t \u00e9");
     s.close();
 
-    String line = new String(Files.readAllBytes(dir.listFiles()[0].toPath()), "UTF-8");
-    LogEntry e = LogStore.readFile(dir.listFiles()[0]).get(0);
+    String line = new String(Files.readAllBytes(logFiles()[0].toPath()), "UTF-8");
+    LogEntry e = LogStore.readFile(logFiles()[0]).get(0);
     assertEquals(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(e.toMap()) + "\n", line);
     assertNull(e.source);
     assertEquals(1, LogStore.seqOf(line));
@@ -237,11 +246,32 @@ public class LogStoreTest {
   }
 
   @Test
+  public void secondStoreOnTheSameDirectoryStaysInMemoryAndCannotDuplicateSeqs() throws Exception {
+    LogStore owner = smallStore();
+    fill(owner, 30);
+
+    LogStore intruder = smallStore();
+    intruder.append(0, "INFO", "src", "intruder");
+    intruder.flush();
+    // Neither sees the other's entries, and nothing the intruder logged reached the owner's files.
+    assertEquals(range(1, 1), seqs(intruder.before(Long.MAX_VALUE, 100, LogStore.Filter.ALL).entries));
+    assertEquals(range(1, 30), seqs(owner.before(Long.MAX_VALUE, 100, LogStore.Filter.ALL).entries));
+    for (File f : logFiles()) {
+      for (LogEntry e : LogStore.readFile(f)) assertFalse("intruder".equals(e.msg));
+    }
+
+    owner.close();
+    intruder.close();
+    LogStore next = smallStore();
+    assertEquals("the lock is released on close", 30, next.latestSeq());
+  }
+
+  @Test
   public void oldestFilesArePrunedBeyondMaxFiles() throws Exception {
     LogStore s = store(2000, 3, 10, Long.MAX_VALUE);
     fill(s, 300);
 
-    assertTrue(dir.listFiles().length <= 3);
+    assertTrue(logFiles().length <= 3);
     LogStore.Page page = s.before(Long.MAX_VALUE, 1000, LogStore.Filter.ALL);
     assertFalse(page.hasMore);
     List<Long> got = seqs(page.entries);
@@ -255,7 +285,7 @@ public class LogStoreTest {
     LogStore first = smallStore();
     fill(first, 3);
     first.close();
-    File file = dir.listFiles()[0];
+    File file = logFiles()[0];
     FileOutputStream out = new FileOutputStream(file, true);
     out.write("{\"seq\":4,\"ts\":1,\"lev".getBytes("UTF-8"));
     out.close();

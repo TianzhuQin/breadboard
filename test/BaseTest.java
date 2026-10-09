@@ -60,6 +60,10 @@ public class BaseTest {
         // Pin the framework-default Global: the app's Global has no startup behaviour to
         // exercise here, since schema management is owned entirely by evolutions.
         config.put("application.global", "play.GlobalSettings");
+        // Play 2.2 picks the Global class from conf/application.conf before this extra config is
+        // applied, so the pin above does not take effect and app/Global.onStart still runs. Keep its
+        // log capture out of the repo's logs/admin, which a running dev server is writing to.
+        config.put("breadboard.logs.enabled", "false");
         app = fakeApplication(config);
         start(app);
     }

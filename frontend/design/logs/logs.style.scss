@@ -10,6 +10,7 @@
 
 .logs-toolbar {
   flex: none;
+  position: relative;
   padding-bottom: 6px;
 
   .logs-query {
@@ -18,6 +19,49 @@
 
   .logs-status {
     margin-left: 8px;
+  }
+}
+
+// Thin indeterminate bar along the toolbar's bottom edge while a request is in flight. Absolutely
+// positioned so it never shifts the layout, and held invisible for the first 300ms so the routine
+// 2s tail polls (a few ms each) never show it.
+.logs-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  animation: logs-progress-appear 0s linear 300ms both;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 30%;
+    background: #337ab7;
+    opacity: 0.7;
+    animation: logs-progress-slide 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes logs-progress-appear {
+  from { visibility: hidden; }
+  to { visibility: visible; }
+}
+
+@keyframes logs-progress-slide {
+  from { left: -30%; }
+  to { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logs-progress::before {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
   }
 }
 

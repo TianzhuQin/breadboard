@@ -32,6 +32,7 @@ function LogsCtrl($scope, $element, $timeout, LogsSrv) {
   vm.highlightSeq = null;
 
   vm.search = search;
+  vm.queryChanged = queryChanged;
   vm.clearSearch = clearSearch;
   vm.loadOlder = loadOlder;
   vm.loadNewer = loadNewer;
@@ -194,6 +195,11 @@ function LogsCtrl($scope, $element, $timeout, LogsSrv) {
     vm.follow = true;
     vm.highlightSeq = null;
     reset();
+  }
+
+  /** Emptying the box (typing it away, or the browser's own ✕ on a search input) drops the text filter. */
+  function queryChanged() {
+    if (!vm.query && vm.activeQuery) search();
   }
 
   function clearSearch() {

@@ -3,7 +3,8 @@
         <input type="search"
                class="form-control input-sm logs-query"
                placeholder="Search the whole log (message or source)"
-               ng-model="vm.query">
+               ng-model="vm.query"
+               ng-change="vm.queryChanged()">
         <select class="form-control input-sm"
                 ng-model="vm.level"
                 ng-change="vm.search()">
@@ -17,8 +18,8 @@
         <button type="button" class="btn btn-default btn-sm"
                 ng-show="vm.isFiltered()"
                 ng-click="vm.clearSearch()">Clear</button>
+        <div class="logs-progress" ng-if="vm.loading" aria-hidden="true"></div>
         <span class="logs-status">
-            <span ng-show="vm.loading" class="fa fa-refresh fa-spin" aria-hidden="true"></span>
             <span ng-show="vm.isFiltered()">{{vm.entries.length}} matching entries loaded</span>
             <span ng-show="vm.follow && !vm.isFiltered()" class="text-success">Live</span>
             <button type="button" class="btn btn-default btn-sm"

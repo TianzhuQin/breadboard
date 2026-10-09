@@ -558,7 +558,7 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
     title: 'Players',
     autoOpen: true,
     width: ((windowWidth * .5) - margin),
-    height: ((windowHeight * .75) - margin),
+    height: ((windowHeight * .5) - margin),
     position: [margin, topDivHeight],
     buttons: {}
   };
@@ -567,8 +567,8 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
     title: 'Logs',
     autoOpen: true,
     width: ((windowWidth * .5) - margin),
-    height: ((windowHeight * .25) - margin),
-    position: [margin, (topDivHeight + margin + (.75 * windowHeight))],
+    height: ((windowHeight * .5) - margin),
+    position: [margin, (topDivHeight + margin + (.5 * windowHeight))],
     buttons: {}
   };
 
@@ -576,7 +576,7 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
     title: 'Script',
     autoOpen: false,
     width: ((windowWidth * .5) - margin),
-    height: ((windowHeight * .75) - margin),
+    height: ((windowHeight * .5) - margin),
     position: [margin, topDivHeight],
     buttons: [
       {
