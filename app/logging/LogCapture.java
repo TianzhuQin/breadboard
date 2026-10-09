@@ -18,6 +18,9 @@ import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.Charset;
 import java.util.Iterator;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Feeds everything an admin would otherwise have to SSH in to see into a {@link LogStore}:
@@ -52,8 +55,8 @@ public final class LogCapture {
     originalErr = System.err;
     newStore.setErrorSink(originalErr);
 
-    capturedOut = printStream(new LineCaptureStream(newStore, "INFO", "stdout", originalOut));
-    capturedErr = printStream(new LineCaptureStream(newStore, "ERROR", "stderr", originalErr));
+    capturedOut = printStream(new LineCaptureStream(newStore, "INFO", "stdout", originalOut, true));
+    capturedErr = printStream(new LineCaptureStream(newStore, "ERROR", "stderr", originalErr, true));
     System.setOut(capturedOut);
     System.setErr(capturedErr);
 
@@ -134,20 +137,37 @@ public final class LogCapture {
     }
   }
 
-  /** Echoes bytes to {@code passthrough} and records each complete line as a log entry. */
+  /**
+   * Echoes bytes to {@code passthrough} and records each complete line as a log entry. Terminal
+   * color codes are stripped from the recorded text only; the console still gets the raw bytes.
+   */
   static class LineCaptureStream extends OutputStream {
     private static final int MAX_LINE_BYTES = 64 * 1024;
+    private static final Pattern ANSI_ESCAPE = Pattern.compile("\u001B\\[[0-9;]*[A-Za-z]");
+    // Play's console pattern "%coloredLevel %logger{15} - %message". A line like this reaching
+    // stdout means logback was reconfigured after install() (Logger.configure resets the context,
+    // which drops our appender and binds a fresh ConsoleAppender to the captured System.out).
+    private static final Pattern CONSOLE_LINE =
+        Pattern.compile("^\\[(trace|debug|info|warn|error)\\] (\\S+) - (.*)$", Pattern.DOTALL);
     private final LogStore target;
     private final String level;
     private final String source;
     private final OutputStream passthrough;
+    private final boolean parseConsoleLines;
     private final ByteArrayOutputStream line = new ByteArrayOutputStream();
 
     LineCaptureStream(LogStore target, String level, String source, OutputStream passthrough) {
+      this(target, level, source, passthrough, false);
+    }
+
+    /** @param parseConsoleLines record Play-formatted logback lines with their own level and logger. */
+    LineCaptureStream(LogStore target, String level, String source, OutputStream passthrough,
+                      boolean parseConsoleLines) {
       this.target = target;
       this.level = level;
       this.source = source;
       this.passthrough = passthrough;
+      this.parseConsoleLines = parseConsoleLines;
     }
 
     @Override
@@ -211,9 +231,16 @@ public final class LogCapture {
       }
       line.reset();
       if (s.endsWith("\r")) s = s.substring(0, s.length() - 1);
-      if (!s.isEmpty()) {
-        target.append(System.currentTimeMillis(), level, source, s);
+      if (s.indexOf('\u001B') >= 0) s = ANSI_ESCAPE.matcher(s).replaceAll("");
+      if (s.isEmpty()) return;
+      if (parseConsoleLines && s.startsWith("[")) {
+        Matcher m = CONSOLE_LINE.matcher(s);
+        if (m.matches()) {
+          target.append(System.currentTimeMillis(), m.group(1).toUpperCase(Locale.ROOT), m.group(2), m.group(3));
+          return;
+        }
       }
+      target.append(System.currentTimeMillis(), level, source, s);
     }
   }
 

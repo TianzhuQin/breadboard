@@ -358,6 +358,55 @@ public class LogStoreTest {
   }
 
   @Test
+  public void lineCaptureStripsColorCodesFromRecordedTextOnly() throws IOException {
+    LogStore s = smallStore();
+    ByteArrayOutputStream console = new ByteArrayOutputStream();
+    LogCapture.LineCaptureStream capture = new LogCapture.LineCaptureStream(s, "INFO", "script", console);
+    String colored = "\u001B[31mred\u001B[0m and \u001B[1;32mbold green\u001B[0m\n";
+
+    capture.write(colored.getBytes("UTF-8"));
+
+    assertEquals(colored, console.toString("UTF-8"));
+    assertEquals("red and bold green", s.before(Long.MAX_VALUE, 1, LogStore.Filter.ALL).entries.get(0).msg);
+  }
+
+  @Test
+  public void lineCaptureRelabelsPlayConsoleLinesWithTheirLevelAndLogger() throws IOException {
+    LogStore s = smallStore();
+    LogCapture.LineCaptureStream capture =
+        new LogCapture.LineCaptureStream(s, "INFO", "stdout", new ByteArrayOutputStream(), true);
+
+    capture.write("[\u001B[36mdebug\u001B[0m] application - loading util.groovy\n".getBytes("UTF-8"));
+    capture.write("[warn] a.c.ClientController - no - dashes - lost\n".getBytes("UTF-8"));
+    capture.write("[note] not a level - left alone\n".getBytes("UTF-8"));
+
+    List<LogEntry> entries = s.before(Long.MAX_VALUE, 100, LogStore.Filter.ALL).entries;
+    assertEquals(3, entries.size());
+    assertEquals("DEBUG", entries.get(0).level);
+    assertEquals("application", entries.get(0).source);
+    assertEquals("loading util.groovy", entries.get(0).msg);
+    assertEquals("WARN", entries.get(1).level);
+    assertEquals("a.c.ClientController", entries.get(1).source);
+    assertEquals("no - dashes - lost", entries.get(1).msg);
+    assertEquals("INFO", entries.get(2).level);
+    assertEquals("stdout", entries.get(2).source);
+    assertEquals("[note] not a level - left alone", entries.get(2).msg);
+  }
+
+  @Test
+  public void lineCaptureLeavesConsoleLookalikesAloneWhenNotParsing() throws IOException {
+    LogStore s = smallStore();
+    LogCapture.LineCaptureStream capture = new LogCapture.LineCaptureStream(s, "INFO", "script", new ByteArrayOutputStream());
+
+    capture.write("[debug] application - from a groovy println\n".getBytes("UTF-8"));
+
+    LogEntry e = s.before(Long.MAX_VALUE, 1, LogStore.Filter.ALL).entries.get(0);
+    assertEquals("INFO", e.level);
+    assertEquals("script", e.source);
+    assertEquals("[debug] application - from a groovy println", e.msg);
+  }
+
+  @Test
   public void groovyPrintlnIsRecordedThroughTheEngineWriter() throws Exception {
     LogStore s = smallStore();
     ScriptEngine engine = new ScriptEngineManager().getEngineByName("gremlin-groovy");

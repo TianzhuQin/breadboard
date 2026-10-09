@@ -46,3 +46,4 @@ native
 
 # The bare "logs" pattern above would also hide the Logs dialog source.
 !frontend/design/logs/
+scripts/upgrade-v*

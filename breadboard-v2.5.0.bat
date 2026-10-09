@@ -10,4 +10,4 @@ set /a j9=j9*19
 rem Set java options for jdk9 and above
 if %jver% GTR %j9% (set _JAVA_OPTIONS="--add-modules=java.xml.bind")
 rem run the breadboard server
-java -cp "./lib/*;" -Dhttps.port=9443 -Dapplication.secret="pleasechangethis" -Dconfig.file=conf\application-prod.conf -Xms1024m -Xmx1024m -XX:MaxPermSize=256m -XX:ReservedCodeCacheSize=128m -XX:+CMSClassUnloadingEnabled -XX:+UseConcMarkSweepGC play.core.server.NettyServer
+java -cp "./lib/*;" -Dhttps.port=9443 -Dapplication.secret="pleasechangethis" -Dsbt.log.noformat=true -Dconfig.file=conf\application-prod.conf -Xms1024m -Xmx1024m -XX:MaxPermSize=256m -XX:ReservedCodeCacheSize=128m -XX:+CMSClassUnloadingEnabled -XX:+UseConcMarkSweepGC play.core.server.NettyServer
