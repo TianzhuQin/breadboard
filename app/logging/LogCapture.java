@@ -159,8 +159,26 @@ public final class LogCapture {
     @Override
     public synchronized void write(byte[] b, int off, int len) {
       try { passthrough.write(b, off, len); } catch (IOException ignored) { }
-      for (int i = off; i < off + len; i++) {
-        capture(b[i]);
+      // Copy whole runs between newlines rather than a byte at a time.
+      int end = off + len;
+      int runStart = off;
+      for (int i = off; i < end; i++) {
+        if (b[i] == '\n') {
+          buffer(b, runStart, i - runStart);
+          emit();
+          runStart = i + 1;
+        }
+      }
+      buffer(b, runStart, end - runStart);
+    }
+
+    private void buffer(byte[] b, int off, int len) {
+      while (len > 0) {
+        int n = Math.min(len, MAX_LINE_BYTES - line.size());
+        line.write(b, off, n);
+        off += n;
+        len -= n;
+        if (line.size() >= MAX_LINE_BYTES) emit();
       }
     }
 
@@ -185,7 +203,12 @@ public final class LogCapture {
     }
 
     private void emit() {
-      String s = new String(line.toByteArray(), Charset.defaultCharset());
+      String s;
+      try {
+        s = line.toString(Charset.defaultCharset().name());  // decodes in place, no copy
+      } catch (UnsupportedEncodingException e) {
+        s = line.toString();
+      }
       line.reset();
       if (s.endsWith("\r")) s = s.substring(0, s.length() - 1);
       if (!s.isEmpty()) {

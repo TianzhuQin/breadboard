@@ -151,6 +151,58 @@ public class LogStoreTest {
   }
 
   @Test
+  public void searchOnDiskHandlesEscapedAndNonAsciiText() throws Exception {
+    LogStore s = smallStore();
+    s.append(0, "INFO", "src", "say \"hi\" to C:\\temp");
+    s.append(0, "INFO", "src", "first\nSECOND line");
+    s.append(0, "INFO", "src", "\u00dcber caf\u00e9");
+    s.append(0, "WARN", "Some.Logger", "plain");
+    fill(s, 100);  // memory holds 10, so the four above are only on disk
+
+    assertEquals(range(1, 1), seqs(s.before(Long.MAX_VALUE, 10, new LogStore.Filter("\"hi\" to c:\\", null)).entries));
+    assertEquals(range(2, 2), seqs(s.before(Long.MAX_VALUE, 10, new LogStore.Filter("first\nsecond", null)).entries));
+    assertEquals(range(2, 2), seqs(s.before(Long.MAX_VALUE, 10, new LogStore.Filter("second line", null)).entries));
+    assertEquals(range(3, 3), seqs(s.before(Long.MAX_VALUE, 10, new LogStore.Filter("\u00fcBER CAF\u00c9", null)).entries));
+    assertEquals(range(4, 4), seqs(s.before(Long.MAX_VALUE, 10, new LogStore.Filter("some.logger", null)).entries));
+    assertEquals(range(4, 4), seqs(s.after(0, 10, new LogStore.Filter("some.logger", null)).entries));
+    // Hits a JSON key on every line, but no message or source.
+    assertTrue(s.before(Long.MAX_VALUE, 10, new LogStore.Filter("\"level\"", null)).entries.isEmpty());
+    assertTrue(s.before(Long.MAX_VALUE, 10, new LogStore.Filter("level", null)).entries.isEmpty());
+  }
+
+  @Test
+  public void storedLinesMatchTheEntryMapAndStartWithSeq() throws Exception {
+    LogStore s = smallStore();
+    s.append(7, "INFO", null, "quote \" slash \\ tab \t \u00e9");
+    s.close();
+
+    String line = new String(Files.readAllBytes(dir.listFiles()[0].toPath()), "UTF-8");
+    LogEntry e = LogStore.readFile(dir.listFiles()[0]).get(0);
+    assertEquals(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(e.toMap()) + "\n", line);
+    assertNull(e.source);
+    assertEquals(1, LogStore.seqOf(line));
+    assertEquals(-1, LogStore.seqOf("{\"ts\":1,\"seq\":2}"));
+    assertEquals(-1, LogStore.seqOf("{\"seq\":12"));
+  }
+
+  @Test
+  public void pagingForwardsHasNoGapsWhileDiskWritesAreStillQueued() throws Exception {
+    LogStore s = smallStore();
+    append(s, 3000);
+
+    List<Long> all = new ArrayList<Long>();
+    long cursor = 0;
+    boolean more = true;
+    while (more) {
+      LogStore.Page page = s.after(cursor, 50, LogStore.Filter.ALL);
+      all.addAll(seqs(page.entries));
+      cursor = page.cursor;
+      more = page.hasMore;
+    }
+    assertEquals(range(1, 3000), all);
+  }
+
+  @Test
   public void readsHaveNoGapsWhileDiskWritesAreStillQueued() throws Exception {
     // Memory holds only 10 entries, so most of these are either queued or on disk depending on
     // how far the writer has got. Either way every entry must be readable exactly once.
@@ -256,6 +308,23 @@ public class LogStoreTest {
 
     capture.close();
     assertEquals("partial", s.before(Long.MAX_VALUE, 1, LogStore.Filter.ALL).entries.get(0).msg);
+  }
+
+  @Test
+  public void lineCaptureSplitsOverlongLinesWithinOneWrite() throws IOException {
+    LogStore s = smallStore();
+    LogCapture.LineCaptureStream capture = new LogCapture.LineCaptureStream(s, "INFO", "stdout", new ByteArrayOutputStream());
+    byte[] big = new byte[64 * 1024 * 2 + 10 + 1];
+    java.util.Arrays.fill(big, (byte) 'a');
+    big[big.length - 1] = '\n';
+
+    capture.write(big);
+
+    List<LogEntry> entries = s.before(Long.MAX_VALUE, 100, LogStore.Filter.ALL).entries;
+    assertEquals(3, entries.size());
+    assertEquals(64 * 1024, entries.get(0).msg.length());
+    assertEquals(64 * 1024, entries.get(1).msg.length());
+    assertEquals(10, entries.get(2).msg.length());
   }
 
   @Test

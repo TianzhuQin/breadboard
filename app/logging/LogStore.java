@@ -1,5 +1,7 @@
 package logging;
 
+import com.fasterxml.jackson.core.JsonEncoding;
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.*;
@@ -30,6 +32,7 @@ import java.util.*;
 public class LogStore {
   private static final String PREFIX = "console-";
   private static final String SUFFIX = ".jsonl";
+  private static final String SEQ_PREFIX = "{\"seq\":";
   private static final Charset UTF_8 = Charset.forName("UTF-8");
   private static final ObjectMapper mapper = new ObjectMapper();
   private static final int MAX_PENDING = 100000;
@@ -55,6 +58,7 @@ public class LogStore {
   private File currentFile;
   private OutputStream currentOut;
   private long currentBytes;
+  private final ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream(512);
   private final Thread writer;
 
   public LogStore(File dir, long maxFileBytes, int maxFiles, int memoryEntries, long scanBudgetBytes) {
@@ -132,17 +136,38 @@ public class LogStore {
     public static final Filter ALL = new Filter(null, null);
     private final String query;
     private final int minLevel;
+    /** Whether a match must also appear verbatim in the stored JSON line, see {@link #mayMatchLine}. */
+    private final boolean lineCheckable;
 
     public Filter(String query, String minLevel) {
       this.query = (query == null || query.isEmpty()) ? null : query.toLowerCase(Locale.ROOT);
       this.minLevel = (minLevel == null || minLevel.isEmpty()) ? -1 : LogEntry.levelRank(minLevel);
+      this.lineCheckable = this.query != null && isUnescapedAscii(this.query);
     }
 
     public boolean matches(LogEntry e) {
       if (minLevel >= 0 && LogEntry.levelRank(e.level) < minLevel) return false;
       if (query == null) return true;
-      return (e.msg != null && e.msg.toLowerCase(Locale.ROOT).contains(query))
-          || (e.source != null && e.source.toLowerCase(Locale.ROOT).contains(query));
+      return (e.source != null && e.source.toLowerCase(Locale.ROOT).contains(query))
+          || (e.msg != null && e.msg.toLowerCase(Locale.ROOT).contains(query));
+    }
+
+    /**
+     * Cheap pre-check on a raw JSON line, so lines that can't match are never parsed. False
+     * positives (e.g. the query hits a key name) are fine: callers still apply {@link #matches}.
+     * Only used when the query is printable ASCII without {@code "} or {@code \}, which Jackson
+     * writes unescaped, so any match in msg or src also appears in the line itself.
+     */
+    boolean mayMatchLine(String line) {
+      return !lineCheckable || line.toLowerCase(Locale.ROOT).contains(query);
+    }
+
+    private static boolean isUnescapedAscii(String s) {
+      for (int i = 0; i < s.length(); i++) {
+        char c = s.charAt(i);
+        if (c < 0x20 || c > 0x7e || c == '"' || c == '\\') return false;
+      }
+      return true;
     }
   }
 
@@ -174,31 +199,46 @@ public class LogStore {
     long memOldest;
   }
 
-  private Snapshot snapshot() {
+  /**
+   * Copies the in-memory window, skipping entries with seq &lt;= {@code minSeq}: a tail poll only
+   * needs the few newest entries, and the copy is made under the lock that {@link #append} needs.
+   */
+  private Snapshot snapshot(long minSeq) {
     Snapshot s = new Snapshot();
+    List<LogEntry> newestFirst = new ArrayList<LogEntry>();
     synchronized (this) {
       // Queued entries already evicted from `recent` aren't on disk yet: count them as in memory.
       long recentOldest = recent.isEmpty() ? nextSeq : recent.peekFirst().seq;
+      LogEntry firstPending = pending.peekFirst();
+      s.memOldest = (firstPending != null && firstPending.seq < recentOldest) ? firstPending.seq : recentOldest;
       s.recent = new ArrayList<LogEntry>();
-      for (LogEntry e : pending) {
-        if (e.seq >= recentOldest) break;
-        s.recent.add(e);
+      if (minSeq + 1 < recentOldest) {
+        for (LogEntry e : pending) {
+          if (e.seq >= recentOldest) break;
+          if (e.seq > minSeq) s.recent.add(e);
+        }
       }
-      s.recent.addAll(recent);
+      Iterator<LogEntry> it = recent.descendingIterator();
+      while (it.hasNext()) {
+        LogEntry e = it.next();
+        if (e.seq <= minSeq) break;
+        newestFirst.add(e);
+      }
       s.latestSeq = nextSeq - 1;
     }
+    for (int i = newestFirst.size() - 1; i >= 0; i--) s.recent.add(newestFirst.get(i));
     // Listed after the memory snapshot and outside the lock: every entry below memOldest was
     // written before this point, so its file is listed. Newer or since-pruned files are harmless.
     s.files = listFiles();
-    s.memOldest = s.recent.isEmpty() ? s.latestSeq + 1 : s.recent.get(0).seq;
     s.oldestSeq = s.files.isEmpty() ? s.memOldest : Math.min(startSeqOf(s.files.get(0)), s.memOldest);
     return s;
   }
 
   /** Up to {@code limit} matching entries with seq &lt; {@code before}, newest first in scan order. */
   public Page before(long before, int limit, Filter filter) {
-    Snapshot s = snapshot();
-    LinkedList<LogEntry> out = new LinkedList<LogEntry>();
+    Snapshot s = snapshot(0);
+    // Collected newest first, reversed once on return.
+    List<LogEntry> out = new ArrayList<LogEntry>();
     long cursor = Math.min(before, s.latestSeq + 1);
 
     for (int i = s.recent.size() - 1; i >= 0; i--) {
@@ -206,8 +246,8 @@ public class LogStore {
       if (e.seq >= cursor) continue;
       cursor = e.seq;
       if (filter.matches(e)) {
-        out.addFirst(e);
-        if (out.size() >= limit) return new Page(out, cursor > s.oldestSeq, cursor, s.latestSeq);
+        out.add(e);
+        if (out.size() >= limit) return beforePage(out, cursor > s.oldestSeq, cursor, s.latestSeq);
       }
     }
     // Everything from memOldest up has been examined (or was never there).
@@ -220,24 +260,33 @@ public class LogStore {
       if (start >= cursor) continue;
       if (budget <= 0) break;
       budget -= file.length();
-      List<LogEntry> entries = readFile(file);
-      for (int j = entries.size() - 1; j >= 0; j--) {
-        LogEntry e = entries.get(j);
-        if (e.seq >= cursor) continue;
+      // Only lines the scan reaches are parsed, so paging back through one file stays cheap.
+      // The cursor only has to be exact where a page ends (at a match) or at the file boundary.
+      List<String> lines = readLines(file);
+      for (int j = lines.size() - 1; j >= 0; j--) {
+        String line = lines.get(j);
+        if (seqOf(line) >= cursor || !filter.mayMatchLine(line)) continue;
+        LogEntry e = parse(line);
+        if (e == null || e.seq >= cursor) continue;
         cursor = e.seq;
         if (filter.matches(e)) {
-          out.addFirst(e);
-          if (out.size() >= limit) return new Page(out, cursor > s.oldestSeq, cursor, s.latestSeq);
+          out.add(e);
+          if (out.size() >= limit) return beforePage(out, cursor > s.oldestSeq, cursor, s.latestSeq);
         }
       }
       cursor = Math.min(cursor, start);
     }
-    return new Page(out, cursor > s.oldestSeq, cursor, s.latestSeq);
+    return beforePage(out, cursor > s.oldestSeq, cursor, s.latestSeq);
+  }
+
+  private static Page beforePage(List<LogEntry> newestFirst, boolean hasMore, long cursor, long latestSeq) {
+    Collections.reverse(newestFirst);
+    return new Page(newestFirst, hasMore, cursor, latestSeq);
   }
 
   /** Up to {@code limit} matching entries with seq &gt; {@code after}, oldest first. */
   public Page after(long after, int limit, Filter filter) {
-    Snapshot s = snapshot();
+    Snapshot s = snapshot(after);
     List<LogEntry> out = new ArrayList<LogEntry>();
     long cursor = Math.max(after, s.oldestSeq - 1);
 
@@ -251,8 +300,12 @@ public class LogStore {
         if (start >= s.memOldest) break;
         if (budget <= 0) return new Page(out, true, cursor, s.latestSeq);
         budget -= file.length();
-        for (LogEntry e : readFile(file)) {
-          if (e.seq <= cursor) continue;
+        for (String line : readLines(file)) {
+          long seq = seqOf(line);
+          if (seq >= s.memOldest) break;
+          if ((seq >= 0 && seq <= cursor) || !filter.mayMatchLine(line)) continue;
+          LogEntry e = parse(line);
+          if (e == null || e.seq <= cursor) continue;
           if (e.seq >= s.memOldest) break;
           cursor = e.seq;
           if (filter.matches(e)) {
@@ -313,17 +366,22 @@ public class LogStore {
   /** Every parseable entry in the file, in order. A torn last line (crash mid-write) is skipped. */
   static List<LogEntry> readFile(File file) {
     List<LogEntry> entries = new ArrayList<LogEntry>();
+    for (String line : readLines(file)) {
+      LogEntry e = parse(line);
+      if (e != null) entries.add(e);
+    }
+    return entries;
+  }
+
+  /** The file's non-empty lines, unparsed, in order. */
+  private static List<String> readLines(File file) {
+    List<String> lines = new ArrayList<String>();
     BufferedReader reader = null;
     try {
-      reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), UTF_8));
+      reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), UTF_8), 64 * 1024);
       String line;
       while ((line = reader.readLine()) != null) {
-        if (line.isEmpty()) continue;
-        try {
-          entries.add(LogEntry.fromMap(mapper.readValue(line, Map.class)));
-        } catch (Exception ignored) {
-          // Partial or corrupt line.
-        }
+        if (!line.isEmpty()) lines.add(line);
       }
     } catch (IOException ignored) {
       // Pruned while we were reading it, or unreadable: treat as empty.
@@ -332,7 +390,35 @@ public class LogStore {
         try { reader.close(); } catch (IOException ignored) { }
       }
     }
-    return entries;
+    return lines;
+  }
+
+  /** The entry on a stored line, or null for a partial or corrupt line. */
+  private static LogEntry parse(String line) {
+    try {
+      return LogEntry.fromMap(mapper.readValue(line, Map.class));
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  /**
+   * The seq of a stored line without parsing it, relying on {@link #writeEntry} putting seq first;
+   * -1 when the line doesn't start that way, in which case callers fall back to {@link #parse}.
+   */
+  static long seqOf(String line) {
+    if (!line.startsWith(SEQ_PREFIX)) return -1;
+    int i = SEQ_PREFIX.length();
+    int digitsStart = i;
+    long seq = 0;
+    while (i < line.length() && i - digitsStart < 18) {
+      char c = line.charAt(i);
+      if (c < '0' || c > '9') break;
+      seq = seq * 10 + (c - '0');
+      i++;
+    }
+    if (i == digitsStart || i >= line.length() || line.charAt(i) != ',') return -1;
+    return seq;
   }
 
   /** Continue the seq numbering from the newest file, so cursors stay valid across restarts. */
@@ -402,9 +488,7 @@ public class LogStore {
             roll(e.seq);
           }
         }
-        byte[] bytes = (mapper.writeValueAsString(e.toMap()) + "\n").getBytes(UTF_8);
-        currentOut.write(bytes);
-        currentBytes += bytes.length;
+        writeEntry(e);
       }
       currentOut.flush();
       return true;
@@ -414,6 +498,23 @@ public class LogStore {
       errorSink.println("Admin log store: disabling disk persistence after write failure in " + dir + ": " + ex);
       return false;
     }
+  }
+
+  /** One JSON line, the same as serializing {@link LogEntry#toMap}. seq must stay first, see {@link #seqOf}. */
+  private void writeEntry(LogEntry e) throws IOException {
+    lineBuffer.reset();
+    JsonGenerator g = mapper.getFactory().createGenerator(lineBuffer, JsonEncoding.UTF8);
+    g.writeStartObject();
+    g.writeNumberField("seq", e.seq);
+    g.writeNumberField("ts", e.ts);
+    g.writeStringField("level", e.level);
+    g.writeStringField("src", e.source);
+    g.writeStringField("msg", e.msg);
+    g.writeEndObject();
+    g.close();
+    lineBuffer.write('\n');
+    lineBuffer.writeTo(currentOut);
+    currentBytes += lineBuffer.size();
   }
 
   private void roll(long startSeq) throws IOException {

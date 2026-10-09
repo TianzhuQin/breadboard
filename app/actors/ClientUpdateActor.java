@@ -25,7 +25,8 @@ public class ClientUpdateActor extends UntypedActor {
       clientUpdate.graphChangedListener.incrementUpdateIteration();
       Long updateIteration = clientUpdate.graphChangedListener.getUpdateIteration();
       if (updateIteration % 10 == 0) {
-        Logger.debug(dateFormat.format(new Date()) + " - c.UpdateGraph:" + updateIteration);
+        // Idle heartbeat: trace so it stays out of the logs unless asked for (entries are already timestamped).
+        Logger.trace("c.UpdateGraph:" + updateIteration);
       }
 
       for(Client c : clientUpdate.graphChangedListener.getClientListeners().values()) {

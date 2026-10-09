@@ -9,21 +9,12 @@ import play.Logger;
 
 import java.io.IOException;
 import java.nio.file.*;
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 
 import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 
 public class FileWatcherActor extends UntypedActor {
-  private static DateFormat dateFormat;
-
-  public FileWatcherActor() {
-    dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-  }
-
 
   @Override
   public void onReceive(Object message) {
@@ -38,7 +29,8 @@ public class FileWatcherActor extends UntypedActor {
       fileWatcher.incrementUpdateIteration();
       Long updateIteration = fileWatcher.getUpdateIteration();
       if (updateIteration % 100 == 0) {
-        Logger.debug(dateFormat.format(new Date()) + " - FileWatch:" + updateIteration);
+        // Idle heartbeat: trace so it stays out of the logs unless asked for (entries are already timestamped).
+        Logger.trace("FileWatch:" + updateIteration);
       }
 
       WatchKey watchKey;
