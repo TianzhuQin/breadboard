@@ -553,18 +553,18 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
     buttons: {}
   };
 
-  $scope.logsDialogOptions = {
-    title: 'Logs',
-    autoOpen: false,
-    width: windowWidth,
-    height: windowHeight,
+  /* START These three dialogs auto-open: Players (top left), Logs (bottom left), Graph (right) */
+  $scope.playerDialogOptions = {
+    title: 'Players',
+    autoOpen: true,
+    width: ((windowWidth * .5) - margin),
+    height: ((windowHeight * .75) - margin),
     position: [margin, topDivHeight],
     buttons: {}
   };
 
-  /* START These three dialogs auto-open */
-  $scope.outputDialogOptions = {
-    title: 'Output',
+  $scope.logsDialogOptions = {
+    title: 'Logs',
     autoOpen: true,
     width: ((windowWidth * .5) - margin),
     height: ((windowHeight * .25) - margin),
@@ -574,7 +574,7 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
 
   $scope.scriptDialogOptions = {
     title: 'Script',
-    autoOpen: true,
+    autoOpen: false,
     width: ((windowWidth * .5) - margin),
     height: ((windowHeight * .75) - margin),
     position: [margin, topDivHeight],
@@ -695,15 +695,6 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
     title: 'Experiment Instances',
     autoOpen: false,
     width: windowWidth,
-    height: windowHeight,
-    position: [margin, topDivHeight],
-    buttons: {}
-  };
-
-  $scope.playerDialogOptions = {
-    title: 'Players',
-    autoOpen: false,
-    width: ((windowWidth * .5) - margin),
     height: windowHeight,
     position: [margin, topDivHeight],
     buttons: {}

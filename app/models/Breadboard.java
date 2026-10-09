@@ -82,15 +82,12 @@ public class Breadboard extends UntypedActor {
               String selectedExperimentName = jsonInput.get("selectedExperiment").toString();
               Experiment experiment = user.getExperimentByName(selectedExperimentName);
               if (experiment != null) {
-                ObjectNode jsonOutput = Json.newObject();
                 try {
                   experiment.export();
-                  jsonOutput.put("output", "Experiment exported.");
+                  Logger.info("Experiment " + experiment.name + " exported.");
                 } catch (IOException ioe) {
-                  jsonOutput.put("output", "Export failed.");
-                  Logger.error(ioe.getMessage());
+                  Logger.error("Export of experiment " + experiment.name + " failed.", ioe);
                 }
-                out.write(jsonOutput);
               }
             } else if (action.equals("SubmitAMTTask")) {
               Logger.debug("action.equals(\"SubmitAMTTask\")");
@@ -326,13 +323,10 @@ public class Breadboard extends UntypedActor {
 
         instances.get(breadboardMessage.user.email).tell(new HitCreated(breadboardMessage.user, lifetimeInSeconds, tutorialTime, breadboardMessage.out), null);
 
-        // Send 'initStep will automatically start' message to Output
-        ObjectNode jsonOutput = Json.newObject();
         Double totalSeconds = (double)(lifetimeInSeconds + tutorialTime);
         Double minutes = Math.floor(totalSeconds / 60);
         Double seconds = totalSeconds - (minutes * 60);
-        jsonOutput.put("output", "AMT HIT created, initStep will automatically start in " + minutes.toString() + " minutes and " + seconds.toString() + " seconds.");
-        breadboardMessage.out.write(jsonOutput);
+        Logger.info("AMT HIT created, initStep will automatically start in " + minutes.toString() + " minutes and " + seconds.toString() + " seconds.");
 
       } else if (message instanceof AddLanguage) {
         AddLanguage addLanguage = (AddLanguage) message;
@@ -386,10 +380,7 @@ public class Breadboard extends UntypedActor {
           Logger.debug("SaveStyle: " + saveStyle.style);
           selectedExperiment.setStyle(saveStyle.style);
           selectedExperiment.update();
-          // Send "Style saved" message to output
-          ObjectNode jsonOutput = Json.newObject();
-          jsonOutput.put("output", "Style saved.");
-          breadboardMessage.out.write(jsonOutput);
+          Logger.info("Style saved for experiment " + selectedExperiment.name + ".");
         }
       } else if (message instanceof SaveClientHtml) {
         SaveClientHtml saveClientHtml = (SaveClientHtml) message;
@@ -398,9 +389,7 @@ public class Breadboard extends UntypedActor {
           Logger.debug("SaveClientHtml: " + saveClientHtml.clientHtml);
           selectedExperiment.setClientHtml(saveClientHtml.clientHtml);
           selectedExperiment.update();
-          ObjectNode jsonOutput = Json.newObject();
-          jsonOutput.put("output", "Client HTML saved.");
-          breadboardMessage.out.write(jsonOutput);
+          Logger.info("Client HTML saved for experiment " + selectedExperiment.name + ".");
           // TODO: Consider pushing update to all clients here, to prevent need for browser refresh.
         }
       } else if (message instanceof SaveClientGraph) {
@@ -410,9 +399,7 @@ public class Breadboard extends UntypedActor {
           Logger.debug("SaveClientGraph: " + saveClientGraph.clientGraph);
           selectedExperiment.setClientGraph(saveClientGraph.clientGraph);
           selectedExperiment.update();
-          ObjectNode jsonOutput = Json.newObject();
-          jsonOutput.put("output", "Client Graph saved.");
-          breadboardMessage.out.write(jsonOutput);
+          Logger.info("Client graph saved for experiment " + selectedExperiment.name + ".");
           // TODO: Consider pushing update to all clients here, to prevent need for browser refresh.
         }
       } else if (message instanceof NewParameter) {

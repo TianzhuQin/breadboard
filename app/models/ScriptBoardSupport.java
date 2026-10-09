@@ -17,6 +17,31 @@ public final class ScriptBoardSupport {
 
     private ScriptBoardSupport() {}
 
+    static final int MAX_SCRIPT_ECHO_CHARS = 2000;
+    static final int MAX_RESULT_CHARS = 10000;
+
+    /**
+     * The log line for an admin-run script: "Ran &lt;name&gt;" for a named step/file, or the (capped)
+     * script itself for an ad-hoc one, followed by "==&gt;" and the (capped) result when there is one.
+     */
+    public static String describeScriptRun(String scriptName, String script, String result) {
+        StringBuilder sb = new StringBuilder();
+        if (scriptName != null) {
+            sb.append("Ran ").append(scriptName);
+        } else {
+            sb.append("Ran script:\n").append(cap(script == null ? "" : script.trim(), MAX_SCRIPT_ECHO_CHARS));
+        }
+        if (result != null) {
+            sb.append("\n==>").append(cap(result, MAX_RESULT_CHARS));
+        }
+        return sb.toString();
+    }
+
+    private static String cap(String s, int max) {
+        if (s.length() <= max) return s;
+        return s.substring(0, max) + "… (" + (s.length() - max) + " more chars)";
+    }
+
     /** A never-null, human-readable description of a Throwable for the admin/client console. */
     public static String describeError(Throwable t) {
         if (t == null) {

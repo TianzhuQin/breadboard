@@ -11,6 +11,22 @@ import static org.junit.Assert.*;
 public class ScriptBoardSupportTest {
 
     @Test
+    public void scriptRunNamesNamedScriptsAndEchoesAdHocOnes() {
+        assertEquals("Ran onJoinStep", ScriptBoardSupport.describeScriptRun("onJoinStep", "big source", null));
+        assertEquals("Ran onJoinStep\n==>step", ScriptBoardSupport.describeScriptRun("onJoinStep", "big source", "step"));
+        assertEquals("Ran script:\ng.V.count()\n==>3", ScriptBoardSupport.describeScriptRun(null, "  g.V.count()\n", "3"));
+    }
+
+    @Test
+    public void scriptRunCapsLongScriptsAndResults() {
+        String longScript = new String(new char[ScriptBoardSupport.MAX_SCRIPT_ECHO_CHARS + 5]).replace('\0', 's');
+        String longResult = new String(new char[ScriptBoardSupport.MAX_RESULT_CHARS + 7]).replace('\0', 'r');
+        String line = ScriptBoardSupport.describeScriptRun(null, longScript, longResult);
+        assertTrue(line.contains("… (5 more chars)\n==>"));
+        assertTrue(line.endsWith("… (7 more chars)"));
+    }
+
+    @Test
     public void coercesIntegerParam() {
         assertEquals(Integer.valueOf(7), ScriptBoardSupport.coerceParam("Integer", "7"));
     }

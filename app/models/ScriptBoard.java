@@ -11,7 +11,6 @@ import com.tinkerpop.gremlin.groovy.GremlinGroovyPipeline;
 import groovy.util.ObservableMap;
 import groovy.lang.Closure;
 import logging.LogCapture;
-import org.apache.commons.io.output.ByteArrayOutputStream;
 import org.apache.commons.lang3.StringUtils;
 import org.codehaus.groovy.control.CompilationFailedException;
 import play.Logger;
@@ -31,6 +30,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ScriptBoard extends UntypedActor {
   private static ObjectMapper mapper = new ObjectMapper();
+  /** Results of admin-run scripts; a child of "application", so it shares its configured level. */
+  private static final Logger.ALogger scriptLogger = Logger.of("application.script");
 
   private static ScriptEngineManager manager = new ScriptEngineManager();
   private static ScriptEngine engine;
@@ -765,32 +766,30 @@ public class ScriptBoard extends UntypedActor {
   }
 
   private static void makeChoice(String uid, String params, ThrottledWebSocketOut out) {
-    ObjectNode jsonOutput = Json.newObject();
     try {
       playerActions.choose(uid, params);
     } catch (Exception e) {
       ScriptLoader.humanizeStackTrace(e);
-      Logger.error("Failed to make choice " + uid, e);
-      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
+      Logger.error("Failed to make choice " + uid + ": " + ScriptBoardSupport.describeError(e), e);
     }
-    out.write(jsonOutput);
+    out.write(Json.newObject());
   }
 
+  /**
+   * Evaluates {@code script} in the shared engine. Results and errors go to the server log (the
+   * admin Logs dialog), not back over {@code out}; a non-null {@code out} only marks the run as
+   * admin-initiated, so its result is logged. Engine-internal runs pass null and log only errors.
+   */
   public static void processScript(String script, ThrottledWebSocketOut out, String scriptName) {
+    boolean named = scriptName != null;
     if (scriptName == null) scriptName = "Unnamed Script";
 
-    ObjectNode jsonOutput = Json.newObject();
     //TODO: better way to handle this?
     boolean initStep = false;
     synchronized (ScriptBoard.class) {
       if (script.contains("initStep.start()")) {
         if (engine.get("initStep.start()") != null) {
-          Logger.debug("engine.get(\"initStep.start()\") = " + engine.get("initStep.start()").toString());
           Logger.warn("The initStep has started already.");
-          jsonOutput.put("error", "Caught error: ".concat("initStep started already").concat("\n"));
-          if (out != null) {
-            out.write(jsonOutput);
-          }
           return;
         }
         engine.put("initStep.start()", true);
@@ -799,50 +798,35 @@ public class ScriptBoard extends UntypedActor {
     }
     try {
       Object outputObject = engine.eval(script);
-      // Clear out error
-      jsonOutput.put("error", "");
-
-      // Write out the results Map as JSON
-      ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-
-      mapper.writeValue(outputStream, engine.getBindings(ScriptContext.ENGINE_SCOPE).get("results"));
-      String outputString = script.trim().concat("\n\n==>");
-
-      if (outputObject != null) {
+      if (out != null) {
+        String result = null;
         if (outputObject instanceof GremlinGroovyPipeline) {
-          outputString += StringUtils.join(((GremlinGroovyPipeline) outputObject).toList(), "\n==>");
-        } else {
-          outputString += outputObject.toString();
+          // Iterate fully, as before, so side-effecting pipelines still run to completion.
+          result = StringUtils.join(((GremlinGroovyPipeline) outputObject).toList(), "\n==>");
+        } else if (outputObject != null) {
+          result = outputObject.toString();
         }
+        scriptLogger.info(ScriptBoardSupport.describeScriptRun(named ? scriptName : null, script, result));
       }
-
-      jsonOutput.put("output", outputString.trim());
     } catch (CompilationFailedException cfe) {
       // Translate Groovy's opaque "Script<N>.groovy" names back to real file names in both the
-      // logged stack trace and the error sent to the browser (see ScriptLoader.humanize*).
+      // logged stack trace and the message (see ScriptLoader.humanize*).
       ScriptLoader.humanizeStackTrace(cfe);
-      Logger.error("Unable to compile the script. " + scriptName, cfe);
-      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(cfe) + "\n");
+      Logger.error("Unable to compile " + scriptName + ": " + ScriptBoardSupport.describeError(cfe), cfe);
       if (initStep) {
         engine.put("initStep.start()", null);
       }
     } catch (ScriptException se) {
       ScriptLoader.humanizeStackTrace(se);
-      Logger.error("Script Error. " + scriptName, se);
-      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(se) + "\n");
+      Logger.error("Script error in " + scriptName + ": " + ScriptBoardSupport.describeError(se), se);
       if (initStep) {
         engine.put("initStep.start()", null);
       }
     } catch (Exception e) {
       ScriptLoader.humanizeStackTrace(e);
-      Logger.error("Failed to process the script. " + scriptName, e);
-      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
+      Logger.error("Failed to process " + scriptName + ": " + ScriptBoardSupport.describeError(e), e);
       if (initStep) {
         engine.put("initStep.start()", null);
-      }
-    } finally {
-      if (out != null) {
-        out.write(jsonOutput);
       }
     }
   }
