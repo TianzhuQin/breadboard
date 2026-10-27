@@ -80,6 +80,7 @@ public final class ScriptLoader {
       "step.groovy",
       // "test.groovy",
       "events.groovy",
+      "edge_edits.groovy",
       "chat.groovy",
       "form.groovy",
       "ready.groovy",

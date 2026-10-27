@@ -11,6 +11,9 @@ const CUSTOM_EVENT = 'CustomEvent'
 // a custom event that the group's own handler listens for. Must stay in sync with
 // Games.SUBMIT_EVENT in groovy/groups.groovy.
 const GROUP_CHOICE_EVENT = 'group-action-submit'
+// Editing ties from the network view. Must stay in sync with groovy/edge_edits.groovy.
+const EDGE_EDIT_EVENT = 'bb:edge-edit'
+export const EDGE_EDIT_RESULT_EVENT = 'bb:edge-edit-result'
 
 // Participant credentials. After login the server redirects to the participant page with the
 // seat token in the URL fragment (it is also set as an HttpOnly cookie). Keep it in session
@@ -167,6 +170,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     return this.send(GROUP_CHOICE_EVENT, data)
   }
 
+  /**
+   * Ask the server to add or cut the tie between two people in this player's view, using the
+   * node ids from the graph. What is allowed is in player.edgeEdits; the server answers with an
+   * EDGE_EDIT_RESULT_EVENT ({ ok, op, a, b, reason }).
+   */
+  sendEdgeEdit (op: 'add' | 'remove', a: string, b: string) {
+    return this.send(EDGE_EDIT_EVENT, { op, a, b })
+  }
+
   getCustomParams () {
     const map: { [key: string]: any } = {}
     const customInputs = Array.from(document.querySelectorAll('.param'))
@@ -224,18 +236,11 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   async login () {
     const config = await this.loadConfig()
     await this.connect()
+    // Only the id: the server no longer stores the referer, user agent and other headers this
+    // used to send, which were personal data and couldn't be trusted anyway.
     this.socket.send(JSON.stringify({
       action: 'LogIn',
-      clientId: config.clientId,
-      referer: config.referer,
-      connection: config.connection,
-      accept: config.accept,
-      acceptLanguage: config.acceptLanguage,
-      acceptEncoding: config.acceptEncoding,
-      userAgent: config.userAgent,
-      host: config.host,
-      ipAddress: config.ipAddress,
-      requestURI: config.requestURI
+      clientId: config.clientId
     }))
   }
 
