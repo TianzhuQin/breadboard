@@ -81,6 +81,7 @@ POST        /languages/remove                                                   
 
 # The hitId and assignmentId parameters may or may not be present
 GET         /game/:experimentId/:experimentInstanceId/amt                        controllers.ClientLogin.amtLogin(experimentId: Long, experimentInstanceId: Long, hitId: String ?= null, assignmentId: String ?= null, workerId: String ?= null)
+GET         /game/:experimentId/:experimentInstanceId/prolific                   controllers.ClientLogin.prolificEntry(experimentId: String, experimentInstanceId: String)
 GET         /game/:experimentId/:experimentInstanceId/login                      controllers.ClientLogin.login(experimentId: String, experimentInstanceId: String)
 POST        /game/:experimentId/:experimentInstanceId/login                      controllers.ClientLogin.authenticate(experimentId: String, experimentInstanceId: String)
 POST        /game/:experimentId/:experimentInstanceId/amt                        controllers.ClientLogin.amtAuthenticate(experimentId: Long, experimentInstanceId: Long, hitId: String, assignmentId: String, workerId: String)

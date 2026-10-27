@@ -1,0 +1,21 @@
+@(title: String, message: String)
+<html>
+    <head>
+        <title>@title</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="/assets/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
+        <style>
+      #contentDiv {
+        padding: 1em;
+        max-width: 40em;
+      }
+        </style>
+    </head>
+    <body>
+      <div id="contentDiv">
+        <h3>@title</h3>
+        <p>@message</p>
+      </div>
+    </body>
+</html>

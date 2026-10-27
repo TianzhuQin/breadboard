@@ -118,3 +118,37 @@ test.async("an unanswered choice still drops the player", 3000) { done ->
   a.setDropPlayers(true)
   a.add(p, [name: "Never answered", result: { }])
 }
+
+// --- tracked edges ------------------------------------------------------------------------------
+
+test("a tracked edge can be removed with _removeEdge and the removal is logged") {
+  def logged = []
+  def oldTracker = g.eventTracker
+  g.eventTracker = [track: { name, data -> logged << name }]
+  try {
+    def v1 = g.addPlayer('edge-a')
+    def v2 = g.addPlayer('edge-b')
+    def e = g.addTrackedEdge(v1, v2, "connected")
+    assert g._removeEdge(e, true) == true
+    assert !g.hasEdge(v1, v2)
+    assert logged == ["Connected", "Disconnected"]
+  } finally {
+    g.eventTracker = oldTracker
+  }
+}
+
+test("a removal that fails is not logged as Disconnected") {
+  def logged = []
+  def oldTracker = g.eventTracker
+  g.eventTracker = [track: { name, data -> logged << name }]
+  try {
+    def v1 = g.addPlayer('edge-c')
+    def v2 = g.addPlayer('edge-d')
+    def e = g.addTrackedEdge(v1, v2, "connected", false)
+    assert g._removeEdge(e, false) == true
+    assert g._removeEdge(e, true) == false   // already gone
+    assert !logged.contains("Disconnected")
+  } finally {
+    g.eventTracker = oldTracker
+  }
+}

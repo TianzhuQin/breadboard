@@ -149,6 +149,7 @@ public class ScriptBoard extends UntypedActor {
     }
     Logger.debug("ScriptEngine reload start");
     ClientView.reset();
+    Recruitment.reset();
     if (engine != null) {
       // just in case
       playerActions.turnAIOff();
@@ -384,6 +385,7 @@ public class ScriptBoard extends UntypedActor {
         }
         Graph wholeGraph = (Graph) engine.get("g");
         Vertex clientVertex = wholeGraph.getVertex(clientId);
+        Recruitment.applyTo(clientVertex);
         if (clientVertex != null) {
           if (graphChangedListener instanceof EventGraphChangedListener) {
             client.updateGraph(clientVertex);
@@ -757,6 +759,13 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  /** Log an event for the current instance from outside the script engine (e.g. an entry route). */
+  public static void trackEvent(String name, LinkedHashMap<Object, Object> data) {
+    if (eventTracker != null) {
+      eventTracker.track(name, data);
+    }
+  }
+
   /**
    * Record whether a participant currently has an open socket: {@code player._system.connected}
    * on the vertex (engine-internal, never sent to neighbors) and a clientConnected /
@@ -825,6 +834,14 @@ public class ScriptBoard extends UntypedActor {
         }
         engine.put("initStep.start()", true);
         initStep = true;
+        // Close the game to newcomers once it starts, however it was started. Only the AMT timer
+        // used to do this, so with a manual start late joiners were admitted mid-game.
+        if (!Play.application().configuration().getBoolean("breadboard.allowLateJoin", false)) {
+          Object listener = engine.get("gameListener");
+          if (listener instanceof GameListener) {
+            ((GameListener) listener).hasStarted();
+          }
+        }
       }
     }
     try {

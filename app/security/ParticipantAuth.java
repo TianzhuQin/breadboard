@@ -150,6 +150,32 @@ public final class ParticipantAuth {
         && MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), signature.getBytes(StandardCharsets.UTF_8));
   }
 
+  /**
+   * The internal client id for a Prolific participant in an instance: the same PROLIFIC_PID always
+   * maps to the same seat (so a participant can come back), but the id doesn't reveal the PID.
+   */
+  public static String prolificClientId(String instanceId, String prolificPid) {
+    byte[] digest;
+    String secret = applicationSecret();
+    String input = "prolific" + SEP + instanceId + SEP + prolificPid;
+    try {
+      if (secret != null) {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        digest = mac.doFinal(input.getBytes(StandardCharsets.UTF_8));
+      } else {
+        digest = sha256(input);
+      }
+    } catch (Exception e) {
+      digest = sha256(input);
+    }
+    StringBuilder id = new StringBuilder("pp-");
+    for (int k = 0; k < 6; k++) {
+      id.append(String.format("%02x", digest[k]));
+    }
+    return id.toString();
+  }
+
   /** The configured application secret, or null if it is missing or a published default. */
   static String applicationSecret() {
     String secret = Play.application().configuration().getString("application.secret");

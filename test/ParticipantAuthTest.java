@@ -175,6 +175,62 @@ public class ParticipantAuthTest extends BaseTest {
         assertFalse(ParticipantAuth.isClaimed(i, "P2"));
     }
 
+    // === Prolific entry ===
+
+    private String prolificUrl(String pid) {
+        return "/game/" + e + "/" + i + "/prolific?PROLIFIC_PID=" + pid + "&STUDY_ID=study-1&SESSION_ID=session-1";
+    }
+
+    @Test
+    public void prolificEntryClaimsAPseudonymousSeat() {
+        Result result = route(fakeRequest(GET, prolificUrl("5f0c1a2b3c4d5e6f7a8b9c0d")));
+        assertEquals(SEE_OTHER, status(result));
+        String location = header(LOCATION, result);
+        String clientId = ParticipantAuth.prolificClientId(i, "5f0c1a2b3c4d5e6f7a8b9c0d");
+        assertTrue(location, location.startsWith("/game/" + e + "/" + i + "/" + clientId + "/connected#"));
+        assertFalse("the Prolific id must not appear in the participant URL", location.contains("5f0c1a2b3c4d5e6f7a8b9c0d"));
+        assertTrue(ParticipantAuth.isClaimed(i, clientId));
+    }
+
+    @Test
+    public void theSameProlificIdFromAnotherBrowserIsRefused() {
+        route(fakeRequest(GET, prolificUrl("PIDA")));
+        Result again = route(fakeRequest(GET, prolificUrl("PIDA")));
+        assertEquals(FORBIDDEN, status(again));
+        assertTrue(contentAsString(again).contains("already joined"));
+    }
+
+    @Test
+    public void theSameBrowserReturnsToItsSeat() {
+        Result first = route(fakeRequest(GET, prolificUrl("PIDB")));
+        Http.Cookie cookie = cookie(ParticipantAuth.cookieName(i), first);
+        Result back = route(fakeRequest(GET, prolificUrl("PIDB")).withCookies(cookie));
+        assertEquals(SEE_OTHER, status(back));
+        String clientId = ParticipantAuth.prolificClientId(i, "PIDB");
+        assertEquals("/game/" + e + "/" + i + "/" + clientId + "/connected", header(LOCATION, back));
+    }
+
+    @Test
+    public void prolificEntryNeedsAProlificId() {
+        Result result = route(fakeRequest(GET, "/game/" + e + "/" + i + "/prolific"));
+        assertEquals(BAD_REQUEST, status(result));
+    }
+
+    @Test
+    public void newcomersAreTurnedAwayOnceTheGameHasStarted() {
+        // Through the setter: test code isn't Ebean-enhanced, so a plain field write isn't saved.
+        instance.setHasStarted(Boolean.TRUE);
+        instance.save();
+        Result prolific = route(fakeRequest(GET, prolificUrl("PIDLATE")));
+        assertEquals(OK, status(prolific));
+        assertTrue(contentAsString(prolific).contains("already started"));
+        assertFalse(ParticipantAuth.isClaimed(i, ParticipantAuth.prolificClientId(i, "PIDLATE")));
+
+        Result login = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("LATE1")));
+        assertEquals(FORBIDDEN, status(login));
+        assertTrue(contentAsString(login).contains("already started"));
+    }
+
     private static Map<String, String> form(String id) {
         Map<String, String> data = new HashMap<String, String>();
         data.put("id", id);

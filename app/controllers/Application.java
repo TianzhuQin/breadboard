@@ -162,14 +162,12 @@ public class Application extends Controller {
 
     csv.append("\n");
 
-    SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'");
-
     List<ExperimentInstance> instances = experiment.instances;
     for (ExperimentInstance instance : instances) {
       csv.append("\"").append(instance.id).append("\",");
       csv.append("\"").append(instance.name).append("\",");
       csv.append("\"").append(instance.status).append("\",");
-      csv.append("\"").append(simpleDateFormat.format(instance.creationDate)).append("\",");
+      csv.append("\"").append(Timestamps.csv(instance.creationDate)).append("\",");
 
       HashMap<String, String> dataMap = new HashMap<>();
       for (Data d : instance.data) {
@@ -201,7 +199,9 @@ public class Application extends Controller {
     Collections.sort(ei.events, new Comparator<Event>() {
       @Override
       public int compare(Event o1, Event o2) {
-        return o1.datetime.compareTo(o2.datetime);
+        int byTime = o1.datetime.compareTo(o2.datetime);
+        // Events in the same millisecond keep the order they were recorded in.
+        return byTime != 0 ? byTime : Long.compare(o1.id == null ? 0 : o1.id, o2.id == null ? 0 : o2.id);
       }
     });
     for (Event event : ei.events) {
@@ -209,7 +209,7 @@ public class Application extends Controller {
       for (EventData eventData : eventDatas) {
         csv.append("\"").append(event.id).append("\",\"")
             .append(event.name).append("\",\"")
-            .append(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS'Z'").format(event.datetime))
+            .append(Timestamps.csv(event.datetime))
             .append("\",\"").append(eventData.name).append("\",")
             .append(eventData.valueToCSV()).append("\n");
       }

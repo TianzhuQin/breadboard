@@ -195,23 +195,23 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
   }
 
   public Edge addEdge(Object id, Vertex v1, Vertex v2, String label) {
+    // EventGraph already returns an EventEdge. It used to be wrapped in a second EventEdge, and
+    // removing that double-wrapped edge threw a ClassCastException inside TinkerGraph.
     Edge edge = super.addEdge(id, v1, v2, label)
-
-    EventEdge eventEdge = new EventEdge(edge, this)
 
     def inProps = [:] as ObservableMap
     inProps.addPropertyChangeListener({ evt ->
-      eventEdge.onEdgePropertyChanged(edge, "inProps", evt.oldValue, evt.newValue)
+      edge.onEdgePropertyChanged(edge, "inProps", evt.oldValue, evt.newValue)
     } as PropertyChangeListener)
-    eventEdge.setProperty("inProps", inProps);
+    edge.setProperty("inProps", inProps);
 
     def outProps = [:] as ObservableMap
     outProps.addPropertyChangeListener({ evt ->
-      eventEdge.onEdgePropertyChanged(edge, "outProps", evt.oldValue, evt.newValue)
+      edge.onEdgePropertyChanged(edge, "outProps", evt.oldValue, evt.newValue)
     } as PropertyChangeListener)
-    eventEdge.setProperty("outProps", outProps);
+    edge.setProperty("outProps", outProps);
 
-    return eventEdge
+    return edge
   }
 
   public Vertex addVertex(Object id) {
@@ -673,14 +673,19 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
     })
   }
 
-  def _removeEdge(Edge e, Boolean track) {
-    if (track) {
-      def data = [[name: "playerId1", value: e.getVertex(Direction.IN).id.toString()], [name: "playerId2", value: e.getVertex(Direction.OUT).id.toString()]]
-      if (eventTracker) {
-        eventTracker.track("Disconnected", data)
-      }
+  // Returns true if the edge was removed, false if it was no longer in the graph.
+  def _removeEdge(Edge e, Boolean track = true) {
+    if (e == null || getEdge(e.getId()) == null) {
+      return false
     }
+    def data = [[name: "playerId1", value: e.getVertex(Direction.IN).id.toString()], [name: "playerId2", value: e.getVertex(Direction.OUT).id.toString()]]
+    // Remove first and log only if that worked: the Disconnected event used to be written before
+    // the removal, so a failed removal still appeared in the data as a tie that was cut.
     removeEdge(e)
+    if (track && eventTracker) {
+      eventTracker.track("Disconnected", data)
+    }
+    return true
   }
 
   def removeVertices() {

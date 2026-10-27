@@ -37,6 +37,9 @@ public class ClientController extends Controller
           if (!ParticipantAuth.verifyInvite(experimentInstanceId, clientId, invite)) {
             return forbidden(amtError.render());
           }
+          if (ClientLogin.closedToNewcomers(experimentInstanceId, clientId)) {
+            return ok(amtGameStarted.render());
+          }
           String token = ParticipantAuth.claim(experimentInstanceId, clientId);
           if (token == null) {
             Form<ClientLogin.CLogin> form = Form.form(ClientLogin.CLogin.class);

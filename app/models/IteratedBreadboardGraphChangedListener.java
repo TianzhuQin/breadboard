@@ -10,6 +10,7 @@ import play.libs.Akka;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,8 +20,8 @@ import scala.concurrent.duration.Duration;
 public class IteratedBreadboardGraphChangedListener implements BreadboardGraphChangedListener {
   private Graph graph;
   private Long updateIteration = 0L;
-  private ArrayList<ClientListener> adminListeners = new ArrayList<>();
-  private HashMap<String, Client> clientListeners = new HashMap<>();
+  private final List<ClientListener> adminListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+  private final Map<String, Client> clientListeners = new java.util.concurrent.ConcurrentHashMap<>();
 
   static ActorRef clientUpdateActor;
 
@@ -63,7 +64,7 @@ public class IteratedBreadboardGraphChangedListener implements BreadboardGraphCh
     }
   }
 
-  public HashMap<String, Client> getClientListeners() {
+  public Map<String, Client> getClientListeners() {
     return this.clientListeners;
   }
 
@@ -87,7 +88,7 @@ public class IteratedBreadboardGraphChangedListener implements BreadboardGraphCh
     adminListeners.add(adminListener);
   }
 
-  public ArrayList<ClientListener> getAdminListeners() {
+  public List<ClientListener> getAdminListeners() {
     return this.adminListeners;
   }
 

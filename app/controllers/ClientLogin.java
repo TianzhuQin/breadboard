@@ -176,12 +176,81 @@ public class ClientLogin extends Controller {
         loginForm.reject("Please enter your ID.");
         return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
+      if (closedToNewcomers(experimentInstanceId, clientId)) {
+        loginForm.reject("This session has already started.");
+        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      }
       String token = ParticipantAuth.claim(experimentInstanceId, clientId);
       if (token == null) {
         loginForm.reject("This ID is already in use.");
         return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
       return enterGame(experimentId, experimentInstanceId, clientId, token, null);
+    }
+  }
+
+  /**
+   * Entry from a Prolific study link:
+   * /game/{experimentId}/{instanceId}/prolific?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
+   *
+   * The PROLIFIC_PID is mapped to a pseudonymous client id, so it never appears in URLs or reaches
+   * other participants. The PID, study and session ids are written to the researcher's event log
+   * (prolificEntry) and to the player's own _system.recruitment for payment and the completion
+   * screen. The same browser coming back returns to its seat; anyone else using the same link
+   * is refused.
+   */
+  public static Result prolificEntry(String experimentId, String experimentInstanceId) {
+    String pid = request().getQueryString("PROLIFIC_PID");
+    String studyId = request().getQueryString("STUDY_ID");
+    String sessionId = request().getQueryString("SESSION_ID");
+    if (pid == null || pid.trim().isEmpty()) {
+      return badRequest(participantMessage.render("Missing Prolific ID",
+          "This link must be opened from Prolific. Please return to Prolific and start the study again."));
+    }
+    ExperimentInstance instance = null;
+    try {
+      instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+    } catch (NumberFormatException ignored) {}
+    if (instance == null || instance.status != ExperimentInstance.Status.RUNNING) {
+      return ok(participantMessage.render("This study is not running",
+          "There is no session running at the moment. Please return the study on Prolific."));
+    }
+
+    String clientId = ParticipantAuth.prolificClientId(experimentInstanceId, pid.trim());
+    if (ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
+      // The same browser coming back: it already holds this seat.
+      return redirect(routes.ClientController.index(experimentId, experimentInstanceId, clientId, null).url());
+    }
+    if (closedToNewcomers(experimentInstanceId, clientId)) {
+      return ok(participantMessage.render("The session has already started",
+          "This session began before you arrived. Please return the study on Prolific."));
+    }
+    String token = ParticipantAuth.claim(experimentInstanceId, clientId);
+    if (token == null) {
+      return forbidden(participantMessage.render("Already joined",
+          "You have already joined this study in another browser or tab. Please continue there."));
+    }
+    Recruitment.prolificEntry(clientId, pid.trim(), studyId, sessionId);
+    java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
+    data.put("clientId", clientId);
+    data.put("prolificPid", pid.trim());
+    data.put("studyId", studyId);
+    data.put("sessionId", sessionId);
+    ScriptBoard.trackEvent("prolificEntry", data);
+    return enterGame(experimentId, experimentInstanceId, clientId, token, null);
+  }
+
+  /**
+   * True when the instance has started and this id doesn't already hold a seat in it, so a new
+   * participant would get a page that can never join the game.
+   */
+  static boolean closedToNewcomers(String experimentInstanceId, String clientId) {
+    try {
+      ExperimentInstance instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+      return instance != null && Boolean.TRUE.equals(instance.hasStarted)
+          && !ParticipantAuth.isClaimed(experimentInstanceId, clientId);
+    } catch (NumberFormatException e) {
+      return false;
     }
   }
 
