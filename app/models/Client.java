@@ -27,6 +27,9 @@ public class Client extends Model {
   public ThrottledWebSocketOut out;
   public ExperimentInstance experimentInstance;
   private int styleHash;
+  // The last full update this participant got. ScriptBoard keeps it for a while after the session
+  // ends, so a page that reconnects later gets its final screen back (see ScriptBoard.addClient).
+  public volatile ObjectNode lastFrame;
 
   public Client(String id, ExperimentInstance experimentInstance, WebSocket.In<JsonNode> in, ThrottledWebSocketOut out) {
     this.id = id;
@@ -187,6 +190,7 @@ public class Client extends Model {
       jsonOutput.put("style", experimentInstance.experiment.getStyle());
     }
 
+    lastFrame = jsonOutput;
     out.write(jsonOutput);
   }
 

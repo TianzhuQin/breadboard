@@ -386,6 +386,27 @@ public class Experiment extends Model {
     return contents;
   }
 
+  /**
+   * The client HTML every experiment got before the new participant page: the default for old
+   * experiments that are converted or imported without client HTML of their own, so they keep
+   * looking as they did. New experiments get {@link #defaultClientHTML()}.
+   */
+  public static String legacyClientHTML() {
+    String contents = "";
+    try {
+      InputStream legacyClientHtml = Play.application().resourceAsStream("defaults/legacy-client-html.html");
+
+      if (legacyClientHtml == null) {
+        Logger.error("Couldn't find the conf/defaults/legacy-client-html.html file.");
+      } else {
+        contents = IOUtils.toString(legacyClientHtml);
+      }
+    } catch(IOException e){
+      Logger.error("Error reading the conf/defaults/legacy-client-html.html file.");
+    }
+    return contents;
+  }
+
   public static String defaultClientGraph() {
     String contents = "";
     try {

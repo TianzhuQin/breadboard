@@ -138,7 +138,8 @@ public class Global extends GlobalSettings {
           FileUtils.writeStringToFile(new File(experimentDirectory, "client.html"), experiment.clientHtml);
           FileUtils.writeStringToFile(new File(experimentDirectory, "client-graph.js"), experiment.clientGraph);
           experiment.clientGraph = Experiment.defaultClientGraph();
-          experiment.clientHtml = Experiment.defaultClientHTML();
+          // The client HTML this upgrade always gave them, not the newer participant page.
+          experiment.clientHtml = Experiment.legacyClientHTML();
         } catch (IOException ioe) {
           Logger.error("Error backing up v2.2 client.html and client.js to experiments directory");
         }

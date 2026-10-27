@@ -44,6 +44,16 @@ public class ScriptBoard extends UntypedActor {
 
   private static Random rand = new Random();
   private static final Map<String, Client> clients = new java.util.concurrent.ConcurrentHashMap<>();
+  // Final screens of the participants of the last few sessions, by instance id and client id, for
+  // pages that reconnect after their session has ended (see addClient).
+  private static final int ENDED_SESSIONS_KEPT = 10;
+  private static final Map<Long, Map<String, ObjectNode>> endedSessionScreens = Collections.synchronizedMap(
+      new LinkedHashMap<Long, Map<String, ObjectNode>>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, Map<String, ObjectNode>> eldest) {
+          return size() > ENDED_SESSIONS_KEPT;
+        }
+      });
 
   // AMT lifecycle timers scheduled by the HitCreated handler. Tracked so they can be
   // cancelled on reload / on re-submit instead of being orphaned (MEMORY_LEAKS.md L6).
@@ -60,10 +70,27 @@ public class ScriptBoard extends UntypedActor {
 
   public static boolean checkPassword(String _password) {
     // If no password is set, always return true
-    if (engine == null || engine.get("password") == null)
+    Object password = currentPassword();
+    if (password == null)
       return true;
-    Object password = engine.get("password");
-    return _password.equals(password.toString());
+    return password.toString().equals(_password);
+  }
+
+  /** Whether the experiment set a participant password (the login form only asks for one then). */
+  public static boolean hasPassword() {
+    return currentPassword() != null;
+  }
+
+  // The experiment's "password" binding, or null when there is none or it is blank. Read once from
+  // a local copy of the engine, which a reload can replace at any moment.
+  private static Object currentPassword() {
+    ScriptEngine current = engine;
+    if (current == null)
+      return null;
+    Object password = current.get("password");
+    if (password == null || password.toString().trim().isEmpty())
+      return null;
+    return password;
   }
 
   public ScriptBoard() throws IOException, ScriptException {
@@ -74,6 +101,7 @@ public class ScriptBoard extends UntypedActor {
     results = new HashMap();
     mapper = new ObjectMapper();
     admins = new ArrayList<>();
+    rememberLastScreens(clients.values());
     clients.clear();
     eventTracker = new EventTracker();
     manager = new ScriptEngineManager();
@@ -92,7 +120,39 @@ public class ScriptBoard extends UntypedActor {
         graphChangedListener.removeClientListener(client);
       }
     }
+    rememberLastScreens(clients.values());
     clients.clear();
+  }
+
+  static void rememberLastScreens(Collection<Client> sessionClients) {
+    for (Client client : sessionClients) {
+      if (client.lastFrame == null || client.experimentInstance == null || client.experimentInstance.id == null) {
+        continue;
+      }
+      Long instanceId = client.experimentInstance.id;
+      synchronized (endedSessionScreens) {
+        Map<String, ObjectNode> screens = endedSessionScreens.get(instanceId);
+        if (screens == null) {
+          screens = new java.util.concurrent.ConcurrentHashMap<>();
+          endedSessionScreens.put(instanceId, screens);
+        }
+        screens.put(client.id, client.lastFrame);
+      }
+    }
+  }
+
+  /** What a page that reconnects to a session that has ended is sent: its last screen, if known. */
+  static ObjectNode endedSessionScreen(Long instanceId, String clientId) {
+    Map<String, ObjectNode> screens = endedSessionScreens.get(instanceId);
+    ObjectNode last = screens == null ? null : screens.get(clientId);
+    if (last != null) {
+      return last;
+    }
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("text", "<h3>This session has ended</h3><p>Thank you for taking part. You can close this page.</p>");
+    return frame;
   }
 
   /** Cancel and forget every tracked AMT lifecycle timer. Safe to call when none exist. */
@@ -298,6 +358,15 @@ public class ScriptBoard extends UntypedActor {
       }
 
       Client client = clients.get(clientId);
+
+      if (client == null && experimentInstance.status != null && !experimentInstance.status.isRunnable()) {
+        // The session is over (finished, or given up by the autopilot), and the engine may already
+        // be running the next one, which this participant must not be pulled into. Give the page
+        // back its last screen (a completion code, a "could not start" notice) instead.
+        Logger.debug("addClient: instance " + experimentInstanceId + " is no longer running");
+        out.write(endedSessionScreen(experimentInstance.id, clientId));
+        return;
+      }
 
       if (client == null && experimentInstance.hasStarted) {
         Logger.debug("New client trying to join after game has already started.");
@@ -851,6 +920,14 @@ public class ScriptBoard extends UntypedActor {
           }
         }
       }
+    }
+    if (initStep) {
+      // Scripts can react however the game was started (admin, AMT timer, a script), e.g.
+      // groovy/autopilot.groovy clears its waiting screen. Sent outside the lock above: a handler
+      // may hold its own lock and call back in here.
+      Map<String, Object> info = new HashMap<String, Object>();
+      info.put("scriptName", scriptName);
+      eventBus.emit("bb:game-start", info);
     }
     try {
       Object outputObject = engine.eval(script);

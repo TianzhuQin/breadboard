@@ -61,6 +61,18 @@ public class ExperimentModelTest extends BaseTest {
     }
 
     @Test
+    public void oldExperimentsGetTheLegacyClientHtml() throws Exception {
+        String legacy = Experiment.legacyClientHTML();
+        assertEquals("legacyClientHTML() should read conf/defaults/legacy-client-html.html",
+                org.apache.commons.io.FileUtils.readFileToString(
+                        new java.io.File("conf/defaults/legacy-client-html.html"), "UTF-8"),
+                legacy);
+        assertTrue(legacy.contains("<SVGGraph"));
+        assertFalse("the legacy page must not be the new participant page",
+                legacy.equals(Experiment.defaultClientHTML()));
+    }
+
+    @Test
     public void experimentFileModeDefault() {
         Experiment exp = createExperiment("FileModeExp");
         Experiment found = Experiment.findById(exp.id);

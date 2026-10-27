@@ -714,7 +714,9 @@ public class ExperimentController extends Controller {
       experiment.addStep(onLeave);
       experiment.addStep(init);
     }
-    experiment.setClientHtml(Experiment.defaultClientHTML());
+    // An import is an older experiment: unless it brings its own client HTML (v2.3 and later
+    // exports do), it gets the client HTML imports always got, not the newer participant page.
+    experiment.setClientHtml(isNewExperiment ? Experiment.defaultClientHTML() : Experiment.legacyClientHTML());
     experiment.setClientGraph(Experiment.defaultClientGraph());
     // Add the user's default language
     experiment.languages.add(user.defaultLanguage);
