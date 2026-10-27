@@ -1,0 +1,156 @@
+/* Server-rendered participant pages: sign in, messages, and the page before the game loads.
+   Same look as the participant client (frontend/client/src/theme/bb-theme.css). */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url(../fonts/inter/inter-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url(../fonts/inter/inter-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url(../fonts/inter/inter-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url(../fonts/inter/inter-latin-700-normal.woff2) format('woff2'); }
+
+/* Only these pages are styled, so every rule sits under .bb-page: the game page loads this file
+   for every experiment, and the experiment's own client HTML must look as it did. */
+.bb-page {
+  --bb-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --bb-bg: #f5f6fa;
+  --bb-surface: #ffffff;
+  --bb-border: #e7e9f1;
+  --bb-text: #0f172a;
+  --bb-text-soft: #475569;
+  --bb-muted: #475569;
+  --bb-accent: #4f46e5;
+  --bb-accent-hover: #4338ca;
+  --bb-danger: #e11d48;
+}
+
+.bb-page, .bb-page *, .bb-page *::before, .bb-page *::after { box-sizing: border-box; }
+
+body.bb-page { margin: 0; }
+
+/* The game page's placeholder until the experiment's page loads: the whole window, whatever the
+   body's own margins (the body belongs to the experiment's page). */
+#app > .bb-page {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.bb-page {
+  font-family: var(--bb-font);
+  color: var(--bb-text);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(99, 102, 241, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 110% 10%, rgba(14, 165, 233, 0.06), transparent 60%),
+    var(--bb-bg);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px 16px;
+}
+
+.bb-page .bb-panel {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-border);
+  border-radius: 20px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 10px 30px rgba(15, 23, 42, 0.06);
+  padding: 36px 32px 32px;
+}
+.bb-page .bb-panel--wide { max-width: 560px; }
+
+.bb-page .bb-mark {
+  width: 44px;
+  height: 44px;
+  margin-bottom: 20px;
+}
+
+.bb-page .bb-panel h1 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+.bb-page .bb-panel p {
+  font-size: 15.5px;
+  line-height: 1.6;
+  color: var(--bb-text-soft);
+  margin: 0 0 12px;
+}
+.bb-page .bb-panel .bb-lead { margin-bottom: 24px; }
+
+.bb-page .bb-field { margin-bottom: 16px; }
+.bb-page .bb-field label {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--bb-text);
+  margin-bottom: 6px;
+}
+.bb-page .bb-field input {
+  width: 100%;
+  font: inherit;
+  font-size: 16px;
+  padding: 12px 14px;
+  border: 1px solid #d8dce6;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--bb-text);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.bb-page .bb-field input:focus {
+  outline: none;
+  border-color: var(--bb-accent);
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.15);
+}
+
+.bb-page .bb-button {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 13px 16px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bb-accent);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.25);
+  transition: background 150ms ease, transform 100ms ease;
+}
+.bb-page .bb-button:hover { background: var(--bb-accent-hover); }
+.bb-page .bb-button:active { transform: translateY(1px); }
+
+.bb-page .bb-alert {
+  font-size: 14.5px;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin: 0 0 18px;
+}
+.bb-page .bb-alert--error { background: #fff1f2; color: #9f1239; }
+.bb-page .bb-alert--success { background: #ecfdf5; color: #065f46; }
+
+.bb-page .bb-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--bb-muted);
+  font-size: 15px;
+}
+.bb-page .bb-spinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid #e0e7ff;
+  border-top-color: var(--bb-accent);
+  animation: bb-spin 0.9s linear infinite;
+}
+@keyframes bb-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .bb-page .bb-spinner { animation-duration: 3s; } }

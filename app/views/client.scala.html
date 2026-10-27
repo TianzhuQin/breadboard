@@ -1,18 +1,19 @@
 @(assetsRoot: String)
 <!DOCTYPE html>
-<html lang="EN">
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>breadboard: Client</title>
+    <title>Breadboard</title>
     <link rel="shortcut icon" type="image/png" href="/assets/img/favicon.ico">
+    <link rel="stylesheet" href="/assets/css/participant.css?v=@models.AssetVersion.VALUE">
 </head>
 <body>
     <div id="app">
-        Loading...
+        <div class="bb-page"><div class="bb-loading"><div class="bb-spinner"></div>Loading…</div></div>
     </div>
     <style id="style"></style>
-    <script type="text/javascript" src="@assetsRoot/bundles/client.js" charset="utf-8"></script>
+    <script type="text/javascript" src="@assetsRoot/bundles/client.js?v=@models.AssetVersion.VALUE" charset="utf-8"></script>
 </body>
 </html>

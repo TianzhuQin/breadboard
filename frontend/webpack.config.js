@@ -7,8 +7,9 @@ const buildPath = path.resolve(__dirname, '../public/bundles/')
 
 const PORT = 8765
 const isProd = process.env.NODE_ENV === 'production'
+// 'auto': chunks load from wherever the entry script was served (breadboard.assetsRoot, e.g. a CDN).
 const publicPath = isProd
-  ? '/assets/bundles/'
+  ? 'auto'
   : `http://localhost:${PORT}/bundles/`
 // webpack-dev-server v3's client isn't injected when launched via webpack-cli's
 // `webpack serve`, so the HMR websocket never connects. Inject it manually in dev.
@@ -33,6 +34,7 @@ if (isProd) {
   plugins.push(
     new MiniCssExtractPlugin({
       filename: '[name].css',
+      chunkFilename: '[name].[contenthash:8].css',
     }),
   )
 }
@@ -55,7 +57,10 @@ module.exports = {
   output: {
     path: buildPath,
     publicPath: publicPath,
-    chunkFilename: '[name].js',
+    // Entry bundles keep fixed names (the server's pages link to them, and browsers revalidate
+    // them: see assets.cache in conf/application.conf). Chunks loaded on demand carry a content
+    // hash, so a browser never runs a stale one after an update.
+    chunkFilename: isProd ? '[name].[contenthash:8].js' : '[name].js',
     clean: true,
   },
   mode: isProd ? 'production' : 'development',

@@ -1,21 +1,18 @@
 @(title: String, message: String)
-<html>
-    <head>
-        <title>@title</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link href="/assets/css/bootstrap.min.css" rel="stylesheet">
-        <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
-        <style>
-      #contentDiv {
-        padding: 1em;
-        max-width: 40em;
-      }
-        </style>
-    </head>
-    <body>
-      <div id="contentDiv">
-        <h3>@title</h3>
-        <p>@message</p>
-      </div>
-    </body>
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>@title</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
+    <link rel="stylesheet" href="/assets/css/participant.css?v=@models.AssetVersion.VALUE">
+  </head>
+  <body class="bb-page">
+    <main class="bb-panel bb-panel--wide">
+      @participantMark()
+      <h1>@title</h1>
+      <p>@message</p>
+    </main>
+  </body>
 </html>
