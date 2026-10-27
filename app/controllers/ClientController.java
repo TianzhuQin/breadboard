@@ -63,12 +63,22 @@ public class ClientController extends Controller
      * comes from a logged-in researcher (the admin's Testing panel embeds participant pages).
      */
     static boolean isAuthorized(String experimentInstanceId, String clientId) {
-        String uid = session("uid");
-        if (uid != null && User.findByUID(uid) != null) {
+        if (isResearcher()) {
             return true;
+        }
+        if (ClientLogin.isTestSession(experimentInstanceId)) {
+            // The test session (0) is a researcher's only: a participant's seat token for it (from
+            // before the login refused it) used to put them into the game of whatever session ran.
+            return false;
         }
         String token = ParticipantAuth.presentedToken(request(), experimentInstanceId);
         return ParticipantAuth.verify(experimentInstanceId, clientId, token);
+    }
+
+    /** Whether the request comes from a signed-in researcher. */
+    static boolean isResearcher() {
+        String uid = session("uid");
+        return uid != null && User.findByUID(uid) != null;
     }
 
     public static Result getState(String experimentId, String experimentInstanceId, String clientId, String connectionSpeed){

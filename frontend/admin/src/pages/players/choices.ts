@@ -1,4 +1,3 @@
-import { watch } from 'vue'
 import { actions, graph, nextMessage } from '@/store/admin'
 import { choicesOf } from '@/network/players'
 
@@ -7,7 +6,8 @@ export type ChoiceOutcome =
   /** The choice had already left their screen; `sent` says whether MakeChoice went out at all. */
   | { ok: false, gone: true, sent: boolean }
   | { ok: false, error: string }
-  | { ok: false, timeout: true }
+  /** No answer in time; `onScreen` says whether the choice is still on their screen. */
+  | { ok: false, timeout: true, onScreen: boolean }
   /** Not connected to the server, so nothing was sent. */
   | { ok: false, offline: true }
 
@@ -20,16 +20,12 @@ export function shortError (error: string): string {
 }
 
 const hasError = (m: any) => typeof m.error === 'string' && m.error.trim() !== ''
-/** The server's own answer to MakeChoice, tagged {"request": "MakeChoice", "choice": "made" | "gone"} or with an error. */
-const isTaggedReply = (m: any) => m.request === 'MakeChoice'
-/** An older server answers MakeChoice with an empty {} when it ran (or ignored) the choice. */
-const isPlainAck = (m: any) => m.constructor === Object && Object.keys(m).length === 0
 /**
- * An engine error that names neither a request nor where it came from (OnJoinStep, OnLeaveStep):
- * MakeChoice's failure on an older server, or anything else.
+ * The server's answer to this MakeChoice: tagged {"request": "MakeChoice"} with "choice": "made" or
+ * "gone", or with the error. When it names the choice ("choiceUID"), an answer about another choice
+ * (one chosen from another page meanwhile) is not taken for this one's.
  */
-const isUntaggedError = (m: any) => hasError(m) && typeof m.request !== 'string' && typeof m.source !== 'string' &&
-  !(typeof m.output === 'string' && m.output.trim())
+const isReplyTo = (choiceUID: string) => (m: any) => m.request === 'MakeChoice' && (m.choiceUID === undefined || m.choiceUID === choiceUID)
 
 /**
  * Make a choice on a player's behalf (MakeChoice) and find out whether it took.
@@ -38,56 +34,21 @@ const isUntaggedError = (m: any) => hasError(m) && typeof m.request !== 'string'
  * while the researcher was confirming): the engine would ignore it without a word. Nor when the
  * connection is down: that is said at once.
  *
- * The server's answer decides. Newer servers tag it {"request": "MakeChoice"} with "choice":
- * "made" or "gone", or with the error, and the first tagged answer is final. Older servers answer
- * an empty {} when the choice ran and an untagged {error} instead when it failed; other engine
- * errors (a late joiner's OnJoinStep, a timer) can arrive meanwhile, so an untagged error only
- * counts when no {} follows it soon. After a {}, the choice leaving their screen is the sign it
- * was made.
+ * Only the server's tagged answer decides. Untagged engine errors that arrive meanwhile (a timer,
+ * a step file saved in file mode) are someone else's, and the choice leaving their screen proves
+ * nothing either: the participant may have answered it themselves. With no answer in time, that is
+ * what it says.
  */
 export function submitChoice (playerId: string, choiceUID: string, ms = 6000): Promise<ChoiceOutcome> {
   const stillThere = () => choicesOf(graph.nodes.get(playerId)).some(c => c.uid === choiceUID)
   if (!stillThere()) return Promise.resolve({ ok: false, gone: true, sent: false })
-  const grace = Math.min(1500, ms / 4)
-  return new Promise<ChoiceOutcome>((resolve) => {
-    let done = false
-    let acked = false
-    let firstError: string | null = null
-    let errorTimer: any = null
-    const finish = (o: ChoiceOutcome) => {
-      if (done) return
-      done = true
-      stop()
-      clearTimeout(timer)
-      if (errorTimer) clearTimeout(errorTimer)
-      resolve(o)
-    }
-    const stop = watch(() => graph.version.value, () => { if (acked && !stillThere()) finish({ ok: true }) })
-    const timer = setTimeout(() => {
-      if (firstError !== null) finish({ ok: false, error: firstError })
-      else finish(stillThere() ? { ok: false, timeout: true } : { ok: true })
-    }, ms)
-
-    // listen before sending so the answer can't slip past
-    nextMessage(isTaggedReply, ms).then(m => {
-      if (!m) return
-      if (hasError(m)) finish({ ok: false, error: String(m.error) })
-      else if (m.choice === 'gone') finish({ ok: false, gone: true, sent: true })
-      else finish({ ok: true })
-    })
-    nextMessage(isPlainAck, ms).then(m => {
-      if (!m || done) return
-      // the server's answer came without an error: any error before it was someone else's
-      acked = true
-      firstError = null
-      if (errorTimer) { clearTimeout(errorTimer); errorTimer = null }
-      if (!stillThere()) finish({ ok: true })
-    })
-    nextMessage(isUntaggedError, ms).then(m => {
-      if (!m || done || acked) return
-      firstError = String(m.error)
-      errorTimer = setTimeout(() => { if (!acked && firstError !== null) finish({ ok: false, error: firstError }) }, grace)
-    })
-    if (!actions.makeChoice(choiceUID)) finish({ ok: false, offline: true })
+  // listen before sending so the answer can't slip past
+  const answer = nextMessage(isReplyTo(choiceUID), ms)
+  if (!actions.makeChoice(choiceUID)) return Promise.resolve({ ok: false, offline: true })
+  return answer.then((m): ChoiceOutcome => {
+    if (!m) return { ok: false, timeout: true, onScreen: stillThere() }
+    if (hasError(m)) return { ok: false, error: String(m.error) }
+    if (m.choice === 'gone') return { ok: false, gone: true, sent: true }
+    return { ok: true }
   })
 }

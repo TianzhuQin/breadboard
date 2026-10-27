@@ -72,6 +72,7 @@
         <!-- what this state means and what happens next, in plain words -->
         <p class="live-hero__explain">
           {{ explanation }}
+          <!-- only the session's log says so (a start that threw logs its start too): offer it again -->
           <button v-if="isRunning && started.started && !started.sure && !startBlocked" type="button" class="live-linkbtn" @click="onStart">Not started? Start it anyway</button>
         </p>
 
@@ -299,7 +300,7 @@ const explanation = computed(() => {
   if (i.status === 'TESTING') return 'This is the test session for trying the experiment out. What happens in it is not saved.'
   if (isRunning.value) {
     if (startBlocked.value) return startBlocked.value
-    if (started.value.started && !started.value.sure) return 'The session\'s log shows the game starting at about the time the engine last reloaded, and a reload forgets a start, so the game may not be running now.'
+    if (started.value.started && started.value.nearReload) return 'The session\'s log shows the game starting at about the time the engine last reloaded, and a reload forgets a start, so the game may not be running now.'
     if (started.value.started) return 'The game is on and new arrivals are turned away. Stop the session when you are done, or let the experiment finish it.'
     if (room.value && room.value.state !== 'cancelled') return 'People are gathering in the waiting room, which starts the game by itself.'
     return 'People can join with the links below. When everyone you need is here, start the game: everyone waiting is let in and newcomers are turned away.'

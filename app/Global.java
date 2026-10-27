@@ -189,6 +189,13 @@ public class Global extends GlobalSettings {
     if(process != null){
       process.destroy();
     }
+    // Its periodic check would otherwise outlive this application (in dev mode, a reload) and open
+    // sessions through it beside the new one's.
+    try {
+      models.Autopilot.stop();
+    } catch (Exception e) {
+      Logger.error("Could not stop the autopilot", e);
+    }
   }
 
   @Override

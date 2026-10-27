@@ -64,22 +64,19 @@ describe('players table', () => {
     expect(csv).toBe('\uFEFFid,status,ties,choices waiting,note,obj\r\np1,,2,0,"say ""hi"", then\nleave","{""a"":1}"\r\n')
   })
 
-  it('keeps spreadsheets from running participant text as a formula', () => {
-    expect(csvCell('=1+1')).toBe("'=1+1")
-    expect(csvCell('=HYPERLINK("http://x","click")')).toBe('"\'=HYPERLINK(""http://x"",""click"")"')
-    expect(csvCell('@x')).toBe("'@x")
-    expect(csvCell('+cmd')).toBe("'+cmd")
-    expect(csvCell('\tlead')).toBe("'\tlead")
-    expect(csvCell('\r=x')).toBe('"\'\r=x"')
-    // numbers, and text that is just a number, are left alone
-    expect(csvCell('-0.5')).toBe('-0.5')
-    expect(csvCell('+3')).toBe('+3')
+  it('writes values exactly as they are, like the session\'s event CSV, so the files join on id', () => {
+    expect(csvCell('-k7')).toBe('-k7')
+    expect(csvCell('@maria')).toBe('@maria')
+    expect(csvCell('+1 555 0100')).toBe('+1 555 0100')
+    expect(csvCell('=1+1')).toBe('=1+1')
+    expect(csvCell('-')).toBe('-')
     expect(csvCell(-2)).toBe('-2')
-    expect(csvCell('a=b')).toBe('a=b')
-    // property names come from scripts, so the header is guarded too
-    const csv = toCsv([node('=p1', { '=k': '-x' })], ['=k'], () => 0)
-    expect(csv.split('\r\n')[0]).toBe("\uFEFFid,status,ties,choices waiting,'=k")
-    expect(csv.split('\r\n')[1]).toBe("'=p1,,0,0,'-x")
+    expect(csvCell('=HYPERLINK("http://x","click")')).toBe('"=HYPERLINK(""http://x"",""click"")"')
+    // leading or trailing white space is kept by quoting the field
+    expect(csvCell('\tlead')).toBe('"\tlead"')
+    const csv = toCsv([node('-k7', { '@k': '-x' })], ['@k'], () => 0)
+    expect(csv.split('\r\n')[0]).toBe('\uFEFFid,status,ties,choices waiting,@k')
+    expect(csv.split('\r\n')[1]).toBe('-k7,,0,0,-x')
   })
 
   it('puts every property in the CSV, maps and lists too, with the engine group and Prolific ids', () => {
@@ -98,11 +95,11 @@ describe('players table', () => {
 
 // ---- choosing for a player ---------------------------------------------------------------------
 
-/** The engine making the choice: it leaves their screen, then the server answers {} (an older, untagged server). */
+/** The engine making the choice: it leaves their screen, then the server answers the console. */
 function chooseOnServer () {
   setTimeout(() => {
     __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' })
-    __receive({})
+    __receive({ request: 'MakeChoice', choice: 'made' })
   }, 5)
   return true
 }
@@ -135,28 +132,32 @@ describe('choosing for a player', () => {
     expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, error: reply.error })
   })
 
-  it('reports the engine\'s error (an untagged error with no answer after it)', async () => {
+  it('ignores untagged engine errors and other requests\' answers while it waits', async () => {
     vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
-      setTimeout(() => __receive({ error: 'Caught error: java.lang.IllegalStateException: no such round\n at x.groovy:3' }), 5)
+      // a step file saved in file mode, or a timer, fails while the game is busy with the choice
+      setTimeout(() => __receive({ error: 'Caught error: java.lang.IllegalStateException: no such round\n at x.groovy:3' }), 2)
+      setTimeout(() => __receive({ request: 'SendScript', error: 'Boom' }), 4)
+      setTimeout(() => __receive({ request: 'MakeChoice', choice: 'made' }), 60)
       return true
     })
-    const r = await submitChoice('p1', 'c1', 400)
-    expect(r).toMatchObject({ ok: false })
-    expect(shortError((r as any).error)).toBe('no such round')
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
+    expect(shortError('Caught error: java.lang.IllegalStateException: no such round\n at x.groovy:3')).toBe('no such round')
   })
 
-  it('ignores another engine error that arrives while the choice is made', async () => {
+  it('does not take the choice leaving their screen for its own success', async () => {
+    // the participant answered it themselves while the console's request waited, and no answer came
     vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
-      // a late joiner's OnJoinStep fails just before the server answers the choice
-      setTimeout(() => __receive({ error: 'Caught error: onJoinStep failed for p7' }), 2)
-      return chooseOnServer()
+      setTimeout(() => __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' }), 2)
+      return true
     })
-    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
-    // nor does an error answering someone else's request
-    seed()
+    expect(await submitChoice('p1', 'c1', 80)).toEqual({ ok: false, timeout: true, onScreen: false })
+  })
+
+  it('does not take the answer about another choice for its own, when the server names the choice', async () => {
     vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
-      setTimeout(() => __receive({ request: 'SendScript', error: 'Boom' }), 2)
-      return chooseOnServer()
+      setTimeout(() => __receive({ request: 'MakeChoice', choice: 'gone', choiceUID: 'other' }), 2)
+      setTimeout(() => __receive({ request: 'MakeChoice', choice: 'made', choiceUID: 'c1' }), 20)
+      return true
     })
     expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
   })
@@ -169,16 +170,15 @@ describe('choosing for a player', () => {
   it('never takes an error from OnJoinStep or OnLeaveStep (tagged with its source) for the choice\'s', async () => {
     vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
       setTimeout(() => __receive({ source: 'OnJoinStep', error: 'Caught error: onJoinStep failed for p7' }), 2)
-      setTimeout(() => __receive({ request: 'MakeChoice', choice: 'made' }), 600)
+      setTimeout(() => __receive({ request: 'MakeChoice', choice: 'made' }), 30)
       return true
     })
-    // longer than the grace an untagged error gets
     expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
   })
 
   it('says so when nothing happens', async () => {
     vi.spyOn(actions, 'makeChoice').mockImplementation(() => true)
-    expect(await submitChoice('p1', 'c1', 60)).toEqual({ ok: false, timeout: true })
+    expect(await submitChoice('p1', 'c1', 60)).toEqual({ ok: false, timeout: true, onScreen: true })
   })
 })
 
@@ -245,6 +245,27 @@ describe('PlayerDetails', () => {
     expect(toasts.find(t => t.title === 'Nothing chosen for p1')!.detail).toMatch(/no longer on their screen.*Nothing was sent/)
     expect(toasts.some(t => /^Chose/.test(t.title))).toBe(false)
     expect(spy).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('never says it chose when the server did not answer, though the choice left their screen', async () => {
+    // the participant answered it themselves while the console's request waited behind a long step
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
+      setTimeout(() => __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' }), 5)
+      return true
+    })
+    const w = mount(PlayerDetails, { props: { id: 'p1' } })
+    await w.findAll('.pd__choice-list button').find(b => b.text() === 'Cooperate')!.trigger('click')
+    vi.useFakeTimers()
+    try {
+      settleConfirm(true)
+      await vi.advanceTimersByTimeAsync(6100)
+    } finally {
+      vi.useRealTimers()
+    }
+    await vi.waitFor(() => expect(toasts.some(t => t.title === 'No answer from the server yet')).toBe(true))
+    expect(toasts.find(t => t.title === 'No answer from the server yet')!.detail).toMatch(/no longer on p1's screen, but the server hasn't said whether yours was made/)
+    expect(toasts.some(t => /^Chose/.test(t.title))).toBe(false)
     w.unmount()
   })
 

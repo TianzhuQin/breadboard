@@ -58,6 +58,7 @@ import {
 import { dropKeptDrafts, explain, unsavedContentCount } from '../src/pages/content/useContent'
 import { HttpError } from '../src/lib/http'
 import { unsavedTotal } from '../src/shell/unsaved'
+import { toasts } from '../src/ui/toast'
 import ContentPage from '../src/pages/content/ContentPage.vue'
 import VisualEditor from '../src/pages/content/VisualEditor.vue'
 
@@ -423,9 +424,9 @@ function experiment (over: Record<string, any> = {}) {
   }
 }
 
-async function mountPage (exp = experiment()) {
+async function mountPage (exp = experiment(), all = [exp]) {
   store.admin.experiment = exp
-  store.admin.user = { email: 'r@lab.org', defaultLanguage: eng, experiments: [exp], currentScript: '' }
+  store.admin.user = { email: 'r@lab.org', defaultLanguage: eng, experiments: all, currentScript: '' }
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -530,6 +531,73 @@ describe('ContentPage', () => {
     wrapper.unmount()
   })
 
+  it('a second save waits for the one on its way, so no translation is posted twice', async () => {
+    const three = ['Intro', 'Middle', 'Outro'].map((name, i) => ({ id: 10 + i, name, translations: [{ id: 100 + i, html: `<p>${name}</p>`, language: eng }] }))
+    const { wrapper } = await mountPage(experiment({ content: three }))
+    await tab(wrapper, 'Spanish').trigger('click')
+    for (const name of ['Intro', 'Middle', 'Outro']) {
+      await wrapper.findAll('.ct-row').find(r => r.text().includes(name))!.trigger('click')
+      await wrapper.find('textarea.code-stub').setValue(`<p>${name} (es)</p>`)
+    }
+    expect(saveButton(wrapper).text()).toBe('Save all (3)')
+    // the first text's save is slow
+    const answerNormally = http.post.getMockImplementation()!
+    let answer!: () => void
+    http.post.mockImplementationOnce((url: string, body: any) => new Promise(resolve => { answer = () => resolve(answerNormally(url, body)) }))
+    const press = () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true }))
+    press()
+    await flushPromises()
+    // pressed again, and the selected text's own Save too
+    press()
+    await wrapper.find('button[title="Save this text only"]').trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(1)
+    answer()
+    await flushPromises()
+    expect(http.post.mock.calls.map(c => c[0])).toEqual(['/content/10', '/content/11', '/content/12'])
+    for (const [, body] of http.post.mock.calls) {
+      expect(body.translations).toEqual([{ id: -1, html: `<p>${body.name} (es)</p>`, language: spa }])
+    }
+    expect(saveButton(wrapper).text()).toBe('All saved')
+    wrapper.unmount()
+  })
+
+  it('posts a text as it is when its turn comes: edited further, or thrown away meanwhile', async () => {
+    const { wrapper } = await mountPage()
+    await wrapper.find('textarea.code-stub').setValue('<p>Goodbye</p>')
+    await wrapper.find('button[aria-label="New text"]').trigger('click')
+    await nextTick()
+    const input = document.querySelector<HTMLInputElement>('#ct-new-form input')!
+    input.value = 'Zebra'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    document.querySelector<HTMLFormElement>('#ct-new-form')!.dispatchEvent(new Event('submit'))
+    await flushPromises()
+    await wrapper.find('textarea.code-stub').setValue('<p>Stripes</p>')
+    await wrapper.findAll('.ct-row').find(r => r.text().includes('Intro'))!.trigger('click')
+    await wrapper.find('textarea.code-stub').setValue('<p>Welcome</p>')
+    expect(saveButton(wrapper).text()).toBe('Save all (3)')
+    const answerNormally = http.post.getMockImplementation()!
+    let answer!: () => void
+    http.post.mockImplementationOnce((url: string, body: any) => new Promise(resolve => { answer = () => resolve(answerNormally(url, body)) }))
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenLastCalledWith('/content/11', expect.anything())
+    // while "Bye" is on its way: "Intro" gets more words, and the new text is thrown away
+    await wrapper.find('textarea.code-stub').setValue('<p>Welcome, {0}</p>')
+    await wrapper.findAll('.ct-row').find(r => r.text().includes('Zebra'))!.trigger('click')
+    await wrapper.find('button[aria-label="More actions for “Zebra”"]').trigger('click')
+    await wrapper.findAll('.b-menu__item').find(b => b.text() === 'Throw away this text')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.ct-row').some(r => r.text().includes('Zebra'))).toBe(false)
+    answer()
+    await flushPromises()
+    expect(http.post.mock.calls.map(c => c[0])).toEqual(['/content/11', '/content/10'])
+    expect(http.post).toHaveBeenLastCalledWith('/content/10', expect.objectContaining({ translations: [expect.objectContaining({ html: '<p>Welcome, {0}</p>' })] }))
+    expect(saveButton(wrapper).text()).toBe('All saved')
+    wrapper.unmount()
+  })
+
   it('creates a new text and saves it with id -1', async () => {
     const { wrapper } = await mountPage()
     await wrapper.find('button[aria-label="New text"]').trigger('click')
@@ -613,11 +681,10 @@ describe('ContentPage', () => {
 
   it('switches to an experiment with unsaved texts, asking first while the engine is in use', async () => {
     const other = experiment({ id: 8, name: 'Other game' })
-    let { wrapper } = await mountPage(other)
+    let { wrapper } = await mountPage(other, [experiment(), other])
     await wrapper.find('textarea.code-stub').setValue('<p>Kept</p>')
     wrapper.unmount()
-    ;({ wrapper } = await mountPage())
-    store.admin.user.experiments = [experiment(), other]
+    ;({ wrapper } = await mountPage(experiment(), [experiment(), other]))
     await flushPromises()
     const button = () => wrapper.findAll('.ct-banner button').find(b => b.text() === 'Switch to “Other game”')!
     expect(button().exists()).toBe(true)
@@ -631,6 +698,27 @@ describe('ContentPage', () => {
     await flushPromises()
     expect(store.actions.selectExperiment).toHaveBeenCalledWith(8)
     wrapper.unmount()
+  })
+
+  it('throws away the unsaved edits of a deleted experiment, but keeps them through signing out', async () => {
+    const other = experiment({ id: 8, name: 'Other game' })
+    const { wrapper } = await mountPage(other, [experiment(), other])
+    await wrapper.find('textarea.code-stub').setValue('<p>Kept</p>')
+    wrapper.unmount()
+    toasts.splice(0)
+    // signing out empties the user
+    const user = store.admin.user
+    store.admin.user = null
+    store.admin.experiment = null
+    await flushPromises()
+    expect(unsavedContentCount.value).toBe(1)
+    // signed in again: "Other game" was deleted meanwhile
+    store.admin.experiment = experiment()
+    store.admin.user = { ...user, experiments: [experiment()] }
+    await flushPromises()
+    expect(unsavedContentCount.value).toBe(0)
+    expect(unsavedTotal()).toBe(0)
+    expect(toasts.some(t => t.title === 'Unsaved texts of “Other game” were thrown away')).toBe(true)
   })
 
   it('never shows one account’s unsaved edits to another', async () => {

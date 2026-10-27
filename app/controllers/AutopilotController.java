@@ -12,8 +12,9 @@ import play.mvc.Result;
 import play.mvc.Security;
 
 /**
- * The console's autopilot settings: {@code GET /autopilot} and {@code POST /autopilot}, both answering
- * with the AutopilotState {@code {settings, source, status}} (see {@link Autopilot#stateJson}).
+ * The console's autopilot settings: {@code GET /autopilot}, {@code POST /autopilot} and
+ * {@code POST /autopilot/resume}, each answering with the AutopilotState
+ * {@code {settings, source, status}} (see {@link Autopilot#stateJson}).
  */
 public class AutopilotController extends Controller {
 
@@ -81,6 +82,26 @@ public class AutopilotController extends Controller {
     // live session of another experiment; otherwise the autopilot waits for it to end.
     JsonNode takeOver = body.get("takeOver");
     Autopilot.settingsSaved(next, takeOver != null && takeOver.isBoolean() && takeOver.booleanValue());
+    return ok(Autopilot.stateJson());
+  }
+
+  /**
+   * Resume ({@code POST /autopilot/resume}, no body): a paused or done autopilot opens sessions by
+   * itself again, and one now if none of its experiment is open and the engine is free (a live session
+   * of another experiment is left to end). It changes no settings, so it also works while
+   * application.conf is in charge, where saving answers 409. 400 {message} when the autopilot is off.
+   * Answers with the AutopilotState, as a save does.
+   */
+  @Security.Authenticated(Secured.class)
+  public static Result resume() {
+    User user = User.findByUID(session("uid"));
+    if (user == null) {
+      return unauthorized(message("Sign in again."));
+    }
+    if (!Autopilot.effective().isOn()) {
+      return badRequest(message("The autopilot is off, so there is nothing to resume. Switch it on and save instead."));
+    }
+    Autopilot.resume(user);
     return ok(Autopilot.stateJson());
   }
 

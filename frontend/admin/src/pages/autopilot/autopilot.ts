@@ -47,6 +47,13 @@ export interface AutopilotStatus {
   problem: string | null
   /** a researcher stopped its session, so it opens none until the settings are saved again */
   paused: boolean
+  /**
+   * its one session finished with "continuous" off, so it opens none until the settings are saved
+   * again. Only newer servers send it; problemKind also reads the server's message.
+   */
+  done: boolean
+  /** what status.problem is about, when the server says (newer servers); see problemKind */
+  problemKind: ProblemKind | null
   /** when the next session opens (ISO time), while the pause after a finished session runs */
   nextOpenAt: string | null
   /** another experiment's live session holds the engine: the autopilot waits for it to end */
@@ -153,6 +160,8 @@ export function normalizeState (raw: any): AutopilotState {
       links: links ? { login: String(links.login || ''), prolific: String(links.prolific || '') } : null,
       problem: text(s.problem),
       paused: s.paused === true,
+      done: s.done === true,
+      problemKind: PROBLEM_KINDS.has(s.problemKind) ? s.problemKind : null,
       nextOpenAt: next && !isNaN(Date.parse(next)) ? next : null,
       engineSession: normalizeEngineSession(s.engineSession),
     },
@@ -191,15 +200,41 @@ export function describeEngineSession (s: EngineSession): string {
  * (for a save, or for another session to end): information, not a fault. 'error' needs fixing.
  */
 export type ProblemKind = 'paused' | 'done' | 'waiting' | 'error'
+const PROBLEM_KINDS = new Set<any>(['paused', 'done', 'waiting', 'error'])
 export function problemKind (state: Pick<AutopilotState, 'settings' | 'status'>): ProblemKind | null {
   const s = state.status
   if (!s.problem) return null
+  if (s.problemKind) return s.problemKind
+  // not running at all (no experiment chosen, or it was deleted): whatever else the status says,
+  // that is the problem to fix
+  if (!s.on) return 'error'
   if (s.paused) return 'paused'
   // its one session finished and "continuous" is off (the server's "has finished" message)
-  if (!state.settings.continuous && /has finished/i.test(s.problem)) return 'done'
-  if (s.engineSession) return 'waiting'
+  if (s.done || (!state.settings.continuous && /has finished/i.test(s.problem))) return 'done'
+  // The server names a live session (engineSession) whenever one holds the engine, also when the
+  // real problem comes first (no admin account to open sessions as, say): only its own "Another
+  // session is running" message means the autopilot is just waiting.
+  if (s.engineSession && /^Another session is running/i.test(s.problem)) return 'waiting'
   return 'error'
 }
+
+/**
+ * Whether stopping this session pauses the autopilot (the server's Autopilot.sessionStopped): it is
+ * the session the engine runs, of the autopilot's experiment. `status.instance` is the engine's
+ * session of that experiment; a test session is left out of it, so `engineSessionId` (what the
+ * console's engine info says the engine runs) covers that case. Already paused: nothing changes.
+ */
+export function stopPausesAutopilot (
+  ap: Pick<AutopilotState, 'settings' | 'status'> | null,
+  session: { id: number, experimentId: number | null | undefined },
+  engineSessionId?: number | null,
+): boolean {
+  if (!ap || !ap.status.on || ap.status.paused) return false
+  if (ap.status.instance?.id === session.id) return true
+  return engineSessionId === session.id && session.experimentId != null && ap.settings.experimentId === session.experimentId
+}
+/** Said before stopping a session that would pause the autopilot (see stopPausesAutopilot). */
+export const STOP_PAUSES_AUTOPILOT = 'The autopilot runs this experiment, so stopping its session pauses it: it opens no new session, and its participant links (including Prolific’s) lead nowhere, until you press Resume on the Autopilot page.'
 
 /** A deep copy to edit (from saved settings, or of another form). */
 export function toForm (s: AutopilotSettings | AutopilotForm): AutopilotForm {

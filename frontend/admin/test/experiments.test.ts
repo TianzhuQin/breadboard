@@ -51,6 +51,8 @@ import {
 import { HttpError } from '../src/lib/http'
 import ImportExperimentDialog from '../src/pages/experiments/ImportExperimentDialog.vue'
 import NewExperimentDialog from '../src/pages/experiments/NewExperimentDialog.vue'
+import { switchToNew } from '../src/pages/experiments/switchTo'
+import { toasts } from '../src/ui/toast'
 
 // ---- a tiny zip writer (stored entries only) for the inspection tests ------------------------------
 
@@ -420,6 +422,28 @@ describe('New experiment dialog', () => {
     }
   })
 
+  it('does not give an earlier refusal as the reason the switch to it failed', async () => {
+    const admin = (store as any).admin
+    admin.requestError = { request: 'SelectExperiment', text: 'An old refusal.', at: Date.now() - 30 * 60000 }
+    toasts.splice(0)
+    try {
+      expect(await switchToNew(6, 'Fresh', 'Created “Fresh”')).toBe(false)
+      const t = toasts.find(x => x.title === 'Created “Fresh”')
+      expect(t?.detail).toMatch(/the switch to it didn't go through/)
+      expect(t?.detail).not.toMatch(/old refusal/)
+
+      store.actions.selectExperiment.mockImplementationOnce(async () => {
+        admin.requestError = { request: 'SelectExperiment', text: 'The engine is busy', at: Date.now() }
+        return null
+      })
+      toasts.splice(0)
+      await switchToNew(6, 'Fresh', 'Created “Fresh”')
+      expect(toasts.find(x => x.title === 'Created “Fresh”')?.detail).toMatch(/didn't go through\. The engine is busy\. /)
+    } finally {
+      admin.requestError = null
+    }
+  })
+
   it('starts as a copy with a free name when asked to duplicate', async () => {
     store.exps.push({ id: 7, name: 'Base copy', instances: [], steps: [], languages: [] })
     http.put.mockResolvedValue({ id: 8, name: 'Base copy 2' })
@@ -561,6 +585,34 @@ describe('Experiments page', () => {
       w.unmount()
     } finally {
       ;(store as any).admin.user = null
+    }
+  })
+
+  it('gives an earlier refusal as the reason only when it answers this switch', async () => {
+    const admin = (store as any).admin
+    store.actions.selectExperiment.mockClear()
+    admin.requestError = { request: 'SelectExperiment', text: 'An old refusal.', at: Date.now() - 30 * 60000 }
+    toasts.splice(0)
+    try {
+      const { w } = await mountAt('/experiments')
+      // no answer in time: the 10:00 refusal is not this switch's reason
+      await workOn(w, 1).trigger('click')
+      await flushPromises()
+      const failed = toasts.find(t => t.title === 'Couldn\'t switch to “Beta”')
+      expect(failed?.detail).toMatch(/didn't confirm the change/)
+
+      // a refusal of this very switch is shown as the server said it
+      store.actions.selectExperiment.mockImplementationOnce(async () => {
+        admin.requestError = { request: 'SelectExperiment', text: 'The engine is busy.', at: Date.now() }
+        return null
+      })
+      toasts.splice(0)
+      await workOn(w, 1).trigger('click')
+      await flushPromises()
+      expect(toasts.find(t => t.title === 'Couldn\'t switch to “Beta”')?.detail).toBe('The engine is busy.')
+      w.unmount()
+    } finally {
+      admin.requestError = null
     }
   })
 

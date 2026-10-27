@@ -338,7 +338,7 @@ describe('live session state', () => {
     const base = { events: [], output: [], since: 0 }
     expect(detectGameStarted(base).started).toBe(false)
     expect(detectGameStarted({ ...base, hasStarted: true })).toMatchObject({ started: true, source: 'server', sure: true })
-    expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)] })).toEqual({ started: true, source: 'output', at: 50, sure: true })
+    expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)] })).toEqual({ started: true, source: 'output', at: 50, sure: true, nearReload: false })
     expect(detectGameStarted({ ...base, output: [out('error', 'Caught error: initStep started already', 60)] }).started).toBe(true)
     // a start before the engine reloaded no longer counts
     expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)], since: 100 }).started).toBe(false)
@@ -351,19 +351,44 @@ describe('live session state', () => {
     expect(detectGameStarted({ ...base, events: auto }).started).toBe(true)
   })
 
-  it('takes a start event as certain, unless it can\'t be placed against the last reload', () => {
+  it('never takes a start event alone as certain, and says when it may be from before the last reload', () => {
     const ev = (name: string, at: number | null, id = 1) => mergeEvents([], [{ id, name, datetime: at === null ? '' : new Date(at).toISOString(), data: {} }])
     const base = { output: [], since: 0 }
-    // seen live after the autopilot started the game: no reload since, or the start came after it
-    expect(detectGameStarted({ ...base, events: ev('autopilotStart', 200000) })).toMatchObject({ started: true, source: 'events', sure: true })
-    expect(detectGameStarted({ ...base, events: ev('InitStepStart', 200000), since: 150000 })).toMatchObject({ started: true, sure: true })
-    expect(detectGameStarted({ ...base, events: ev('InitStepStart', null) })).toMatchObject({ started: true, sure: true })
-    // a few seconds before the reload (the clocks may disagree), or at an unknown time after one: unsure
-    expect(detectGameStarted({ ...base, events: ev('InitStepStart', 198000), since: 200000 })).toMatchObject({ started: true, sure: false, at: 198000 })
-    expect(detectGameStarted({ ...base, events: ev('InitStepStart', null), since: 200000 })).toMatchObject({ started: true, sure: false })
-    // a sure sign wins over an unsure one
+    // the log shows a start (the autopilot's, or a start that threw after logging it): started, but not for certain
+    expect(detectGameStarted({ ...base, events: ev('autopilotStart', 200000) })).toMatchObject({ started: true, source: 'events', sure: false, nearReload: false })
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', 200000), since: 150000 })).toMatchObject({ started: true, sure: false, nearReload: false })
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', null) })).toMatchObject({ started: true, sure: false, nearReload: false })
+    // a few seconds before the reload (the clocks may disagree), or at an unknown time after one
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', 198000), since: 200000 })).toMatchObject({ started: true, sure: false, nearReload: true, at: 198000 })
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', null), since: 200000 })).toMatchObject({ started: true, sure: false, nearReload: true })
+    // one clearly after the reload wins over one that may be from before it
     const both = mergeFeed(ev('InitStepStart', 198000, 1), ev('autopilotStart', 230000, 2))
-    expect(detectGameStarted({ ...base, events: both, since: 200000 })).toMatchObject({ sure: true, at: 230000 })
+    expect(detectGameStarted({ ...base, events: both, since: 200000 })).toMatchObject({ nearReload: false, at: 230000 })
+    // the engine's own answer makes it certain
+    const out = [{ id: 1, kind: 'error' as const, text: 'Caught error: initStep started already', source: 'RunGame', at: 240000 }]
+    expect(detectGameStarted({ events: ev('InitStepStart', 200000), output: out, since: 0 })).toMatchObject({ started: true, source: 'output', sure: true })
+  })
+
+  it('takes a start that threw as not started, though the log shows its start event', () => {
+    const ev = (name: string, at: number, id = 1) => mergeEvents([], [{ id, name, datetime: new Date(at).toISOString(), data: {} }])
+    const failed = (at: number) => ({ id: at, kind: 'error' as const, text: 'Caught error: NullPointerException: Cannot get property \'x\' on null object\n at InitStep.groovy:4', source: 'RunGame', at })
+    // Step.start() logged InitStepStart just before the step threw; the server's flag may still say started
+    const r = detectGameStarted({ hasStarted: true, events: ev('InitStepStart', 300000), output: [failed(301000)], since: 0 })
+    expect(r).toMatchObject({ started: false, sure: true })
+    // the server's clock a few seconds ahead of this computer's: still the same failed start
+    expect(detectGameStarted({ events: ev('InitStepStart', 304000), output: [failed(301000)], since: 0 }).started).toBe(false)
+    // a start after it (the autopilot's, or another console's) counts again, from the log only
+    expect(detectGameStarted({ events: ev('autopilotStart', 330000), output: [failed(301000)], since: 0 })).toMatchObject({ started: true, sure: false, at: 330000 })
+    // a successful retry from this console wins
+    const retried = [failed(301000), { id: 2, kind: 'output' as const, text: 'initStep.start()\n\n==>null', source: 'RunGame', at: 320000 }]
+    expect(detectGameStarted({ events: ev('InitStepStart', 319000), output: retried, since: 0 })).toMatchObject({ started: true, sure: true })
+    // a refusal changed nothing, nor did an error that isn't RunGame's answer
+    const refused = { id: 3, kind: 'error' as const, text: 'Nothing was done: the engine is running "X"', source: 'RunGame', at: 301000 }
+    expect(detectGameStarted({ hasStarted: true, events: [], output: [refused], since: 0 })).toMatchObject({ started: true, source: 'server' })
+    const timer = { id: 4, kind: 'error' as const, text: 'Caught error: timer failed', at: 301000 }
+    expect(detectGameStarted({ events: ev('InitStepStart', 300000), output: [timer], since: 0 }).started).toBe(true)
+    // a failure from before the engine last reloaded is about code that no longer runs
+    expect(detectGameStarted({ hasStarted: true, events: [], output: [failed(301000)], since: 400000 })).toMatchObject({ started: true, source: 'server' })
   })
 
   it('recognises the engine\'s answer to a start', () => {
@@ -492,6 +517,23 @@ describe('session controls', () => {
     await again
   })
 
+  it('shows the resume is under way while it asks who uses the engine, and ignores a second click', async () => {
+    let answer!: (v: string) => void
+    store.engineUsers.mockImplementationOnce(() => new Promise<string>(r => { answer = r }))
+    const done = resumeSession(inst)
+    expect(busy.resume).toBe(5)
+    await resumeSession(inst)
+    expect(store.engineUsers).toHaveBeenCalledTimes(1)
+    answer('')
+    await flushPromises()
+    expect(confirmState.req!.title).toBe('Resume “Pilot”?')
+    settleConfirm(false)
+    await done
+    // declined: nothing sent, and the button is free again
+    expect(store.selectInstance).not.toHaveBeenCalled()
+    expect(busy.resume).toBe(null)
+  })
+
   it('does not ask to resume while offline, nor send when the connection drops meanwhile', async () => {
     store.ensureConnected.mockReturnValueOnce(false)
     await resumeSession(inst)
@@ -531,12 +573,34 @@ describe('SessionPage', () => {
   }
   const startButton = (w: VueWrapper) => w.findAll('button').find(b => b.text().includes('Start the game'))
 
-  it('shows no "start anyway" once the autopilot\'s start is in the feed', async () => {
+  it('offers "start anyway" when only the session\'s log shows the start', async () => {
+    // the autopilot's start (or one that threw after logging its start) seen in the feed
     store2.admin.engineReloadedAt = Date.now() - 60000
     store2.admin.events = [startEvent('InitStepStart', Date.now() - 1000), startEvent('autopilotStart', Date.now() - 1000)]
     const w = await mountPage()
     expect(w.text()).toContain('Game started')
+    expect(w.text()).toContain('Start it anyway')
+    expect(w.text()).not.toContain('may not be running now')
+    w.unmount()
+  })
+
+  it('shows no "start anyway" once the engine answered this console\'s start', async () => {
+    store2.admin.events = [startEvent('InitStepStart', Date.now() - 1000)]
+    store2.admin.output = [{ id: 1, kind: 'output', text: 'initStep.start()\n\n==>null', source: 'RunGame', at: Date.now() }]
+    const w = await mountPage()
+    expect(w.text()).toContain('Game started')
     expect(w.text()).not.toContain('Start it anyway')
+    w.unmount()
+  })
+
+  it('offers Start the game again after a start that threw', async () => {
+    store2.admin.instance = { ...store2.admin.instance, hasStarted: true }
+    store2.admin.events = [startEvent('InitStepStart', Date.now() - 1000)]
+    store2.admin.output = [{ id: 1, kind: 'error', text: 'Caught error: Cannot get property \'x\' on null object', source: 'RunGame', at: Date.now() }]
+    const w = await mountPage()
+    expect(startButton(w)).toBeDefined()
+    expect(w.text()).toContain('Game not started')
+    expect(w.text()).not.toContain('Game started')
     w.unmount()
   })
 
@@ -676,6 +740,43 @@ describe('NewSessionDialog', () => {
     store.launch.mockResolvedValue({ user: {} })
     await submit()
     expect(store.launch).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows progress while it checks who uses the engine, and creates nothing if closed meanwhile', async () => {
+    const w = await open()
+    await numberInput().setValue('3')
+    let answer!: (v: boolean) => void
+    store.confirmEngineRebuild.mockImplementationOnce(() => new Promise<boolean>(r => { answer = r }))
+    store.launch.mockResolvedValue({ user: {} })
+    await submit()
+    const buttons = page().findAll('button')
+    const cancel = buttons.find(b => b.text() === 'Cancel')!
+    const create = buttons.find(b => b.attributes('type') === 'submit')!
+    expect(cancel.attributes('disabled')).toBeDefined()
+    expect(create.attributes('aria-busy')).toBe('true')
+    // a second submit meanwhile asks nothing more
+    await submit()
+    expect(store.confirmEngineRebuild).toHaveBeenCalledTimes(1)
+    // another experiment is selected meanwhile: the dialog closes, and nothing is created for it
+    admin.experiment = { ...admin.experiment, id: 13 }
+    await nextTick()
+    answer(true)
+    await flushPromises()
+    expect(store.launch).not.toHaveBeenCalled()
+    const opens = w.emitted('update:open') || []
+    expect(opens[opens.length - 1]).toEqual([false])
+  })
+
+  it('creates nothing when the dialog was closed while the engine was checked', async () => {
+    const w = await open()
+    await numberInput().setValue('3')
+    let answer!: (v: boolean) => void
+    store.confirmEngineRebuild.mockImplementationOnce(() => new Promise<boolean>(r => { answer = r }))
+    await submit()
+    await w.setProps({ open: false })
+    answer(true)
+    await flushPromises()
+    expect(store.launch).not.toHaveBeenCalled()
   })
 
   it('sends nothing while offline', async () => {

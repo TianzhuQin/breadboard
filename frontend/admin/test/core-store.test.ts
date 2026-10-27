@@ -192,4 +192,32 @@ describe('asking before an engine rebuild', () => {
     await answer
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })
+
+  it('asks the server what the engine runs now, also a session started since this console last heard', async () => {
+    // this console asked when the engine said it rebuilt, before the other account's session had started
+    const engine = { experimentId: 3, experimentName: 'Trust', sessionId: null, sessionName: null, owner: 'other@lab' }
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '', engine })
+    graph.clear()
+    const pilot = { id: 12, name: 'Pilot 2', experimentId: 3, experimentName: 'Trust', owner: 'other@lab' }
+    get.mockResolvedValue({ status: { on: false, instance: null, engineSession: pilot } })
+    let answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments', detail: 'Session “Pilot 2” is stopped.' })
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 2” of “Trust” running.')
+    expect(confirmState.req!.message).toMatch(/the network is emptied\. Session “Pilot 2” is stopped\.$/)
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+
+    // named once when this console knows it too (this account's own: no name); the autopilot's session beside it
+    admin.email = 'r@lab'
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '', engine: { ...engine, sessionId: 12, sessionName: 'Pilot 2' } })
+    get.mockResolvedValue({ status: { on: true, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' }, engineSession: { ...pilot, id: '12', owner: 'R@Lab' } } })
+    answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    const message = confirmState.req!.message || ''
+    expect(message).toContain('The autopilot has session “Auto 3” open. The engine is running session “Pilot 2” of “Trust”.')
+    expect(message.match(/Pilot 2/g)!.length).toBe(1)
+    settleConfirm(false)
+    await answer
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+  })
 })

@@ -1,5 +1,5 @@
 import { watch } from 'vue'
-import { admin } from '@/store/admin'
+import { admin, connectionState } from '@/store/admin'
 import type { OutputEntry } from '@/store/types'
 
 /**
@@ -14,6 +14,11 @@ import type { OutputEntry } from '@/store/types'
  * a success is matched by its echo, and an error goes to the oldest script still waiting for an
  * answer (of its request, when tagged). Older servers tag nothing: an untagged error is taken as an
  * answer there, but not once the server has shown that it tags its answers.
+ *
+ * Errors are paired by their place in line, so the line must hold only scripts whose answer can
+ * still come: a script that timed out keeps its place (its late answer is not taken for the next
+ * script's), and when the connection drops every waiting script gets null at once (their answers
+ * went to the old socket and never come).
  */
 export interface EngineReply {
   ok: boolean
@@ -101,7 +106,8 @@ function settle (i: number, reply: EngineReply | null) {
   w.done(reply)
 }
 
-watch(lastOutputId, () => {
+/** Pair the output entries that arrived since last time with the scripts waiting for them. */
+function takeFresh () {
   // the entries that arrived since last time, oldest first
   const fresh: OutputEntry[] = []
   for (let i = admin.output.length - 1; i >= 0 && admin.output[i].id > seen; i--) fresh.unshift(admin.output[i])
@@ -114,18 +120,34 @@ watch(lastOutputId, () => {
     const values = e.kind === 'output' ? splitValues(e.text, waiters[i].script) || [] : []
     settle(i, { ok: e.kind === 'output', values, error: e.kind === 'error' ? e.text : null, at: Date.now() })
   }
-})
+}
+watch(lastOutputId, takeFresh)
+
+// The connection dropped (or reconnects with another sign-in): the answers to the scripts sent
+// before went to the old socket and never come. Give them null now ("No answer"), so they no longer
+// stand in line for the next script's error.
+watch(connectionState, (s) => {
+  if (s === 'open' || !waiters.length) return
+  // (answers that arrived just before the drop still count)
+  takeFresh()
+  while (waiters.length) settle(0, null)
+}, { flush: 'sync' })
 
 /**
  * Wait for the engine's answer to `script`, sent with `request` after output entry `afterId`.
- * Resolves null when nothing came within `timeoutMs` (the connection dropped, or the engine is stuck).
+ * Resolves null when nothing came within `timeoutMs` (the engine is busy or stuck), and at once when
+ * the connection drops.
  */
 export function expectReply (script: string, afterId: number, request?: ScriptRequest, timeoutMs = 90000): Promise<EngineReply | null> {
   return new Promise(resolve => {
     const w: Waiter = { script, afterId, request, done: resolve, timer: null }
     w.timer = setTimeout(() => {
-      const i = waiters.indexOf(w)
-      if (i >= 0) settle(i, null)
+      w.timer = null
+      if (!waiters.includes(w)) return
+      // A slow script still answers later: it keeps its place in line until then, so that answer
+      // is not taken for the next script's. (A dropped connection clears it, see above.)
+      w.done = () => {}
+      resolve(null)
     }, timeoutMs)
     waiters.push(w)
   })

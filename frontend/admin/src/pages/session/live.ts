@@ -128,43 +128,67 @@ export interface StartedInfo {
   source: 'server' | 'output' | 'events' | null
   at: number | null
   /**
-   * False only when the sign may be from before the engine's last reload, which forgets a start: a
-   * start event whose time is unknown, or within the few seconds the server's and this computer's
-   * clocks may disagree by.
+   * Whether the engine itself said so (the server's flag, or its answer to a start since its last
+   * reload). The session's log alone never makes it certain: a start that threw still logged its
+   * start event (Step.start() records it before the step runs), and a reload forgets a start the
+   * log keeps. So the page offers to start it anyway unless this is true.
    */
   sure: boolean
+  /**
+   * The start event may be from before the engine's last reload: its time is unknown, or within
+   * the few seconds the server's and this computer's clocks may disagree by.
+   */
+  nearReload: boolean
 }
 
 /** How far the server's clock may be off from this computer's when comparing event times. */
 const CLOCK_SLACK_MS = 5000
 
 /**
+ * The engine's answer to this console's RunGame when initStep.start() threw (or there was no
+ * engine): the start was undone, so the game can be started again. Not "started already", and not
+ * a refusal ("Nothing was done: …"), which changed nothing.
+ */
+function isFailedStart (o: OutputEntry): boolean {
+  return o.kind === 'error' && o.source === 'RunGame' && /^Caught error:/.test(o.text) && !o.text.includes(ALREADY)
+}
+
+/**
  * Whether initStep.start() has run since the engine last loaded. The server keeps that flag only
- * in the engine, so this reads the signs: an explicit `hasStarted` on the session (if the server
- * sends it), the engine's answer to a start (output "initStep.start() ==> …" or the error
- * "initStep started already") after the last reload, or a start event in the session's log
- * (InitStepStart, or the autopilot's autopilotStart when it started the game itself).
+ * in the engine, so this reads the signs: the engine's answer to a start since the last reload
+ * (output "initStep.start() ==> …", the error "initStep started already", or a start that threw),
+ * an explicit `hasStarted` on the session, or a start event in the session's log (InitStepStart,
+ * or the autopilot's autopilotStart when it started the game itself).
  */
 export function detectGameStarted (opts: { hasStarted?: unknown, events: FeedEvent[], output: OutputEntry[], since: number }): StartedInfo {
-  if (opts.hasStarted === true) return { started: true, source: 'server', at: null, sure: true }
+  // the engine's newest answer to a start since it last reloaded decides
+  let failedAt = 0
   for (let i = opts.output.length - 1; i >= 0; i--) {
     const o = opts.output[i]
     if (o.at < opts.since) break
-    if (o.kind === 'output' && o.text.startsWith(START_OUTPUT)) return { started: true, source: 'output', at: o.at, sure: true }
-    if (o.kind === 'error' && o.text.includes(ALREADY)) return { started: true, source: 'output', at: o.at, sure: true }
+    if (o.kind === 'output' && o.text.startsWith(START_OUTPUT)) return { started: true, source: 'output', at: o.at, sure: true, nearReload: false }
+    if (o.kind === 'error' && o.text.includes(ALREADY)) return { started: true, source: 'output', at: o.at, sure: true, nearReload: false }
+    if (isFailedStart(o)) { failedAt = o.at; break }
   }
+  // (a start that threw leaves the session's flag set on older servers, so the answer wins over it)
+  if (opts.hasStarted === true && !failedAt) return { started: true, source: 'server', at: null, sure: true, nearReload: false }
   // the engine forgets a start when it reloads; events from before that don't count, and one that
   // can't be placed against the reload leaves it open
   const since = opts.since
   let unsure: FeedEvent | null = null
   for (const e of opts.events) {
     if (!START_EVENTS.has(e.name.toLowerCase())) continue
-    if (!since || (e.at && e.at >= since)) return { started: true, source: 'events', at: e.at || null, sure: true }
+    // the failed start logged its own start event: only a clearly later one is another start
+    if (failedAt) {
+      if (e.at && e.at > failedAt + CLOCK_SLACK_MS) return { started: true, source: 'events', at: e.at, sure: false, nearReload: false }
+      continue
+    }
+    if (!since || (e.at && e.at >= since)) return { started: true, source: 'events', at: e.at || null, sure: false, nearReload: false }
     if (e.at && e.at < since - CLOCK_SLACK_MS) continue
     unsure = unsure || e
   }
-  if (unsure) return { started: true, source: 'events', at: unsure.at || null, sure: false }
-  return { started: false, source: null, at: null, sure: true }
+  if (unsure) return { started: true, source: 'events', at: unsure.at || null, sure: false, nearReload: true }
+  return { started: false, source: null, at: null, sure: true, nearReload: false }
 }
 
 export type StartOutcome = { kind: 'started' } | { kind: 'already' } | { kind: 'error', message: string } | { kind: 'timeout' }

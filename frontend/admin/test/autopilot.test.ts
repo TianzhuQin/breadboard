@@ -21,9 +21,12 @@ vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: fal
 
 import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, humanSeconds, normalizeSettings, normalizeState,
-  participantLinks, problemKind, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive, type AutopilotForm,
+  participantLinks, problemKind, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
+  type AutopilotForm,
 } from '../src/pages/autopilot/autopilot'
 import { HttpError } from '../src/lib/http'
+import { unsavedTotal } from '../src/shell/unsaved'
+import { toasts } from '../src/ui/toast'
 import { admin as mockedAdmin } from '@/store/admin'
 import AutopilotPage from '../src/pages/autopilot/AutopilotPage.vue'
 
@@ -150,6 +153,39 @@ describe('reading the server\'s answer', () => {
     expect(kind({ on: true, problem: 'Its session "a" has finished, and opening the next session (continuous) is off.' }, false)).toBe('done')
     expect(kind({ on: true, engineSession: { id: 9, name: 'pilot' }, problem: 'Another session is running: "pilot".' })).toBe('waiting')
     expect(kind({ on: true, problem: 'The last session it opened reported an error: boom' })).toBe('error')
+  })
+  it('does not call a real problem "waiting" just because another session is live', () => {
+    const kind = (status: any) => problemKind(normalizeState({ settings: { enabled: true, experimentId: 12 }, status }))
+    const other = { id: 9, name: 'pilot 3', experimentId: 13 }
+    // the server names every live session, also when the problem comes before it
+    expect(kind({ on: true, engineSession: other, problem: 'There is no admin account to open sessions as.' })).toBe('error')
+    // application.conf names an experiment that doesn't exist: nothing runs, whatever else is live
+    expect(kind({
+      on: false,
+      engineSession: other,
+      problem: 'application.conf names the experiment "Trust gme" (breadboard.autopilot.experiment), but there is no experiment with that name.',
+    })).toBe('error')
+  })
+  it('follows the server when it says what the problem is', () => {
+    const st = (status: any, continuous = true) => normalizeState({ settings: { enabled: true, experimentId: 12, continuous }, status })
+    expect(st({ on: true, done: true, problemKind: 'done', problem: 'Its session finished.' }).status).toMatchObject({ done: true, problemKind: 'done' })
+    expect(problemKind(st({ on: true, done: true, problem: 'Its session finished.' }))).toBe('done')
+    expect(problemKind(st({ on: true, problemKind: 'waiting', problem: 'Waiting for “pilot”.' }))).toBe('waiting')
+    // unknown kinds and older servers fall back to reading the status
+    expect(st({ problemKind: 'weird', done: 'yes' }).status).toMatchObject({ done: false, problemKind: null })
+  })
+  it('knows when stopping a session pauses the autopilot', () => {
+    const ap = (status: any, settings: any = { enabled: true, experimentId: 12 }) => normalizeState({ source: 'admin', settings, status })
+    const own = { id: 4, name: 'auto 1', status: 'RUNNING' }
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(true)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 5, experimentId: 12 })).toBe(false)
+    // a test session the engine runs is left out of status.instance
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7, experimentId: 12 }, 7)).toBe(true)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7, experimentId: 13 }, 7)).toBe(false)
+    // off, already paused, or no answer: nothing to say
+    expect(stopPausesAutopilot(ap({ on: false, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(false)
+    expect(stopPausesAutopilot(ap({ on: true, paused: true, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(false)
+    expect(stopPausesAutopilot(null, { id: 4, experimentId: 12 })).toBe(false)
   })
 })
 
@@ -350,7 +386,17 @@ describe('Autopilot page', () => {
   it('shows a paused autopilot and when the next session opens, as information', async () => {
     http.get.mockResolvedValue(stateJson({
       settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
-      status: { on: true, paused: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 4, name: 'auto 1', status: 'STOPPED' }, links: null, problem: 'It is paused: its session "auto 1" was stopped by b@lab.org. It opens no new session until the settings are saved again.' },
+      status: {
+        on: true,
+        paused: true,
+        experimentId: 12,
+        experimentName: 'Public goods',
+        instance: { id: 4, name: 'auto 1', status: 'STOPPED' },
+        links: null,
+        // another experiment's session finished meanwhile, which sets the server's timer all the same
+        nextOpenAt: new Date(Date.now() + 600000).toISOString(),
+        problem: 'It is paused: its session "auto 1" was stopped by b@lab.org. It opens no new session until the settings are saved again.',
+      },
     }))
     const w = await mountPage()
     expect(w.find('.apst__title').text()).toBe('The autopilot is paused')
@@ -358,6 +404,8 @@ describe('Autopilot page', () => {
     expect(w.find('.apst__problem').classes()).toContain('is-info')
     expect(w.find('.apst__problem').attributes('role')).toBe('status')
     expect(w.text()).toMatch(/Press Resume below to start again/)
+    // paused, it opens nothing when that timer runs out
+    expect(w.text()).not.toMatch(/The next session opens at/)
     // unchanged settings can still be saved, to resume it
     const submit = w.find('.ap-savebar button[type="submit"]')
     expect(submit.text()).toBe('Resume')
@@ -380,6 +428,93 @@ describe('Autopilot page', () => {
     expect(w2.text()).toMatch(/The next session opens at/)
     expect(w2.text()).not.toMatch(/opens one shortly/)
     w2.unmount()
+  })
+
+  it('lets a done autopilot open another session without changing anything', async () => {
+    const settings = { ...DEFAULTS, enabled: true, experimentId: 12, continuous: false }
+    http.get.mockResolvedValue(stateJson({
+      settings,
+      status: {
+        on: true,
+        experimentId: 12,
+        experimentName: 'Public goods',
+        instance: { id: 4, name: 'auto 1', status: 'FINISHED' },
+        links: null,
+        nextOpenAt: new Date(Date.now() + 600000).toISOString(),
+        problem: 'Its session "auto 1" has finished, and opening the next session (continuous) is off, so it opens no more. Save the settings to open another.',
+      },
+    }))
+    toasts.splice(0)
+    const w = await mountPage()
+    expect(w.find('.apst__problem').classes()).toContain('is-info')
+    expect(w.find('.apst__problem').text()).toMatch(/Its one session has finished/)
+    expect(w.find('.apst__sub').text()).toMatch(/Press Open another session below/)
+    expect(w.text()).not.toMatch(/The next session opens at/)
+    expect(w.find('.ap-savebar').text()).toMatch(/Its one session has finished/)
+    const submit = w.find('.ap-savebar button[type="submit"]')
+    expect(submit.text()).toBe('Open another session')
+    expect(submit.attributes('disabled')).toBeUndefined()
+
+    // Cmd/Ctrl+S does what the button does
+    http.post.mockResolvedValueOnce(stateJson({ settings, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null } }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true }))
+    await flushPromises()
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(http.post).toHaveBeenCalledTimes(1)
+    expect(http.post.mock.calls[0][1]).toMatchObject({ enabled: true, experimentId: 12, continuous: false })
+    expect(toasts.some(t => t.title === 'Opening another session')).toBe(true)
+    // nothing left to save
+    expect(w.find('.ap-savebar button[type="submit"]').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('says a paused autopilot opens nothing, even once another session ends', async () => {
+    const pilot = { id: 9, name: 'Trust pilot', experimentId: 13, experimentName: 'Trust', owner: 'b@lab.org' }
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null, engineSession: pilot, problem: 'It is paused: its session "auto 1" was stopped.' },
+    }))
+    const w = await mountPage()
+    expect(w.find('.ap-holder').text()).toMatch(/The autopilot is paused, so it opens nothing until you press Resume/)
+    expect(w.find('.ap-holder').text()).not.toMatch(/The autopilot waits for that session to end/)
+    // once edited, saving resumes it: then it waits for that session
+    const countdown = w.findAll('input.b-input__el').find(i => i.attributes('min') === '0' && (i.element as HTMLInputElement).value === '5')!
+    await countdown.setValue('10')
+    expect(w.find('.ap-holder').text()).toMatch(/When you save, the autopilot waits for that session to end/)
+    w.unmount()
+  })
+
+  it('shows the real problem, not "waiting", when the configured experiment does not exist', async () => {
+    http.get.mockResolvedValue(stateJson({
+      source: 'config',
+      settings: { ...DEFAULTS, enabled: true, experimentId: null },
+      status: {
+        on: false,
+        experimentId: null,
+        experimentName: null,
+        instance: null,
+        links: null,
+        engineSession: { id: 9, name: 'pilot 3', experimentId: 13, experimentName: 'Trust', owner: null },
+        problem: 'application.conf names the experiment "Trust gme" (breadboard.autopilot.experiment), but there is no experiment with that name.',
+      },
+    }))
+    const w = await mountPage()
+    expect(w.find('.apst__title').text()).toBe('The autopilot can’t run')
+    expect(w.find('.apst__problem').attributes('role')).toBe('alert')
+    expect(w.find('.apst__problem').text()).toMatch(/there is no experiment with that name/)
+    expect(w.text()).not.toMatch(/Waiting for another session/)
+    w.unmount()
+  })
+
+  it('counts unsaved settings when signing out, while the page is open', async () => {
+    http.get.mockResolvedValue(stateJson())
+    const w = await mountPage()
+    expect(unsavedTotal()).toBe(0)
+    const countdown = w.findAll('input.b-input__el').find(i => i.attributes('min') === '0' && (i.element as HTMLInputElement).value === '5')!
+    await countdown.setValue('10')
+    expect(unsavedTotal()).toBe(1)
+    w.unmount()
+    expect(unsavedTotal()).toBe(0)
   })
 
   it('saves without asking while its own session is open', async () => {

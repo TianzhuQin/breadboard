@@ -7,8 +7,8 @@
         class="b-toast"
         :class="`b-toast--${t.kind}`"
         :role="t.kind === 'error' ? 'alert' : 'status'"
-        @mouseenter="holdToast(t.id, 'pointer')"
-        @mouseleave="releaseToast(t.id, 'pointer')"
+        @pointerenter="onPointerEnter($event, t.id)"
+        @pointerleave="releaseToast(t.id, 'pointer')"
         @focusin="holdToast(t.id, 'focus')"
         @focusout="onFocusOut($event, t.id)"
       >
@@ -28,6 +28,12 @@
 import { CircleCheck, CircleAlert, Info, TriangleAlert, X } from 'lucide-vue-next'
 import { toasts, dismiss, holdToast, releaseToast } from './toast'
 const icons = { success: CircleCheck, error: CircleAlert, info: Info, warning: TriangleAlert }
+
+// Only a mouse hovers. On a touch screen a tap also sends mouseenter, whose mouseleave comes only
+// with a tap somewhere else, which would keep the toast up until then.
+function onPointerEnter (ev: PointerEvent, id: number) {
+  if (ev.pointerType === 'mouse') holdToast(id, 'pointer')
+}
 
 // (moving between the toast's own buttons keeps it held)
 function onFocusOut (ev: FocusEvent, id: number) {
@@ -74,8 +80,9 @@ function onFocusOut (ev: FocusEvent, id: number) {
 .b-toast-enter-from { opacity: 0; transform: translateY(8px); }
 .b-toast-leave-to { opacity: 0; transform: translateX(16px); }
 @media (max-width: 640px) {
-  /* dialogs become bottom sheets here, with their buttons at the very bottom: keep off them */
-  .b-toasts { top: calc(12px + env(safe-area-inset-top, 0px)); bottom: auto; }
+  /* dialogs become bottom sheets here, with their buttons at the very bottom: keep off them, and
+     off the top bar's menu, session and Output buttons */
+  .b-toasts { top: calc(var(--topbar-height) + 8px + env(safe-area-inset-top, 0px)); bottom: auto; }
   .b-toast-enter-from { transform: translateY(-8px); }
 }
 </style>

@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.Consumer;
 
 import static org.junit.Assert.*;
 import static play.test.Helpers.*;
@@ -40,8 +39,8 @@ public class AutopilotSettingsTest extends BaseTest {
         openerField = Autopilot.class.getDeclaredField("opener");
         openerField.setAccessible(true);
         originalOpener = openerField.get(null);
-        openerField.set(null, new Consumer<String>() {
-            public void accept(String why) { opened.add(why); }
+        openerField.set(null, new Autopilot.Opener() {
+            public void open(String why, boolean onlyIfIdle, boolean automatic) { opened.add(why); }
         });
         // As if the engine ran no session (an earlier test's may still look live to it).
         engineSessionField = ScriptBoard.class.getDeclaredField("engineGameListener");
@@ -66,14 +65,40 @@ public class AutopilotSettingsTest extends BaseTest {
     }
 
     private static void resetTiming() throws Exception {
+        forgetHaltInMemory();
+        Field due = Autopilot.class.getDeclaredField("nextOpenAt");
+        due.setAccessible(true);
+        due.set(null, 0L);   // a pending delayed open then does nothing
+        // Nor does an earlier test's researcher still hold the engine.
+        Field builtFor = ScriptBoard.class.getDeclaredField("engineBuiltFor");
+        builtFor.setAccessible(true);
+        builtFor.set(null, null);
+    }
+
+    /** As a restart does: paused and done are gone from memory (the database keeps them). */
+    private static void forgetHaltInMemory() throws Exception {
         for (String name : new String[]{"pausedBecause", "doneBecause"}) {
             Field f = Autopilot.class.getDeclaredField(name);
             f.setAccessible(true);
             f.set(null, null);
         }
-        Field due = Autopilot.class.getDeclaredField("nextOpenAt");
-        due.setAccessible(true);
-        due.set(null, 0L);   // a pending delayed open then does nothing
+    }
+
+    private static void restoreHalt() throws Exception {
+        java.lang.reflect.Method m = Autopilot.class.getDeclaredMethod("restoreHalt");
+        m.setAccessible(true);
+        m.invoke(null);
+    }
+
+    private static Result resume(User user) {
+        return callAction(controllers.routes.ref.AutopilotController.resume(),
+            fakeRequest(POST, "/autopilot/resume").withSession("uid", user.uid));
+    }
+
+    private static JsonNode statusJson(Autopilot.Effective effective) throws Exception {
+        java.lang.reflect.Method m = Autopilot.class.getDeclaredMethod("statusJson", Autopilot.Effective.class);
+        m.setAccessible(true);
+        return (JsonNode) m.invoke(null, effective);
     }
 
     /** As if the engine ran this session, started by this account. */
@@ -547,6 +572,115 @@ public class AutopilotSettingsTest extends BaseTest {
         watchdog();
         Thread.sleep(200);
         assertEquals(4, opened.size());
+    }
+
+    @Test
+    public void pausedAndDoneAreKeptOverARestartAndResumeEndsThem() throws Exception {
+        User user = user("restarted");
+        Experiment experiment = createExperiment("Kept paused");
+        own(user, experiment);
+        post(user, settings(experiment.id, true));
+        awaitOpens(opened, 1);
+
+        // A researcher stopped its session: paused, and kept.
+        ExperimentInstance ours = live("ours", experiment);
+        stoppedBy(ExperimentInstance.findById(ours.id), user);
+        assertNotNull(AutopilotSettings.loadHalt());
+
+        // The server restarts: nothing opens by itself, and the console is told why.
+        forgetHaltInMemory();
+        restoreHalt();
+        watchdog();
+        Thread.sleep(200);
+        assertEquals(1, opened.size());
+        JsonNode status = json(get(user)).get("status");
+        assertTrue(status.get("paused").asBoolean());
+        assertEquals("paused", status.get("problemKind").asText());
+        assertTrue(status.get("problem").asText(), status.get("problem").asText().contains("Resume"));
+
+        // Resume, which changes no settings, lifts it and opens a session.
+        Result resumed = resume(user);
+        assertEquals(contentAsString(resumed), OK, status(resumed));
+        assertFalse(json(resumed).get("status").get("paused").asBoolean());
+        awaitOpens(opened, 2);
+        assertTrue(opened.get(1), opened.get(1).contains("resumed by " + user.email));
+        assertNull(AutopilotSettings.loadHalt());
+
+        // Done (its one session finished with continuous off) is kept the same way.
+        Autopilot.sessionFinished(ExperimentInstance.findById(ours.id));
+        assertNotNull(AutopilotSettings.loadHalt().doneBecause);
+        forgetHaltInMemory();
+        restoreHalt();
+        status = json(get(user)).get("status");
+        assertTrue(status.get("done").asBoolean());
+        assertEquals("done", status.get("problemKind").asText());
+        watchdog();
+        Thread.sleep(200);
+        assertEquals(2, opened.size());
+
+        // One kept for another experiment than the one it runs now is forgotten.
+        AutopilotSettings.saveHalt(987654321L, "its session \"elsewhere\" was stopped by someone", null);
+        forgetHaltInMemory();
+        restoreHalt();
+        assertFalse(json(get(user)).get("status").get("paused").asBoolean());
+        assertNull(AutopilotSettings.loadHalt());
+    }
+
+    @Test
+    public void runFromApplicationConfItIsToldToResumeNeverToSave() throws Exception {
+        User user = user("configured");
+        Experiment experiment = createExperiment("Configured " + UUID.randomUUID());
+        Map<String, Object> file = new HashMap<String, Object>();
+        file.put("breadboard.autopilot.experiment", experiment.name);
+        Autopilot.Effective fromFile = Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(file)));
+        assertEquals(Autopilot.CONFIG, fromFile.source);
+
+        Field paused = Autopilot.class.getDeclaredField("pausedBecause");
+        paused.setAccessible(true);
+        paused.set(null, "its session \"s1\" was stopped by " + user.email);
+        JsonNode status = statusJson(fromFile);
+        assertEquals("paused", status.get("problemKind").asText());
+        String text = status.get("problem").asText();
+        assertTrue(text, text.contains("Resume"));
+        assertFalse(text, text.toLowerCase().contains("save"));
+
+        paused.set(null, null);
+        Field done = Autopilot.class.getDeclaredField("doneBecause");
+        done.setAccessible(true);
+        done.set(null, "Its session \"s1\" has finished, and opening the next session (continuous) is off");
+        status = statusJson(fromFile);
+        assertEquals("done", status.get("problemKind").asText());
+        assertTrue(status.get("done").asBoolean());
+        text = status.get("problem").asText();
+        assertTrue(text, text.contains("Resume"));
+        assertFalse(text, text.toLowerCase().contains("save"));
+
+        // Resume needs it switched on (here nothing is saved and the server's file names nothing).
+        Result off = resume(user);
+        assertEquals(BAD_REQUEST, status(off));
+        assertEquals(UNAUTHORIZED, status(callAction(controllers.routes.ref.AutopilotController.resume(),
+            fakeRequest(POST, "/autopilot/resume"))));
+    }
+
+    @Test
+    public void itOpensNothingOnceTheApplicationHasStopped() throws Exception {
+        User user = user("stopping");
+        Experiment experiment = createExperiment("Stopping");
+        own(user, experiment);
+        post(user, settings(experiment.id, true));
+        awaitOpens(opened, 1);
+        Field stopped = Autopilot.class.getDeclaredField("stopped");
+        stopped.setAccessible(true);
+        try {
+            stopped.set(null, true);
+            watchdog();
+            Thread.sleep(200);
+            assertEquals(1, opened.size());
+        } finally {
+            stopped.set(null, false);
+        }
+        watchdog();
+        awaitOpens(opened, 2);
     }
 
     @Test

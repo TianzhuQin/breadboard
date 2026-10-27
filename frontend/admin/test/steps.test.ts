@@ -7,6 +7,7 @@ vi.mock('@/store/admin', async () => {
   const { reactive, ref, computed } = await import('vue')
   const admin = reactive({
     email: 'r@lab.org',
+    ready: true,
     user: { email: 'r@lab.org', currentScript: '', experiments: [{ id: 7, name: 'Trust game' }], defaultLanguage: null } as any,
     experiment: null as any,
     instance: null as any,
@@ -50,7 +51,8 @@ import {
   BUILTINS, builtinOf, copyName, draftFromStep, formatName, isDirty, isNew, mergeServerSteps, newDraft, renameDraft,
   sortDrafts, templateSource, uniqueName, validateName, type StepDraft,
 } from '../src/pages/steps/stepsModel'
-import { buckets, deleteDraft, errorText, saveDraft, ensureBucket, runDraft, unsavedDrafts } from '../src/pages/steps/stepsStore'
+import { bucketKey, buckets, deleteDraft, errorText, saveDraft, ensureBucket, runDraft, unsavedDrafts } from '../src/pages/steps/stepsStore'
+import { __resetReplies } from '../src/pages/console/engineReplies'
 import { toasts } from '../src/ui/toast'
 import { unsavedTotal } from '../src/shell/unsaved'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
@@ -58,10 +60,15 @@ import StepsPage from '../src/pages/steps/StepsPage.vue'
 
 const admin = store.admin as any
 const actions = store.actions as any
+const connectionState = (store as any).connectionState
 const get = http.get as any
 const post = http.post as any
 
-beforeEach(() => {
+beforeEach(async () => {
+  // runs an earlier test left waiting for the engine's answer
+  __resetReplies()
+  await flushPromises()
+  admin.engine = 'ready'
   vi.clearAllMocks()
   buckets.clear()
 })
@@ -326,6 +333,73 @@ describe('the live engine', () => {
     expect(runDraft(d)).toBe(false)
     expect(d.run).toMatchObject({ status: 'notsent' })
     expect(d.engineBehind).toBe(true)
+    expect(actions.markEngineStale).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks the engine stale when a saved version fails to load, or gets no answer', async () => {
+    await nextTick()
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }), draftFromStep({ id: 2, name: 'B', source: 'b()' }))
+    const [a, bb] = b.drafts
+    a.engineBehind = bb.engineBehind = true
+    runDraft(a)
+    admin.output.push({ id: ++outId, kind: 'error', text: 'Caught error: No such property: x', source: 'SendStep', at: Date.now() })
+    await flushPromises()
+    expect(a.run).toMatchObject({ status: 'error' })
+    expect(a.engineBehind).toBe(true)
+    expect(actions.markEngineStale).toHaveBeenCalledTimes(1)
+    expect(admin.engine).toBe('stale')
+    // the connection drops before B's answer comes
+    admin.engine = 'ready'
+    runDraft(bb)
+    connectionState.value = 'retrying'
+    await flushPromises()
+    connectionState.value = 'open'
+    expect(bb.run).toMatchObject({ status: 'noreply' })
+    expect(actions.markEngineStale).toHaveBeenCalledTimes(2)
+    expect(admin.engine).toBe('stale')
+  })
+
+  it('keeps the “not loaded yet” marks through signing out, and says so again after signing in', async () => {
+    await nextTick()
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    b.drafts[0].engineBehind = true
+    // signing out (or a 401): the store starts over, which is no reload
+    admin.ready = false
+    admin.engineReloadedAt = 0
+    await nextTick()
+    expect(b.drafts[0].engineBehind).toBe(true)
+    // signed in again: the first User JSON
+    admin.ready = true
+    await nextTick()
+    expect(actions.markEngineStale).toHaveBeenCalledTimes(1)
+    expect(admin.engine).toBe('stale')
+    // a real reload still clears them
+    admin.engineReloadedAt = Date.now() + 2
+    await nextTick()
+    expect(b.drafts[0].engineBehind).toBe(false)
+  })
+
+  it('throws away the drafts of a deleted experiment, but keeps them through signing out', async () => {
+    const user = admin.user
+    admin.user = { ...user, experiments: [{ id: 7, name: 'Trust game' }, { id: 8, name: 'Pilot study' }] }
+    await nextTick()
+    const b = ensureBucket(8, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    b.drafts[0].source = 'edited()'
+    ensureBucket(8, true)
+    toasts.splice(0)
+    admin.user = null
+    await nextTick()
+    expect(unsavedDrafts.value).toHaveLength(1)
+    // signed in again: the experiment is gone (deleted in another tab)
+    admin.user = { ...user, experiments: [{ id: 7, name: 'Trust game' }] }
+    await nextTick()
+    expect(unsavedDrafts.value).toHaveLength(0)
+    expect(buckets.has(bucketKey(8, false)) || buckets.has(bucketKey(8, true))).toBe(false)
+    expect(toasts.some(t => t.title === 'Unsaved steps of “Pilot study” were thrown away')).toBe(true)
+    admin.user = user
   })
 
   it('counts unsaved steps for the sign-out question', () => {
@@ -563,6 +637,52 @@ describe('StepsPage', () => {
     // saved, but not in the engine yet
     expect(actions.markEngineStale).toHaveBeenCalled()
     admin.engine = 'ready'
+    w.unmount()
+  })
+
+  it('doesn’t run a step whose save ended after the selected experiment changed', async () => {
+    const { w } = await open()
+    await w.find('textarea.code-stub').setValue('initStep = 5')
+    toasts.splice(0)
+    let answer!: (v: any) => void
+    post.mockReturnValueOnce(new Promise(resolve => { answer = resolve }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }))
+    await nextTick()
+    // another tab switches the account to another experiment meanwhile
+    get.mockResolvedValue({ steps: [] })
+    admin.experiment = { id: 8, name: 'Other', fileMode: false, steps: [] }
+    answer({ id: 1, name: 'InitStep', source: 'initStep = 5' })
+    await flushPromises()
+    expect(post).toHaveBeenCalledWith('/steps/1', { experimentId: 7, stepSource: 'initStep = 5', name: 'InitStep' })
+    expect(actions.runStep).not.toHaveBeenCalled()
+    expect(toasts.some(t => t.title === '“InitStep” was saved but not run')).toBe(true)
+    w.unmount()
+  })
+
+  it('offers to copy or discard edits made before file mode was switched on', async () => {
+    const { w } = await open()
+    await w.find('textarea.code-stub').setValue('initStep = 9')
+    expect(w.find('.steps__banner.is-stranded').exists()).toBe(false)
+    // file mode is switched on (here or in another tab): the steps come from the files
+    const files = steps.map(s => ({ ...s, id: null }))
+    get.mockResolvedValue({ steps: files })
+    admin.experiment = { ...admin.experiment, fileMode: true, steps: files }
+    await flushPromises()
+    const banner = w.find('.steps__banner.is-stranded')
+    expect(banner.text()).toContain('Not saved: InitStep.')
+    expect(unsavedDrafts.value).toHaveLength(1)
+    await banner.findAll('button').find(b => b.text() === 'Discard…')!.trigger('click')
+    await flushPromises()
+    expect(confirmState.open).toBe(true)
+    settleConfirm(true)
+    await flushPromises()
+    expect(unsavedDrafts.value).toHaveLength(0)
+    expect(w.find('.steps__banner.is-stranded').exists()).toBe(false)
+    // back out of file mode: the saved version is there
+    get.mockResolvedValue({ steps })
+    admin.experiment = { ...admin.experiment, fileMode: false, steps }
+    await flushPromises()
+    expect((w.find('textarea.code-stub').element as HTMLTextAreaElement).value).toBe('initStep = 1')
     w.unmount()
   })
 

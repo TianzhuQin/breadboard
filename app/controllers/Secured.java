@@ -11,6 +11,10 @@ public class Secured extends Security.Authenticator {
   @Override
   public String getUsername(Context ctx) {
     String uid = ctx.session().get("uid");
+    // No sign-in: a lookup by a null uid matched an account that had never signed in.
+    if (uid == null || uid.trim().isEmpty()) {
+      return null;
+    }
     User user = User.findByUID(uid);
     if(user != null) {
       return user.email;

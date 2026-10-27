@@ -178,6 +178,18 @@ public class ClientLogin extends Controller {
         loginForm.reject("Please enter your ID.");
         return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
+      if (clientId.startsWith("_")) {
+        // Ids starting with "_" are the computer players' (g.addAI makes _1, _2, ...): signing in as
+        // one took over its seat.
+        loginForm.reject("This ID is reserved. Please use the ID you were given.");
+        return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      }
+      if (isTestSession(experimentInstanceId)) {
+        // The test session (0) has no seats for participants: it only exists while the engine has the
+        // experiment loaded, and a seat token for it used to open the game of whatever session ran.
+        loginForm.reject("This session isn't running right now. Please check the link you were given.");
+        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      }
       if (closedToNewcomers(experimentInstanceId, clientId)) {
         loginForm.reject("This session has already started.");
         return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
@@ -218,6 +230,7 @@ public class ClientLogin extends Controller {
     try {
       instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
     } catch (NumberFormatException ignored) {}
+    // (The test session, 0, has no row, so it is refused here too.)
     if (instance == null || instance.status != ExperimentInstance.Status.RUNNING) {
       return ok(participantMessage.render("This study is not running",
           "There is no session running at the moment. Please return the study on Prolific."));
@@ -277,6 +290,15 @@ public class ClientLogin extends Controller {
     }
     String query = request().uri().contains("?") ? request().uri().substring(request().uri().indexOf('?')) : "";
     return redirect("/game/" + experimentId + "/" + open.id + "/" + entry + query);
+  }
+
+  /** Whether this is the id of an experiment's test session (0), which takes no participants. */
+  static boolean isTestSession(String experimentInstanceId) {
+    try {
+      return Experiment.TEST_INSTANCE_ID.equals(Long.valueOf(experimentInstanceId));
+    } catch (NumberFormatException e) {
+      return false;
+    }
   }
 
   /**

@@ -13,12 +13,15 @@ export async function switchToNew (id: number, name: string, done: string): Prom
     notify.success(done, `${stay} Choose it on the Experiments page when the engine is free.`)
     return false
   }
+  const askedAt = Date.now()
   await actions.selectExperiment(id)
   if (admin.experiment?.id === id) {
     notify.success(done, 'You are now working on it.')
     return true
   }
-  const why = admin.requestError?.request === 'SelectExperiment' ? `${admin.requestError.text.replace(/\.?$/, '.')} ` : ''
+  // only a refusal of this switch, not one left over from an earlier try
+  const err = admin.requestError
+  const why = err?.request === 'SelectExperiment' && err.at >= askedAt ? `${err.text.replace(/\.?$/, '.')} ` : ''
   notify.warning(done, `It was saved, but the switch to it didn't go through. ${why}${stay} Choose it on the Experiments page to try again.`)
   return false
 }

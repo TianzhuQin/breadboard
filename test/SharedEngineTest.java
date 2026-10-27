@@ -228,6 +228,185 @@ public class SharedEngineTest extends BaseTest {
         assertNull("no seat in the game", engine().eval("g.getVertex('late-page')"));
     }
 
+    // ---- a token for another session never opens a seat in the live game -------------------------------
+
+    /** A participant page's socket: the frames it gets, and whether the server closed it. */
+    private static final class Page {
+        final List<JsonNode> frames = new CopyOnWriteArrayList<>();
+        volatile boolean closed;
+        final ThrottledWebSocketOut out = new ThrottledWebSocketOut(new WebSocket.Out<JsonNode>() {
+            public void write(JsonNode frame) { frames.add(frame); }
+            public void close() { closed = true; }
+        }, 0L);
+    }
+
+    private static String text(JsonNode frame) {
+        return frame.has("player") ? frame.get("player").path("text").asText() : "";
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Client client(String id) throws Exception {
+        Field f = ScriptBoard.class.getDeclaredField("clients");
+        f.setAccessible(true);
+        return ((java.util.Map<String, Client>) f.get(null)).get(id);
+    }
+
+    @Test
+    public void aTokenForAnotherSessionNeverOpensASeatInTheLiveGame() throws Throwable {
+        final User user = user("host");
+        final Experiment experiment = createExperiment("Live game");
+        own(user, experiment);
+        // An earlier session of the same experiment, over now; its participants kept their tokens.
+        ExperimentInstance earlier = createInstance("earlier", experiment);
+        earlier.status = ExperimentInstance.Status.FINISHED;
+        earlier.save();
+
+        final AdminSocketsTest.Tab t = loggedIn(user);
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> {
+            Experiment selection = User.findByEmail(user.email).selectedExperiment;
+            return selection != null && experiment.id.equals(selection.id);
+        });
+        t.send("LaunchGame", "name", "R", "parameters", Json.newObject());
+        await("running", () -> {
+            for (ExperimentInstance s : sessions(experiment)) {
+                if ("R".equals(s.name) && s.status == ExperimentInstance.Status.RUNNING) return true;
+            }
+            return false;
+        });
+        ExperimentInstance live = null;
+        for (ExperimentInstance s : sessions(experiment)) if ("R".equals(s.name)) live = s;
+        final String e = experiment.id.toString();
+
+        // Participant 3 of R joins.
+        Page real = new Page();
+        ScriptBoard.addClient(e, live.id.toString(), "3", new WebSocket.In<JsonNode>(), real.out);
+        assertNotNull(engine().eval("g.getVertex('3')"));
+        assertSame(real.out, client("3").out);
+
+        // Someone with a token for seat 3 of the earlier session, or of the test session, connects:
+        // refused, and participant 3 keeps their seat and their socket.
+        Page old = new Page();
+        ScriptBoard.addClient(e, earlier.id.toString(), "3", new WebSocket.In<JsonNode>(), old.out);
+        assertEquals(1, old.frames.size());
+        assertTrue(old.frames.get(0).toString(), text(old.frames.get(0)).contains("ended"));
+        Page test = new Page();
+        ScriptBoard.addClient(e, "0", "3", new WebSocket.In<JsonNode>(), test.out);
+        assertEquals(1, test.frames.size());
+        assertTrue(test.frames.get(0).toString(), text(test.frames.get(0)).contains("isn't running"));
+        assertSame(real.out, client("3").out);
+        assertFalse(real.closed);
+
+        // Nor does the test session take newcomers into R's game while R runs.
+        assertFalse(ScriptBoard.runsSession(experiment.id, experiment.getTestInstance()));
+        Page bot = new Page();
+        ScriptBoard.addClient(e, "0", "bot1", new WebSocket.In<JsonNode>(), bot.out);
+        assertTrue(bot.frames.toString(), text(bot.frames.get(0)).contains("isn't running"));
+        assertNull(engine().eval("g.getVertex('bot1')"));
+
+        // Participant 3 coming back to R still gets their seat.
+        Page back = new Page();
+        ScriptBoard.addClient(e, live.id.toString(), "3", new WebSocket.In<JsonNode>(), back.out);
+        assertSame(back.out, client("3").out);
+        assertTrue("the older socket is closed", real.closed);
+    }
+
+    // ---- a step queued for an engine that has been replaced -----------------------------------------------
+
+    @Test
+    public void aStepQueuedForAReplacedEngineDoesNotRunInTheNewOne() throws Throwable {
+        final User user = user("stepper");
+        final Experiment first = createExperiment("Steps first");
+        final Experiment second = createExperiment("Steps second");
+        own(user, first);
+        own(user, second);
+        final AdminSocketsTest.Tab t = loggedIn(user);
+        t.send("SelectExperiment", "experimentId", first.id);
+        await("first in the engine", () -> first.id.equals(engineExperimentId()));
+        Field generation = ScriptBoard.class.getDeclaredField("engineGeneration");
+        generation.setAccessible(true);
+        final long before = (Long) generation.get(null);
+
+        t.send("SelectExperiment", "experimentId", second.id);
+        await("second in the engine", () -> second.id.equals(engineExperimentId()) && (Long) generation.get(null) > before);
+
+        // A step queued (by SendStep) for the first engine, arriving after the rebuild.
+        Field instances = Breadboard.class.getDeclaredField("instances");
+        instances.setAccessible(true);
+        akka.actor.ActorRef actor = ((java.util.Map<String, akka.actor.ActorRef>) instances.get(null)).get(user.email);
+        final List<JsonNode> frames = new CopyOnWriteArrayList<>();
+        ThrottledWebSocketOut out = new ThrottledWebSocketOut(new WebSocket.Out<JsonNode>() {
+            public void write(JsonNode frame) { frames.add(frame); }
+            public void close() {}
+        }, 0L);
+        actor.tell(new Breadboard.RunStep(User.findByEmail(user.email), "staleStep = 1", out, "SendStep", before), null);
+        await("refused", () -> frames.size() == 1);
+        assertEquals("SendStep", frames.get(0).get("request").asText());
+        assertTrue(frames.get(0).get("error").asText().contains("reloaded"));
+        assertNull(engine().get("staleStep"));
+
+        // One for the engine that runs now does run.
+        actor.tell(new Breadboard.RunStep(User.findByEmail(user.email), "freshStep = 1", out, "SendStep", (Long) generation.get(null)), null);
+        await("ran", () -> Integer.valueOf(1).equals(engine().get("freshStep")));
+    }
+
+    // ---- signing out, or a new password, cuts off the account's open consoles ---------------------------
+
+    @Test
+    public void signingOutClosesTheAccountsConsoleSockets() throws Throwable {
+        final User user = user("leaving");
+        final User other = user("staying");
+        final AdminSocketsTest.Tab one = loggedIn(user);
+        final AdminSocketsTest.Tab two = loggedIn(user);
+        final AdminSocketsTest.Tab theirs = loggedIn(other);
+        final int before = ScriptBoard.adminCount();
+
+        play.test.Helpers.route(play.test.Helpers.fakeRequest("GET", "/logout").withSession("uid", user.uid));
+        for (final AdminSocketsTest.Tab t : new AdminSocketsTest.Tab[]{one, two}) {
+            await("told", () -> t.count(f -> f.has("status") && "unauthorized".equals(f.get("status").asText())) == 1);
+            assertTrue(t.first(f -> f.has("status")).get("error").asText().startsWith("You are not signed in"));
+        }
+        assertEquals("both of its sockets are gone, the other account's is not", before - 2, ScriptBoard.adminCount());
+        assertEquals(0, theirs.count(f -> f.has("status")));
+    }
+
+    @Test
+    public void aNewPasswordClosesTheConsolesThatStillUseTheOldSignIn() throws Throwable {
+        Field grace = controllers.Application.class.getDeclaredField("CONSOLE_GRACE_MS");
+        grace.setAccessible(true);
+        Object was = grace.get(null);
+        grace.set(null, 300L);
+        try {
+            final User user = user("rotating");
+            final AdminSocketsTest.Tab stolen = loggedIn(user);
+            java.util.Map<String, String> form = new java.util.HashMap<>();
+            form.put("currentPassword", "secret-1");
+            form.put("newPassword", "a-new-one-1");
+            form.put("confirmPassword", "a-new-one-1");
+            play.mvc.Result changed = play.test.Helpers.route(play.test.Helpers.fakeRequest("POST", "/saveUserSettings")
+                .withFormUrlEncodedBody(form).withSession("uid", user.uid));
+            String uid = Json.parse(play.test.Helpers.contentAsString(changed)).get("uid").asText();
+            // The console that asked reconnects with the new sign-in at once: it is kept.
+            final AdminSocketsTest.Tab fresh = tab(User.findByEmail(user.email));
+            assertEquals(uid, fresh.uid);
+            fresh.send("LogIn");
+            await("LogIn", () -> fresh.count(AdminSocketsTest.userJson()) >= 1);
+
+            await("the old one is told", () -> stolen.count(f -> f.has("status") && "unauthorized".equals(f.get("status").asText())) == 1);
+            Thread.sleep(300);
+            assertEquals(0, fresh.count(f -> f.has("status")));
+            // The old socket gets nothing more: a change in the account isn't pushed to it.
+            final int seen = stolen.frames.size();
+            final int freshSeen = fresh.count(AdminSocketsTest.userJson());
+            fresh.send("SelectExperiment", "experimentId", createExperiment("After").id);
+            await("the new console hears", () -> fresh.count(AdminSocketsTest.userJson()) > freshSeen);
+            Thread.sleep(300);
+            assertEquals(seen, stolen.frames.size());
+        } finally {
+            grace.set(null, was);
+        }
+    }
+
     // ---- a tab that closes before its Admin is registered ----------------------------------------------
 
     @Test

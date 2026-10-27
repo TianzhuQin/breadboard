@@ -377,8 +377,11 @@ async function choose (c: Choice) {
     toast('error', `The choice for ${who} failed`, shortError(outcome.error), {
       action: { label: 'Show output', run: () => { openOutput.value = true } },
     })
+  } else if (outcome.onScreen) {
+    notify.warning('No answer from the server yet', `“${c.name}” is still on ${who}'s screen. The game may be busy, or the choice may need answers only the participant page can collect. Check again in a moment.`)
   } else {
-    notify.warning('Nothing changed yet', `The choice is still on ${who}'s screen. It may have expired, or it may need answers only the participant page can collect.`)
+    // it left their screen, but that alone doesn't say whose answer it was
+    notify.warning('No answer from the server yet', `The choice is no longer on ${who}'s screen, but the server hasn't said whether yours was made or ${who} answered first. Their properties and the session's events show what was chosen.`)
   }
 }
 

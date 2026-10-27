@@ -72,6 +72,12 @@ public class AutopilotSessionTest extends BaseTest {
         fail("Timed out waiting for " + what);
     }
 
+    private static Long engineExperimentId() throws Exception {
+        Field f = ScriptBoard.class.getDeclaredField("engineExperimentId");
+        f.setAccessible(true);
+        return (Long) f.get(null);
+    }
+
     private static ScriptEngine engine() throws Exception {
         Field f = ScriptBoard.class.getDeclaredField("engine");
         f.setAccessible(true);
@@ -193,7 +199,7 @@ public class AutopilotSessionTest extends BaseTest {
     }
 
     @Test
-    public void aSessionOfAnotherExperimentIsLeftAloneWhenTheNextOneIsDue() throws Exception {
+    public void aResearcherWhoMovesTheEngineOffItsSessionPausesItUntilResume() throws Exception {
         final User researcher = user("busy");
         final Experiment auto = createExperiment("Autopiloted");
         final Experiment manual = createExperiment("Run by hand");
@@ -204,33 +210,95 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals(OK, status(post(researcher, settings(auto, 2))));
         await("the autopilot's session", () -> sessions(auto).size() == 1
             && sessions(auto).get(0).status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance first = sessions(auto).get(0);
 
-        // Someone launches a session of another experiment by hand (ending the autopilot's).
+        // Someone selects another experiment (ending the autopilot's session) and launches it by hand.
         final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(researcher.uid);
         tabs.add(tab);
         tab.send("LogIn");
         await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
         tab.send("SelectExperiment", "experimentId", manual.id);
         await("the selection", () -> selected(researcher, manual));
+        await("its session stopped", () -> ExperimentInstance.findById(first.id).status == ExperimentInstance.Status.STOPPED);
+        JsonNode status = state(researcher).get("status");
+        assertTrue(status.toString(), status.get("paused").asBoolean());
+        assertEquals("paused", status.get("problemKind").asText());
+        assertTrue(status.get("problem").asText(), status.get("problem").asText().contains(researcher.email));
         tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
         await("the manual session", () -> sessions(manual).size() == 1
             && sessions(manual).get(0).status == ExperimentInstance.Status.RUNNING);
 
-        // The autopilot's session counts as finished: its next one waits for the engine to be free.
-        ExperimentInstance autoSession = ExperimentInstance.findById(sessions(auto).get(0).id);
-        autoSession.status = ExperimentInstance.Status.FINISHED;
-        autoSession.save();
-        Autopilot.sessionFinished(autoSession);
-        Thread.sleep(800);
-        assertEquals(1, sessions(auto).size());
-        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(sessions(manual).get(0).id).status);
-
-        // When the manual session finishes, the engine is free: the autopilot opens its next one.
+        // Paused, it doesn't take the engine back, not even when the manual session finishes.
+        watchdog();
         ExperimentInstance manualSession = ExperimentInstance.findById(sessions(manual).get(0).id);
         manualSession.status = ExperimentInstance.Status.FINISHED;
         manualSession.save();
         Autopilot.sessionFinished(manualSession);
+        Thread.sleep(800);
+        watchdog();
+        Thread.sleep(500);
+        assertEquals(1, sessions(auto).size());
+        assertTrue(selected(researcher, manual));
+
+        // Resume (which changes no settings) opens its next one.
+        Result resumed = callAction(controllers.routes.ref.AutopilotController.resume(),
+            fakeRequest(POST, "/autopilot/resume").withSession("uid", researcher.uid));
+        assertEquals(contentAsString(resumed), OK, status(resumed));
+        assertFalse(Json.parse(contentAsString(resumed)).get("status").get("paused").asBoolean());
         await("the autopilot's next session", () -> sessions(auto).size() == 2 && running(auto) == 1);
+        // ...without changing what the researcher has selected.
+        assertTrue(selected(researcher, manual));
+    }
+
+    @Test
+    public void theWatchdogLeavesTheEngineToAResearcherWhoHasAnotherExperimentLoaded() throws Throwable {
+        final User operator = user("operator");
+        final User colleague = user("colleague");
+        final Experiment auto = createExperiment("Unattended");
+        final Experiment theirs = createExperiment("Being edited");
+        operator.ownedExperiments.add(auto);
+        operator.saveManyToManyAssociations("ownedExperiments");
+        colleague.ownedExperiments.add(theirs);
+        colleague.saveManyToManyAssociations("ownedExperiments");
+        // The operator has another experiment selected: the autopilot leaves that selection alone.
+        User op = User.findByEmail(operator.email);
+        op.setSelectedExperiment(Experiment.findById(theirs.id));
+        op.update();
+
+        assertEquals(OK, status(post(operator, settings(auto, 2))));
+        await("the autopilot's session", () -> sessions(auto).size() == 1 && running(auto) == 1);
+        assertTrue("the operator's selection is kept", selected(operator, theirs));
+        assertEquals(-1L, User.findByEmail(operator.email).experimentInstanceId.longValue());
+
+        // A colleague selects their experiment to edit it: the autopilot's session ends, it pauses.
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(colleague.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", theirs.id);
+        await("paused", () -> state(operator).get("status").get("paused").asBoolean());
+        await("their experiment in the engine", () -> theirs.id.equals(engineExperimentId()));
+
+        // Even with the pause lifted by other means (e.g. between two sessions), the periodic check
+        // leaves the engine to the colleague while their console is open...
+        for (String name : new String[]{"pausedBecause", "doneBecause"}) {
+            Field f = Autopilot.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(null, null);
+        }
+        watchdog();
+        Thread.sleep(1000);
+        assertEquals(1, sessions(auto).size());
+        JsonNode status = state(operator).get("status");
+        assertEquals("waiting", status.get("problemKind").asText());
+        assertTrue(status.get("problem").asText(), status.get("problem").asText().contains(colleague.email));
+        assertTrue(selected(operator, theirs));
+
+        // ...and takes it once they have closed it.
+        tab.close();
+        watchdog();
+        await("the autopilot's next session", () -> sessions(auto).size() == 2 && running(auto) == 1);
+        assertTrue("still the operator's own selection", selected(operator, theirs));
     }
 
     // (Ids don't always grow with time here, so sessions are told apart by status.)

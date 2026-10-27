@@ -34,6 +34,7 @@ let bucketsFor = admin.email
 watch(() => admin.email, (email) => {
   if (email === bucketsFor) return
   buckets.clear()
+  stepDeletedSinceReload = false
   bucketsFor = email
 })
 
@@ -181,12 +182,15 @@ export function runDraft (d: StepDraft): boolean {
   const afterId = lastOutputId()
   if (!actions.runStep({ id: d.id, name: d.name, source })) {
     d.run = { status: 'notsent', values: [], error: null, at: Date.now() }
+    if (d.engineBehind) actions.markEngineStale()
     return false
   }
   d.run = { status: 'pending', values: [], error: null, at: Date.now() }
   const run = d.run
   expectReply(source, afterId, 'SendStep').then(reply => {
     if (d.run !== run) return
+    // it didn't load: the engine still has the version before this save (or half of this one)
+    if ((!reply || !reply.ok) && d.engineBehind) actions.markEngineStale()
     if (!reply) {
       run.status = 'noreply'
       return
@@ -222,9 +226,20 @@ function engineCaughtUp () {
 }
 
 // A reload (or an experiment switch) loads every saved step, so nothing is behind any more.
-watch(() => admin.engineReloadedAt, () => {
+// (Signing out sets the time back to 0: that is no reload, and the drafts outlive it.)
+watch(() => admin.engineReloadedAt, (t) => {
+  if (!t) return
   stepDeletedSinceReload = false
   for (const b of buckets.values()) for (const d of b.drafts) d.engineBehind = false
+})
+
+// Signing in again (after Sign out or a 401) starts the store over with the engine marked current,
+// but the shared engine still has the old versions of what was saved here and never loaded.
+watch(() => admin.ready, (ready) => {
+  if (!ready || admin.engine !== 'ready') return
+  const id = admin.experiment?.id
+  const behind = [...buckets.values()].some(b => b.experimentId === id && b.drafts.some(d => d.engineBehind))
+  if (stepDeletedSinceReload || behind) actions.markEngineStale()
 })
 
 /** Delete a step (DELETE /steps/:id); a step never saved is just dropped. */
@@ -264,6 +279,33 @@ export const unsavedDrafts = computed(() => {
 
 // signing out asks first while there are any (they are kept, but only in this tab)
 registerUnsaved('steps', () => unsavedDrafts.value.length, 'Steps')
+
+/** The experiments' names as last seen, to name a deleted one (also after signing in again). */
+const experimentNames = new Map<number, string>()
+// A deleted experiment (from this tab or another) takes its steps with it: drafts kept for it could
+// never be saved, and would keep asking before closing the tab or signing out. (Only a User JSON
+// says which experiments there are: signing out empties `user`, and the drafts outlive that.)
+watch(() => admin.user?.experiments, (list) => {
+  if (!admin.user || !Array.isArray(list)) return
+  const ids = new Set(list.map(e => e?.id))
+  const selected = admin.experiment?.id
+  const lost = new Map<number, number>()
+  for (const [key, b] of [...buckets]) {
+    if (ids.has(b.experimentId) || b.experimentId === selected) continue
+    const n = b.fileMode ? 0 : b.drafts.filter(isDirty).length
+    if (n) lost.set(b.experimentId, (lost.get(b.experimentId) || 0) + n)
+    buckets.delete(key)
+  }
+  for (const [id, n] of lost) {
+    const name = experimentNames.get(id)
+    notify.warning(
+      name ? `Unsaved steps of “${name}” were thrown away` : 'Unsaved steps were thrown away',
+      `The experiment was deleted, so there is nowhere to save ${n === 1 ? 'the step' : `the ${n} steps`} you had changed in it.`,
+    )
+  }
+  experimentNames.clear()
+  for (const e of list) if (e) experimentNames.set(e.id, e.name)
+}, { immediate: true })
 
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', (e) => {

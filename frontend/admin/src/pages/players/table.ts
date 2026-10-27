@@ -58,17 +58,14 @@ export function quickMatch (n: GraphNode, q: QuickFilter): boolean {
   }
 }
 
-const NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i
-
 /**
- * One CSV cell. Text a spreadsheet would run as a formula (starting with = + - @, a tab or a
- * carriage return) gets a leading apostrophe, because ids and answers are typed by participants;
- * numbers, and text that is just a number like -0.5, are left alone.
+ * One CSV cell, written exactly as the value is: no apostrophe before text starting with = + - @,
+ * like the session's event CSV (Application.csvField on the server). Researchers join the two files
+ * on id, so a participant's "-k7" or "@maria" must stay exactly that.
  */
 export function csvCell (v: any): string {
   if (v === undefined || v === null) return ''
-  let s = typeof v === 'object' ? JSON.stringify(v) : String(v)
-  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s) && !NUMBER.test(s)) s = `'${s}`
+  const s = typeof v === 'object' ? JSON.stringify(v) : String(v)
   // quotes doubled and fields quoted when needed (the old CSVs didn't escape quotes)
   return /[",\n\r]/.test(s) || /^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }

@@ -206,16 +206,16 @@ describe('the engine running another experiment', () => {
 
   afterEach(() => { connection.state.value = 'idle' })
 
-  it('says what the engine runs, and switches to it after asking', async () => {
+  it('says what the engine runs, and that opening it here ends that session', async () => {
     admin.email = 'r@lab'
     graph.clear()
     state(engine(2, 'B', 'Pilot 3'))
     const w = mount(EngineNotice, { attachTo: document.body })
     await nextTick()
-    expect(text(w)).toContain('The engine is running B’s session Pilot 3 (other@lab). Live controls here act on nothing until you switch.')
+    expect(text(w)).toContain('The engine is running B’s session Pilot 3 (other@lab). Live controls here act on nothing. Opening B here stops that session for everyone in it.')
     expect(w.attributes('role')).toBe('status')
     const btn = w.find('button')
-    expect(btn.text()).toBe('Switch to B')
+    expect(btn.text()).toBe('End that session and open B')
 
     connection.state.value = 'open'
     const send = vi.spyOn(connection, 'send').mockReturnValue(true)
@@ -223,8 +223,9 @@ describe('the engine running another experiment', () => {
     await btn.trigger('click')
     // switching rebuilds the engine, which ends the session it runs
     await vi.waitFor(() => expect(confirmState.open).toBe(true))
-    expect(confirmState.req!.title).toBe('Switch to “B”?')
+    expect(confirmState.req).toMatchObject({ title: 'End “Pilot 3” and open “B”?', confirmLabel: 'End it and open', danger: true })
     expect(confirmState.req!.message).toContain('other@lab has session “Pilot 3” of “B” running.')
+    expect(confirmState.req!.message).toContain('Session “Pilot 3” is stopped: the people in it can’t rejoin it, and its links stop working.')
     settleConfirm(true)
     await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
     // the switch done: the reply, the rebuild, and what the engine runs now
@@ -242,13 +243,26 @@ describe('the engine running another experiment', () => {
     state(engine(2, 'B', null, 'r@lab'))
     const w = mount(EngineNotice, { attachTo: document.body })
     await nextTick()
-    expect(text(w)).toContain('The engine has B loaded, with no session running (your account).')
+    expect(text(w)).toContain('The engine has B loaded, with no session running (your account). Live controls here act on nothing until you switch.')
+    expect(w.find('button').text()).toBe('Switch to B')
     connection.state.value = 'open'
     const send = vi.spyOn(connection, 'send').mockReturnValue(true)
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
     await w.find('button').trigger('click')
     await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
     expect(confirmState.open).toBe(false)
+    w.unmount()
+  })
+
+  it('just switches when the session there is this account\'s own, which is taken up again', async () => {
+    state(engine(2, 'B', 'Pilot 3', 'r@lab'))
+    // the account's selected session is the one the engine runs (ChangeExperiment resumes it)
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(1, 'A'), engine: engine(2, 'B', 'Pilot 3', 'r@lab'),
+      experimentInstance: { id: 40, name: 'Pilot 3', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] } })
+    const w = mount(EngineNotice, { attachTo: document.body })
+    await nextTick()
+    expect(text(w)).toContain('Live controls here act on nothing until you switch.')
+    expect(w.find('button').text()).toBe('Switch to B')
     w.unmount()
   })
 
@@ -303,6 +317,29 @@ describe('signing out with unsaved work', () => {
     expect(confirmState.open).toBe(false)
     offContent()
     offBroken()
+  })
+
+  it('says which requests are still running, apart from unsaved changes', async () => {
+    let jobs = 2
+    const offJobs = registerUnsaved('mturk', () => jobs, 'Mechanical Turk requests', { running: true })
+    expect(unsavedTotal()).toBe(0)
+    let answer = confirmSignOut()
+    expect(confirmState.req!.title).toBe('Sign out while requests are still running?')
+    expect(confirmState.req!.message).toContain('Still running: Mechanical Turk requests (2).')
+    expect(confirmState.req!.message).not.toContain('Not saved yet')
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+
+    const offSteps = registerUnsaved('steps', () => 1, 'Steps')
+    answer = confirmSignOut()
+    expect(confirmState.req!.title).toBe('Sign out with an unsaved change?')
+    expect(confirmState.req!.message).toContain('Not saved yet: Steps (1). Still running: Mechanical Turk requests (2).')
+    settleConfirm(true)
+    expect(await answer).toBe(true)
+    offSteps()
+    jobs = 0
+    expect(await confirmSignOut()).toBe(true)
+    offJobs()
   })
 
   it('the account menu signs out only once the researcher agrees', async () => {

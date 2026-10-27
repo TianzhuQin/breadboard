@@ -226,7 +226,11 @@ watch(() => [pw.next, pw.confirm], () => {
 
 // Only a typed new password counts as unsaved: browsers may fill in the current one by themselves.
 const pwTyped = computed(() => !!(pw.next || pw.confirm))
-useUnsavedGuard(pwTyped, { what: 'your password', save: () => { if (pwDirty.value) savePassword() } })
+useUnsavedGuard(pwTyped, {
+  what: 'your password',
+  save: () => { if (pwDirty.value) savePassword() },
+  unsaved: { key: 'password', label: 'New password' },
+})
 
 function resetPassword () {
   pw.current = ''

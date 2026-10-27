@@ -9,9 +9,16 @@
         The engine has <strong>{{ experimentName }}</strong> loaded, with no session running
       </template>
       <template v-if="ownerText"> ({{ ownerText }})</template>.
-      {{ target ? 'Live controls here act on nothing until you switch.' : 'Live controls here act on nothing for now.' }}
+      <template v-if="target && endsSession">
+        Live controls here act on nothing. Opening {{ target.name }} here stops that session for everyone in it.
+      </template>
+      <template v-else>
+        {{ target ? 'Live controls here act on nothing until you switch.' : 'Live controls here act on nothing for now.' }}
+      </template>
     </p>
-    <BButton v-if="target" size="sm" class="engine-notice__btn" :loading="switching" @click="switchTo">Switch to {{ target.name }}</BButton>
+    <BButton v-if="target" size="sm" class="engine-notice__btn" :loading="switching" @click="switchTo">
+      {{ endsSession ? `End that session and open ${target.name}` : `Switch to ${target.name}` }}
+    </BButton>
   </div>
 </template>
 
@@ -37,14 +44,35 @@ const ownerText = computed(() => {
 })
 /** The engine's experiment, when it is one of this account's (another account's can't be selected). */
 const target = computed(() => experiments.value.find(e => e.id === info.value?.experimentId) || null)
+/**
+ * Whether switching to it ends the session the engine runs. Selecting an experiment rebuilds the
+ * engine and stops its session (ScriptBoard's ChangeExperiment), unless that session is this
+ * account's own selected running session of it, which is taken up again.
+ */
+const endsSession = computed(() => {
+  const e = info.value
+  if (!e || (e.sessionId === null && !e.sessionName)) return false
+  const own = admin.instance
+  return !(own && e.sessionId !== null && own.id === e.sessionId && own.status === 'RUNNING')
+})
 
 const switching = ref(false)
 async function switchTo () {
   const e = target.value
   if (!e || switching.value || !ensureConnected()) return
   // Selecting an experiment rebuilds the engine every time, also for the experiment it already runs
-  // (ScriptBoard's ChangeExperiment), which ends the session it runs: ask as the switcher does.
-  if (!await confirmEngineRebuild({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+  // (ScriptBoard's ChangeExperiment), which ends the session it runs: ask as the switcher does, and
+  // say so plainly when there is one.
+  const session = info.value?.sessionName || (info.value?.sessionId != null ? String(info.value.sessionId) : '')
+  const ok = endsSession.value
+    ? await confirmEngineRebuild({
+      title: `End “${session}” and open “${e.name}”?`,
+      action: `Opening “${e.name}” here`,
+      detail: `Session “${session}” is stopped: the people in it can’t rejoin it, and its links stop working.`,
+      confirmLabel: 'End it and open',
+    })
+    : await confirmEngineRebuild({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })
+  if (!ok) return
   switching.value = true
   try {
     await actions.selectExperiment(e.id)

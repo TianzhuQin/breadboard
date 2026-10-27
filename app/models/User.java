@@ -67,7 +67,15 @@ public class User extends Model {
     return find.where().eq("email", email).findUnique();
   }
 
+  /**
+   * The account signed in with this token, or null. Null for a null or blank token: Ebean turns
+   * eq("uid", null) into "uid is null", which found an account that had never signed in (or was
+   * added by SQL), so a request with no session at all was let in as that account.
+   */
   public static User findByUID(String uid) {
+    if (uid == null || uid.trim().isEmpty()) {
+      return null;
+    }
     return find.where().eq("uid", uid).findUnique();
   }
 

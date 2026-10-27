@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { admin, graph, actions, experiments, engineInUse, engineElsewhere, connection, NOT_CONNECTED, __receive } from '../src/store/admin'
+import { admin, graph, actions, experiments, engineInUse, engineElsewhere, connection, NOT_CONNECTED, ENGINE_SETTLE_MS, __receive } from '../src/store/admin'
 
 const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
 
@@ -334,6 +334,40 @@ describe('waiting for the answer to a request', () => {
     expect(t.value.experiment).toMatchObject({ id: 1, fileMode: true })
   })
 
+  it('a file-mode switch the server could not make ends soon after its unchanged answer', async () => {
+    vi.useFakeTimers()
+    try {
+      push({ experiment: exp(1, 'A') })
+      const t = track(actions.toggleFileMode())
+      // the server only logs that it could not write the folder, and answers with the mode as it was
+      push({ experiment: exp(1, 'A') })
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(t.done).toBe(false)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(t.done).toBe(true)
+      expect(t.value.experiment).toMatchObject({ id: 1, fileMode: false })
+
+      // an unchanged push that came first does not hide the switched answer that follows
+      const ok = track(actions.toggleFileMode())
+      push({ experiment: exp(1, 'A') })
+      await vi.advanceTimersByTimeAsync(500)
+      push({ experiment: { ...exp(1, 'A'), fileMode: true } })
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(ok.value.experiment).toMatchObject({ id: 1, fileMode: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('launching sends the experiment the page showed, when it says', () => {
+    const send = vi.mocked(connection.send)
+    push({ experiment: exp(2, 'B') })
+    void actions.launch('Pilot 3', { n: 4 }, 1)
+    expect(send).toHaveBeenLastCalledWith('LaunchGame', { experimentId: 1, name: 'Pilot 3', parameters: { n: 4 } })
+    void actions.launch('Pilot 4', {})
+    expect(send).toHaveBeenLastCalledWith('LaunchGame', { experimentId: 2, name: 'Pilot 4', parameters: {} })
+  })
+
   it('launching waits for the session it named', async () => {
     const t = track(actions.launch('Pilot 2', {}))
     push({ experiment: exp(1, 'A'), experimentInstance: inst(4, 'RUNNING') })
@@ -397,6 +431,35 @@ describe('what the engine runs', () => {
     __receive({ notify: { ScriptEngineReloaded: 6 } })
     push(2, engine(1, 9))
     expect(engineElsewhere.value).toMatchObject({ experimentId: 1, sessionId: 9 })
+  })
+
+  it('asks once more a little after a rebuild, which may be for a session not started yet', () => {
+    vi.useFakeTimers()
+    try {
+      const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+      // another account resumes a session: the engine says it rebuilt before the session starts again
+      __receive({ notify: { ScriptEngineReloading: 7 } })
+      __receive({ notify: { ScriptEngineReloaded: 8 } })
+      expect(send).toHaveBeenCalledTimes(1)
+      push(1, engine(2))
+      expect(engineElsewhere.value).toMatchObject({ experimentId: 2, sessionId: null })
+      vi.advanceTimersByTime(ENGINE_SETTLE_MS)
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(send).toHaveBeenLastCalledWith('Update')
+      push(1, engine(2, 9))
+      expect(engineElsewhere.value).toMatchObject({ experimentId: 2, sessionId: 9 })
+
+      // not while the next rebuild is under way: that one asks when it ends
+      __receive({ notify: { ScriptEngineReloaded: 9 } })
+      expect(send).toHaveBeenCalledTimes(3)
+      __receive({ notify: { ScriptEngineReloading: 10 } })
+      vi.advanceTimersByTime(ENGINE_SETTLE_MS * 2)
+      expect(send).toHaveBeenCalledTimes(3)
+      __receive({ notify: { ScriptEngineReloaded: 11 } })
+      push(1, engine(1))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('asks again at once when a rebuild is refused', () => {

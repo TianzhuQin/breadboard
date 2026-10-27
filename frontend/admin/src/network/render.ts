@@ -412,12 +412,17 @@ function legendRows (legend: LegendBlock): { label: string, color?: string, grad
 
 // ---- SVG ----------------------------------------------------------------------------------------
 
-/** Characters XML 1.0 doesn't allow at all (control characters, U+FFFE/U+FFFF, lone surrogates). */
-const XML_ILLEGAL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g
+/**
+ * Characters XML 1.0 doesn't allow at all (control characters, U+FFFE/U+FFFF, lone surrogates). A
+ * whole surrogate pair matches first and is kept, so a surrogate matched on its own is a lone one.
+ * No lookbehind: Safari before 16.4 can't parse it, and a regex literal is parsed as the module
+ * loads, so the whole console would fail to start there.
+ */
+const XML_ILLEGAL = /[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]|[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g
 
 /** Text made safe for XML: special characters escaped, characters XML can't hold dropped. */
 export function escapeXml (s: string): string {
-  return s.replace(XML_ILLEGAL, '').replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', '\'': '&apos;' }[c]!))
+  return s.replace(XML_ILLEGAL, m => m.length === 2 ? m : '').replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', '\'': '&apos;' }[c]!))
 }
 const f1 = (n: number) => (Math.round(n * 10) / 10).toString()
 

@@ -108,6 +108,7 @@ function handle (m: any) {
       state.engineReloadedAt = Date.now()
       setTimeout(() => { if (state.engine === 'loaded') state.engine = 'ready' }, 2500)
       askEngineInfo()
+      askEngineInfoAgain()
     }
     // every console hears when a rebuild fails, with the reason (it may not be the one that asked)
     if (m.notify.ScriptEngineReloadFailed) {
@@ -206,15 +207,23 @@ watch(conn.state, (s) => {
  * nothing is sent when the rebuild has changed it. So from the moment a rebuild is asked for or
  * announced, the engine info is out of date (admin.engineInfoCurrent); once the rebuild has ended,
  * ask for the User JSON again, and the next one is current.
+ *
+ * The engine says it rebuilt before the request that rebuilt it is done: a launch or a resume then
+ * still loads the steps, ends the session the engine ran and starts its own. Only the console that
+ * asked gets a User JSON after that, so every console asks once more a little later.
  */
 let engineInfoPhase: 'current' | 'rebuilding' | 'asked' = 'current'
 let engineInfoTimer: ReturnType<typeof setTimeout> | null = null
+let engineSettleTimer: ReturnType<typeof setTimeout> | null = null
 /** A rebuild this console asked for that is never announced (nor refused) is taken as not happening after this long. */
 const ENGINE_INFO_WAIT_MS = 15000
+/** How long after the engine says it rebuilt to ask again what it runs. */
+export const ENGINE_SETTLE_MS = 2000
 
 function engineInfoOutdated () {
   engineInfoPhase = 'rebuilding'
   state.engineInfoCurrent = false
+  clearEngineSettle()
   if (engineInfoTimer) clearTimeout(engineInfoTimer)
   engineInfoTimer = setTimeout(() => {
     engineInfoTimer = null
@@ -227,6 +236,18 @@ function askEngineInfo () {
   engineInfoPhase = 'asked'
   // (when the connection is down, the LogIn after it comes back is answered with a User JSON too)
   conn.send('Update')
+}
+/** Ask again after ENGINE_SETTLE_MS, unless another rebuild has begun by then. */
+function askEngineInfoAgain () {
+  clearEngineSettle()
+  engineSettleTimer = setTimeout(() => {
+    engineSettleTimer = null
+    if (engineInfoPhase !== 'rebuilding' && state.engine !== 'loading') askEngineInfo()
+  }, ENGINE_SETTLE_MS)
+}
+function clearEngineSettle () {
+  if (engineSettleTimer) clearTimeout(engineSettleTimer)
+  engineSettleTimer = null
 }
 function engineInfoOf (v: any): EngineInfo | null {
   if (!v || typeof v !== 'object') return null
@@ -302,6 +323,7 @@ function resetState () {
   engineInfoPhase = 'current'
   if (engineInfoTimer) clearTimeout(engineInfoTimer)
   engineInfoTimer = null
+  clearEngineSettle()
   clearEngineWatchdog()
   graph.clear()
   const pending = waiters
@@ -456,6 +478,9 @@ const isErrorFor = (request: string) => (m: any) => typeof m.error === 'string' 
 const instancesIn = (m: any): any[] => (m.experiment && Array.isArray(m.experiment.instances) ? m.experiment.instances : [])
 const isLive = (i: any) => !!i && (i.status === 'RUNNING' || i.status === 'TESTING')
 
+/** How long a file-mode switch waits for the switched mode after a reply that shows it unchanged. */
+const FILE_MODE_GRACE_MS = 3000
+
 /** Wait for the server's next User JSON (most actions end with one). */
 function nextUserJson (ms = 20000) {
   return nextMessage(isUserJson, ms)
@@ -483,9 +508,13 @@ const actions = {
     if (!send('SelectExperiment', { experimentId: id })) return Promise.resolve(null)
     return replyTo('SelectExperiment', 20000, m => !!m.experiment && m.experiment.id === id)
   },
-  /** Create and start a session of the selected experiment. */
-  launch (name: string, parameters: Record<string, string | number | boolean>) {
-    if (!send('LaunchGame', { experimentId: state.experiment?.id, name, parameters })) return Promise.resolve(null)
+  /**
+   * Create and start a session of the selected experiment. `experimentId` is the experiment the
+   * caller's page showed (and took the parameters from); the server refuses the launch when the
+   * account has selected another one since, e.g. in another tab. Left out, it is the one selected now.
+   */
+  launch (name: string, parameters: Record<string, string | number | boolean>, experimentId?: number) {
+    if (!send('LaunchGame', { experimentId: experimentId ?? state.experiment?.id, name, parameters })) return Promise.resolve(null)
     // a refused launch ({"error", "request": "LaunchGame"}) resolves null at once; the reason is in admin.requestError
     return replyTo('LaunchGame', 60000, m => !!m.experimentInstance && m.experimentInstance.name === name)
   },
@@ -541,15 +570,27 @@ const actions = {
   },
   /**
    * Resolves with the User JSON that shows the selected experiment's file mode switched; null when
-   * refused or no answer. (A server that cannot read or write the folder only logs it, so a failed
-   * switch ends with null after the wait.)
+   * refused or no answer. A server that cannot read or write the folder only logs it, and answers
+   * with the mode unchanged: that answer can't be told from another tab's push that came first, so
+   * a User JSON with the mode unchanged counts as the answer once the switched one hasn't followed
+   * within FILE_MODE_GRACE_MS (it resolves with that one; compare its fileMode).
    */
   toggleFileMode () {
     const before = state.experiment
     const id = before?.id
     const was = !!before?.fileMode
     if (!send('ToggleFileMode')) return Promise.resolve(null)
-    return replyTo('ToggleFileMode', 20000, m => !!m.experiment && (id === undefined || m.experiment.id === id) && !!m.experiment.fileMode !== was)
+    const same = (m: any) => !!m.experiment && (id === undefined || m.experiment.id === id)
+    let unchanged: ReturnType<typeof setTimeout> | null = null
+    let notSwitched: (m: any) => void = () => {}
+    const switched = replyTo('ToggleFileMode', 20000, (m) => {
+      if (!same(m)) return false
+      if (!!m.experiment.fileMode !== was) return true
+      if (!unchanged) unchanged = setTimeout(() => notSwitched(m), FILE_MODE_GRACE_MS)
+      return false
+    })
+    switched.then(() => { if (unchanged) clearTimeout(unchanged) })
+    return Promise.race([switched, new Promise<any>(resolve => { notSwitched = resolve })])
   },
   /** Ask the server for the newest User JSON. */
   refresh () {

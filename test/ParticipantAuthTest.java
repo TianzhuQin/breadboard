@@ -262,6 +262,33 @@ public class ParticipantAuthTest extends BaseTest {
         assertEquals(FORBIDDEN, status(wrong));
     }
 
+    @Test
+    public void aComputerPlayersIdCantBeUsedToSignIn() {
+        Result login = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("_1")));
+        assertEquals(BAD_REQUEST, status(login));
+        assertTrue(contentAsString(login), contentAsString(login).contains("reserved"));
+        assertFalse(ParticipantAuth.isClaimed(i, "_1"));
+    }
+
+    @Test
+    public void theTestSessionGivesParticipantsNoSeat() {
+        // The engine runs a real session (this one): the test session's login would have put a
+        // newcomer into its game, even after it started.
+        Result login = route(fakeRequest(POST, "/game/" + e + "/0/login").withFormUrlEncodedBody(form("3")));
+        assertEquals(FORBIDDEN, status(login));
+        assertFalse(ParticipantAuth.isClaimed("0", "3"));
+        assertNull(header(LOCATION, login));
+
+        // A token for it from before (they lived in memory) opens neither its page data nor its socket.
+        String token = ParticipantAuth.claim("0", "3");
+        Result state = route(fakeRequest(GET, "/game/" + e + "/0/3/state").withHeader(ParticipantAuth.HEADER, token));
+        assertEquals(UNAUTHORIZED, status(state));
+        // A researcher's own preview may still use it.
+        Language lang = createLanguage("eng", "English");
+        User researcher = createUser("tester@test.com", "Tester", "pass", lang);
+        assertEquals(OK, status(route(fakeRequest(GET, "/game/" + e + "/0/3/state").withSession("uid", researcher.uid))));
+    }
+
     private static Map<String, String> form(String id) {
         Map<String, String> data = new HashMap<String, String>();
         data.put("id", id);

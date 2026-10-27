@@ -151,21 +151,38 @@ function undoFromToast (edit: TieEdit, gen: number, name?: (id: string) => strin
   void undoEdit(edit, name)
 }
 
+/** Remembered edits whose undo has been sent and not yet answered. */
+const undoing = new Set<TieEdit>()
+
 /**
  * Take back an earlier edit (the opposite edit, no further undo). Only edits still remembered can
  * be taken back: one already undone (Ctrl/Cmd+Z, or its toast) or made on a network that has since
- * been rebuilt is left alone, so a late click on an old toast can't change a newer tie.
+ * been rebuilt is left alone, so a late click on an old toast can't change a newer tie. The edit
+ * stays remembered until its undo succeeds, so an undo that fails (no connection, a refusal) can be
+ * tried again and the next Ctrl/Cmd+Z doesn't skip to an older edit.
  */
-export function undoEdit (edit: TieEdit, name?: (id: string) => string): Promise<TieEditResult> {
-  const i = editHistory.value.lastIndexOf(edit)
-  if (i < 0) {
-    const reason = 'That change was already taken back.'
-    toast('info', 'Nothing to undo', reason)
-    return Promise.resolve({ ok: false, op: edit.op, a: edit.a, b: edit.b, reason })
+export async function undoEdit (edit: TieEdit, name?: (id: string) => string): Promise<TieEditResult> {
+  const refuse = (title: string, reason: string): TieEditResult => {
+    toast('info', title, reason)
+    return { ok: false, op: edit.op, a: edit.a, b: edit.b, reason }
   }
-  editHistory.value = editHistory.value.filter((_, j) => j !== i)
-  const inv = inverseOf(edit)
-  return editTie(inv.op, inv.a, inv.b, { name, undoable: false, record: false, undoing: true })
+  // the Tie and Cut tools are locked then too: the server would refuse
+  const blocked = tieEditsBlocked.value
+  if (blocked) return refuse('Nothing was undone', `${blocked}.`)
+  if (!editHistory.value.includes(edit)) return refuse('Nothing to undo', 'That change was already taken back.')
+  if (undoing.has(edit)) return refuse('Already being undone', 'That change is being taken back. Wait a moment.')
+  const gen = generation
+  undoing.add(edit)
+  let result: TieEditResult
+  try {
+    const inv = inverseOf(edit)
+    result = await editTie(inv.op, inv.a, inv.b, { name, undoable: false, record: false, undoing: true })
+  } finally {
+    undoing.delete(edit)
+  }
+  // (a rebuilt network has forgotten it already)
+  if (result.ok && gen === generation) editHistory.value = editHistory.value.filter(x => x !== edit)
+  return result
 }
 
 /** Ctrl/Cmd+Z: take back the newest edit still remembered. */

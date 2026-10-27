@@ -5,6 +5,7 @@ import { http, saveText } from '@/lib/http'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Experiment, Instance } from '@/store/types'
+import { STOP_PAUSES_AUTOPILOT, autopilotNow, stopPausesAutopilot } from '../autopilot/autopilot'
 import { canDelete, canResume, canStop, csvDataRows, describeError, safeFileName, waitUntil } from './sessionData'
 
 type Job = 'resume' | 'stop' | 'delete' | 'data' | 'list'
@@ -88,11 +89,16 @@ export function useSessionActions () {
   async function stop (s: Instance): Promise<boolean> {
     if (!canStop(s)) return false
     if (!connected()) return false
+    // Stopping the autopilot's session pauses the autopilot (the server's Autopilot.sessionStopped).
+    // The sessions listed here are the selected experiment's.
+    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: s.id, experimentId: admin.experiment?.id }, admin.user?.engine?.sessionId)
     const ok = await confirm({
       title: `Stop “${s.name}”?`,
       message: (admin.instance?.id === s.id
         ? 'Nobody new can join, and it stops being the current session. People already on the page stay connected until the engine reloads, and everything recorded so far is kept.'
-        : 'Nobody new can join it. Everything recorded so far is kept, and your current session is not affected.') + '\n\nYou can resume it later from this page.',
+        : 'Nobody new can join it. Everything recorded so far is kept, and your current session is not affected.') +
+        (pausesAutopilot ? `\n\n${STOP_PAUSES_AUTOPILOT}` : '') +
+        '\n\nYou can resume it later from this page.',
       confirmLabel: 'Stop session',
       danger: true,
     })
@@ -104,7 +110,9 @@ export function useSessionActions () {
         return !now || !canStop(now)
       }, 15000)
       if (stopped) {
-        notify.success(`Stopped “${s.name}”`, 'Resume it here whenever you want to continue.')
+        notify.success(`Stopped “${s.name}”`, pausesAutopilot
+          ? 'The autopilot is paused and opens no new session until you press Resume on the Autopilot page. Resume this session here whenever you want to continue.'
+          : 'Resume it here whenever you want to continue.')
         return true
       }
       notify.error(`“${s.name}” is still running`, 'The server did not confirm the stop. Try again, or check the output panel.')

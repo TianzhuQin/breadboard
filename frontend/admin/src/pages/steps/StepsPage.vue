@@ -32,6 +32,17 @@
         </p>
         <BButton size="sm" @click="reloadEngine">Reload engine</BButton>
       </div>
+      <div v-if="stranded.length" class="steps__banner is-file is-stranded" role="status">
+        <TriangleAlert :size="16" aria-hidden="true" class="steps__banner-icon" />
+        <p class="steps__banner-text">
+          <strong>Not saved: {{ stranded.map(d => d.name).join(', ') }}.</strong>
+          You changed {{ stranded.length === 1 ? 'this step' : 'these steps' }} before file mode was switched on, and
+          {{ stranded.length === 1 ? 'it' : 'they' }} can't be saved while the steps come from files. Switch file mode off
+          to save, or copy the code and discard the changes.
+        </p>
+        <BButton size="sm" :icon="Copy" @click="copyStranded">Copy code</BButton>
+        <BButton size="sm" variant="ghost" @click="discardStranded">Discard…</BButton>
+      </div>
 
       <div v-if="!bucket || (bucket.loading && !bucket.loaded)" class="steps__state" role="status">
         <BSpinner :size="22" />
@@ -235,7 +246,7 @@ import {
 } from './stepsModel'
 import {
   addDraft, bucketKey, buckets, createBuiltin, createFromTemplate, deleteDraft, duplicate, ensureBucket, loadSteps,
-  mergeFromServer, refreshStore, runDraft, saveDraft, type StepsBucket,
+  mergeFromServer, refreshStore, removeDraft, runDraft, saveDraft, type StepsBucket,
 } from './stepsStore'
 
 const router = useRouter()
@@ -270,6 +281,49 @@ watch(() => admin.experiment?.steps, (steps) => {
   const b = bucket.value
   if (b && Array.isArray(steps) && admin.experiment?.id === b.experimentId) mergeFromServer(b, steps)
 })
+
+/**
+ * Unsaved edits from before file mode was switched on. They are kept (and count as unsaved), but can
+ * only be saved once file mode is off again: say so, and offer to copy or discard them.
+ */
+const stranded = computed<StepDraft[]>(() => {
+  const exp = admin.experiment
+  if (!exp || !fileMode.value) return []
+  const b = buckets.get(bucketKey(exp.id, false))
+  return b ? sortDrafts(b.drafts.filter(isDirty)) : []
+})
+
+async function copyStranded () {
+  const list = stranded.value
+  try {
+    await navigator.clipboard.writeText(list.map(d => `// ---- ${d.name} ----\n${d.source}`).join('\n\n'))
+    notify.success(list.length === 1 ? 'Copied the code' : `Copied the code of ${list.length} steps`)
+  } catch (e) {
+    notify.error('Could not copy', 'Your browser blocked the clipboard.')
+  }
+}
+
+async function discardStranded () {
+  const exp = admin.experiment
+  const list = stranded.value
+  if (!exp || !list.length) return
+  const ok = await confirm({
+    title: list.length === 1 ? `Discard your changes to “${list[0].name}”?` : `Discard your changes to ${list.length} steps?`,
+    message: 'Your edits are thrown away. The step files, and the steps saved before file mode was switched on, stay as they are.',
+    confirmLabel: 'Discard changes',
+    danger: true,
+  })
+  const b = buckets.get(bucketKey(exp.id, false))
+  if (!ok || !b) return
+  for (const d of list) {
+    if (isNew(d)) {
+      removeDraft(b, d)
+    } else {
+      d.name = d.savedName ?? d.name
+      d.source = d.savedSource ?? ''
+    }
+  }
+}
 
 const current = computed<StepDraft | null>(() => {
   const b = bucket.value
@@ -432,6 +486,14 @@ async function saveAndRunCurrent () {
     }
     refreshStore()
   }
+  // The server runs the code in whatever the engine runs now: when the selected experiment changed
+  // while saving (here or in another tab), this step belongs to another one.
+  const exp = admin.experiment
+  if (!exp || exp.id !== b.experimentId || !!exp.fileMode !== b.fileMode) {
+    notify.warning(`“${d.name}” was saved but not run`, 'The selected experiment changed (or went into file mode) while it was being saved, so it wasn’t loaded into the engine.')
+    announce.value = `${d.name} was saved but not run: the selected experiment changed.`
+    return
+  }
   if (!d.source.trim()) {
     notify.info('Nothing to run', 'This step has no code yet.')
     return
@@ -440,8 +502,7 @@ async function saveAndRunCurrent () {
     announce.value = `Running ${d.name} in the engine.`
     return
   }
-  // not sent: a version just saved is not in the engine yet
-  if (d.engineBehind) actions.markEngineStale()
+  // (not sent: runDraft marks a version just saved as not in the engine yet)
   announce.value = `${d.name} did not run: not connected to the server.`
 }
 
@@ -452,7 +513,7 @@ const runTitle = computed(() => {
   if (r.status === 'ok') return r.values.length ? 'Loaded into the engine. It returned:' : 'Loaded into the engine'
   if (r.status === 'error') return 'The engine reported an error'
   if (r.status === 'notsent') return 'Not run: not connected to the server. Run it again once the connection is back.'
-  return 'No answer from the engine. It may be busy or reloading; check the output panel.'
+  return 'No answer from the engine. The connection may have dropped, or the engine is busy or reloading; check the output panel.'
 })
 watch(() => current.value?.run?.status, (s, before) => {
   const d = current.value

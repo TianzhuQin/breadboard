@@ -118,12 +118,44 @@ public class ImagesController extends Controller {
 
     if (image != null) {
       if (image.contentType != null && image.file != null) {
-        response().setContentType(image.contentType);
-        return ok(image.file);
+        return serveImage(image.contentType, image.file);
       }
     }
 
     return notFound();
+  }
+
+  /** Image types sent as themselves, to be shown in the page; anything else is sent as a download. */
+  static final java.util.Set<String> SHOWN_TYPES = new java.util.HashSet<String>(java.util.Arrays.asList(
+      "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon",
+      "image/avif", "image/svg+xml"));
+
+  /**
+   * Send an experiment's image. These come from the console's own address, with the type they were
+   * stored with (the browser's word at upload, the file name's at import), so an SVG with a script in
+   * it, or a file sent as text/html, ran as the researcher who opened it in a tab. Now: the sandbox
+   * policy lets nothing run when one is opened by itself (images shown in a page are unaffected, and
+   * SVG never runs script there); only image types are shown, anything else is a download; and the
+   * browser must not guess another type.
+   */
+  static Result serveImage(String contentType, byte[] contents) {
+    String type = contentType == null ? "" : contentType.trim().toLowerCase();
+    int parameters = type.indexOf(';');
+    if (parameters >= 0) {
+      type = type.substring(0, parameters).trim();
+    }
+    if ("image/jpg".equals(type) || "image/pjpeg".equals(type)) {
+      type = "image/jpeg";
+    }
+    response().setHeader("X-Content-Type-Options", "nosniff");
+    response().setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox");
+    if (SHOWN_TYPES.contains(type)) {
+      response().setContentType(type);
+    } else {
+      response().setContentType("application/octet-stream");
+      response().setHeader("Content-Disposition", "attachment");
+    }
+    return ok(contents);
   }
 
   public static Result getImageByFileName(Long experimentId, String fileName) {
@@ -140,10 +172,13 @@ public class ImagesController extends Controller {
       }
       try {
         String contentType = Files.probeContentType(file.toPath());
+        if (contentType == null) {
+          // Often unknown to the system (e.g. on macOS): from the name, as an import does.
+          String extension = FilenameUtils.getExtension(file.getName()).toLowerCase();
+          contentType = "image/" + ("svg".equals(extension) ? "svg+xml" : "jpg".equals(extension) ? "jpeg" : extension);
+        }
         byte[] contents = FileUtils.readFileToByteArray(file);
-        response().setContentType(contentType == null ? "application/octet-stream" : contentType);
-        response().setHeader("X-Content-Type-Options", "nosniff");
-        return ok(contents);
+        return serveImage(contentType, contents);
       } catch (IOException ioe) {
         return notFound();
       }
@@ -157,8 +192,7 @@ public class ImagesController extends Controller {
 
     if (image != null) {
       if (image.contentType != null && image.file != null) {
-        response().setContentType(image.contentType);
-        return ok(image.file);
+        return serveImage(image.contentType, image.file);
       }
     }
 
@@ -193,8 +227,7 @@ public class ImagesController extends Controller {
 
     if (image != null) {
       if (image.contentType != null && image.thumbFile != null && image.thumbFile.length > 0) {
-        response().setContentType(image.contentType);
-        return ok(image.thumbFile);
+        return serveImage(image.contentType, image.thumbFile);
       }
     }
 

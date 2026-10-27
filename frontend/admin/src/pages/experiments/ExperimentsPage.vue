@@ -225,12 +225,13 @@ async function select (e: Experiment) {
   try {
     // the engine is shared: another researcher's session (or the autopilot's) may be live on it
     if (!await confirmEngineRebuild({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+    const askedAt = Date.now()
     await actions.selectExperiment(e.id)
     if (admin.experiment?.id === e.id) notify.success(`Now working on “${e.name}”`)
     else {
-      notify.error(`Couldn't switch to “${e.name}”`, admin.requestError?.request === 'SelectExperiment'
-        ? admin.requestError.text
-        : 'The server didn\'t confirm the change. Try again, or reload the page.')
+      // only a refusal of this switch, not one left over from an earlier try
+      const refusal = admin.requestError?.request === 'SelectExperiment' && admin.requestError.at >= askedAt ? admin.requestError.text : ''
+      notify.error(`Couldn't switch to “${e.name}”`, refusal || 'The server didn\'t confirm the change. Try again, or reload the page.')
     }
   } finally {
     selectingId.value = null

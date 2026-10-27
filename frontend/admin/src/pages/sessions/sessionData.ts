@@ -270,18 +270,14 @@ export function eventNameCounts (events: readonly SessionEvent[]): { name: strin
 
 // ---- CSV --------------------------------------------------------------------------------------
 
-const NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i
-
 /**
  * One CSV field: always quoted, quotes doubled (RFC 4180), so commas, quotes and newlines survive.
- * Text a spreadsheet would run as a formula (starting with = + - @, a tab or a carriage return) gets
- * a leading apostrophe, because event data holds what participants typed; plain numbers like -5 are
- * left alone (as in recruit/mturk/lib.ts).
+ * The value is written exactly as recorded, with no spreadsheet-formula escaping (no ' put before
+ * = + - @), like the server's own file (Application.csvField): researchers analyse both, so a
+ * participant's "@anna yes" or "-" must stay exactly that.
  */
 export function csvField (v: unknown): string {
-  let s = valueText(v)
-  if (/^[=+\-@\t\r]/.test(s) && !NUMBER.test(s)) s = `'${s}`
-  return `"${s.replace(/"/g, '""')}"`
+  return `"${valueText(v).replace(/"/g, '""')}"`
 }
 export function toCsv (rows: readonly (readonly unknown[])[]): string {
   return rows.map(r => r.map(csvField).join(',')).join('\n') + '\n'
@@ -292,9 +288,8 @@ function isoTime (e: SessionEvent): string {
 }
 
 /**
- * The same columns as the server's event file (GET /csv/data/:id), so analysis scripts read both:
- * one row per data item. Unlike the server's file, events without data keep a row, and every
- * field is escaped.
+ * The same columns and values as the server's event file (GET /csv/data/:id), so analysis scripts
+ * read both: one row per data item. Unlike the server's file, events without data keep a row.
  */
 export function eventsToCsv (events: readonly SessionEvent[]): string {
   const rows: unknown[][] = [['id', 'event', 'event_date', 'data_name', 'data_value']]

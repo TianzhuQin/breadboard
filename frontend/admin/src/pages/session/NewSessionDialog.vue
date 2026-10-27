@@ -4,8 +4,8 @@
     title="New session"
     subtitle="A session is one run of the experiment. It opens at once, and people can join with its links."
     size="lg"
-    :dismissable="!busy && !dirty"
-    :closable="!busy"
+    :dismissable="!busy && !checking && !dirty"
+    :closable="!busy && !checking"
     @update:open="(v) => !v && close()"
   >
     <form :id="formId" class="nsd" novalidate @submit.prevent="submit">
@@ -110,8 +110,8 @@
 
     <template #footer>
       <p class="nsd-foot-note">Starts right away.</p>
-      <BButton variant="ghost" :disabled="busy" @click="close">Cancel</BButton>
-      <BButton type="submit" :form="formId" :variant="replacing ? 'danger' : 'primary'" :loading="busy">
+      <BButton variant="ghost" :disabled="busy || checking" @click="close">Cancel</BButton>
+      <BButton type="submit" :form="formId" :variant="replacing ? 'danger' : 'primary'" :loading="busy || checking">
         {{ busy ? 'Creating…' : replacing ? 'Stop it and create' : 'Create session' }}
       </BButton>
     </template>
@@ -142,8 +142,11 @@ const values = reactive<Record<string, FieldValue>>({})
 const touched = reactive(new Set<string>())
 const submitted = ref(false)
 const busy = ref(false)
-/** Asking whether to rebuild the engine (a second submit meanwhile must not launch twice). */
-let asking = false
+/**
+ * Checking who uses the engine (the server can take a few seconds to say), then asking whether to
+ * rebuild it. Shown on the Create button; a second submit meanwhile must not launch twice.
+ */
+const checking = ref(false)
 const failure = ref('')
 const announce = ref('')
 
@@ -214,7 +217,7 @@ async function focusFirstProblem () {
 }
 
 async function submit () {
-  if (busy.value) return
+  if (busy.value || checking.value) return
   submitted.value = true
   failure.value = ''
   const built = buildLaunchParams(fields.value, values)
@@ -225,10 +228,11 @@ async function submit () {
     return
   }
   const sessionName = name.value.trim()
-  if (asking || !ensureConnected()) return
+  if (!ensureConnected()) return
+  const experimentId = admin.experiment?.id
   // a launch rebuilds the engine every account and the autopilot share: say whose session and
   // players it disconnects (no question when nobody is using it)
-  asking = true
+  checking.value = true
   let go = false
   try {
     go = await confirmEngineRebuild({
@@ -237,10 +241,10 @@ async function submit () {
       confirmLabel: replacing.value ? 'Stop it and create' : 'Create anyway',
     })
   } finally {
-    asking = false
+    checking.value = false
   }
-  // (the connection may have dropped while the question was open)
-  if (!go || !ensureConnected()) return
+  // closed meanwhile (another experiment was selected), or the connection dropped while the question was open
+  if (!go || !props.open || admin.experiment?.id !== experimentId || !ensureConnected()) return
   busy.value = true
   announce.value = 'Creating the session…'
   try {

@@ -24,7 +24,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { changePassword, friendlyPasswordError, validatePasswordChange } from '../src/pages/settings/settings'
 import SettingsPage from '../src/pages/settings/SettingsPage.vue'
 import { theme } from '../src/lib/theme'
-import { registerUnsaved } from '../src/shell/unsaved'
+import { registerUnsaved, unsavedTotal } from '../src/shell/unsaved'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 
 describe('password change checks', () => {
@@ -114,6 +114,23 @@ describe('Settings page', () => {
     } finally {
       unregister()
     }
+  })
+
+  it('counts a typed new password as unsaved when signing out, while the page is open', async () => {
+    const w = await mountPage()
+    expect(unsavedTotal()).toBe(0)
+    const [, next] = w.findAll('.set-pw input.b-input__el')
+    await next.setValue('long-enough-1')
+    expect(unsavedTotal()).toBe(1)
+    await w.findAll('button').find(b => /Sign out/.test(b.text()))!.trigger('click')
+    await flushPromises()
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.req!.message).toMatch(/New password \(1\)/)
+    settleConfirm(false)
+    await flushPromises()
+    expect(logout).not.toHaveBeenCalled()
+    w.unmount()
+    expect(unsavedTotal()).toBe(0)
   })
 
   it('keeps the connection working after a password change by taking the new uid', async () => {

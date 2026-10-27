@@ -96,8 +96,14 @@
               <div>
                 <p>
                   {{ describeEngineSession(holder) }} is running on the script engine, which every researcher shares.
-                  {{ dirty || !state.settings.enabled ? 'When you save, the autopilot waits' : 'The autopilot waits' }}
-                  for that session to end, then opens its own.
+                  <template v-if="resumable && !dirty">
+                    The autopilot is {{ paused ? 'paused' : 'done' }}, so it opens nothing until you press
+                    {{ paused ? 'Resume' : 'Open another session' }}; then it waits for that session to end and opens its own.
+                  </template>
+                  <template v-else>
+                    {{ dirty || !state.settings.enabled ? 'When you save, the autopilot waits' : 'The autopilot waits' }}
+                    for that session to end, then opens its own.
+                  </template>
                 </p>
                 <BButton class="ap-holder__btn" size="sm" variant="danger" :disabled="saving" @click="save(true)">Save and end it now…</BButton>
               </div>
@@ -293,11 +299,12 @@
             <template v-if="dirty"><span class="ap-savebar__dot" aria-hidden="true" /> Unsaved changes</template>
             <template v-else-if="state.source === 'off'">Not set up yet: these are the suggested settings.</template>
             <template v-else-if="paused">Paused. Resume to let it open sessions again with these settings.</template>
+            <template v-else-if="done">Its one session has finished. Open another with these settings whenever you like.</template>
             <template v-else>All changes saved.</template>
           </span>
           <BButton v-if="dirty" variant="ghost" :icon="Undo2" :disabled="saving" @click="discard">Discard</BButton>
-          <BButton type="submit" variant="primary" :icon="paused && !dirty ? Play : Save" :loading="saving" :disabled="!dirty && state.source !== 'off' && !paused">
-            {{ paused && !dirty ? 'Resume' : 'Save' }}
+          <BButton type="submit" variant="primary" :icon="resumable && !dirty ? Play : Save" :loading="saving" :disabled="!canSave">
+            {{ dirty || !resumable ? 'Save' : paused ? 'Resume' : 'Open another session' }}
           </BButton>
         </div>
       </form>
@@ -316,8 +323,8 @@ import { liveEventOf } from '../sessions/sessionData'
 import AutopilotStatus from './AutopilotStatus.vue'
 import { useUnsavedGuard } from './useUnsavedGuard'
 import {
-  autopilotActivity, describeEngineSession, describeWaitingRoom, fetchAutopilot, humanSeconds, participantLinks, sameForm,
-  saveAutopilot, takeOverTarget, DEFAULTS, toForm, toSettings, validateAutopilot, waitingRoomLive,
+  autopilotActivity, describeEngineSession, describeWaitingRoom, fetchAutopilot, humanSeconds, participantLinks, problemKind,
+  sameForm, saveAutopilot, takeOverTarget, DEFAULTS, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm, type AutopilotState, type EngineSession,
 } from './autopilot'
 
@@ -337,7 +344,12 @@ const formEl = ref<HTMLFormElement>()
 const readOnly = computed(() => state.value?.source === 'config')
 /** Stopped by a researcher: saving (even unchanged settings) lets it open sessions again. */
 const paused = computed(() => !!state.value?.status.on && !!state.value.status.paused)
+/** Its one session finished ("continuous" off): saving (even unchanged settings) opens another. */
+const done = computed(() => !!state.value?.status.on && !paused.value && problemKind(state.value) === 'done')
+const resumable = computed(() => paused.value || done.value)
 const dirty = computed(() => phase.value === 'ready' && !readOnly.value && !sameForm(form.value, baseline.value))
+/** Something to save: edits, first-time settings, or a paused or done autopilot to start again. */
+const canSave = computed(() => dirty.value || state.value?.source === 'off' || resumable.value)
 const errors = computed<Record<string, string>>(() => (readOnly.value ? {} : validateAutopilot(form.value)))
 const roomOff = computed(() => readOnly.value || !form.value.waitingRoom.enabled)
 const leaveOff = computed(() => readOnly.value || !form.value.replaceDisconnected.enabled)
@@ -480,7 +492,8 @@ async function save (takeOver = false) {
   }
   const next = toSettings(form.value)
   const prev = state.value.settings
-  const wasPaused = state.value.status.on && state.value.status.paused
+  const wasPaused = paused.value
+  const wasDone = done.value
   const name = experiments.value.find(e => e.id === next.experimentId)?.name
     || (state.value.status.experimentId === next.experimentId ? state.value.status.experimentName : null)
     || `experiment #${next.experimentId}`
@@ -518,8 +531,10 @@ async function save (takeOver = false) {
     const waitingFor = saved.status.engineSession
     if (saved.settings.enabled && !ending && waitingFor && waitingFor.experimentId !== saved.settings.experimentId) {
       notify.success('The autopilot is on', `It opens a session of “${name}” once “${waitingFor.name || `Session #${waitingFor.id}`}” ends.`)
+    } else if (saved.settings.enabled && wasDone && !saved.settings.continuous) {
+      notify.success('Opening another session', `The autopilot opens one more session of “${name}”. Share the participant links on this page.`)
     } else if (saved.settings.enabled) {
-      notify.success(wasPaused ? 'The autopilot is running again' : 'The autopilot is on', `“${name}” runs unattended. Share the participant links on this page.`)
+      notify.success(wasPaused || wasDone ? 'The autopilot is running again' : 'The autopilot is on', `“${name}” runs unattended. Share the participant links on this page.`)
     } else if (prev.enabled) {
       notify.success('The autopilot is off', 'No new sessions will open. A session that is already open keeps running.')
     } else {
@@ -537,7 +552,13 @@ async function save (takeOver = false) {
   }
 }
 
-useUnsavedGuard(dirty, { what: 'the autopilot settings', save: () => { if (dirty.value || state.value?.source === 'off') save() } })
+useUnsavedGuard(dirty, {
+  what: 'the autopilot settings',
+  // like the Save button: also resumes a paused autopilot, or opens another session once it is done
+  save: () => { if (canSave.value) save() },
+  // signing out swaps the whole console for the sign-in page, so no route guard runs: count it there too
+  unsaved: { key: 'autopilot', label: 'Autopilot settings' },
+})
 </script>
 
 <style>

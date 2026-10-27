@@ -226,17 +226,18 @@ describe('CSV', () => {
     expect(toCsv([['a', 'b'], ['line\nbreak', '"']])).toBe('"a","b"\n"line\nbreak",""""\n')
   })
 
-  it('keeps what participants typed from running as a spreadsheet formula, but not plain numbers', () => {
-    expect(csvField('=HYPERLINK("http://x","y")')).toBe('"\'=HYPERLINK(""http://x"",""y"")"')
-    expect(csvField('+1 call me')).toBe('"\'+1 call me"')
-    expect(csvField('@SUM(A1)')).toBe('"\'@SUM(A1)"')
-    expect(csvField('\tx')).toBe('"\'\tx"')
-    expect(csvField('-5')).toBe('"-5"')
+  it('writes values exactly as recorded, like the server\'s file (no apostrophe before = + - @)', () => {
+    expect(csvField('=HYPERLINK("http://x","y")')).toBe('"=HYPERLINK(""http://x"",""y"")"')
+    expect(csvField('@anna yes')).toBe('"@anna yes"')
+    expect(csvField('-')).toBe('"-"')
+    expect(csvField('+44 20 7946 0958')).toBe('"+44 20 7946 0958"')
+    expect(csvField('\tx')).toBe('"\tx"')
     expect(csvField(-0.5)).toBe('"-0.5"')
-    expect(csvField('+3e2')).toBe('"+3e2"')
-    expect(csvField('a=b')).toBe('"a=b"')
-    const evs = [normalizeEvent({ id: 1, name: 'chat', datetime: '2026-10-27 13:06:00,5', data: [{ name: 'text', value: '=1+1' }] })]
-    expect(eventsToCsv(evs).split('\n')[1]).toMatch(/"'=1\+1"$/)
+    const evs = [normalizeEvent({ id: 1, name: 'chat', datetime: '2026-10-27 13:06:00,5', data: [{ name: 'text', value: '=1+1' }, { name: 'to', value: '@anna' }] })]
+    const rows = eventsToCsv(evs).split('\n')
+    expect(rows[1]).toMatch(/,"text","=1\+1"$/)
+    expect(rows[2]).toMatch(/,"to","@anna"$/)
+    expect(eventsToWideCsv(evs).split('\n')[1]).toMatch(/,"=1\+1","@anna"$/)
   })
 
   it('exports events in the server file\'s columns, keeping events without data', () => {
@@ -444,6 +445,36 @@ describe('useSessionActions', () => {
     expect(await actionsApi.stop(store.admin.experiment.instances[1])).toBe(true)
     expect(store.actions.stopInstance).toHaveBeenCalledWith(2)
     expect(ui.notify.success).toHaveBeenCalledWith('Stopped “pilot 2”', expect.any(String))
+  })
+
+  it('says that stopping the autopilot\'s session pauses the autopilot', async () => {
+    httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
+      ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: { id: 2, name: 'pilot 2', status: 'RUNNING' } } }
+      : null)
+    store.actions.stopInstance.mockImplementationOnce(async () => {
+      store.admin.experiment.instances[1].status = 'STOPPED'
+      return { user: {} }
+    })
+    try {
+      expect(await actionsApi.stop(store.admin.experiment.instances[1])).toBe(true)
+      expect(ui.confirm.mock.calls[0][0].message).toMatch(/stopping its session pauses it.*until you press Resume on the Autopilot page/s)
+      expect(ui.notify.success).toHaveBeenCalledWith('Stopped “pilot 2”', expect.stringMatching(/autopilot is paused/))
+    } finally {
+      httpMod.http.get.mockReset()
+    }
+  })
+
+  it('does not mention the autopilot when it runs another session', async () => {
+    httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
+      ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: { id: 8, name: 'auto 3', status: 'RUNNING' } } }
+      : null)
+    ui.confirm.mockResolvedValueOnce(false)
+    try {
+      await actionsApi.stop(store.admin.experiment.instances[1])
+      expect(ui.confirm.mock.calls[0][0].message).not.toMatch(/autopilot/i)
+    } finally {
+      httpMod.http.get.mockReset()
+    }
   })
 
   it('refuses to queue session changes while disconnected', async () => {

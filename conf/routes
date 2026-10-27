@@ -76,6 +76,7 @@ GET         /experiment/export/:experimentId                                    
 # Autopilot: run an experiment unattended
 GET         /autopilot                                                           controllers.AutopilotController.get()
 POST        /autopilot                                                           controllers.AutopilotController.save()
+POST        /autopilot/resume                                                    controllers.AutopilotController.resume()
 
 # Languages
 GET         /languages                                                          controllers.LanguageController.getLanguages()

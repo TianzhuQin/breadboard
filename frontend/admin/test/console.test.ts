@@ -179,6 +179,48 @@ describe('engine replies', () => {
     expect(await p).toBeNull()
     vi.useRealTimers()
   })
+
+  it('keeps a script that timed out in line, so its late error is not taken for the next script', async () => {
+    vi.useFakeTimers()
+    push('input', 'slow()')
+    const slow = expectReply('slow()', lastOutputId(), 'SendScript', 1000)
+    vi.advanceTimersByTime(1001)
+    expect(await slow).toBeNull()
+    push('input', 'next()')
+    const next = expectReply('next()', lastOutputId(), 'SendScript', 1000)
+    // slow() fails at last, then next() does
+    push('error', 'Caught error: slow failed', 'SendScript')
+    await nextTick()
+    push('error', 'Caught error: next failed', 'SendScript')
+    await nextTick()
+    expect(await next).toMatchObject({ ok: false, error: 'Caught error: next failed' })
+    vi.useRealTimers()
+  })
+
+  it('answers every waiting script with null when the connection drops (their answers never come)', async () => {
+    const conn = (store as any).connectionState
+    push('input', 'a()')
+    const a = expectReply('a()', lastOutputId(), 'SendScript')
+    conn.value = 'retrying'
+    expect(await a).toBeNull()
+    conn.value = 'open'
+    // the next run gets its own error, not a()'s place in line
+    push('input', 'b()')
+    const b = expectReply('b()', lastOutputId(), 'SendScript')
+    push('error', 'Caught error: b failed', 'SendScript')
+    await nextTick()
+    expect(await b).toMatchObject({ ok: false, error: 'Caught error: b failed' })
+  })
+
+  it('still takes an answer that arrived just before the connection dropped', async () => {
+    const conn = (store as any).connectionState
+    push('input', 'g.V.count()')
+    const p = expectReply('g.V.count()', lastOutputId(), 'SendScript')
+    push('output', 'g.V.count()\n\n==>3', 'SendScript')
+    conn.value = 'closed'
+    conn.value = 'open'
+    expect(await p).toMatchObject({ ok: true, values: ['3'] })
+  })
 })
 
 describe('engine errors', () => {

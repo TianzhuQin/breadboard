@@ -8,6 +8,9 @@
         </h2>
         <p class="apst__sub">
           <template v-if="status.on && status.paused">Its session was stopped, so it opens no new one for now. Press Resume below to start again.</template>
+          <template v-else-if="status.on && kind === 'done'">
+            Its one session{{ expName ? ` of “${expName}”` : '' }} has finished, so it opens no new one for now.{{ source === 'config' ? '' : ' Press Open another session below when you want one.' }}
+          </template>
           <template v-else-if="status.on && expName">Running “{{ expName }}” unattended.</template>
           <template v-else-if="status.on">Running an experiment unattended.</template>
           <template v-else-if="stalled && status.problem">It is switched on below, but no session opens by itself until the problem below is fixed.</template>
@@ -135,8 +138,12 @@ const infoText = computed(() => {
   return status.value.problem || ''
 })
 
-/** When the next session opens, as a time of day; '' when none is due. */
+/**
+ * When the next session opens, as a time of day; '' when none is due. Paused or done, it opens none
+ * whatever the server's timer says (another experiment's finished session can still set one).
+ */
 const nextOpen = computed(() => {
+  if (status.value.paused || kind.value === 'paused' || kind.value === 'done') return ''
   const at = status.value.nextOpenAt ? new Date(status.value.nextOpenAt) : null
   if (!at || isNaN(at.getTime())) return ''
   return at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })

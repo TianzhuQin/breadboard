@@ -353,4 +353,82 @@ public final class AutopilotSettings {
       sql.setParameter(name, value);
     }
   }
+
+  // ---- paused or done, kept over a restart (autopilot_halt) ---------------------------------------
+
+  /**
+   * Why the autopilot opens no session by itself (a researcher ended its session, or its one session
+   * finished), and for which experiment. A table of its own, not columns of autopilot_settings: when
+   * application.conf runs the autopilot there is no settings row, and writing one would put the
+   * console in charge.
+   */
+  public static final class Halt {
+    public Long experimentId;
+    public String pausedBecause;
+    public String doneBecause;
+  }
+
+  /** The table as evolution 32 creates it (also created here, for installs with evolutions off). */
+  static final String CREATE_HALT_TABLE =
+      "create table if not exists autopilot_halt (\n"
+          + "  id                          bigint not null,\n"
+          + "  experiment_id               bigint,\n"
+          + "  paused_because              varchar(2000),\n"
+          + "  done_because                varchar(2000),\n"
+          + "  updated_at                  timestamp,\n"
+          + "  constraint pk_autopilot_halt primary key (id))";
+
+  private static volatile boolean haltTableChecked = false;
+
+  private static void ensureHaltTable() {
+    if (!haltTableChecked) {
+      Ebean.createSqlUpdate(CREATE_HALT_TABLE).execute();
+      haltTableChecked = true;
+    }
+  }
+
+  /** What was kept, or null when the autopilot is neither paused nor done. */
+  public static Halt loadHalt() {
+    ensureHaltTable();
+    SqlRow row = Ebean.createSqlQuery("select * from autopilot_halt where id = :id")
+        .setParameter("id", ROW_ID)
+        .findUnique();
+    if (row == null || (row.getString("paused_because") == null && row.getString("done_because") == null)) {
+      return null;
+    }
+    Halt halt = new Halt();
+    halt.experimentId = row.getLong("experiment_id");
+    halt.pausedBecause = row.getString("paused_because");
+    halt.doneBecause = row.getString("done_because");
+    return halt;
+  }
+
+  /** Keep why the autopilot opens nothing by itself; both null (not paused, not done) clears it. */
+  public static void saveHalt(Long experimentId, String pausedBecause, String doneBecause) {
+    ensureHaltTable();
+    if (pausedBecause == null && doneBecause == null) {
+      Ebean.createSqlUpdate("delete from autopilot_halt where id = :id").setParameter("id", ROW_ID).execute();
+      return;
+    }
+    SqlUpdate update = Ebean.createSqlUpdate("update autopilot_halt set experiment_id = :experimentId, "
+        + "paused_because = :paused, done_because = :done, updated_at = :updatedAt where id = :id");
+    if (bindHalt(update, experimentId, pausedBecause, doneBecause).execute() == 0) {
+      bindHalt(Ebean.createSqlUpdate("insert into autopilot_halt (id, experiment_id, paused_because, done_because, updated_at) "
+          + "values (:id, :experimentId, :paused, :done, :updatedAt)"), experimentId, pausedBecause, doneBecause).execute();
+    }
+  }
+
+  private static SqlUpdate bindHalt(SqlUpdate sql, Long experimentId, String pausedBecause, String doneBecause) {
+    sql.setParameter("id", ROW_ID);
+    nullable(sql, "experimentId", experimentId, Types.BIGINT);
+    nullable(sql, "paused", clip(pausedBecause), Types.VARCHAR);
+    nullable(sql, "done", clip(doneBecause), Types.VARCHAR);
+    sql.setParameter("updatedAt", new java.sql.Timestamp(System.currentTimeMillis()));
+    return sql;
+  }
+
+  // Session names are typed by researchers; the column holds 2000 characters.
+  private static String clip(String text) {
+    return text == null || text.length() <= 2000 ? text : text.substring(0, 1999) + "…";
+  }
 }

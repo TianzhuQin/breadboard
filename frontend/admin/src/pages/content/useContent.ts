@@ -45,10 +45,37 @@ export function dropKeptDrafts () {
 }
 watch(() => admin.email, claimKeptDrafts)
 
+/** The experiments' names as last seen, to name a deleted one (also after signing in again). */
+const experimentNames = new Map<number, string>()
+// A deleted experiment (from this tab or another) takes its texts with it: edits kept for it could
+// never be saved, and would keep asking before closing the tab or signing out. (Only a User JSON
+// says which experiments there are: signing out empties `user`, and the edits outlive that.)
+watch(() => admin.user?.experiments, (list) => {
+  if (!admin.user || !Array.isArray(list)) return
+  const ids = new Set(list.map(e => e?.id))
+  for (const key of Object.keys(keptDrafts)) {
+    const id = Number(key)
+    if (ids.has(id) || id === admin.experiment?.id) continue
+    const n = Object.keys(keptDrafts[id]).length
+    delete keptDrafts[id]
+    if (!n) continue
+    const name = experimentNames.get(id)
+    notify.warning(
+      name ? `Unsaved texts of “${name}” were thrown away` : 'Unsaved texts were thrown away',
+      `The experiment was deleted, so there is nowhere to save ${n === 1 ? 'the text' : `the ${n} texts`} you had changed in it.`,
+    )
+  }
+  experimentNames.clear()
+  for (const e of list) if (e) experimentNames.set(e.id, e.name)
+}, { immediate: true })
+
 /** How many texts have unsaved edits, in any experiment, whether or not the page is open. */
 export const unsavedContentCount = computed(() => Object.values(keptDrafts).reduce((n, d) => n + Object.keys(d).length, 0))
 // signing out asks first while there are any
 registerUnsaved('content', () => unsavedContentCount.value, 'Content')
+
+/** The content save on its way (also one from before the page was last taken down): the next one waits for it. */
+let saveRun: Promise<boolean> | null = null
 
 function readPref (key: string): string | null {
   try { return localStorage.getItem(key) } catch (e) { return null }
@@ -342,16 +369,33 @@ export function useContent () {
   const deleting = reactive(new Set<string>())
   const errors = reactive<Record<string, string>>({})
 
-  async function save (keys?: string[]): Promise<boolean> {
+  /**
+   * Save the modified texts (only `keys`, when given). One save runs at a time: another one (a second
+   * Cmd/Ctrl+S, a text's own Save) waits for it, then saves what is still unsaved by then, so nothing
+   * is posted twice (a new text or translation posted twice is created twice).
+   */
+  function save (keys?: string[]): Promise<boolean> {
+    const before = saveRun
+    const run = before ? before.then(() => saveNow(keys, true), () => saveNow(keys, true)) : saveNow(keys, false)
+    saveRun = run
+    const clear = () => { if (saveRun === run) saveRun = null }
+    run.then(clear, clear)
+    return run
+  }
+
+  async function saveNow (keys: string[] | undefined, waited: boolean): Promise<boolean> {
     if (readOnly.value) {
       notify.warning('Nothing can be saved in file mode', 'Turn file mode off on the Experiments page to edit content here.')
       return false
     }
     const id = expId.value
     if (id == null) return false
-    const targets = items.value.filter(i => i.modified && (!keys || keys.includes(i.key)) && !saving.has(i.key))
+    // (a new text the save before this one saved has a new key now)
+    const wanted = keys && keys.map(resolveKey)
+    const targets = items.value.filter(i => i.modified && (!wanted || wanted.includes(i.key)) && !saving.has(i.key))
     if (!targets.length) {
-      if (!saving.size) notify.info('Everything is saved')
+      // (after waiting for another save, that one has already said how it went)
+      if (!saving.size && !waited) notify.info('Everything is saved')
       return true
     }
     for (const it of targets) {
@@ -366,7 +410,27 @@ export function useContent () {
     }
     const done: string[] = []
     const failed: { name: string, message: string }[] = []
-    for (const it of targets) {
+    // this experiment's texts as the server has them (kept here too, in case the page switches experiment meanwhile)
+    let base = server.value
+    for (const target of targets) {
+      if (expId.value === id) {
+        if (readOnly.value) break
+        base = server.value
+      }
+      // The text as it is now, not as it was when this save began: it may have been discarded,
+      // deleted or saved since, or edited further.
+      const k = resolveKey(target.key)
+      const list = expId.value === id ? items.value : buildItems(base, draftsByExp[id] || {})
+      const it = list.find(i => i.key === k)
+      if (!it || !it.modified || saving.has(it.key)) continue
+      if (it.isNew || it.renamed) {
+        const err = validateName(it.name, list, it.key)
+        if (err) {
+          errors[it.key] = err
+          failed.push({ name: it.name || 'Untitled', message: err })
+          continue
+        }
+      }
       const payload = buildSavePayload(id, it)
       saving.add(it.key)
       try {
@@ -378,6 +442,7 @@ export function useContent () {
           aliases[key] = aliases[it.key] ?? it.key
           if (selectedKey.value === it.key) selectedKey.value = key
         }
+        base = upsertContent(base, it.id, res)
         if (expId.value === id) {
           server.value = upsertContent(server.value, it.id, res)
           version++
@@ -392,14 +457,16 @@ export function useContent () {
         saving.delete(it.key)
       }
     }
+    const tried = done.length + failed.length
+    if (!tried) return true
     // the server doesn't push content changes made over HTTP; ask for the new picture
     if (done.length) actions.refresh()
     if (!failed.length) {
       notify.success(done.length === 1 ? `Saved “${done[0]}”` : `Saved ${done.length} texts`, 'Scripts get the new text from their next c.get().')
-    } else if (failed.length === 1 && targets.length === 1) {
+    } else if (failed.length === 1 && tried === 1) {
       notify.error(`Couldn’t save “${failed[0].name}”`, failed[0].message)
     } else {
-      notify.error(`${failed.length} of ${targets.length} texts weren’t saved`, `${failed.map(f => `“${f.name}”`).join(', ')}: the reason is shown on each.`)
+      notify.error(`${failed.length} of ${tried} texts weren’t saved`, `${failed.map(f => `“${f.name}”`).join(', ')}: the reason is shown on each.`)
     }
     return !failed.length
   }

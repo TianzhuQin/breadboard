@@ -46,6 +46,8 @@ public class Application extends Controller {
     user.defaultLanguage = defaultLanguage;
     user.experimentInstanceId = -1L;
     user.selectedExperiment = null;
+    // A token nobody holds until the first sign-in (a missing one used to match a request with none).
+    user.uid = UUID.randomUUID().toString();
     user.save();
 
     // TODO: Make method for creating demo experiments and associating with new user
@@ -108,6 +110,8 @@ public class Application extends Controller {
       if (user != null) {
         user.uid = UUID.randomUUID().toString();
         user.update();
+        // Its open console sockets stop receiving the live network and participants' data too.
+        ScriptBoard.closeAdminsOf(user.email, user.uid, null);
       }
     }
     session().clear();
@@ -194,9 +198,31 @@ public class Application extends Controller {
     user.update();
     session("uid", uid);
     session("juid", uid);
+    closeOldConsolesSoon(user.email, uid);
     result.put("success", true);
     result.put("uid", uid);
     return ok(result);
+  }
+
+  // How long the account's consoles have to move to the new token before the old ones are closed.
+  static long CONSOLE_GRACE_MS = 3000L;
+
+  /**
+   * After a password change, close the account's console sockets that still use an old token
+   * (ScriptBoard.closeAdminsOf), so a stolen token's socket stops receiving pushes. A little later,
+   * not at once: the console that asked reconnects with the new token from this reply, and the
+   * account's other tabs in this browser follow it; closing first raced the browser's cookie update,
+   * and the tab could find itself signed out.
+   */
+  private static void closeOldConsolesSoon(final String email, final String uid) {
+    play.libs.Akka.system().scheduler().scheduleOnce(
+        scala.concurrent.duration.Duration.create(CONSOLE_GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS),
+        new Runnable() {
+          public void run() {
+            ScriptBoard.closeAdminsOf(email, uid, null);
+          }
+        },
+        play.libs.Akka.system().dispatcher());
   }
 
   /** A field of a form-encoded or JSON request body, or null. Passwords are taken as typed (not trimmed). */

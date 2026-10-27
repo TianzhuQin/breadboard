@@ -106,27 +106,29 @@ export async function stopSession (inst: Instance) {
 /** SelectInstance: make a stopped session current again and restart it (rebuilds the engine). */
 export async function resumeSession (inst: Instance) {
   if (busy.resume != null || !ensureConnected()) return
-  const cur = admin.instance
-  const other = cur && cur.id !== inst.id && (cur.status === 'RUNNING' || cur.status === 'TESTING') ? cur : null
-  // The engine is shared by every account and the autopilot: say whose session and players the
-  // restart disconnects ('' when nobody is using it). It names your running session too.
-  const users = await engineUsers()
-  const ok = await confirm({
-    title: `Resume “${inst.name}”?`,
-    message: [
-      users && other ? `${users} “${other.name}” will be stopped.` : users || (other ? `“${other.name}” is running now and will be stopped.` : ''),
-      users
-        ? 'Resuming restarts the script engine, which every researcher on this server shares: the network is emptied and everyone in it is disconnected, whoever\'s session they are in. People can then join again with this session\'s links.'
-        : 'The experiment\'s scripts restart from its steps: the network is emptied and anyone still connected is disconnected. People can then join again with the session\'s links.',
-      'Data recorded so far is kept.',
-    ].filter(Boolean).join('\n\n'),
-    confirmLabel: 'Resume session',
-    danger: !!users || !!other,
-  })
-  // (the connection may have dropped while the confirmation was open)
-  if (!ok || !ensureConnected()) return
+  // marked at once: asking the server who uses the engine can take a few seconds, and the button
+  // shows it is working (a second click meanwhile is ignored)
   busy.resume = inst.id
   try {
+    const cur = admin.instance
+    const other = cur && cur.id !== inst.id && (cur.status === 'RUNNING' || cur.status === 'TESTING') ? cur : null
+    // The engine is shared by every account and the autopilot: say whose session and players the
+    // restart disconnects ('' when nobody is using it). It names your running session too.
+    const users = await engineUsers()
+    const ok = await confirm({
+      title: `Resume “${inst.name}”?`,
+      message: [
+        users && other ? `${users} “${other.name}” will be stopped.` : users || (other ? `“${other.name}” is running now and will be stopped.` : ''),
+        users
+          ? 'Resuming restarts the script engine, which every researcher on this server shares: the network is emptied and everyone in it is disconnected, whoever\'s session they are in. People can then join again with this session\'s links.'
+          : 'The experiment\'s scripts restart from its steps: the network is emptied and anyone still connected is disconnected. People can then join again with the session\'s links.',
+        'Data recorded so far is kept.',
+      ].filter(Boolean).join('\n\n'),
+      confirmLabel: 'Resume session',
+      danger: !!users || !!other,
+    })
+    // (the connection may have dropped while the confirmation was open)
+    if (!ok || !ensureConnected()) return
     const running = nextMessage(m => !!m && ((m.request === 'SelectInstance' && typeof m.error === 'string') ||
       ('user' in m && m.experimentInstance && m.experimentInstance.id === inst.id &&
       (m.experimentInstance.status === 'RUNNING' || m.experimentInstance.status === 'TESTING'))), 60000)

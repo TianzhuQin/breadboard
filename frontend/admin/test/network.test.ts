@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import ts from 'typescript'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { scaleFor, NEUTRAL, CATEGORICAL_LIGHT, CATEGORICAL_DARK, CATEGORY20, rampColor } from '../src/network/palette'
 import { parseFilter, matchFilter, describeFilter } from '../src/network/filter'
 import {
   isAi, connectionOf, discoverProperties, colorableProperties, compareValues, compareIds, labelOf, valueOf, choicesOf, formatValue, isTie, tieBetween,
 } from '../src/network/players'
 import { NetworkLayout, layoutFor } from '../src/network/layout'
-import { placeLabels, sceneToSvg, PAPER_THEME, type Scene } from '../src/network/render'
+import { escapeXml, placeLabels, sceneToSvg, PAPER_THEME, type Scene } from '../src/network/render'
 import { networkGraphml, networkJson, exportFileName } from '../src/network/exporters'
 import { LiveGraph, type GraphNode } from '../src/lib/graph'
 import { actions, admin, graph, __receive } from '../src/store/admin'
@@ -431,6 +435,15 @@ describe('drawing and exports', () => {
     expect(data.experiment).toBe('E')
   })
 
+  it('drops lone surrogates and characters XML can\'t hold, and keeps whole emoji', () => {
+    expect(escapeXml('a\uD800b')).toBe('ab')
+    expect(escapeXml('a\uDC00b')).toBe('ab')
+    expect(escapeXml('\uD83D\uD83D\uDE00')).toBe('\uD83D\uDE00')
+    expect(escapeXml('\uD83D\uDE00\uDE00x\uD83D')).toBe('\uD83D\uDE00x')
+    expect(escapeXml('tab\tline\nend\u0000\u001F\uFFFE\uFFFF')).toBe('tab\tline\nend')
+    expect(escapeXml('<a & "b">')).toBe('&lt;a &amp; &quot;b&quot;&gt;')
+  })
+
   it('names files safely', () => {
     expect(exportFileName('png', { experiment: 'My study: wave 2/3', session: 'Pilot 1' }, new Date(2026, 9, 27, 14, 5)))
       .toBe('network-My-study-wave-2-3-Pilot-1-2026-10-27-1405.png')
@@ -442,6 +455,8 @@ describe('drawing and exports', () => {
 describe('tie edits', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    // ties can be changed (and changes undone) only while the session runs
+    if (admin.instance?.status !== 'RUNNING') admin.instance = { id: 1, name: 's1', status: 'RUNNING' } as any
     graph.clear()
     for (const id of ['a', 'b', 'c']) __receive({ action: 'addNode', id })
     __receive({ action: 'addLink', id: '1', source: 'a', target: 'b', value: 'connected' })
@@ -493,6 +508,60 @@ describe('tie edits', () => {
     editHistory.value = []
     expect(undoLast()).toBe(null)
     expect(toasts[toasts.length - 1].title).toBe('Nothing to undo')
+  })
+
+  it('keeps an edit whose undo failed, so the next Ctrl/Cmd+Z retries it instead of an older one', async () => {
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    // cut a–b, then tie a–c
+    await editTie('remove', 'a', 'b')
+    __receive({ action: 'removeLink', id: '1' })
+    await editTie('add', 'a', 'c')
+    __receive({ action: 'addLink', id: '2', source: 'a', target: 'c', value: 'connected' })
+    expect(editHistory.value).toEqual([{ op: 'remove', a: 'a', b: 'b' }, { op: 'add', a: 'a', b: 'c' }])
+    // the connection blips: undoing a–c fails
+    spy.mockImplementationOnce(async (op, a, b) => ({ ok: false, op, a, b, reason: 'Not connected to the server. Try again once the connection is back.' }))
+    expect((await undoLast())!.ok).toBe(false)
+    expect(editHistory.value).toEqual([{ op: 'remove', a: 'a', b: 'b' }, { op: 'add', a: 'a', b: 'c' }])
+    // once it is back, Ctrl/Cmd+Z undoes a–c, not the older cut
+    expect((await undoLast())!.ok).toBe(true)
+    expect(spy).toHaveBeenLastCalledWith('remove', 'a', 'c')
+    expect(editHistory.value).toEqual([{ op: 'remove', a: 'a', b: 'b' }])
+  })
+
+  it('refuses a second undo of the same edit while the first is on its way, and keeps it if that fails', async () => {
+    let answer!: (r: any) => void
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    await editTie('add', 'a', 'c')
+    __receive({ action: 'addLink', id: '2', source: 'a', target: 'c', value: 'connected' })
+    const undo = toasts[toasts.length - 1].action!
+    spy.mockImplementationOnce(() => new Promise(r => { answer = r }))
+    const first = undoLast()!
+    expect(undoLast()).not.toBe(null)
+    await Promise.resolve()
+    expect(toasts[toasts.length - 1].title).toBe('Already being undone')
+    undo.run()
+    expect(toasts[toasts.length - 1].title).toBe('Already being undone')
+    expect(spy).toHaveBeenCalledTimes(2)
+    answer({ ok: false, op: 'remove', a: 'a', b: 'c', reason: 'Boom' })
+    expect((await first).ok).toBe(false)
+    expect(editHistory.value).toEqual([{ op: 'add', a: 'a', b: 'c' }])
+    // the toast's Undo can try again
+    undo.run()
+    await vi.waitFor(() => expect(editHistory.value).toEqual([]))
+    expect(spy).toHaveBeenLastCalledWith('remove', 'a', 'c')
+  })
+
+  it('undoes nothing once the session stopped (the Tie and Cut tools are locked then too)', async () => {
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    await editTie('add', 'a', 'c')
+    const undo = toasts[toasts.length - 1].action!
+    admin.instance = { id: 1, name: 's1', status: 'STOPPED' } as any
+    expect((await undoLast())!.ok).toBe(false)
+    expect(toasts[toasts.length - 1]).toMatchObject({ title: 'Nothing was undone', detail: 'Start the session to change ties.' })
+    undo.run()
+    await Promise.resolve()
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(editHistory.value).toEqual([{ op: 'add', a: 'a', b: 'c' }])
   })
 
   it('shows the server\'s reason when it refuses', async () => {
@@ -614,6 +683,56 @@ describe('tie edits', () => {
     expect(editHistory.value.length).toBe(1)
     __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: { id: 2, name: 's2', status: 'RUNNING' } })
     await vi.waitFor(() => expect(editHistory.value).toEqual([]))
+  })
+})
+
+// ---- browser support -----------------------------------------------------------------------------
+
+/** Regex literals in this code that use a lookbehind, (?<= or (?<! (not \(?<=, which starts with an escaped bracket). */
+function lookbehindLiterals (code: string, file = 'x.ts'): string[] {
+  const found: string[] = []
+  const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
+  const visit = (n: ts.Node) => {
+    if (n.kind === ts.SyntaxKind.RegularExpressionLiteral && /(^|[^\\])(\\\\)*\(\?<[=!]/.test(n.getText(sf))) found.push(n.getText(sf))
+    ts.forEachChild(n, visit)
+  }
+  visit(sf)
+  return found
+}
+
+describe('browser support', () => {
+  it('finds lookbehinds in regex literals', () => {
+    expect(lookbehindLiterals('const r = /(?<![a-z])x/g; const t = /a(?<=b)/')).toEqual(['/(?<![a-z])x/g', '/a(?<=b)/'])
+    expect(lookbehindLiterals('const r = /\\(?<=x/; const n = /(?<name>x)/; const s = "(?<!x)"')).toEqual([])
+  })
+
+  // Safari before 16.4 (all of Safari 15, iOS and iPadOS up to 16.3) can't parse a lookbehind. The
+  // build (target es2020) leaves regex literals as written, and a literal is parsed when its module
+  // loads, so one anywhere would stop the whole console from starting there.
+  it('uses no lookbehind in any regex literal of the console', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
+    const files: string[] = []
+    const walk = (dir: string) => {
+      for (const f of readdirSync(dir)) {
+        const p = join(dir, f)
+        if (statSync(p).isDirectory()) walk(p)
+        else if (/\.(ts|vue)$/.test(f)) files.push(p)
+      }
+    }
+    walk(root)
+    expect(files.length).toBeGreaterThan(50)
+    const found: string[] = []
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8')
+      const scripts = file.endsWith('.vue') ? Array.from(text.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g), m => m[1]) : [text]
+      for (const code of scripts) for (const r of lookbehindLiterals(code, file)) found.push(`${relative(root, file)}: ${r}`)
+      // a template's expressions can hold regex literals too
+      if (file.endsWith('.vue')) {
+        const template = text.replace(/<script\b[\s\S]*?<\/script>/g, '').replace(/<style\b[\s\S]*?<\/style>/g, '')
+        if (/\(\?<[=!]/.test(template)) found.push(`${relative(root, file)}: (template)`)
+      }
+    }
+    expect(found).toEqual([])
   })
 })
 

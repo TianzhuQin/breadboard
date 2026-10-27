@@ -432,6 +432,8 @@ public class Breadboard extends UntypedActor {
         // includes this socket's later frames; the console signs in again with the new password.
         saveUserSettings.user.uid = UUID.randomUUID().toString();
         saveUserSettings.user.update();
+        // The account's other console sockets stop receiving anything at once (this one is answered).
+        ScriptBoard.closeAdminsOf(saveUserSettings.user.email, saveUserSettings.user.uid, saveUserSettings.out);
 
       } else if (message instanceof SelectExperiment) {
         // TODO: Clear the working memory of the ScriptEngine
@@ -447,7 +449,8 @@ public class Breadboard extends UntypedActor {
         if (selectedExperiment != null) {
           // TODO: Create "ChangeExperiment" action and handle it in ScriptBoard
           // Find Content based on currently selected Experiment
-          scriptBoard.tell(new ChangeExperiment(breadboardMessage.user, selectedExperiment, breadboardMessage.out), null);
+          BreadboardMessage change = new ChangeExperiment(breadboardMessage.user, selectedExperiment, breadboardMessage.out);
+          scriptBoard.tell(selectExperiment.atSignIn ? change.atSignIn() : change, null);
           //move the load steps into scriptboard
 //                    for (Step step : selectedExperiment.steps)
 //                        instances.get(breadboardMessage.user.email).tell(new RunStep(breadboardMessage.user, step.source, breadboardMessage.out));
@@ -716,12 +719,12 @@ public class Breadboard extends UntypedActor {
       boolean running = saved != null && (saved.status == ExperimentInstance.Status.RUNNING
           || saved.status == ExperimentInstance.Status.TESTING);
       if (running) {
-        getSelf().tell(new SelectInstance(user, saved.id, out), null);
+        getSelf().tell(new SelectInstance(user, saved.id, out).atSignIn(), null);
       } else if (user.selectedExperiment != null) {
         Logger.debug("user.selectedExperiment = " + user.selectedExperiment);
-        getSelf().tell(new SelectExperiment(user, user.selectedExperiment, out), null);
+        getSelf().tell(new SelectExperiment(user, user.selectedExperiment, out).atSignIn(), null);
       } else {
-        scriptBoard.tell(new ReloadEngine(user, out), null);
+        scriptBoard.tell(new ReloadEngine(user, out).atSignIn(), null);
       }
     } else if (firstSinceStart) {
       // Someone else (or the autopilot) has the engine: a session this account left running before
@@ -741,10 +744,19 @@ public class Breadboard extends UntypedActor {
   public static abstract class BreadboardMessage {
     final User user;
     final ThrottledWebSocketOut out;
+    // Set on what LogIn sends to load the account's saved work after a restart (see logIn): the
+    // engine that builds is not one the researcher asked for, so the autopilot may take it over
+    // (ScriptBoard.researcherHolding).
+    boolean atSignIn = false;
 
     public BreadboardMessage(User user, ThrottledWebSocketOut out) {
       this.user = user;
       this.out = out;
+    }
+
+    BreadboardMessage atSignIn() {
+      this.atSignIn = true;
+      return this;
     }
   }
 
@@ -962,27 +974,42 @@ public class Breadboard extends UntypedActor {
   /** Sent by a ScriptBoard to itself after the steps it queued have run (see AutopilotHooks). */
   public static class StepsLoaded extends BreadboardMessage {
     final Experiment experiment;
+    // The engine it was queued for (ScriptBoard.engineGeneration); dropped once another has been
+    // built. Null: whichever engine runs then.
+    final Long generation;
 
     public StepsLoaded(User user, Experiment experiment, ThrottledWebSocketOut out) {
+      this(user, experiment, out, null);
+    }
+
+    public StepsLoaded(User user, Experiment experiment, ThrottledWebSocketOut out, Long generation) {
       super(user, out);
       this.experiment = experiment;
+      this.generation = generation;
     }
   }
 
   public static class RunStep extends BreadboardMessage {
     final String source;
     // The console request it answers ("SendStep"), sent back as "request" on its frames; null for
-    // the steps a launch re-runs, whose frames carry "source": "Steps" instead.
+    // steps that load with an experiment, whose frames carry "source": "Steps" instead.
     final String request;
+    // As StepsLoaded's: the engine it was queued for, or null.
+    final Long generation;
 
     public RunStep(User user, String source, ThrottledWebSocketOut out) {
       this(user, source, out, null);
     }
 
     public RunStep(User user, String source, ThrottledWebSocketOut out, String request) {
+      this(user, source, out, request, null);
+    }
+
+    public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation) {
       super(user, out);
       this.source = source;
       this.request = request;
+      this.generation = generation;
     }
   }
 
@@ -1015,6 +1042,11 @@ public class Breadboard extends UntypedActor {
     final Long experimentId;
     final String name;
     final LinkedHashMap parameters;
+    // Set only by the autopilot: the experiment to launch, instead of the account's selection (which
+    // it leaves alone), and how Autopilot.launchStillWanted checks the launch is still wanted.
+    final Experiment autopilotExperiment;
+    final boolean onlyIfIdle;
+    final boolean automatic;
 
     public LaunchGame(User user, String name, LinkedHashMap parameters, ThrottledWebSocketOut out) {
       this(user, null, name, parameters, out);
@@ -1025,6 +1057,21 @@ public class Breadboard extends UntypedActor {
       this.experimentId = experimentId;
       this.name = name;
       this.parameters = parameters;
+      this.autopilotExperiment = null;
+      this.onlyIfIdle = false;
+      this.automatic = false;
+    }
+
+    /** The autopilot's launch of {@code experiment}, as {@code user} (its operator). */
+    LaunchGame(User user, Experiment experiment, String name, LinkedHashMap parameters, ThrottledWebSocketOut out,
+               boolean onlyIfIdle, boolean automatic) {
+      super(user, out);
+      this.experimentId = null;
+      this.name = name;
+      this.parameters = parameters;
+      this.autopilotExperiment = experiment;
+      this.onlyIfIdle = onlyIfIdle;
+      this.automatic = automatic;
     }
   }
 

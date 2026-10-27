@@ -85,6 +85,14 @@ save. The settings are kept in the database and take effect at once. The page sh
 session that is open and the two links to give participants: the sign-in link and the Prolific
 study URL.
 
+- If another experiment's session is running when you turn it on, the autopilot waits for that
+  session to end; the page also offers to end it there and then.
+- Stopping the autopilot's session from the console pauses the autopilot. Press **Resume** on
+  the Autopilot page to let it open sessions again.
+- While it is on, it opens a session whenever the script engine runs none. The engine is shared
+  by everyone on the server, so on a server that runs the autopilot, test other experiments on
+  another server, or turn the autopilot off first.
+
 Settings saved there take precedence over the ones in the experiment's steps. Alternatively, in
 `application.conf` (or as `-D` options), in which case the Autopilot page only shows them:
 

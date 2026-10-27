@@ -356,6 +356,68 @@ public class ConsoleRoutesTest extends BaseTest {
         assertEquals(fresh, User.findByEmail(user.email).uid);
     }
 
+    // ---- no session cookie: no account -------------------------------------------------------------
+
+    @Test
+    public void aRequestWithNoSignInIsRefusedEvenWhenAnAccountHasNeverSignedIn() {
+        User added = user("added-by-sql");
+        // As an account inserted by SQL (or created before the first-user form set one): no token yet.
+        com.avaje.ebean.Ebean.createSqlUpdate("update users set uid = null where email = :email")
+            .setParameter("email", added.email).execute();
+        com.avaje.ebean.Ebean.getServer("default").getServerCacheManager().clearAll();
+        assertNull(User.findByEmail(added.email).uid);
+
+        assertNull(User.findByUID(null));
+        assertNull(User.findByUID(""));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/state"))));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/csv/data/1"))));
+        Result steps = route(fakeRequest(POST, "/autopilot").withJsonBody(Json.parse("{\"enabled\": false}")));
+        assertEquals(UNAUTHORIZED, status(steps));
+        assertNull("nothing was saved", AutopilotSettings.load());
+
+        // The first account gets a token at once, so it never matches a request without one.
+        com.avaje.ebean.Ebean.createSqlUpdate("delete from users").execute();
+        Language lang = Language.find.where().eq("code", "eng").findUnique();
+        ObjectNode first = Json.newObject();
+        first.put("email", "first@test.org");
+        first.put("password", "first-password");
+        first.put("defaultLanguageId", lang.id);
+        assertEquals(OK, status(route(fakeRequest(POST, "/createFirstUser").withJsonBody(first))));
+        assertNotNull(User.findByEmail("first@test.org").uid);
+    }
+
+    // ---- images are shown, never run --------------------------------------------------------------------
+
+    @Test
+    public void imagesAreSentSoTheyCanNeverRunAScript() throws Exception {
+        Experiment experiment = createExperiment("Pictures");
+        File file = File.createTempFile("bb-image", ".bin");
+        file.deleteOnExit();
+        Files.write(file.toPath(), "<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>".getBytes(StandardCharsets.UTF_8));
+
+        long png = Json.parse(contentAsString(ImagesController.storeImage(experiment.id.toString(), "logo.png", "image/png", file))).get("id").asLong();
+        long svg = Json.parse(contentAsString(ImagesController.storeImage(experiment.id.toString(), "logo.svg", "image/svg+xml", file))).get("id").asLong();
+        long html = Json.parse(contentAsString(ImagesController.storeImage(experiment.id.toString(), "page.png", "text/html", file))).get("id").asLong();
+        long jpg = Json.parse(contentAsString(ImagesController.storeImage(experiment.id.toString(), "photo.jpg", "image/JPG", file))).get("id").asLong();
+
+        for (Result r : new Result[]{route(fakeRequest(GET, "/images/" + png)), route(fakeRequest(GET, "/images/" + svg)),
+            route(fakeRequest(GET, "/images/" + html)), route(fakeRequest(GET, "/images/" + experiment.id + "/page.png"))}) {
+            assertEquals(OK, status(r));
+            assertEquals("nosniff", header("X-Content-Type-Options", r));
+            assertTrue(header("Content-Security-Policy", r), header("Content-Security-Policy", r).contains("sandbox"));
+        }
+        assertEquals("image/png", contentType(route(fakeRequest(GET, "/images/" + png))));
+        assertNull(header("Content-Disposition", route(fakeRequest(GET, "/images/" + png))));
+        // An SVG is still shown (in a page an <img> never runs its script; opened alone, the sandbox stops it).
+        assertEquals("image/svg+xml", contentType(route(fakeRequest(GET, "/images/" + svg))));
+        assertEquals("image/jpeg", contentType(route(fakeRequest(GET, "/images/" + jpg))));
+        // Anything that isn't an image type is a download, never a page.
+        for (Result r : new Result[]{route(fakeRequest(GET, "/images/" + html)), route(fakeRequest(GET, "/images/" + experiment.id + "/page.png"))}) {
+            assertEquals("application/octet-stream", contentType(r));
+            assertEquals("attachment", header("Content-Disposition", r));
+        }
+    }
+
     // ---- CSV (§3.6.2) ------------------------------------------------------------------------------
 
     @Test
