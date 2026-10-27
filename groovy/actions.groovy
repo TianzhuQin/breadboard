@@ -244,6 +244,13 @@ class PlayerActions {
     choose(uid, "")
   }
 
+  // Id of the player a pending choice uid was offered to (null if there is no such choice), so the
+  // server can refuse a choice sent by anyone else.
+  String ownerOf(String uid) {
+    PlayerAction action = actions[uid]
+    return action?.player?.getId()?.toString()
+  }
+
   def choose(String uid, String params) {
     PlayerAction action = actions[uid]
 

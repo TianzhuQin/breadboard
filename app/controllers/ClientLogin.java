@@ -10,6 +10,7 @@ import play.data.Form;
 import play.mvc.Controller;
 import play.mvc.Result;
 import play.mvc.WebSocket;
+import security.ParticipantAuth;
 import views.html.*;
 import java.util.List;
 
@@ -147,13 +148,18 @@ public class ClientLogin extends Controller {
 
       Logger.debug("! loginForm.hasErrors()");
       String clientId = assignmentId;
+      String token = ParticipantAuth.claim(experimentInstanceId.toString(), clientId);
+      if (token == null) {
+        // Someone already entered with this assignment.
+        return ok(amtGameStarted.render());
+      }
       if (!amtHit.hasWorker(workerId)) {
         AMTWorker amtWorker = new AMTWorker();
         amtWorker.workerId = workerId;
         amtHit.amtWorkers.add(amtWorker);
         amtHit.save();
       }
-      return redirect(routes.ClientController.index(experimentId.toString(), experimentInstanceId.toString(), clientId, connectionSpeed));
+      return enterGame(experimentId.toString(), experimentInstanceId.toString(), clientId, token, connectionSpeed);
     }
   }
 
@@ -166,8 +172,31 @@ public class ClientLogin extends Controller {
     } else {
       Logger.debug("! loginForm.hasErrors()");
       String clientId = loginForm.get().id;
-      return redirect(routes.ClientController.index(experimentId, experimentInstanceId, clientId, null));
+      if (clientId == null || clientId.trim().isEmpty()) {
+        loginForm.reject("Please enter your ID.");
+        return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      }
+      String token = ParticipantAuth.claim(experimentInstanceId, clientId);
+      if (token == null) {
+        loginForm.reject("This ID is already in use.");
+        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      }
+      return enterGame(experimentId, experimentInstanceId, clientId, token, null);
     }
+  }
+
+  /**
+   * Finish a successful entry: store the seat token in an HttpOnly cookie scoped to this
+   * instance, and redirect to the participant page with the token also in the URL fragment.
+   * The fragment never reaches the server or its logs; the client moves it into session storage
+   * and uses it when cookies are blocked (e.g. inside another site's iframe).
+   */
+  static Result enterGame(String experimentId, String experimentInstanceId, String clientId, String token, String connectionSpeed) {
+    boolean secure = play.Play.application().configuration().getBoolean("breadboard.secureCookies", false);
+    response().setCookie(ParticipantAuth.cookieName(experimentInstanceId), token, null,
+        ParticipantAuth.cookiePath(experimentId, experimentInstanceId), null, secure, true);
+    String url = routes.ClientController.index(experimentId, experimentInstanceId, clientId, connectionSpeed).url();
+    return redirect(url + "#" + ParticipantAuth.FRAGMENT_KEY + "=" + token);
   }
 
   /**

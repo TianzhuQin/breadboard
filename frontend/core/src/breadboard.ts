@@ -12,6 +12,34 @@ const CUSTOM_EVENT = 'CustomEvent'
 // Games.SUBMIT_EVENT in groovy/groups.groovy.
 const GROUP_CHOICE_EVENT = 'group-action-submit'
 
+// Participant credentials. After login the server redirects to the participant page with the
+// seat token in the URL fragment (it is also set as an HttpOnly cookie). Keep it in session
+// storage and send it explicitly, because cookies are often blocked when the page is embedded
+// in another site's iframe. Must stay in sync with security.ParticipantAuth.
+const TOKEN_HEADER = 'X-Breadboard-Token'
+const TOKEN_FRAGMENT_KEY = 'bbt'
+
+export function participantToken (): string | null {
+  if (typeof window === 'undefined') return null
+  const storageKey = 'breadboard-token:' + window.location.pathname
+  try {
+    const hash = window.location.hash.replace(/^#/, '')
+    const params = new URLSearchParams(hash)
+    const fromFragment = params.get(TOKEN_FRAGMENT_KEY)
+    if (fromFragment) {
+      window.sessionStorage.setItem(storageKey, fromFragment)
+      params.delete(TOKEN_FRAGMENT_KEY)
+      const rest = params.toString()
+      // Drop the token from the address bar so it isn't bookmarked, shared or kept in history.
+      window.history.replaceState(null, '', window.location.pathname + window.location.search + (rest ? '#' + rest : ''))
+      return fromFragment
+    }
+    return window.sessionStorage.getItem(storageKey)
+  } catch (e) {
+    return null
+  }
+}
+
 export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   private socket!: Socket
@@ -30,8 +58,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       return this.config
     }
     try {
-      const res = await http.get<BreadboardConfig>('state')
-      this.config = await res.json()
+      const token = participantToken()
+      const res = await http.get<BreadboardConfig>('state', token ? { headers: { [TOKEN_HEADER]: token } } : {})
+      const body = await res.json()
+      if (res.status === 401 && body && body.error === 'not-logged-in' && body.login) {
+        // A participant page opened without this seat's credentials (e.g. someone else's URL).
+        window.location.href = body.login
+        throw new Error('Not logged in')
+      }
+      this.config = body
       return this.config!
     } finally {
       release()

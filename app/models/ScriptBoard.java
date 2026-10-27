@@ -16,6 +16,7 @@ import org.codehaus.groovy.control.CompilationFailedException;
 import play.Logger;
 import play.Play;
 import play.libs.F.Callback;
+import play.libs.F.Callback0;
 import play.libs.Json;
 import play.mvc.WebSocket;
 
@@ -42,7 +43,7 @@ public class ScriptBoard extends UntypedActor {
   private static EventBus<Map> eventBus = new EventBus();
 
   private static Random rand = new Random();
-  private static HashMap<String, Client> clients = new HashMap<>();
+  private static final Map<String, Client> clients = new java.util.concurrent.ConcurrentHashMap<>();
 
   // AMT lifecycle timers scheduled by the HitCreated handler. Tracked so they can be
   // cancelled on reload / on re-submit instead of being orphaned (MEMORY_LEAKS.md L6).
@@ -73,7 +74,7 @@ public class ScriptBoard extends UntypedActor {
     results = new HashMap();
     mapper = new ObjectMapper();
     admins = new ArrayList<>();
-    clients = new HashMap<>();
+    clients.clear();
     eventTracker = new EventTracker();
     manager = new ScriptEngineManager();
     eventBus.clear();
@@ -301,52 +302,61 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
 
+      final Client thisClient;
       if (client == null) {
         // New client, let's create a new Client object
         client = new Client(clientId, experimentInstance, in, out);
         clients.put(clientId, client);
       } else {
-        // Reconnecting: let's change the in / out so they continue to receive messages
+        // Reconnecting (the controller already checked this request holds the seat's token):
+        // switch to the new socket and close the previous one, so an older tab can neither keep
+        // receiving updates nor keep sending choices for this participant.
+        ThrottledWebSocketOut previous = client.out;
         client.setIn(in);
         client.setOut(out);
+        if (previous != null && previous != out) {
+          try {
+            previous.close();
+          } catch (Exception ignored) {}
+        }
       }
+      thisClient = client;
+      setConnected(clientId, true);
+
+      in.onClose(new Callback0() {
+        public void invoke() {
+          // Only the current socket counts; a replaced one closing is not a disconnect.
+          if (thisClient.in == in) {
+            setConnected(clientId, false);
+          }
+        }
+      });
 
       in.onMessage(new Callback<JsonNode>() {
         public void invoke(JsonNode event) {
+          if (thisClient.in != in) {
+            return; // message from a socket that has since been replaced
+          }
           try {
             ObjectMapper mapper = new ObjectMapper();
             // TODO: is event.toString() the correct method here?
             Map<String, Object> jsonInput = mapper.readValue(event.toString(), Map.class);
-            String action = jsonInput.get("action").toString();
+            Object actionValue = jsonInput.get("action");
+            String action = actionValue == null ? "" : actionValue.toString();
             if (action.equals("LogIn")) {
-              String clientId = jsonInput.get("clientId").toString();
-              String referer = jsonInput.get("referer").toString();
-              String connection = jsonInput.get("connection").toString();
-              String accept = jsonInput.get("accept").toString();
-              String acceptLanguage = jsonInput.get("acceptLanguage").toString();
-              String acceptEncoding = jsonInput.get("acceptEncoding").toString();
-              String userAgent = jsonInput.get("userAgent").toString();
-              String host = jsonInput.get("host").toString();
-              String ipAddress = jsonInput.get("ipAddress").toString();
-              String requestURI = jsonInput.get("requestURI").toString();
-
+              // The browser used to report its own IP address, user agent, referer (full URL,
+              // including recruitment ids) and other headers here, which were stored with every
+              // login. They were unverified and mostly personal data, so only the id is kept.
               if (eventTracker != null) {
                 LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
                 data.put("clientId", clientId);
-                data.put("referer", referer);
-                data.put("connection", connection);
-                data.put("acceptLanguage", acceptLanguage);
-                data.put("acceptEncoding", acceptEncoding);
-                data.put("userAgent", userAgent);
-                data.put("host", host);
-                data.put("ipAddress", ipAddress);
-                data.put("requestURI", requestURI);
                 eventTracker.track("clientLogIn", data);
               }
             } else if (action.equals("MakeChoice")) {
-              String choiceUID = jsonInput.get("choiceUID").toString();
-              String params = (jsonInput.containsKey("params")) ? jsonInput.get("params").toString() : null;
-              makeChoice(choiceUID, params, out);
+              Object uidValue = jsonInput.get("choiceUID");
+              String choiceUID = uidValue == null ? null : uidValue.toString();
+              String params = (jsonInput.containsKey("params") && jsonInput.get("params") != null) ? jsonInput.get("params").toString() : null;
+              makeChoice(clientId, choiceUID, params, out);
             } else if (action.equals("CustomEvent")) {
               // TODO: Is is possible for this to be emitted before the event has been registered? 
               //       I think it is and I think it will cause exceptions to be thrown...
@@ -451,7 +461,7 @@ public class ScriptBoard extends UntypedActor {
 
         } else if (message instanceof Breadboard.MakeChoice) {
           Breadboard.MakeChoice makeChoice = (Breadboard.MakeChoice) message;
-          makeChoice(makeChoice.uid, makeChoice.params, breadboardMessage.out);
+          makeChoice(null, makeChoice.uid, makeChoice.params, breadboardMessage.out); // admin acting for a player
         } else if (message instanceof Breadboard.SendStep) {
           Breadboard.SendStep sendStep = (Breadboard.SendStep) message;
 
@@ -746,9 +756,46 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
-  private static void makeChoice(String uid, String params, ThrottledWebSocketOut out) {
+  /**
+   * Record whether a participant currently has an open socket: {@code player._system.connected}
+   * on the vertex (engine-internal, never sent to neighbors) and a clientConnected /
+   * clientDisconnected event in the log.
+   */
+  static void setConnected(String clientId, boolean connected) {
+    try {
+      if (engine != null) {
+        Object g = engine.get("g");
+        if (g instanceof Graph) {
+          Vertex v = ((Graph) g).getVertex(clientId);
+          if (v != null) {
+            Object system = v.getProperty("_system");
+            if (system instanceof Map) {
+              ((Map<String, Object>) system).put("connected", connected);
+            }
+          }
+        }
+      }
+      if (eventTracker != null) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("clientId", clientId);
+        eventTracker.track(connected ? "clientConnected" : "clientDisconnected", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not record connection state for " + clientId, e);
+    }
+  }
+
+  private static void makeChoice(String clientId, String uid, String params, ThrottledWebSocketOut out) {
     ObjectNode jsonOutput = Json.newObject();
     try {
+      // A choice uid is only valid for the participant it was shown to. clientId is null when an
+      // admin makes the choice on a player's behalf from the admin panel.
+      String owner = (playerActions == null || uid == null) ? null : playerActions.ownerOf(uid);
+      if (clientId != null && (owner == null || !owner.equals(clientId))) {
+        Logger.info("Ignored choice " + uid + " from " + clientId + ": not offered to this participant");
+        out.write(jsonOutput);
+        return;
+      }
       playerActions.choose(uid, params);
     } catch (Exception e) {
       ScriptLoader.humanizeStackTrace(e);
