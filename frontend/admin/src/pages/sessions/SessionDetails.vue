@@ -128,8 +128,6 @@ const hostname = window.location.hostname
 const localOnly = isLocalHost(hostname)
 
 const resumeHint = computed(() => {
-  // the server only stops the session it is tracking (ScriptBoard StopGame)
-  if (canStop(props.session) && !props.current) return 'Make it current to stop it.'
   if (canResume(props.session) || canStop(props.session)) return ''
   return props.session.status === 'FINISHED'
     ? 'A finished session can’t be resumed. Start a new session to run the experiment again.'

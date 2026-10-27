@@ -16,6 +16,9 @@ import play.mvc.Security;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.Map;
 
 public class ImagesController extends Controller {
@@ -131,11 +134,15 @@ public class ImagesController extends Controller {
 
     if (experiment.fileMode) {
       File imageDirectory = new File(Play.application().path().toString() + "/dev/" + experiment.getDirectoryName() + "/Images");
+      File file = imageFileIn(imageDirectory, fileName);
+      if (file == null) {
+        return notFound();
+      }
       try {
-        File file = FileUtils.getFile(imageDirectory, fileName);
         String contentType = Files.probeContentType(file.toPath());
         byte[] contents = FileUtils.readFileToByteArray(file);
-        response().setContentType(contentType);
+        response().setContentType(contentType == null ? "application/octet-stream" : contentType);
+        response().setHeader("X-Content-Type-Options", "nosniff");
         return ok(contents);
       } catch (IOException ioe) {
         return notFound();
@@ -156,6 +163,29 @@ public class ImagesController extends Controller {
     }
 
     return notFound();
+  }
+
+  /**
+   * The file named {@code fileName} directly inside {@code imageDirectory}, or null when there is no
+   * such regular file or the name reaches outside the folder. The image route is public and Play
+   * decodes %2F in the name, so "..%2F..%2Fconf%2Fapplication.conf" used to read any file on the
+   * server. A name is one path segment; symbolic links are not followed.
+   */
+  static File imageFileIn(File imageDirectory, String fileName) {
+    if (fileName == null || fileName.isEmpty() || fileName.equals(".") || fileName.equals("..")
+        || fileName.indexOf('/') >= 0 || fileName.indexOf('\\') >= 0 || fileName.indexOf('\0') >= 0) {
+      return null;
+    }
+    try {
+      Path base = imageDirectory.toPath().toRealPath();
+      Path path = base.resolve(fileName).normalize();
+      if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || !path.toRealPath().startsWith(base)) {
+        return null;
+      }
+      return path.toFile();
+    } catch (IOException | InvalidPathException e) {
+      return null;
+    }
   }
 
   public static Result getImageThumb(Long imageId) {

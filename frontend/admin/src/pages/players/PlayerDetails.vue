@@ -88,21 +88,44 @@
           <h3 :id="`${headingId}-ties`" class="pd__h">Ties <span class="pd__count">{{ neighbors.length }}</span></h3>
         </div>
         <ul v-if="neighbors.length" class="pd__ties" role="list">
-          <li v-for="nb in neighbors" :key="nb.id" class="pd__tie">
-            <span class="pd__tie-dot" :class="`is-${nb.tone}`" aria-hidden="true" />
-            <button type="button" class="pd__tie-name" :title="`Show ${nb.label}`" @click="emit('select', nb.id)">
-              {{ nb.label }}<span v-if="nb.label !== nb.id" class="pd__tie-id">{{ nb.id }}</span>
-            </button>
-            <BButton
-              variant="danger-ghost"
-              size="sm"
-              :icon="Scissors"
-              :loading="isPending(id, nb.id)"
-              :disabled="!canEdit"
-              :aria-label="`Cut the tie between ${name} and ${nb.label}`"
-              :title="canEdit ? `Cut the tie between ${name} and ${nb.label}` : editBlockedReason"
-              @click="cut(nb.id)"
-            >Cut</BButton>
+          <li v-for="nb in neighbors" :key="nb.id" class="pd__tie-item">
+            <div class="pd__tie">
+              <span class="pd__tie-dot" :class="`is-${nb.tone}`" aria-hidden="true" />
+              <button type="button" class="pd__tie-name" :title="`Show ${nb.label}`" @click="emit('select', nb.id)">
+                {{ nb.label }}<span v-if="nb.label !== nb.id" class="pd__tie-id">{{ nb.id }}</span>
+              </button>
+              <span v-for="k in nb.kinds" :key="k" class="pd__tie-kind" :title="`Joined by a “${k}” link, which can't be cut here`">{{ k }}</span>
+              <button
+                v-if="nb.props"
+                type="button"
+                class="pd__tie-more"
+                :aria-expanded="openTies.has(nb.id) ? 'true' : 'false'"
+                :aria-label="`${openTies.has(nb.id) ? 'Hide' : 'Show'} the properties of the tie with ${nb.label}`"
+                :title="openTies.has(nb.id) ? 'Hide the tie\'s properties' : 'Show the tie\'s properties'"
+                @click="toggleTie(nb.id)"
+              >
+                <ChevronRight :size="13" class="pd__tie-chev" :class="{ 'is-open': openTies.has(nb.id) }" aria-hidden="true" />{{ nb.props }}
+              </button>
+              <BButton
+                v-if="nb.tie"
+                variant="danger-ghost"
+                size="sm"
+                :icon="Scissors"
+                :loading="isPending(id, nb.id)"
+                :disabled="!canEdit"
+                :aria-label="`Cut the tie between ${name} and ${nb.label}`"
+                :title="canEdit ? `Cut the tie between ${name} and ${nb.label}` : editBlockedReason"
+                @click="cut(nb.id)"
+              >Cut</BButton>
+            </div>
+            <div v-if="nb.props && openTies.has(nb.id)" class="pd__tie-props">
+              <template v-for="l in nb.links" :key="l.id">
+                <h4 v-if="nb.links.length > 1 && l.data.length" class="pd__h pd__h--minor">{{ l.kind }}</h4>
+                <ul v-if="l.data.length" class="pd__props" role="list">
+                  <PropertyRow v-for="([k, v]) in l.data" :key="k" :name="k" :value="v" :path="k" />
+                </ul>
+              </template>
+            </div>
           </li>
         </ul>
         <p v-else class="pd__sub">{{ name }} isn't tied to anyone yet.</p>
@@ -148,13 +171,13 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { X, Copy, Bot, UserX, MonitorSmartphone, Share2, Crosshair, Scissors, Search } from 'lucide-vue-next'
+import { X, Copy, Bot, UserX, MonitorSmartphone, Share2, Crosshair, Scissors, Search, ChevronRight } from 'lucide-vue-next'
 import { BBadge, BButton, BEmpty, BInput, confirm, notify, toast } from '@/ui'
 import { uid } from '@/ui/uid'
 import { admin, graph, running } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import {
-  autopilotOf, choicesOf, compareIds, connectionOf, isAi, labelOf, recruitmentOf, type Choice,
+  NOISY_LINK_KEYS, autopilotOf, choicesOf, compareIds, connectionOf, isAi, isTie, labelOf, recruitmentOf, type Choice,
 } from '@/network/players'
 import { editTie, isPending } from '@/network/tieEdits'
 import ParticipantScreen from './ParticipantScreen.vue'
@@ -233,20 +256,56 @@ function toneOf (id: string): TieCandidate['tone'] {
   return c === 'connected' ? 'on' : c === 'disconnected' ? 'off' : 'none'
 }
 
-const neighbors = computed(() => {
+interface Neighbor {
+  id: string
+  label: string
+  tone: TieCandidate['tone']
+  /** Joined by a tie (a "connected" edge), which can be cut here. */
+  tie: boolean
+  /** The kinds of their other links (e.g. "partner"), which can't be edited here. */
+  kinds: string[]
+  /** Each link between them with its properties (ties first). */
+  links: { id: string, kind: string, data: [string, any][] }[]
+  /** How many properties those links have. */
+  props: number
+}
+const linkProps = (data: Record<string, any>): [string, any][] => Object.keys(data)
+  .filter(k => !NOISY_LINK_KEYS.has(k) && data[k] !== null && data[k] !== undefined && !(typeof data[k] === 'object' && !Object.keys(data[k]).length))
+  .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+  .map(k => [k, data[k]])
+
+/** Everyone joined to them, by a tie or by a link of another kind the experiment added. */
+const neighbors = computed<Neighbor[]>(() => {
   void graph.version.value
-  const seen = new Set<string>()
-  const out: { id: string, label: string, tone: TieCandidate['tone'] }[] = []
-  for (const other of graph.neighbors(props.id)) {
-    if (seen.has(other) || other === props.id) continue
-    seen.add(other)
-    out.push({ id: other, label: nameFor(other), tone: toneOf(other) })
+  const byId = new Map<string, Neighbor>()
+  for (const l of graph.links.values()) {
+    const other = l.source === props.id ? l.target : l.target === props.id ? l.source : null
+    if (other === null || other === props.id) continue
+    let nb = byId.get(other)
+    if (!nb) {
+      nb = { id: other, label: nameFor(other), tone: toneOf(other), tie: false, kinds: [], links: [], props: 0 }
+      byId.set(other, nb)
+    }
+    const tie = isTie(l)
+    const kind = l.label || 'connected'
+    if (tie) nb.tie = true
+    else if (!nb.kinds.includes(kind)) nb.kinds.push(kind)
+    const data = linkProps(l.data)
+    nb.props += data.length
+    nb.links[tie ? 'unshift' : 'push']({ id: l.id, kind, data })
   }
-  return out.sort((a, b) => compareIds(a.label, b.label))
+  return Array.from(byId.values()).sort((a, b) => compareIds(a.label, b.label))
 })
+const openTies = ref(new Set<string>())
+function toggleTie (other: string) {
+  const next = new Set(openTies.value)
+  if (!next.delete(other)) next.add(other)
+  openTies.value = next
+}
 const candidates = computed<TieCandidate[]>(() => {
   void graph.version.value
-  const tied = new Set(neighbors.value.map(n => n.id))
+  // someone joined only by another kind of link can still be tied to
+  const tied = new Set(neighbors.value.filter(n => n.tie).map(n => n.id))
   const out: TieCandidate[] = []
   for (const other of graph.nodes.keys()) {
     if (other === props.id || tied.has(other)) continue
@@ -297,6 +356,14 @@ async function choose (c: Choice) {
   choosing.value = null
   if (outcome.ok) {
     notify.success(`Chose “${c.name}” for ${who}`)
+  } else if ('gone' in outcome) {
+    // they answered, or it expired, while the confirmation was open
+    notify.warning(
+      `Nothing chosen for ${who}`,
+      outcome.sent
+        ? `“${c.name}” had already left their screen when it reached the game, so nothing changed.`
+        : `“${c.name}” is no longer on their screen. They may have answered, or it expired. Nothing was sent.`,
+    )
   } else if ('error' in outcome) {
     toast('error', `The choice for ${who} failed`, shortError(outcome.error), {
       action: { label: 'Show output', run: () => { openOutput.value = true } },
@@ -322,6 +389,7 @@ function tieTo (other: string) {
 watch(() => props.id, () => {
   propQuery.value = ''
   showSource.value = false
+  openTies.value = new Set()
 })
 
 defineExpose({ focusHeading: () => heading.value?.focus() })
@@ -426,8 +494,36 @@ defineExpose({ focusHeading: () => heading.value?.focus() })
 .pd__choices { display: flex; flex-direction: column; gap: 8px; }
 .pd__choice-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .pd__ties { margin: 0; padding: 0; display: flex; flex-direction: column; }
+.pd__tie-item { list-style: none; }
 .pd__tie { display: flex; align-items: center; gap: 9px; padding: 3px 0 3px 2px; border-radius: var(--radius-xs); }
 .pd__tie:hover { background: var(--surface-hover); }
+.pd__tie-kind {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.pd__tie-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  padding: 2px 6px 2px 2px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.pd__tie-more:hover { background: var(--surface-hover); color: var(--text); }
+.pd__tie-chev { transition: transform var(--duration) var(--ease); }
+.pd__tie-chev.is-open { transform: rotate(90deg); }
+.pd__tie-props { padding: 2px 0 8px 17px; }
 .pd__tie-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
 .pd__tie-dot.is-on { background: var(--success); }
 .pd__tie-dot.is-off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }

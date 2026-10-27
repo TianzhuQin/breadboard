@@ -19,6 +19,21 @@ export function prolificTestUrl (origin: string, experimentId: number, token: st
   return `${origin}/play/${experimentId}/prolific?${q.toString()}`
 }
 
+/**
+ * Where /play/<experiment>/prolific leads right now, picked as Autopilot.openInstance does: the
+ * newest RUNNING session whose game hasn't started. `started` is the newest running session whose
+ * game has started, which explains why there is none.
+ */
+export function prolificTarget<T extends { id: number, status: string, hasStarted?: boolean }> (list: T[]): { open: T | null, started: T | null } {
+  let open: T | null = null
+  let started: T | null = null
+  for (const i of list) {
+    if (i.status !== 'RUNNING') continue
+    if (i.hasStarted) { if (!started || i.id > started.id) started = i } else if (!open || i.id > open.id) open = i
+  }
+  return { open, started }
+}
+
 export function randomToken (): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   let s = ''

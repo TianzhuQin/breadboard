@@ -47,6 +47,17 @@
     </BPanel>
 
     <template v-else>
+      <!-- not dismissable: it stays true until participant pages are served from another origin -->
+      <div class="pv__warn" role="note">
+        <ShieldAlert :size="16" class="pv__warn-icon" aria-hidden="true" />
+        <p>
+          <strong>Previews run with your researcher sign-in.</strong>
+          The participant page shows text as HTML, so if this experiment puts what one participant typed on another’s page
+          (chat, names, free answers), that participant could hide code in it that runs as you when you preview the page,
+          here or in a new tab. Preview only pages whose content you trust.
+        </p>
+      </div>
+
       <div v-if="!noticeSeen" class="pv__notice" role="note">
         <Info :size="18" class="pv__notice-icon" aria-hidden="true" />
         <div class="pv__notice-text">
@@ -160,7 +171,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Bot, ChevronDown, Database, FlaskConical, Info, ListOrdered, Monitor, MonitorOff, MonitorSmartphone, Play, Plus,
-  RotateCw, Smartphone, UserPlus, Users, UsersRound,
+  RotateCw, ShieldAlert, Smartphone, UserPlus, Users, UsersRound,
 } from 'lucide-vue-next'
 import { BButton, BEmpty, BPage, BPanel, BSpinner, BSwitch, BTabs, confirm, notify, type TabItem } from '@/ui'
 import { admin, graph } from '@/store/admin'
@@ -315,12 +326,14 @@ function closeFocus () {
 watch(focusId, (id) => { if (id) tabbed.delete(id) })
 
 function openTab (id: string) {
-  const w = window.open(pageUrl(id), '_blank')
+  // a blank tab first, cut off from this one before the participant page loads in it
+  const w = window.open('about:blank', '_blank')
   if (!w) {
     notify.error('The browser blocked the new tab', 'Allow pop-ups for this site, then try again.')
     return
   }
-  try { w.opener = null } catch (e) { /* cross-origin after navigation */ }
+  try { w.opener = null } catch (e) { /* not allowed: the page loads anyway */ }
+  w.location.href = pageUrl(id)
   tabbed.add(id)
   if (focusId.value === id) focusId.value = null
 }
@@ -393,6 +406,19 @@ function readFlag (key: string) {
 .pv__gridbox { min-width: 0; }
 .pv__grid { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 20px 18px; align-items: flex-start; }
 
+.pv__warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning-soft-text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.pv__warn-icon { flex: none; margin-top: 2px; }
+.pv__warn strong { font-weight: 650; }
 .pv__notice {
   display: flex;
   align-items: flex-start;

@@ -22,10 +22,10 @@
     <section class="hd__section" :aria-label="`Submissions for ${hit.title}`">
       <div class="hd__bar" role="toolbar" aria-label="Actions for the selected submissions">
         <span class="hd__count" aria-live="polite">{{ selected.size ? `${selected.size} selected` : plural(rows.length, 'submission') + (nextToken ? ' loaded' : '') }}</span>
-        <BButton size="sm" variant="primary" :icon="Check" :disabled="!approvable.length" @click="approve">
+        <BButton size="sm" variant="primary" :icon="Check" :disabled="moneyRun || !approvable.length" :title="moneyRun ? RUN_BUSY : undefined" @click="approve">
           Approve{{ approvable.length ? ` ${approvable.length}` : '' }}
         </BButton>
-        <BButton size="sm" :icon="X" :disabled="!rejectable.length" @click="rejectOpen = true">
+        <BButton size="sm" :icon="X" :disabled="moneyRun || !rejectable.length" :title="moneyRun ? RUN_BUSY : undefined" @click="rejectOpen = true">
           Reject{{ rejectable.length ? ` ${rejectable.length}` : '' }}…
         </BButton>
         <BButton size="sm" :icon="HandCoins" :disabled="!bonusable.length" :title="bonusBlockedReason" @click="bonusOpen = true">
@@ -41,7 +41,7 @@
           {{ allAnswersOpen ? 'Hide answers' : 'Show answers' }}
         </BButton>
         <BButton size="sm" variant="ghost" :icon="Download" :loading="csvBusy" :disabled="!rows.length" @click="downloadCsv">CSV</BButton>
-        <BButton size="sm" variant="ghost" :icon="RefreshCw" :loading="loading" @click="load()">Refresh</BButton>
+        <BButton size="sm" variant="ghost" :icon="RefreshCw" :loading="loading" :disabled="moneyRun" :title="moneyRun ? RUN_BUSY : undefined" @click="load()">Refresh</BButton>
       </div>
 
       <ErrorNote v-if="error" title="Could not load the submissions" :message="error.message" :detail="error.detail" :on-retry="() => load()" />
@@ -97,6 +97,15 @@
                       <div v-if="r.approvalTime || r.rejectionTime" class="rc-sub">{{ formatTime(r.approvalTime || r.rejectionTime) }}</div>
                     </template>
                     <div v-if="r.error" class="rc-error-text" role="alert">{{ r.error }}</div>
+                    <BButton
+                      v-if="uncertain.has(r.id) && !r.busy && paid(r) === 0"
+                      size="sm"
+                      variant="ghost"
+                      title="Only after checking that no bonus to this worker went through"
+                      @click="uncertain.delete(r.id)"
+                    >
+                      Not paid? Allow a new bonus
+                    </BButton>
                   </td>
                   <td class="num">
                     <BSpinner v-if="bonus.loading && !bonus.loaded" :size="12" label="Loading bonus payments" />
@@ -220,8 +229,9 @@ const STATUS = {
   approved: { label: 'Approved', tone: 'success' as const },
   rejected: { label: 'Rejected', tone: 'danger' as const },
 }
-const BUSY = { approve: 'Approving…', reject: 'Rejecting…', bonus: 'Paying…', '': '' }
+const BUSY = { queued: 'Waiting…', approve: 'Approving…', reject: 'Rejecting…', bonus: 'Paying…', '': '' }
 const POOL = 4
+const RUN_BUSY = 'Wait until the current run finishes'
 
 const hitId = computed(() => hitIdOf(props.hit))
 const uid = computed(() => props.annotation.experimentUid)
@@ -237,6 +247,10 @@ const bonusOpen = ref(false)
 const csvBusy = ref(false)
 
 const bonus = reactive({ loading: false, loaded: false, error: null as ErrorText | null, payments: [] as BonusPayment[] })
+/** True while approvals, rejections or bonuses are being sent, so no second run can start on the same rows. */
+const moneyRun = ref(false)
+/** Assignments whose last bonus got no clear answer: it may have been paid, so no new bonus until that is settled. */
+const uncertain = reactive(new Set<string>())
 
 // ---- loading ----------------------------------------------------------------------------------
 
@@ -296,6 +310,7 @@ async function loadBonuses () {
     bonus.loaded = true
     // a payment that errored but went through anyway now shows as paid
     for (const r of rows.value) if (r.error && paid(r) > 0 && r.busy === '') r.error = null
+    for (const id of [...uncertain]) if (paidBy.value.has(id)) uncertain.delete(id)
   } catch (e) {
     bonus.error = describeError(e)
     bonus.loaded = false
@@ -363,13 +378,23 @@ function selectAll (on: boolean) {
 
 const approvable = computed(() => selectedRows.value.filter(r => !r.busy && rowStatus(r) === 'submitted'))
 const rejectable = approvable
-const bonusable = computed(() => bonus.loaded ? selectedRows.value.filter(r => !r.busy && paid(r) === 0) : [])
+// nobody can be paid while a run is going or the payments list is (re)loading, so nobody is paid twice
+const bonusable = computed(() => bonus.loaded && !bonus.loading && !moneyRun.value
+  ? selectedRows.value.filter(r => !r.busy && paid(r) === 0 && !uncertain.has(r.id))
+  : [])
 const bonusPreview = computed(() => bonusTotal(bonusable.value.map(r => r.bonusAsked)))
+const unsureSelected = computed(() => selectedRows.value.filter(r => uncertain.has(r.id) && paid(r) === 0).length)
 const bonusBlockedReason = computed(() => {
+  if (moneyRun.value) return RUN_BUSY
   if (!selected.size) return 'Select submissions first'
-  if (!bonus.loaded) return 'The bonus payments must load first, so nobody is paid twice'
-  if (!bonusable.value.length) return 'Everyone selected already has a bonus'
-  return undefined
+  if (!bonus.loaded || bonus.loading) return 'The bonus payments must load first, so nobody is paid twice'
+  const unsure = unsureSelected.value
+  if (!bonusable.value.length) {
+    return unsure
+      ? `${plural(unsure, 'worker')} selected may already have a bonus from an earlier try. Check the bonus payments below first.`
+      : 'Everyone selected already has a bonus'
+  }
+  return unsure ? `Leaves out ${plural(unsure, 'worker')} who may already have a bonus from an earlier try` : undefined
 })
 
 const moreItems = computed<MenuItem[]>(() => [
@@ -394,7 +419,21 @@ function summarize (verb: string, results: PromiseSettledResult<unknown>[]) {
 
 // ---- money and review actions ------------------------------------------------------------------
 
+/** Marks every row of a run as waiting before it starts, so none of them is offered again meanwhile. */
+function queue (list: AssignmentRow[]) {
+  for (const r of list) { r.busy = 'queued'; r.error = null }
+}
+function unqueue (list: AssignmentRow[]) {
+  for (const r of list) if (r.busy === 'queued') r.busy = ''
+}
+
+/** A failure after which the request may still have gone through: no answer, a server error, a proxy timeout. */
+function outcomeUnknown (e: unknown): boolean {
+  return !(e instanceof HttpError) || e.status >= 500
+}
+
 async function approve () {
+  if (moneyRun.value) return
   const list = approvable.value.slice()
   if (!list.length) return
   const reward = parseFloat(props.hit.reward || '0') || 0
@@ -409,71 +448,97 @@ async function approve () {
     footnote: `MTurk adds its fee on top (${fee}% for this HIT). Bonuses are paid separately.`,
     confirmLabel: `Approve and pay ${formatMoney(total)}`,
   })
-  if (!ok) return
-  const results = await track(() => mapPool(list, POOL, async (r) => {
-    r.busy = 'approve'
-    r.error = null
-    try {
-      await props.api.approve(r.id)
-      r.approvalTime = nowMinute()
-      selected.delete(r.id)
-    } catch (e) {
-      r.error = errorLine(e)
-      throw e
-    } finally {
-      r.busy = ''
-    }
-  }))
-  const done = summarize('Approved', results)
-  if (done) { emit('reviewed', done); balanceChanged() }
+  if (!ok || moneyRun.value) return
+  moneyRun.value = true
+  queue(list)
+  try {
+    const results = await track(() => mapPool(list, POOL, async (r) => {
+      r.busy = 'approve'
+      try {
+        await props.api.approve(r.id)
+        r.approvalTime = nowMinute()
+        selected.delete(r.id)
+      } catch (e) {
+        r.error = errorLine(e)
+        throw e
+      } finally {
+        r.busy = ''
+      }
+    }))
+    const done = summarize('Approved', results)
+    if (done) { emit('reviewed', done); balanceChanged() }
+  } finally {
+    unqueue(list)
+    moneyRun.value = false
+  }
 }
 
 async function reject (reason: string) {
   rejectOpen.value = false
+  if (moneyRun.value) return
   const list = rejectable.value.slice()
-  const results = await track(() => mapPool(list, POOL, async (r) => {
-    r.busy = 'reject'
-    r.error = null
-    try {
-      await props.api.reject(r.id, reason)
-      r.rejectionTime = nowMinute()
-      selected.delete(r.id)
-    } catch (e) {
-      r.error = errorLine(e)
-      throw e
-    } finally {
-      r.busy = ''
-    }
-  }))
-  const done = summarize('Rejected', results)
-  if (done) emit('reviewed', done)
+  if (!list.length) return
+  moneyRun.value = true
+  queue(list)
+  try {
+    const results = await track(() => mapPool(list, POOL, async (r) => {
+      r.busy = 'reject'
+      try {
+        await props.api.reject(r.id, reason)
+        r.rejectionTime = nowMinute()
+        selected.delete(r.id)
+      } catch (e) {
+        r.error = errorLine(e)
+        throw e
+      } finally {
+        r.busy = ''
+      }
+    }))
+    const done = summarize('Rejected', results)
+    if (done) emit('reviewed', done)
+  } finally {
+    unqueue(list)
+    moneyRun.value = false
+  }
 }
 
 async function payBonuses (items: { row: AssignmentRow, amount: number }[], reason: string) {
   bonusOpen.value = false
-  // two at a time, never retried automatically: MTurk's SendBonus has no idempotency token here
-  const results = await track(() => mapPool(items, 2, async ({ row, amount }) => {
-    row.busy = 'bonus'
-    row.error = null
-    try {
-      await props.api.sendBonus(row.id, row.workerId, moneyString(amount), reason)
-      selected.delete(row.id)
-    } catch (e) {
-      row.error = e instanceof HttpError
-        ? errorLine(e)
-        : 'No answer from the server, so this may or may not have been paid. Check the bonus payments below before paying again.'
-      throw e
-    } finally {
-      row.busy = ''
-    }
-  }))
-  const failed = results.filter(r => r.status === 'rejected').length
-  const paidOk = items.filter((_, i) => results[i].status === 'fulfilled')
-  const sum = bonusTotal(paidOk.map(x => x.amount))
-  if (!failed) notify.success(`Paid ${formatMoney(sum)} in bonuses`, plural(paidOk.length, 'worker'))
-  else notify.warning(`Paid ${plural(paidOk.length, 'bonus', 'bonuses')}, ${failed} failed`, 'See the rows marked with an error.')
-  balanceChanged()
-  await loadBonuses()
+  if (moneyRun.value || !items.length) return
+  moneyRun.value = true
+  queue(items.map(x => x.row))
+  try {
+    // two at a time, never retried automatically: MTurk's SendBonus has no idempotency token here
+    const results = await track(() => mapPool(items, 2, async ({ row, amount }) => {
+      row.busy = 'bonus'
+      try {
+        await props.api.sendBonus(row.id, row.workerId, moneyString(amount), reason)
+        selected.delete(row.id)
+      } catch (e) {
+        if (outcomeUnknown(e)) {
+          // MTurk may have paid even though the answer was lost (a timeout, a 5xx or a proxy page)
+          uncertain.add(row.id)
+          row.error = 'The server gave no clear answer, so this bonus may or may not have been paid. Check the bonus payments below before paying again.'
+        } else {
+          row.error = errorLine(e)
+        }
+        throw e
+      } finally {
+        row.busy = ''
+      }
+    }))
+    const failed = results.filter(r => r.status === 'rejected').length
+    const paidOk = items.filter((_, i) => results[i].status === 'fulfilled')
+    const sum = bonusTotal(paidOk.map(x => x.amount))
+    if (!failed) notify.success(`Paid ${formatMoney(sum)} in bonuses`, plural(paidOk.length, 'worker'))
+    else notify.warning(`Paid ${plural(paidOk.length, 'bonus', 'bonuses')}, ${failed} failed`, 'See the rows marked with an error.')
+    balanceChanged()
+    // the run is over only once the payments list shows what it paid
+    await loadBonuses()
+  } finally {
+    unqueue(items.map(x => x.row))
+    moneyRun.value = false
+  }
 }
 
 // ---- completed and qualification --------------------------------------------------------------

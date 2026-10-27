@@ -1,5 +1,5 @@
 import type { GraphNode } from '@/lib/graph'
-import { choicesOf, compareIds, compareValues, connectionOf, isAi, statusOf, valueOf } from '@/network/players'
+import { choicesOf, compareIds, compareValues, connectionOf, isAi, recruitmentOf, statusOf, valueOf } from '@/network/players'
 
 /** The Players table: what each column shows and sorts by, the quick filters, and CSV. */
 
@@ -58,14 +58,51 @@ export function quickMatch (n: GraphNode, q: QuickFilter): boolean {
   }
 }
 
-function csvCell (v: any): string {
+const NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i
+
+/**
+ * One CSV cell. Text a spreadsheet would run as a formula (starting with = + - @, a tab or a
+ * carriage return) gets a leading apostrophe, because ids and answers are typed by participants;
+ * numbers, and text that is just a number like -0.5, are left alone.
+ */
+export function csvCell (v: any): string {
   if (v === undefined || v === null) return ''
-  const s = typeof v === 'object' ? JSON.stringify(v) : String(v)
+  let s = typeof v === 'object' ? JSON.stringify(v) : String(v)
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s) && !NUMBER.test(s)) s = `'${s}`
   // quotes doubled and fields quoted when needed (the old CSVs didn't escape quotes)
   return /[",\n\r]/.test(s) || /^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-/** A CSV of the given players: id, status, ties, then the given properties. */
+/** The engine's plumbing on a player, left out of the CSV (status, ties and choices have columns). */
+const CSV_SKIP = new Set(['text', 'choices', 'timers', '_system', 'private', 'edgeEdits', 'lastupdated', 'timerUpdatedAt', 'ai'])
+const RECRUITMENT_KEYS = ['source', 'prolificPid', 'studyId', 'sessionId']
+
+/**
+ * The property columns of the CSV: every property the experiment set on anyone (maps and lists
+ * as JSON), then the engine group and how people were recruited (Prolific ids), when anyone has them.
+ */
+export function csvKeys (nodes: GraphNode[]): string[] {
+  const own = new Set<string>()
+  let group = false
+  const recruitment = new Set<string>()
+  for (const n of nodes) {
+    for (const k of Object.keys(n.data)) if (!CSV_SKIP.has(k)) own.add(k)
+    const sys = n.data._system
+    if (!sys || typeof sys !== 'object') continue
+    if (sys.groupId !== undefined && sys.groupId !== null && sys.groupId !== '') group = true
+    const r = recruitmentOf(n)
+    if (r) for (const k of RECRUITMENT_KEYS) if ((r as any)[k] != null && (r as any)[k] !== '') recruitment.add(k)
+  }
+  const keys = Array.from(own).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+  if (group) keys.push('_system.groupId')
+  for (const k of RECRUITMENT_KEYS) if (recruitment.has(k)) keys.push(`_system.recruitment.${k}`)
+  return keys
+}
+
+/**
+ * A CSV of the given players: id, status, ties, then the given properties. It starts with a byte
+ * order mark so Excel reads names and answers in any language as UTF-8.
+ */
 export function toCsv (nodes: GraphNode[], keys: string[], degree: Degree): string {
   const head = ['id', 'status', 'ties', 'choices waiting', ...keys]
   const lines = [head.map(csvCell).join(',')]
@@ -78,5 +115,5 @@ export function toCsv (nodes: GraphNode[], keys: string[], degree: Degree): stri
       ...keys.map(k => valueOf(n, k, degree)),
     ].map(csvCell).join(','))
   }
-  return lines.join('\r\n') + '\r\n'
+  return '\uFEFF' + lines.join('\r\n') + '\r\n'
 }

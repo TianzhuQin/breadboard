@@ -100,6 +100,9 @@ public class User extends Model {
     }
   }
 
+  /** Shortest password a password change accepts (the console's Settings page and the websocket). */
+  public static final int PASSWORD_MIN_LENGTH = 8;
+
   /** Store a new password, hashed (the caller saves the user). */
   public void changePassword(String raw) {
     this.password = BCrypt.hashpw(raw, BCrypt.gensalt());
@@ -169,6 +172,14 @@ public class User extends Model {
       }
     } else {
       breadboard.put("experimentInstance", "");
+    }
+
+    // What the shared engine runs, which can be another experiment (or another account's session).
+    try {
+      breadboard.put("engine", ScriptBoard.engineJson());
+    } catch (Exception e) {
+      Logger.warn("Could not describe the engine for the User JSON: " + e);
+      breadboard.putNull("engine");
     }
 
     return breadboard;

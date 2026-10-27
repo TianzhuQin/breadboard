@@ -28,7 +28,9 @@ import java.util.function.Consumer;
  * <p>Normally nothing happens until a researcher logs into the admin, selects an experiment and
  * launches a session; until then participants have nowhere to go. With the autopilot on, the server
  * keeps a session of one experiment open by itself: at startup, right after the settings are saved,
- * and again after each finished session if {@code continuous} is set. The game starts when the
+ * again after each finished session if {@code continuous} is set, and whenever a periodic check finds
+ * the engine running no session. It never ends another experiment's live session unless a save asks
+ * it to ({@code takeOver}), and pauses when a researcher stops its session. The game starts when the
  * waiting room says so (groovy/autopilot.groovy; its values can be set in the console, see
  * {@link AutopilotHooks}). A researcher who logs in with the autopilot's account sees the session.
  *
@@ -70,6 +72,16 @@ public final class Autopilot {
   private static volatile long launchRequestedAt = 0L;
   private static volatile Long sessionBeforeLaunch = null;
   private static final long LAUNCH_TIMEOUT_MS = 30000L;
+
+  // How often the watchdog checks that a session is open (see watchdog()).
+  static final long WATCHDOG_SECONDS = 30L;
+  // Why no new session opens by itself until the settings are saved again, for the console: a
+  // researcher stopped its session (paused), or its one session of a non-continuous run finished
+  // (done). Not kept over a restart, which opens a session as before.
+  private static volatile String pausedBecause = null;
+  private static volatile String doneBecause = null;
+  // When a finished session's pause (nextSessionDelaySeconds) ends and the next one opens; 0 when none is due.
+  private static volatile long nextOpenAt = 0L;
 
   // Opens a session (openSession); a field only so tests can see when one would be opened.
   static volatile Consumer<String> opener = new Consumer<String>() {
@@ -141,6 +153,27 @@ public final class Autopilot {
     return found.isEmpty() ? null : found.get(0);
   }
 
+  /**
+   * An experiment was deleted. Saved settings that run it are switched off and forget it, so the
+   * console doesn't keep offering an experiment that is gone (and can save the settings again).
+   */
+  static void experimentDeleted(Long experimentId) {
+    if (experimentId == null) {
+      return;
+    }
+    try {
+      AutopilotSettings saved = AutopilotSettings.load();
+      if (saved != null && experimentId.equals(saved.experimentId)) {
+        saved.enabled = false;
+        saved.experimentId = null;
+        saved.save();
+        Logger.info("Autopilot: experiment " + experimentId + " was deleted; the autopilot is switched off");
+      }
+    } catch (Exception e) {
+      Logger.error("Autopilot: could not switch off after experiment " + experimentId + " was deleted", e);
+    }
+  }
+
   public static boolean isEnabled() {
     return effective().isOn();
   }
@@ -153,8 +186,26 @@ public final class Autopilot {
 
   // ---- when sessions open ------------------------------------------------------------------------
 
-  /** Called once from Global.onStart: with the autopilot on, a session opens shortly. */
+  /**
+   * Called once from Global.onStart: with the autopilot on, a session opens shortly. From then on a
+   * check every {@link #WATCHDOG_SECONDS} opens one whenever the autopilot is on and the engine runs
+   * no session (see {@link #watchdog}).
+   */
   public static void start() {
+    // Not in tests: they call watchdog() themselves, and a check at a random moment would open
+    // sessions in the middle of other tests.
+    if (!Play.isTest()) {
+      scheduler.scheduleWithFixedDelay(new Runnable() {
+        public void run() {
+          try {
+            watchdog();
+          } catch (Throwable t) {
+            // Never let it escape: the executor would cancel every later check.
+            Logger.error("Autopilot: the check for an open session failed", t);
+          }
+        }
+      }, WATCHDOG_SECONDS, WATCHDOG_SECONDS, TimeUnit.SECONDS);
+    }
     try {
       Effective e = effective();
       if (!e.isOn()) {
@@ -186,28 +237,95 @@ public final class Autopilot {
       Logger.error("Autopilot: could not read its settings", ex);
       return;
     }
-    if (!e.isOn() || !e.settings.experimentId.equals(instance.experiment.id)) {
+    if (!e.isOn()) {
       return;
     }
-    if (!e.settings.continuous) {
+    boolean own = e.settings.experimentId.equals(instance.experiment.id);
+    if (own && !e.settings.continuous) {
+      // That was its one session; the watchdog leaves it at that.
+      doneBecause = "Its session \"" + instance.name + "\" has finished, and opening the next session (continuous) "
+          + "is off, so it opens no more. Save the settings to open another.";
       Logger.info("Autopilot: session " + instance.name + " finished; continuous is off, not opening another");
       return;
     }
+    // Its own session finished (continuous), or another experiment's did and the engine is free again:
+    // either way the autopilot's turn, after the pause it is set to keep between sessions.
     int delay = e.settings.nextSessionDelaySeconds;
-    Logger.info("Autopilot: session " + instance.name + " finished; opening the next one in " + delay + " s");
+    String why = own ? "session " + instance.name + " finished" : "session " + instance.name + " of another experiment finished";
+    Logger.info("Autopilot: " + why + "; opening the next one in " + delay + " s");
+    openLater(why, delay);
+  }
+
+  /**
+   * openWhenDue(why, true) in {@code seconds}; the watchdog leaves it to that until then. A later
+   * call replaces an earlier one that is still waiting.
+   */
+  private static void openLater(final String why, int seconds) {
+    final long due = System.currentTimeMillis() + seconds * 1000L;
+    nextOpenAt = due;
     scheduler.schedule(new Runnable() {
       public void run() {
-        openWhenDue("session " + instance.name + " finished", true);
+        if (nextOpenAt != due) {
+          return;
+        }
+        nextOpenAt = 0L;
+        openWhenDue(why, true);
       }
-    }, delay, TimeUnit.SECONDS);
+    }, seconds, TimeUnit.SECONDS);
+  }
+
+  /**
+   * Every {@link #WATCHDOG_SECONDS}: with the autopilot on, open a session if the engine runs none.
+   * Sessions otherwise open only at startup, on a save and when one finishes, so one ended any other
+   * way (another launch, a reload, a session taken up at startup) left it waiting for good. It leaves
+   * a running session of another experiment alone, waits while a finished session's pause runs, and
+   * does nothing while paused or after the one session of a non-continuous run.
+   */
+  static void watchdog() {
+    if (nextOpenAt > System.currentTimeMillis()) {
+      return;
+    }
+    openWhenDue("no session was open", true);
+  }
+
+  /**
+   * A researcher stopped the session the engine ran (StopGame). If it was of the autopilot's
+   * experiment, the autopilot pauses: it opens no new session by itself until the settings are saved
+   * again, rather than opening one behind the researcher's back.
+   */
+  static void sessionStopped(ExperimentInstance instance, User by) {
+    if (instance == null || instance.experiment == null) {
+      return;
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long experimentId = instance.experiment.id;
+    String name = instance.name;
+    String who = by == null ? "" : " by " + by.email;
+    Effective e;
+    try {
+      e = effective();
+    } catch (Exception ex) {
+      Logger.error("Autopilot: could not read its settings", ex);
+      return;
+    }
+    if (e.isOn() && e.settings.experimentId.equals(experimentId)) {
+      pausedBecause = "It is paused: its session \"" + name + "\" was stopped" + who
+          + ". It opens no new session until the settings are saved again.";
+      Logger.info("Autopilot: session " + name + " was stopped" + who + "; pausing");
+    }
   }
 
   /**
    * New settings were saved in the console. A session of the experiment that is running now gets the
    * new waiting-room and takeover values at once; with the autopilot on, a session opens now if
-   * none of this experiment is open (ending whatever else the shared engine was running).
+   * none of this experiment is open and the engine runs no other session. A session of another
+   * experiment is ended only with {@code takeOver} (the console asks first): a plain edit used to end
+   * another researcher's live session.
    */
-  public static void settingsSaved(final AutopilotSettings saved) {
+  public static void settingsSaved(final AutopilotSettings saved, final boolean takeOver) {
+    // Saving is the researcher's go-ahead again.
+    pausedBecause = null;
+    doneBecause = null;
     scheduler.execute(new Runnable() {
       public void run() {
         try {
@@ -218,20 +336,24 @@ public final class Autopilot {
         } catch (Exception e) {
           Logger.error("Autopilot: could not apply the new settings to the running session", e);
         }
-        openWhenDue("its settings were saved", false);
+        openWhenDue(takeOver ? "its settings were saved, taking over the engine" : "its settings were saved", !takeOver);
       }
     });
   }
 
   /**
-   * Open a session of the autopilot's experiment, unless it is off or the engine runs one of that
-   * experiment already. With {@code onlyIfIdle} the engine is also left alone while it runs a session
-   * of another experiment: someone took it over in the meantime, and opening would end their session.
+   * Open a session of the autopilot's experiment, unless it is off, paused or done, or the engine runs
+   * one of that experiment already. With {@code onlyIfIdle} the engine is also left alone while it
+   * runs a session of another experiment: opening would end that session.
    */
   static void openWhenDue(String why, boolean onlyIfIdle) {
     try {
       Effective e = effective();
       if (!e.isOn()) {
+        return;
+      }
+      if (pausedBecause != null || doneBecause != null) {
+        Logger.debug("Autopilot: " + why + ", but it is " + (pausedBecause != null ? "paused" : "done") + "; not opening one");
         return;
       }
       if (launchUnderWay()) {
@@ -359,21 +481,21 @@ public final class Autopilot {
 
   // ---- what the engine is doing --------------------------------------------------------------------
 
-  /** The newest instance of an experiment that is running and hasn't started its game yet. */
+  /**
+   * The session of this experiment participants can join now: the engine's own session, while it is
+   * running and its game hasn't started; else null. (It used to be the newest running session in the
+   * database, which could be one the engine no longer ran, e.g. from before a restart.)
+   */
   public static ExperimentInstance openInstance(Long experimentId) {
-    Experiment experiment = Experiment.findById(experimentId);
-    if (experiment == null) {
+    ExperimentInstance live = liveEngineSession();
+    if (experimentId == null || live == null || live.isTestInstance() || live.experiment == null
+        || !experimentId.equals(live.experiment.id)) {
       return null;
     }
-    ExperimentInstance open = null;
-    for (ExperimentInstance instance : experiment.instances) {
-      if (instance.status == ExperimentInstance.Status.RUNNING && !Boolean.TRUE.equals(instance.hasStarted)) {
-        if (open == null || instance.id > open.id) {
-          open = instance;
-        }
-      }
+    if (live.status != ExperimentInstance.Status.RUNNING || Boolean.TRUE.equals(live.hasStarted)) {
+      return null;
     }
-    return open;
+    return live;
   }
 
   /** The session the engine runs right now, if it is still going (RUNNING or TESTING); else null. */
@@ -446,7 +568,38 @@ public final class Autopilot {
       links.put("login", "/play/" + experiment.id + "/login");
       links.put("prolific", "/play/" + experiment.id + "/prolific?" + PROLIFIC_QUERY);
     }
-    String problem = problem(e, experiment);
+    status.put("paused", e.isOn() && pausedBecause != null);
+    long due = nextOpenAt;
+    if (e.isOn() && due > System.currentTimeMillis()) {
+      status.put("nextOpenAt", Timestamps.iso(new Date(due)));
+    } else {
+      status.putNull("nextOpenAt");
+    }
+    // A live session of another experiment holds the engine: the autopilot waits for it to end (a
+    // save with takeOver ends it). The console names it when it asks before taking over.
+    ExperimentInstance other = otherLiveSession(id);
+    if (other == null) {
+      status.putNull("engineSession");
+    } else {
+      ObjectNode session = status.putObject("engineSession");
+      session.put("id", other.id);
+      session.put("name", other.name);
+      Experiment of = other.experiment == null ? null : Experiment.findById(other.experiment.id);
+      if (of == null) {
+        session.putNull("experimentId");
+        session.putNull("experimentName");
+      } else {
+        session.put("experimentId", of.id);
+        session.put("experimentName", of.name);
+      }
+      String owner = ScriptBoard.engineOwnerEmail();
+      if (owner == null) {
+        session.putNull("owner");
+      } else {
+        session.put("owner", owner);
+      }
+    }
+    String problem = problem(e, experiment, other);
     if (problem == null) {
       status.putNull("problem");
     } else {
@@ -455,8 +608,18 @@ public final class Autopilot {
     return status;
   }
 
+  /** The engine's live session when it is not of this experiment (or the autopilot has none), else null. */
+  private static ExperimentInstance otherLiveSession(Long experimentId) {
+    ExperimentInstance live = liveEngineSession();
+    if (live == null || live.isTestInstance()) {
+      return null;
+    }
+    boolean ours = experimentId != null && live.experiment != null && experimentId.equals(live.experiment.id);
+    return ours ? null : live;
+  }
+
   /** Why the autopilot, switched on, can't keep a session open; null when nothing is wrong. */
-  private static String problem(Effective e, Experiment experiment) {
+  private static String problem(Effective e, Experiment experiment, ExperimentInstance otherSession) {
     if (!e.settings.enabled) {
       return null;
     }
@@ -472,13 +635,29 @@ public final class Autopilot {
     if (operator(e.settings) == null) {
       return "There is no admin account to open sessions as.";
     }
+    if (pausedBecause != null) {
+      return pausedBecause;
+    }
+    if (doneBecause != null) {
+      return doneBecause;
+    }
+    if (otherSession != null) {
+      String owner = ScriptBoard.engineOwnerEmail();
+      return "Another session is running: \"" + otherSession.name + "\"" + (owner == null ? "" : " (" + owner + ")")
+          + ". The autopilot opens its own session when that one ends.";
+    }
     return lastProblem;
   }
 
   // ---- the autopilot's console output ----------------------------------------------------------------
 
   private static final AccountOut accountOut = new AccountOut();
-  private static ThrottledWebSocketOut output;
+  private static volatile ThrottledWebSocketOut output;
+
+  /** Whether this is the autopilot's output, which writes to every console tab of its account. */
+  static boolean isOutput(ThrottledWebSocketOut out) {
+    return out != null && out == output;
+  }
 
   /** One shared output (each ThrottledWebSocketOut starts a timer thread), pointed at the operator. */
   private static synchronized ThrottledWebSocketOut output(String email) {

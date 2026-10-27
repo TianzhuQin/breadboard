@@ -7,6 +7,20 @@ import com.tinkerpop.blueprints.util.wrappers.event.EventGraph
 import com.tinkerpop.blueprints.util.wrappers.event.listener.GraphChangedListener
 import java.beans.PropertyChangeListener
 
+// player._system. The participant's socket thread, the autopilot's timers and scripts write to it
+// while the consoles' and pages' updates read it on other threads; a plain map could throw
+// ConcurrentModificationException half-way through such an update. Setting a key to null removes
+// it, as a ConcurrentHashMap can't hold null.
+class SystemMap extends java.util.concurrent.ConcurrentHashMap<String, Object> {
+  Object put(String key, Object value) {
+    return value == null ? remove(key) : super.put(key, value)
+  }
+
+  void putAll(Map<? extends String, ?> values) {
+    values.each { k, v -> put(k, v) }
+  }
+}
+
 class BreadboardGraph extends EventGraph<TinkerGraph> {
   //TODO: consider tracking number of edges and number of vertices to avoid iterating over graph to count number of edges or vertices
 
@@ -28,7 +42,7 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
           v.onVertexPropertyChanged(v, "private", evt.oldValue, evt.newValue)
         } as PropertyChangeListener)
         vertex.setProperty("private", pvt);
-        vertex.setProperty("_system", [:])
+        vertex.setProperty("_system", new SystemMap())
       }
 
       @Override

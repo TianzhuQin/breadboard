@@ -7,8 +7,13 @@
     <div class="pf__screen">
       <!--
         The participant page is the console's own (same-origin) page: it needs the researcher's
-        sign-in to act as the player. The sandbox still stops it from navigating the console away
-        (e.g. an end-of-study redirect written for window.top).
+        sign-in to act as the player. With allow-scripts and allow-same-origin together the sandbox
+        is no protection: a script in the page can reach the console (window.parent), its cookies
+        and the admin socket, and can even lift the sandbox. So whatever HTML the page shows runs
+        with the researcher's rights, and the Preview page says so. The flags only keep a
+        well-behaved page (an end-of-study redirect written for window.top) from navigating the
+        console away, and keep its pop-ups sandboxed. Real isolation needs the participant pages on
+        another origin.
       -->
       <iframe
         :src="src"
@@ -17,7 +22,7 @@
         :style="{ width: `${geo.deviceWidth}px`, height: `${geo.deviceHeight}px`, transform: `scale(${geo.scale})` }"
         :tabindex="interactive ? 0 : -1"
         :loading="lazy ? 'lazy' : undefined"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
         referrerpolicy="same-origin"
         @load="loaded = true"
       />

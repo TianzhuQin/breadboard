@@ -14,7 +14,8 @@ export interface AssignmentRow {
   bonusInput: string
   /** this worker finished the experiment (drives "block previous players") */
   completed: boolean
-  busy: '' | 'approve' | 'reject' | 'bonus'
+  /** 'queued' while a bulk money or review run is still to reach this row */
+  busy: '' | 'queued' | 'approve' | 'reject' | 'bonus'
   completedBusy: boolean
   /** the experiment's participant qualification on MTurk ('na' for HITs not from Breadboard) */
   qual: 'idle' | 'loading' | 'granted' | 'none' | 'error' | 'na'

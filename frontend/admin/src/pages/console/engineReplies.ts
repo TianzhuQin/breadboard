@@ -7,9 +7,9 @@ import type { OutputEntry } from '@/store/types'
  *
  * The server answers every SendScript / SendStep with exactly one frame, in order
  * (ScriptBoard.processScript): {output: "<script.trim()>\n\n==><result>"} on success, which names
- * its script, or {error: "Caught error: …"}, which doesn't. OnJoin/OnLeave output and other pages'
- * runs share the same stream (admin.output), so a success is matched by its echo and an error goes
- * to the oldest script still waiting for an answer.
+ * its script, or {error: "Caught error: …"}, which doesn't. OnJoin/OnLeave output, other pages'
+ * runs and refusals of other requests share the same stream (admin.output), so a success is matched
+ * by its echo and an untagged error goes to the oldest script still waiting for an answer.
  */
 export interface EngineReply {
   ok: boolean
@@ -39,10 +39,20 @@ export function splitValues (output: string, script: string): string[] | null {
   return rest.length ? rest.split('\n==>') : []
 }
 
-/** Which waiting script (index) an output entry answers, or -1. */
-export function matchReply (waiters: { script: string, afterId: number }[], entry: Pick<OutputEntry, 'id' | 'kind' | 'text'>): number {
+/** The requests whose errors can answer a waiting script (RunStep is reported as SendStep). */
+const SCRIPT_REQUESTS = new Set(['SendScript', 'SendStep'])
+
+/**
+ * Which waiting script (index) an output entry answers, or -1. An error tagged with another source
+ * (a refused LaunchGame, DeleteInstance, SelectExperiment …, or OnJoinStep / OnLeaveStep once the
+ * server tags those) is not an answer, so it never settles a run.
+ */
+export function matchReply (waiters: { script: string, afterId: number }[], entry: Pick<OutputEntry, 'id' | 'kind' | 'text' | 'source'>): number {
   if (entry.kind === 'output') return waiters.findIndex(w => entry.id > w.afterId && splitValues(entry.text, w.script) !== null)
-  if (entry.kind === 'error') return waiters.findIndex(w => entry.id > w.afterId)
+  if (entry.kind === 'error') {
+    if (entry.source && !SCRIPT_REQUESTS.has(entry.source)) return -1
+    return waiters.findIndex(w => entry.id > w.afterId)
+  }
   return -1
 }
 

@@ -1,14 +1,20 @@
 <template>
   <div class="shell" :class="{ 'nav-open': navOpen }">
-    <a href="#main" class="shell__skip">Skip to content</a>
-    <div class="shell__nav">
-      <SideNav @navigate="navOpen = false" />
+    <!-- not a fragment link: under the hash router "#main" would be read as the page /main -->
+    <a href="#main" class="shell__skip" @click.prevent="mainEl?.focus()">Skip to content</a>
+    <div
+      id="shell-nav"
+      ref="navEl"
+      class="shell__nav"
+      :inert="navHidden || undefined"
+    >
+      <SideNav @navigate="closeNav('main')" />
     </div>
-    <div v-if="navOpen" class="shell__scrim" aria-hidden="true" @click="navOpen = false" />
+    <div v-if="navOpen" class="shell__scrim" aria-hidden="true" @click="closeNav('menu')" />
 
     <div class="shell__main">
-      <TopBar :output-open="outputOpen" @menu="navOpen = true" @toggle-output="toggleOutput" />
-      <main id="main" class="shell__content" :class="{ 'is-bleed': bleed }" tabindex="-1">
+      <TopBar ref="topBar" :output-open="outputOpen" :nav-open="navOpen" @menu="openNav" @toggle-output="toggleOutput" />
+      <main id="main" ref="mainEl" class="shell__content" :class="{ 'is-bleed': bleed }" tabindex="-1">
         <div v-if="!admin.ready" class="shell__loading" role="status">
           <BSpinner :size="22" />
           <span>Loading your experiments…</span>
@@ -24,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import SideNav from './SideNav.vue'
 import TopBar from './TopBar.vue'
@@ -38,6 +44,34 @@ const route = useRoute()
 const navOpen = ref(false)
 const outputOpen = openOutput
 const bleed = computed(() => !!route.meta.fullBleed)
+const navEl = ref<HTMLElement>()
+const mainEl = ref<HTMLElement>()
+const topBar = ref<InstanceType<typeof TopBar>>()
+
+// Below 900px the navigation is a drawer, only moved off-screen when closed: keep it out of the
+// tab order and away from screen readers then.
+const narrow = ref(false)
+let narrowQuery: MediaQueryList | null = null
+function onNarrow () {
+  narrow.value = !!narrowQuery?.matches
+  if (!narrow.value) navOpen.value = false
+}
+const navHidden = computed(() => narrow.value && !navOpen.value)
+
+async function openNav () {
+  navOpen.value = true
+  await nextTick()
+  const link = navEl.value?.querySelector<HTMLElement>('a.is-active') || navEl.value?.querySelector<HTMLElement>('a[href]')
+  link?.focus()
+}
+/** Close the drawer; focus goes back to the menu button, or to the page after choosing one. */
+function closeNav (focus: 'menu' | 'main') {
+  if (!navOpen.value) return
+  const hadFocus = !!navEl.value && navEl.value.contains(document.activeElement)
+  navOpen.value = false
+  if (focus === 'menu') topBar.value?.focusMenu()
+  else if (hadFocus) mainEl.value?.focus({ preventScroll: true })
+}
 
 function toggleOutput () {
   outputOpen.value = !outputOpen.value
@@ -51,10 +85,24 @@ function onKey (e: KeyboardEvent) {
     e.preventDefault()
     toggleOutput()
   }
+  // (menus and dialogs inside handle their own Escape and stop it)
+  if (e.key === 'Escape' && navOpen.value) closeNav('menu')
 }
-onMounted(() => window.addEventListener('keydown', onKey))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
-watch(() => route.fullPath, () => { navOpen.value = false })
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  if (typeof window.matchMedia === 'function') {
+    narrowQuery = window.matchMedia('(max-width: 900px)')
+    onNarrow()
+    narrowQuery.addEventListener?.('change', onNarrow)
+  }
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKey)
+  narrowQuery?.removeEventListener?.('change', onNarrow)
+})
+watch(() => route.fullPath, () => closeNav('main'))
+// Pages scroll inside <main>, which stays from page to page: start each new page at its top.
+watch(() => route.path, () => { if (mainEl.value) mainEl.value.scrollTop = 0 })
 </script>
 
 <style>

@@ -59,7 +59,8 @@ function onScroll () {
   const el = scroller.value
   if (el) stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40
 }
-watch(() => shown.value.length, async () => {
+// the newest entry, not the count: once the store keeps its maximum, the count stops changing
+watch(() => shown.value[shown.value.length - 1]?.id, async () => {
   await nextTick()
   if (stick && scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
 }, { immediate: true })

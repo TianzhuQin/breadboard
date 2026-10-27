@@ -134,6 +134,7 @@ import ExperimentCard from './ExperimentCard.vue'
 import NewExperimentDialog from './NewExperimentDialog.vue'
 import ImportExperimentDialog from './ImportExperimentDialog.vue'
 import FileModeDialog from './FileModeDialog.vue'
+import { autopilotNow, runningSessions, sessionNames } from '../sessions/runningSessions'
 import {
   describeError, devDirName, downloadExperiment, lastSession, plural, runningSession, zipFileName,
 } from './experiments'
@@ -218,8 +219,21 @@ async function select (e: Experiment) {
       'Switching experiments restarts the script engine, which disconnects everyone in the session.')
     return
   }
+  if (selectingId.value != null) return
   selectingId.value = e.id
   try {
+    // the engine is shared, so a session another account or the autopilot runs ends too
+    const others = await runningSessions()
+    if (others.length) {
+      const ok = await confirm({
+        title: `Switch to “${e.name}”?`,
+        message: `${sessionNames(others)} ${others.length === 1 ? 'appears' : 'appear'} to be running. ` +
+          'Switching experiments restarts the script engine, which every account and the autopilot share: the session it is running ends, and everyone in it is disconnected.',
+        confirmLabel: 'Switch anyway',
+        danger: true,
+      })
+      if (!ok) return
+    }
     await actions.selectExperiment(e.id)
     if (admin.experiment?.id === e.id) notify.success(`Now working on “${e.name}”`)
     else notify.error(`Couldn't switch to “${e.name}”`, 'The server didn\'t confirm the change. Try again, or reload the page.')
@@ -271,12 +285,15 @@ async function remove (e: Experiment) {
   }
   const n = e.instances?.length || 0
   const twin = experiments.value.some(x => x.id !== e.id && x.name.trim().toLowerCase() === e.name.trim().toLowerCase())
+  const ap = await autopilotNow()
+  const autopilots = !!ap && ap.settings.enabled && ap.settings.experimentId === e.id
   const ok = await confirm({
     title: `Delete “${e.name}”?`,
     message: [
       `This permanently deletes the experiment: its steps, content, parameters and images${n ? `, and ${plural(n, 'session')} with all their data` : ''}.`,
       'It cannot be undone. Export it first if you might need it again.',
       twin ? '\nAnother experiment has the same name. Check that you are deleting the right one.' : '',
+      autopilots ? '\nThe autopilot runs this experiment, so it stops opening sessions. Choose another experiment on the Autopilot page to start it again.' : '',
     ].filter(Boolean).join(' '),
     confirmLabel: 'Delete experiment',
     danger: true,

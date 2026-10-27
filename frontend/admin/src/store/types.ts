@@ -72,6 +72,11 @@ export interface OutputEntry {
 /** An event as the server records it during the session ({event: ...} push). */
 export interface LiveEvent {
   id?: number
+  /** The session it was recorded in (newer servers; every console gets every session's events). */
+  instanceId?: number | null
+  /** The same, under the name some pages read (sessions/sessionData.ts liveEventOf). */
+  experimentInstanceId?: number | null
+  experimentId?: number | null
   name: string
   /** ISO-8601 UTC */
   datetime: string

@@ -54,6 +54,8 @@ public class Breadboard extends UntypedActor {
     });
     in.onClose(new Callback0() {
       public void invoke() {
+        // Marked first: an AddAdmin still queued for this socket then registers nothing.
+        out.markClosed();
         ScriptBoard.removeAdmin(out);
       }
     });
@@ -88,6 +90,7 @@ public class Breadboard extends UntypedActor {
     if (message instanceof ChangeExperiment) return "SelectExperiment";
     if (message instanceof AddAdmin || message instanceof Refresh) return "LogIn";
     if (message instanceof RunStep) return "SendStep";
+    if (message instanceof HitCreated) return "SubmitAMTTask";
     return message.getClass().getSimpleName();
   }
 
@@ -178,10 +181,11 @@ public class Breadboard extends UntypedActor {
     if (action.equals("LogIn")) {
       breadboardController.tell(new LogIn(user, out), null);
     } else if (action.equals("SaveUserSettings")) {
-      // Missing fields are reported by the validation, as empty ones.
-      String currentPassword = StringUtils.defaultString(text(jsonInput, "currentPassword")).trim();
-      String newPassword = StringUtils.defaultString(text(jsonInput, "newPassword")).trim();
-      String confirmPassword = StringUtils.defaultString(text(jsonInput, "confirmPassword")).trim();
+      // Missing fields are reported by the validation, as empty ones. Passwords are taken as typed:
+      // trimming them stored a different password from the one typed.
+      String currentPassword = StringUtils.defaultString(text(jsonInput, "currentPassword"));
+      String newPassword = StringUtils.defaultString(text(jsonInput, "newPassword"));
+      String confirmPassword = StringUtils.defaultString(text(jsonInput, "confirmPassword"));
 
       breadboardController.tell(new SaveUserSettings(user, currentPassword, newPassword, confirmPassword, out), null);
 
@@ -301,12 +305,14 @@ public class Breadboard extends UntypedActor {
       scriptBoard(user).tell(new SendStep(user, id, name, source, out), null);
     } else if (action.equals("LaunchGame")) {
       String name = required(jsonInput, "name");
+      // The experiment the console's page shows (the new console sends it): checked against the selection.
+      Long experimentId = jsonInput.get("experimentId") == null ? null : requiredLong(jsonInput, "experimentId");
       Object parameters = jsonInput.get("parameters");
       if (parameters != null && !(parameters instanceof Map)) {
         throw new BadRequest("\"parameters\" must be an object of name: value.");
       }
       LinkedHashMap params = parameters == null ? new LinkedHashMap() : new LinkedHashMap((Map) parameters);
-      scriptBoard(user).tell(new LaunchGame(user, name, params, out), null);
+      scriptBoard(user).tell(new LaunchGame(user, experimentId, name, params, out), null);
     } else if (action.equals("StopGame")) {
       Long id = requiredLong(jsonInput, "id");
       scriptBoard(user).tell(new StopGame(user, id, out), null);
@@ -372,6 +378,9 @@ public class Breadboard extends UntypedActor {
     }
     if (StringUtils.isEmpty(newPassword)) {
       errors.add("'New Password' is required");
+    } else if (newPassword.length() < User.PASSWORD_MIN_LENGTH) {
+      // The same rule as the Settings page's /saveUserSettings.
+      errors.add("'New Password' must be at least " + User.PASSWORD_MIN_LENGTH + " characters long");
     } else if (!newPassword.equals(confirmPassword)) {
       errors.add("'Confirm Password' doesn't match the new password");
     }
@@ -411,6 +420,9 @@ public class Breadboard extends UntypedActor {
           return;
         }
         saveUserSettings.user.changePassword(saveUserSettings.newPassword);
+        // As /saveUserSettings does: a new token, so whoever held the old one is signed out. That
+        // includes this socket's later frames; the console signs in again with the new password.
+        saveUserSettings.user.uid = UUID.randomUUID().toString();
         saveUserSettings.user.update();
 
       } else if (message instanceof SelectExperiment) {
@@ -438,6 +450,11 @@ public class Breadboard extends UntypedActor {
         Logger.error("Import experiment incorrectly sent via socket");
       } else if (message instanceof SubmitAMTTask) {
         SubmitAMTTask submitAMTTask = (SubmitAMTTask) message;
+        // Its timer starts the engine's game: refused here, before it says the game will start.
+        String refusal = ScriptBoard.engineRefusal(breadboardMessage.user);
+        if (refusal != null) {
+          throw new BadRequest(refusal);
+        }
         Integer lifetimeInSeconds = submitAMTTask.lifetimeInSeconds;
         Integer tutorialTime = submitAMTTask.tutorialTime;
 
@@ -597,6 +614,8 @@ public class Breadboard extends UntypedActor {
           objectNode.put("id", event.id);
           objectNode.put("name", event.name);
           objectNode.put("datetime", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss,S").format(event.datetime));
+          // The server's local time above has no zone; this one is UTC, as Event.toJson and live events send it.
+          objectNode.put("datetimeUtc", Timestamps.iso(event.datetime));
           ArrayNode dataNodes = objectNode.putArray("data");
           for (EventData eventData : eventDatas) {
             ObjectNode dataNode = Json.newObject();
@@ -638,7 +657,14 @@ public class Breadboard extends UntypedActor {
         }
       }
 
-      breadboardMessage.out.write(breadboardMessage.user.toJson());
+      ObjectNode userJson = breadboardMessage.user.toJson();
+      breadboardMessage.out.write(userJson);
+      if (message instanceof SelectExperiment || message instanceof ToggleFileMode
+          || (message instanceof Update && ((Update) message).wholeAccount)) {
+        // The account's other tabs show the same selection and session; one left behind would act on
+        // what it still shows (e.g. launch another experiment than the one it shows).
+        ScriptBoard.toOtherTabs(breadboardMessage.user.email, userJson, breadboardMessage.out);
+      }
 
     } // END if(message instanceof BreadboardMessage)
   }
@@ -655,6 +681,7 @@ public class Breadboard extends UntypedActor {
   private void logIn(User user, ThrottledWebSocketOut out) {
     ActorRef scriptBoard = instances.get(user.email);
     boolean firstIntoEngine = false;
+    boolean firstSinceStart = scriptBoard == null;
     if (scriptBoard == null) {
       // instances is filled synchronously (here and by the autopilot) before any engine is built.
       firstIntoEngine = instances.isEmpty() && !ScriptBoard.hasEngine();
@@ -666,6 +693,9 @@ public class Breadboard extends UntypedActor {
 
     // User JSON first, then the network (the ScriptBoard actor writes it after this).
     out.write(user.toJson());
+    // Registered now, not only when the engine actor gets to it (it may be busy for seconds), so
+    // this tab already hears of changes made in the account's other tabs.
+    ScriptBoard.registerAdmin(user, scriptBoard, out);
     scriptBoard.tell(new AddAdmin(user, scriptBoard, out), null);
 
     if (firstIntoEngine) {
@@ -684,6 +714,17 @@ public class Breadboard extends UntypedActor {
         getSelf().tell(new SelectExperiment(user, user.selectedExperiment, out), null);
       } else {
         scriptBoard.tell(new ReloadEngine(user, out), null);
+      }
+    } else if (firstSinceStart) {
+      // Someone else (or the autopilot) has the engine: a session this account left running before
+      // the restart isn't taken up, and nothing runs it any more. Marked stopped, so the Sessions list
+      // and the participant links don't offer it as open.
+      ExperimentInstance saved = (user.experimentInstanceId == null || user.experimentInstanceId == -1)
+          ? null : ExperimentInstance.findById(user.experimentInstanceId);
+      if (saved != null && (saved.status == ExperimentInstance.Status.RUNNING || saved.status == ExperimentInstance.Status.TESTING)
+          && !ScriptBoard.isEngineSession(saved.id)) {
+        Logger.info("LogIn: session " + saved.id + " of " + user.email + " is no longer running in the engine; marking it stopped");
+        ScriptBoard.stopQuietly(saved.id);
       }
     }
     Logger.debug("LogIn: " + user.email);
@@ -712,8 +753,16 @@ public class Breadboard extends UntypedActor {
   }
 
   public static class Update extends BreadboardMessage {
+    // After a change to the account (its selection, its session): its other tabs get the User JSON too.
+    final boolean wholeAccount;
+
     public Update(User user, ThrottledWebSocketOut out) {
+      this(user, out, false);
+    }
+
+    public Update(User user, ThrottledWebSocketOut out, boolean wholeAccount) {
       super(user, out);
+      this.wholeAccount = wholeAccount;
     }
   }
 
@@ -946,11 +995,18 @@ public class Breadboard extends UntypedActor {
   }
 
   public static class LaunchGame extends BreadboardMessage {
+    // The experiment the console showed when Launch was pressed; null when it didn't say.
+    final Long experimentId;
     final String name;
     final LinkedHashMap parameters;
 
     public LaunchGame(User user, String name, LinkedHashMap parameters, ThrottledWebSocketOut out) {
+      this(user, null, name, parameters, out);
+    }
+
+    public LaunchGame(User user, Long experimentId, String name, LinkedHashMap parameters, ThrottledWebSocketOut out) {
       super(user, out);
+      this.experimentId = experimentId;
       this.name = name;
       this.parameters = parameters;
     }

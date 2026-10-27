@@ -4,7 +4,7 @@ import { actions, graph, __receive } from '../src/store/admin'
 import { toasts } from '../src/ui/toast'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { pendingEdits, editHistory } from '../src/network/tieEdits'
-import { sortNodes, quickMatch, toCsv } from '../src/pages/players/table'
+import { sortNodes, quickMatch, toCsv, csvCell, csvKeys } from '../src/pages/players/table'
 import { submitChoice, shortError } from '../src/pages/players/choices'
 import PlayerDetails from '../src/pages/players/PlayerDetails.vue'
 import PropertyRow from '../src/pages/players/PropertyRow.vue'
@@ -58,36 +58,115 @@ describe('players table', () => {
     expect(people.filter(n => quickMatch(n, 'choice')).map(n => n.id)).toEqual(['p1'])
   })
 
-  it('writes CSV with quotes, commas and line breaks escaped', () => {
+  it('writes CSV with quotes, commas and line breaks escaped, starting with a BOM for Excel', () => {
     const csv = toCsv([node('p1', { note: 'say "hi", then\nleave', obj: { a: 1 } })], ['note', 'obj'], () => 2)
-    expect(csv).toBe('id,status,ties,choices waiting,note,obj\r\np1,,2,0,"say ""hi"", then\nleave","{""a"":1}"\r\n')
+    expect(csv).toBe('\uFEFFid,status,ties,choices waiting,note,obj\r\np1,,2,0,"say ""hi"", then\nleave","{""a"":1}"\r\n')
+  })
+
+  it('keeps spreadsheets from running participant text as a formula', () => {
+    expect(csvCell('=1+1')).toBe("'=1+1")
+    expect(csvCell('=HYPERLINK("http://x","click")')).toBe('"\'=HYPERLINK(""http://x"",""click"")"')
+    expect(csvCell('@x')).toBe("'@x")
+    expect(csvCell('+cmd')).toBe("'+cmd")
+    expect(csvCell('\tlead')).toBe("'\tlead")
+    expect(csvCell('\r=x')).toBe('"\'\r=x"')
+    // numbers, and text that is just a number, are left alone
+    expect(csvCell('-0.5')).toBe('-0.5')
+    expect(csvCell('+3')).toBe('+3')
+    expect(csvCell(-2)).toBe('-2')
+    expect(csvCell('a=b')).toBe('a=b')
+    // property names come from scripts, so the header is guarded too
+    const csv = toCsv([node('=p1', { '=k': '-x' })], ['=k'], () => 0)
+    expect(csv.split('\r\n')[0]).toBe("\uFEFFid,status,ties,choices waiting,'=k")
+    expect(csv.split('\r\n')[1]).toBe("'=p1,,0,0,'-x")
+  })
+
+  it('puts every property in the CSV, maps and lists too, with the engine group and Prolific ids', () => {
+    const nodes = [
+      node('p1', { answers: { q1: 'yes' }, x: 3, score: 1, text: '<p>big</p>', choices: [], timers: {}, _system: { connected: true, groupId: 2, recruitment: { source: 'prolific', prolificPid: 'PID1', studyId: 'S', sessionId: 'X' } } }),
+      node('p2', { tags: ['a', 'b'], _system: { connected: false } }),
+    ]
+    const keys = csvKeys(nodes)
+    expect(keys).toEqual(['answers', 'score', 'tags', 'x', '_system.groupId', '_system.recruitment.source', '_system.recruitment.prolificPid', '_system.recruitment.studyId', '_system.recruitment.sessionId'])
+    const rows = toCsv(nodes, keys, () => 0).split('\r\n')
+    expect(rows[1]).toBe('p1,Connected,0,0,"{""q1"":""yes""}",1,,3,2,prolific,PID1,S,X')
+    expect(rows[2]).toBe('p2,Disconnected,0,0,,,"[""a"",""b""]",,,,,,')
+    expect(csvKeys([node('p1', { score: 1 })])).toEqual(['score'])
   })
 })
 
 // ---- choosing for a player ---------------------------------------------------------------------
 
+/** The engine making the choice: it leaves their screen, then the server answers {} (an older, untagged server). */
+function chooseOnServer () {
+  setTimeout(() => {
+    __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' })
+    __receive({})
+  }, 5)
+  return true
+}
+
 describe('choosing for a player', () => {
   beforeEach(() => { vi.restoreAllMocks(); seed() })
 
-  it('succeeds when the choice leaves their screen', async () => {
-    const spy = vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
-      setTimeout(() => __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' }), 5)
-    })
+  it('succeeds when the server answers and the choice leaves their screen', async () => {
+    const spy = vi.spyOn(actions, 'makeChoice').mockImplementation(chooseOnServer)
     expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
     expect(spy).toHaveBeenCalledWith('c1')
   })
 
-  it('reports the engine\'s error', async () => {
+  it('sends nothing when the choice has already left their screen', async () => {
+    const spy = vi.spyOn(actions, 'makeChoice')
+    expect(await submitChoice('p1', 'gone-uid', 2000)).toEqual({ ok: false, gone: true, sent: false })
+    __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' })
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, gone: true, sent: false })
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('takes a tagged answer from the server as final', async () => {
+    let reply: any = { request: 'MakeChoice', choice: 'made' }
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => { setTimeout(() => __receive(reply), 5); return true })
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
+    // the participant answered first: the server says so, even though the console still lists it
+    reply = { request: 'MakeChoice', choice: 'gone' }
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, gone: true, sent: true })
+    reply = { request: 'MakeChoice', error: 'Caught error: java.lang.IllegalStateException: no such round' }
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, error: reply.error })
+  })
+
+  it('reports the engine\'s error (an untagged error with no answer after it)', async () => {
     vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
       setTimeout(() => __receive({ error: 'Caught error: java.lang.IllegalStateException: no such round\n at x.groovy:3' }), 5)
+      return true
     })
-    const r = await submitChoice('p1', 'c1', 2000)
+    const r = await submitChoice('p1', 'c1', 400)
     expect(r).toMatchObject({ ok: false })
     expect(shortError((r as any).error)).toBe('no such round')
   })
 
-  it('says so when nothing happens (an expired choice is a silent no-op on the server)', async () => {
-    vi.spyOn(actions, 'makeChoice').mockImplementation(() => {})
+  it('ignores another engine error that arrives while the choice is made', async () => {
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
+      // a late joiner's OnJoinStep fails just before the server answers the choice
+      setTimeout(() => __receive({ error: 'Caught error: onJoinStep failed for p7' }), 2)
+      return chooseOnServer()
+    })
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
+    // nor does an error answering someone else's request
+    seed()
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
+      setTimeout(() => __receive({ request: 'SendScript', error: 'Boom' }), 2)
+      return chooseOnServer()
+    })
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
+  })
+
+  it('says so at once when there is no connection', async () => {
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => false)
+    expect(await submitChoice('p1', 'c1', 2000)).toMatchObject({ ok: false, error: expect.stringMatching(/Not connected/) })
+  })
+
+  it('says so when nothing happens', async () => {
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => true)
     expect(await submitChoice('p1', 'c1', 60)).toEqual({ ok: false, timeout: true })
   })
 })
@@ -129,9 +208,7 @@ describe('PlayerDetails', () => {
   })
 
   it('asks before choosing for them, then says it worked', async () => {
-    const spy = vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
-      setTimeout(() => __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' }), 5)
-    })
+    const spy = vi.spyOn(actions, 'makeChoice').mockImplementation(chooseOnServer)
     const w = mount(PlayerDetails, { props: { id: 'p1' } })
     const coop = w.findAll('.pd__choice-list button').find(b => b.text() === 'Cooperate')!
     await coop.trigger('click')
@@ -141,6 +218,20 @@ describe('PlayerDetails', () => {
     settleConfirm(true)
     await vi.waitFor(() => expect(toasts.some(t => t.title === 'Chose “Cooperate” for p1')).toBe(true))
     expect(spy).toHaveBeenCalledWith('c1')
+    w.unmount()
+  })
+
+  it('sends nothing when the choice went while the confirmation was open', async () => {
+    const spy = vi.spyOn(actions, 'makeChoice')
+    const w = mount(PlayerDetails, { props: { id: 'p1' } })
+    await w.findAll('.pd__choice-list button').find(b => b.text() === 'Cooperate')!.trigger('click')
+    // the participant answers (or the round times out) while the researcher reads the dialog
+    __receive({ action: 'nodePropertyRemoved', id: 'p1', key: 'choices' })
+    settleConfirm(true)
+    await vi.waitFor(() => expect(toasts.some(t => t.title === 'Nothing chosen for p1')).toBe(true))
+    expect(toasts.find(t => t.title === 'Nothing chosen for p1')!.detail).toMatch(/no longer on their screen.*Nothing was sent/)
+    expect(toasts.some(t => /^Chose/.test(t.title))).toBe(false)
+    expect(spy).not.toHaveBeenCalled()
     w.unmount()
   })
 
@@ -167,6 +258,32 @@ describe('PlayerDetails', () => {
     await input.setValue('p3')
     await input.trigger('keydown', { key: 'Enter' })
     expect(spy).toHaveBeenLastCalledWith('add', 'p1', 'p3')
+    w.unmount()
+  })
+
+  it('offers Cut only for ties, and shows each tie\'s properties on request', async () => {
+    __receive({ action: 'addLink', id: 'e2', source: 'p1', target: 'p3', value: 'partner' })
+    __receive({ action: 'linkPropertyChanged', id: 'e1', key: 'weight', value: '3' })
+    __receive({ action: 'linkPropertyChanged', id: 'e1', key: 'inProps', value: '{}' })
+    await tick()
+    const w = mount(PlayerDetails, { props: { id: 'p1' }, attachTo: document.body })
+    const rows = w.findAll('.pd__tie')
+    expect(rows.map(t => t.find('.pd__tie-name').text())).toEqual(['p2', 'p3'])
+    // p3 is a "partner": shown with its kind, no Cut (EditTie only cuts "connected" ties)
+    expect(rows[1].find('.pd__tie-kind').text()).toBe('partner')
+    expect(w.find('[aria-label="Cut the tie between p1 and p3"]').exists()).toBe(false)
+    expect(w.find('[aria-label="Cut the tie between p1 and p2"]').exists()).toBe(true)
+    // ...but they can still be tied
+    const input = w.find('input[role="combobox"]')
+    await input.setValue('p3')
+    expect(w.findAll('[role="option"]').map(o => o.text())).toEqual(['p3'])
+    // the tie's own properties, without the engine's empty private maps
+    const more = w.find('[aria-label="Show the properties of the tie with p2"]')
+    expect(more.text()).toBe('1')
+    await more.trigger('click')
+    expect(w.find('.pd__tie-props').text()).toContain('weight')
+    expect(w.find('.pd__tie-props').text()).toContain('3')
+    expect(w.find('.pd__tie-props').text()).not.toContain('inProps')
     w.unmount()
   })
 

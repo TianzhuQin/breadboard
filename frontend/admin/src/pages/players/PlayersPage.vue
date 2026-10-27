@@ -188,7 +188,7 @@ import { undoLast } from '@/network/tieEdits'
 import { download } from '@/network/exporters'
 import PlayerPanel from './PlayerPanel.vue'
 import PlayerDetails from './PlayerDetails.vue'
-import { BASE_COLUMNS, QUICK_FILTERS, quickMatch, sortNodes, toCsv, type Column, type QuickFilter, type Sort } from './table'
+import { BASE_COLUMNS, QUICK_FILTERS, csvKeys, quickMatch, sortNodes, toCsv, type Column, type QuickFilter, type Sort } from './table'
 
 const route = useRoute()
 const router = useRouter()
@@ -395,10 +395,11 @@ function showOnNetwork (id: string) {
 
 function downloadCsv () {
   try {
-    const keys = labelable.value.map(p => p.key)
+    // every property anyone has (not only the ones a table column can show), plus Prolific ids
+    const keys = csvKeys(nodes.value)
     const name = [admin.experiment?.name, admin.instance?.name].filter(Boolean).join('-').replace(/[^\w-]+/g, '-') || 'players'
     download(toCsv(sorted.value, keys, degree), `players-${name}.csv`, 'text/csv;charset=utf-8')
-    notify.success('Players downloaded', `${rows.value.length} ${rows.value.length === 1 ? 'row' : 'rows'}, every property as a column.`)
+    notify.success('Players downloaded', `${rows.value.length} ${rows.value.length === 1 ? 'row' : 'rows'}, with every property the experiment set as a column.`)
   } catch (e: any) {
     notify.error('Couldn\'t download the players', e?.message || String(e))
   }

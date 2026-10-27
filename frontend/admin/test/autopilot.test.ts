@@ -21,9 +21,10 @@ vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: fal
 
 import {
   DEFAULTS, autopilotActivity, describeWaitingRoom, humanSeconds, normalizeSettings, normalizeState, participantLinks,
-  toForm, toSettings, validateAutopilot, waitingRoomLive, type AutopilotForm,
+  saveOpensSession, toForm, toSettings, validateAutopilot, waitingRoomLive, type AutopilotForm,
 } from '../src/pages/autopilot/autopilot'
 import { HttpError } from '../src/lib/http'
+import { admin as mockedAdmin, running as mockedRunning } from '@/store/admin'
 import AutopilotPage from '../src/pages/autopilot/AutopilotPage.vue'
 
 const form = (patch: (f: AutopilotForm) => void = () => {}) => {
@@ -102,6 +103,23 @@ describe('reading the server\'s answer', () => {
     expect(st.status.on).toBe(true)
     expect(st.status.instance).toEqual({ id: 3, name: 'auto', status: 'RUNNING' })
     expect(st.status.links).toBeNull()
+    expect(st.status.problem).toBeNull()
+  })
+  it('keeps the server\'s reason why the autopilot can\'t run', () => {
+    expect(normalizeState({ status: { on: false, problem: 'The experiment it was set to run (id 4) no longer exists.' } }).status.problem)
+      .toBe('The experiment it was set to run (id 4) no longer exists.')
+    expect(normalizeState({ status: { problem: '  ' } }).status.problem).toBeNull()
+    expect(normalizeState({ status: { problem: 3 } }).status.problem).toBeNull()
+  })
+  it('knows when saving opens a session at once', () => {
+    const status = (instance: any, experimentId = 12) => normalizeState({ status: { on: true, experimentId, instance } }).status
+    const on = { enabled: true, experimentId: 12 }
+    expect(saveOpensSession(on, status(null))).toBe(true)
+    expect(saveOpensSession(on, status({ id: 3, name: 'a', status: 'FINISHED' }))).toBe(true)
+    expect(saveOpensSession(on, status({ id: 3, name: 'a', status: 'RUNNING' }))).toBe(false)
+    // the open session belongs to the experiment it ran before
+    expect(saveOpensSession({ enabled: true, experimentId: 13 }, status({ id: 3, name: 'a', status: 'RUNNING' }))).toBe(true)
+    expect(saveOpensSession({ enabled: false, experimentId: 12 }, status(null))).toBe(false)
   })
 })
 
@@ -234,6 +252,73 @@ describe('Autopilot page', () => {
     expect(body).toMatchObject({ enabled: true, experimentId: 12, waitingRoom: { minPlayers: 2 } })
     expect(w.text()).toMatch(/The autopilot is on/)
     expect(w.text()).not.toMatch(/Unsaved changes/)
+    w.unmount()
+  })
+
+  it('warns before a save while it is on ends a session of another experiment', async () => {
+    const on = { settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null } }
+    http.get.mockResolvedValue(stateJson(on))
+    http.post.mockImplementation(async (_url: string, body: any) => stateJson({ ...on, settings: body }))
+    const a = mockedAdmin as any
+    const r = mockedRunning as any
+    a.experiment = { id: 13, name: 'Trust' }
+    a.instance = { id: 7, name: 'Trust pilot', status: 'RUNNING' }
+    r.value = true
+    try {
+      const w = await mountPage()
+      const countdown = w.findAll('input.b-input__el').find(i => i.attributes('min') === '0' && (i.element as HTMLInputElement).value === '5')!
+      await countdown.setValue('10')
+      confirmMock.mockResolvedValueOnce(false)
+      await w.find('form.ap-form').trigger('submit')
+      await flushPromises()
+      expect(confirmMock).toHaveBeenCalledTimes(1)
+      const req = confirmMock.mock.calls[0][0]
+      expect(req.danger).toBe(true)
+      expect(req.title).toMatch(/Save and open a session of “Public goods”/)
+      expect(req.message).toMatch(/“Trust pilot” appears to be running/)
+      expect(http.post).not.toHaveBeenCalled()
+      w.unmount()
+    } finally {
+      a.experiment = { id: 12, name: 'Public goods' }
+      a.instance = null
+      r.value = false
+    }
+  })
+
+  it('saves without asking while its own session is open', async () => {
+    const on = { settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 4, name: 'auto 1', status: 'RUNNING' }, links: null } }
+    http.get.mockResolvedValue(stateJson(on))
+    http.post.mockImplementation(async (_url: string, body: any) => stateJson({ ...on, settings: body }))
+    const w = await mountPage()
+    const countdown = w.findAll('input.b-input__el').find(i => i.attributes('min') === '0' && (i.element as HTMLInputElement).value === '5')!
+    await countdown.setValue('10')
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(http.post).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+
+  it('says why a switched-on autopilot isn\'t running', async () => {
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: false, experimentId: null, experimentName: null, instance: null, links: null, problem: 'The experiment it was set to run (id 12) no longer exists. Choose another one.' },
+    }))
+    const w = await mountPage()
+    expect(w.find('.apst__title').text()).toBe('The autopilot can’t run')
+    expect(w.find('.apst__problem').text()).toMatch(/no longer exists/)
+    expect(w.text()).not.toMatch(/Nothing opens sessions by itself/)
+    w.unmount()
+  })
+
+  it('shows the problem of a running autopilot and stops promising a session', async () => {
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem: 'The last session it opened reported an error: boom' },
+    }))
+    const w = await mountPage()
+    expect(w.find('.apst__problem').text()).toMatch(/reported an error: boom/)
+    expect(w.text()).not.toMatch(/opens one shortly/)
     w.unmount()
   })
 

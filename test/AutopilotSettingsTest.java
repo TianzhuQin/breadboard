@@ -48,19 +48,59 @@ public class AutopilotSettingsTest extends BaseTest {
         engineSessionField.setAccessible(true);
         originalEngineSession = engineSessionField.get(null);
         engineSessionField.set(null, null);
-        // Nor is a launch from an earlier test under way.
+        // Nor is a launch from an earlier test under way, nor is it paused, done or waiting to open one.
         Field launch = Autopilot.class.getDeclaredField("launchRequestedAt");
         launch.setAccessible(true);
         launch.set(null, 0L);
+        resetTiming();
     }
 
     @After
     public void restoreOpener() throws Exception {
         // Settings gone first, so a task still queued on the autopilot's thread does nothing.
         Ebean.createSqlUpdate("delete from autopilot_settings").execute();
+        resetTiming();
         Thread.sleep(150);
         openerField.set(null, originalOpener);
         engineSessionField.set(null, originalEngineSession);
+    }
+
+    private static void resetTiming() throws Exception {
+        for (String name : new String[]{"pausedBecause", "doneBecause"}) {
+            Field f = Autopilot.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(null, null);
+        }
+        Field due = Autopilot.class.getDeclaredField("nextOpenAt");
+        due.setAccessible(true);
+        due.set(null, 0L);   // a pending delayed open then does nothing
+    }
+
+    /** As if the engine ran this session, started by this account. */
+    private void runInEngine(ExperimentInstance instance, User owner) throws Exception {
+        GameListener running = new GameListener();
+        running.experimentInstance = instance;
+        running.user = owner;
+        engineSessionField.set(null, running);
+    }
+
+    private static void watchdog() throws Exception {
+        java.lang.reflect.Method m = Autopilot.class.getDeclaredMethod("watchdog");
+        m.setAccessible(true);
+        m.invoke(null);
+    }
+
+    private static void stoppedBy(ExperimentInstance instance, User user) throws Exception {
+        java.lang.reflect.Method m = Autopilot.class.getDeclaredMethod("sessionStopped", ExperimentInstance.class, User.class);
+        m.setAccessible(true);
+        m.invoke(null, instance, user);
+    }
+
+    private ExperimentInstance live(String name, Experiment experiment) {
+        ExperimentInstance instance = createInstance(name, experiment);
+        instance.status = ExperimentInstance.Status.RUNNING;
+        instance.save();
+        return instance;
     }
 
     private User user(String prefix) {
@@ -396,19 +436,138 @@ public class AutopilotSettingsTest extends BaseTest {
         post(user, s);
         awaitOpens(opened, 1);   // the save itself
 
+        // Another experiment's session finishing frees the engine: the autopilot's turn again.
         Autopilot.sessionFinished(ExperimentInstance.findById(otherSession.id));
-        Thread.sleep(300);
-        assertEquals("another experiment's session doesn't count", 1, opened.size());
+        awaitOpens(opened, 2);
+        assertEquals("session elsewhere of another experiment finished", opened.get(1));
 
         Autopilot.sessionFinished(ExperimentInstance.findById(session.id));
-        awaitOpens(opened, 2);
-        assertEquals("session first finished", opened.get(1));
+        awaitOpens(opened, 3);
+        assertEquals("session first finished", opened.get(2));
 
         s.put("continuous", false);
         post(user, s);
-        awaitOpens(opened, 3);   // saving with it on asks again (no session of it is open)
+        awaitOpens(opened, 4);   // saving with it on asks again (no session of it is open)
         Autopilot.sessionFinished(ExperimentInstance.findById(session.id));
         Thread.sleep(300);
-        assertEquals(3, opened.size());
+        assertEquals(4, opened.size());
+        // That was its one session: the periodic check leaves it at that, and says why.
+        watchdog();
+        Thread.sleep(100);
+        assertEquals(4, opened.size());
+        assertTrue(json(get(user)).get("status").get("problem").asText().contains("has finished"));
+    }
+
+    // ---- other sessions, the periodic check, pausing ---------------------------------------------
+
+    @Test
+    public void aSaveLeavesAnotherExperimentsLiveSessionAloneUnlessToldToTakeOver() throws Exception {
+        User user = user("polite");
+        User someone = user("someone");
+        Experiment experiment = createExperiment("Ours");
+        Experiment other = createExperiment("Theirs");
+        own(user, experiment);
+        ExperimentInstance theirs = live("their session", other);
+        runInEngine(theirs, someone);
+
+        JsonNode status = json(post(user, settings(experiment.id, true))).get("status");
+        assertTrue(status.get("on").asBoolean());
+        JsonNode engineSession = status.get("engineSession");
+        assertEquals(theirs.id.longValue(), engineSession.get("id").asLong());
+        assertEquals("their session", engineSession.get("name").asText());
+        assertEquals(other.id.longValue(), engineSession.get("experimentId").asLong());
+        assertEquals("Theirs", engineSession.get("experimentName").asText());
+        assertEquals(someone.email, engineSession.get("owner").asText());
+        assertTrue(status.get("problem").asText(), status.get("problem").asText().contains("Another session is running"));
+
+        // A plain edit doesn't end it either.
+        ObjectNode edit = settings(experiment.id, true);
+        ((ObjectNode) edit.get("waitingRoom")).put("minPlayers", 4);
+        assertEquals(OK, status(post(user, edit)));
+        watchdog();
+        Thread.sleep(300);
+        assertTrue(opened.toString(), opened.isEmpty());
+
+        // Asked to (after the console's confirmation), it takes the engine over.
+        edit.put("takeOver", true);
+        assertEquals(OK, status(post(user, edit)));
+        awaitOpens(opened, 1);
+        assertTrue(opened.get(0), opened.get(0).contains("taking over"));
+        assertFalse("takeOver is not a setting", json(get(user)).get("settings").has("takeOver"));
+    }
+
+    @Test
+    public void theWatchdogOpensASessionWhenNoneRunsUnlessPaused() throws Exception {
+        User user = user("watched");
+        Experiment experiment = createExperiment("Watched");
+        Experiment other = createExperiment("Elsewhere");
+        own(user, experiment);
+
+        post(user, settings(experiment.id, true));
+        awaitOpens(opened, 1);   // the save
+
+        // Its session ended some other way (another launch, a reload): the check opens one.
+        watchdog();
+        awaitOpens(opened, 2);
+        assertEquals("no session was open", opened.get(1));
+
+        // Not while another experiment's session runs.
+        ExperimentInstance elsewhere = live("elsewhere", other);
+        runInEngine(elsewhere, user);
+        watchdog();
+        Thread.sleep(200);
+        assertEquals(2, opened.size());
+
+        // A researcher stopped its session: paused until the next save.
+        ExperimentInstance ours = live("ours", experiment);
+        runInEngine(ours, user);
+        ours.status = ExperimentInstance.Status.STOPPED;
+        ours.save();
+        stoppedBy(ExperimentInstance.findById(ours.id), user);
+        watchdog();
+        Thread.sleep(200);
+        assertEquals(2, opened.size());
+        JsonNode status = json(get(user)).get("status");
+        assertTrue(status.get("paused").asBoolean());
+        assertTrue(status.get("problem").asText(), status.get("problem").asText().contains("paused"));
+        assertTrue(status.get("problem").asText().contains(user.email));
+
+        JsonNode saved = json(post(user, settings(experiment.id, true))).get("status");
+        assertFalse(saved.get("paused").asBoolean());
+        awaitOpens(opened, 3);
+
+        // While a finished session's pause runs, the check waits for it.
+        ObjectNode later = settings(experiment.id, true);
+        later.put("continuous", true);
+        later.put("nextSessionDelaySeconds", 60);
+        post(user, later);
+        awaitOpens(opened, 4);
+        Autopilot.sessionFinished(ExperimentInstance.findById(ours.id));
+        assertFalse(json(get(user)).get("status").get("nextOpenAt").isNull());
+        watchdog();
+        Thread.sleep(200);
+        assertEquals(4, opened.size());
+    }
+
+    @Test
+    public void itCanBeSwitchedOffAfterItsExperimentWasDeleted() {
+        User user = user("tidy");
+        Experiment experiment = createExperiment("Deleted later");
+        own(user, experiment);
+        post(user, settings(experiment.id, false));
+        AutopilotSettings saved = AutopilotSettings.load();
+        saved.enabled = true;
+        saved.experimentId = 987654321L;   // as if deleted
+        saved.save();
+
+        // Turning it on for it is still refused...
+        assertEquals(BAD_REQUEST, status(post(user, settings(987654321L, true))));
+        // ...but switching it off works, and forgets the experiment.
+        Result off = post(user, settings(987654321L, false));
+        assertEquals(contentAsString(off), OK, status(off));
+        AutopilotSettings now = AutopilotSettings.load();
+        assertFalse(now.enabled);
+        assertNull(now.experimentId);
+        assertTrue(json(off).get("settings").get("experimentId").isNull());
     }
 }

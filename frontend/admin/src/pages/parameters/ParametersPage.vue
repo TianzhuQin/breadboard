@@ -134,19 +134,30 @@ const numeric = (p: Parameter) => isNumericType(p.type)
 // What the server last pushed, plus our own changes until the next push confirms them.
 const added = ref<Parameter[]>([])
 const removedIds = ref(new Set<number>())
+/** Parameters changed here, by id, until the server's copy shows the change. */
+const edited = ref(new Map<number, Parameter>())
 const serverList = computed<Parameter[]>(() => admin.experiment?.parameters || [])
 const list = computed<Parameter[]>(() => {
-  const base = serverList.value.filter(p => p.id == null || !removedIds.value.has(p.id))
+  const base = serverList.value
+    .filter(p => p.id == null || !removedIds.value.has(p.id))
+    .map(p => (p.id != null && edited.value.get(p.id)) || p)
   const extra = added.value.filter(a => a.id != null && !serverList.value.some(p => p.id === a.id))
   return [...base, ...extra]
 })
+const sameParameter = (a: Parameter, b: Parameter) =>
+  (['name', 'type', 'minVal', 'maxVal', 'defaultVal', 'description'] as const).every(k => (a[k] ?? '') === (b[k] ?? ''))
 watch(serverList, (now) => {
   added.value = added.value.filter(a => a.id != null && !now.some(p => p.id === a.id))
   removedIds.value = new Set([...removedIds.value].filter(id => now.some(p => p.id === id)))
+  edited.value = new Map([...edited.value].filter(([id, e]) => {
+    const p = now.find(x => x.id === id)
+    return !!p && !sameParameter(p, e)
+  }))
 })
 watch(() => admin.experiment?.id, () => {
   added.value = []
   removedIds.value = new Set()
+  edited.value = new Map()
   dialogOpen.value = false
 })
 
@@ -202,13 +213,14 @@ async function flash (p: Parameter) {
   rowEls.get(key)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 }
 
-function onSaved (created: Parameter, removed: number | null, warning: string) {
-  if (removed != null) removedIds.value = new Set([...removedIds.value, removed])
-  if (created.id != null) added.value = [...added.value, created]
-  const found = list.value.find(p => p.id === created.id) || null
-  if (warning) notify.warning(`Saved ${created.name}`, warning)
-  else if (editing.value) notify.success(`Saved ${created.name}`, 'Sessions you create from now on use the new settings.')
-  else notify.success(`Created ${created.name}`, 'Sessions you create from now on will ask for it.')
+function onSaved (saved: Parameter) {
+  if (saved.id != null) {
+    if (serverList.value.some(p => p.id === saved.id)) edited.value = new Map([...edited.value, [saved.id, saved]])
+    else added.value = [...added.value, saved]
+  }
+  const found = list.value.find(p => p.id === saved.id) || null
+  if (editing.value) notify.success(`Saved ${saved.name}`, 'Sessions you create from now on use the new settings.')
+  else notify.success(`Created ${saved.name}`, 'Sessions you create from now on will ask for it.')
   if (found) flash(found)
   refresh()
 }

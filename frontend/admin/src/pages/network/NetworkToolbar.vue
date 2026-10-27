@@ -24,7 +24,7 @@
     </div>
 
     <!-- find someone -->
-    <div class="ntb__search" :class="{ 'has-query': !!query, 'is-miss': !!query && !matchCount && !searchError }">
+    <div class="ntb__search" :class="{ 'has-query': !!query, 'is-miss': !!query && !matchCount && !searchError, 'has-error': !!query && !!searchError }" :title="query && searchError ? searchError : undefined">
       <Search :size="15" class="ntb__search-icon" aria-hidden="true" />
       <input
         ref="searchInput"
@@ -354,7 +354,21 @@ defineExpose({ focusSearch: () => { searchInput.value?.focus(); searchInput.valu
 @media (max-width: 760px) {
   /* two rows: modes, search, freeze, more / colour, name, all names */
   .ntb { padding: 8px 12px; gap: 8px; }
-  .ntb__mode-label, .ntb__kbd, .ntb__toggle-label, .ntb__search-status { display: none; }
+  .ntb__mode-label, .ntb__kbd, .ntb__toggle-label { display: none; }
+  /* no room for the match count, but screen readers still hear it (it is the box's description) */
+  .ntb__search-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* a filter that can't be read still shows: the box turns red */
+  .ntb__search.has-error { border-color: var(--danger); }
   .ntb__mode { padding: 0 8px; }
   .ntb__search { flex: 1 1 100px; min-width: 0; max-width: none; padding-left: 8px; }
   .ntb__end { order: 2; margin-left: 0; gap: 6px; }

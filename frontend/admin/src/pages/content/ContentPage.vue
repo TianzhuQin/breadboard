@@ -65,7 +65,7 @@ import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { ArrowRight, Check, CircleAlert, FileLock2, Info, RotateCw, Save } from 'lucide-vue-next'
 import { BButton, confirm, notify } from '@/ui'
 import { actions, running } from '@/store/admin'
-import { CONTENT, useContent } from './useContent'
+import { CONTENT, dropKeptDrafts, useContent } from './useContent'
 import LanguageBar from './LanguageBar.vue'
 import ContentList from './ContentList.vue'
 import ContentEditor from './ContentEditor.vue'
@@ -151,16 +151,19 @@ onMounted(() => {
   window.addEventListener('keydown', onKey)
   window.addEventListener('beforeunload', onBeforeUnload)
 })
+// Unsaved edits outlive the page (see useContent) only when it is taken down without leaving it,
+// as when signing out swaps the console for the sign-in form; leaving the page drops them.
+let leftPage = false
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('beforeunload', onBeforeUnload)
+  if (leftPage) dropKeptDrafts()
 })
 
 onBeforeRouteLeave(async () => {
   editor.value?.flush()
   const n = s.totalDirty.value
-  if (!n) return true
-  return confirm({
+  leftPage = !n || await confirm({
     title: 'Leave without saving?',
     message: n === 1
       ? 'One text has unsaved changes. If you leave this page, they are lost.'
@@ -169,6 +172,7 @@ onBeforeRouteLeave(async () => {
     cancelLabel: 'Stay',
     danger: true,
   })
+  return leftPage
 })
 </script>
 

@@ -11,17 +11,24 @@ vi.mock('@/store/admin', async () => {
     experiment: null as any,
     instance: null as any,
     engine: 'ready',
+    engineReloadedAt: 0,
     output: [] as any[],
   })
   const actions = {
     runScript: vi.fn(),
     runStep: vi.fn(),
     refresh: vi.fn(() => Promise.resolve(null)),
-    markEngineStale: vi.fn(),
+    markEngineStale: vi.fn(() => { admin.engine = 'stale' }),
     reloadEngine: vi.fn(),
     selectExperiment: vi.fn(),
   }
-  return { admin, actions, running: computed(() => false), connectionState: ref('open'), graph: { nodes: new Map(), version: ref(0) } }
+  return {
+    admin,
+    actions,
+    running: computed(() => admin.instance?.status === 'RUNNING'),
+    connectionState: ref('open'),
+    graph: { nodes: new Map(), version: ref(0) },
+  }
 })
 
 vi.mock('@/lib/http', () => {
@@ -39,7 +46,9 @@ import {
   BUILTINS, builtinOf, copyName, draftFromStep, formatName, isDirty, isNew, mergeServerSteps, newDraft, renameDraft,
   sortDrafts, templateSource, uniqueName, validateName, type StepDraft,
 } from '../src/pages/steps/stepsModel'
-import { buckets, errorText, saveDraft, ensureBucket, unsavedDrafts } from '../src/pages/steps/stepsStore'
+import { buckets, deleteDraft, errorText, saveDraft, ensureBucket, runDraft, unsavedDrafts } from '../src/pages/steps/stepsStore'
+import { toasts } from '../src/ui/toast'
+import { confirmState, settleConfirm } from '../src/ui/confirm'
 import StepsPage from '../src/pages/steps/StepsPage.vue'
 
 const admin = store.admin as any
@@ -178,6 +187,20 @@ describe('merging the server\'s steps', () => {
     expect(mergeServerSteps([n], [], false, 2000)).toEqual([n])
   })
 
+  it('reads Windows line endings as the editor will give them back', () => {
+    const d = draftFromStep(s(1, 'InitStep', 'a = 1\r\nb = 2\r\n'))
+    expect(d.source).toBe('a = 1\nb = 2\n')
+    expect(d.savedSource).toBe(d.source)
+    // type a character, delete it: back to the saved text
+    d.source = 'a = 1\nb = 2\nx'
+    d.source = 'a = 1\nb = 2\n'
+    expect(isDirty(d)).toBe(false)
+    // a server copy with \r\n (or a lone \r) is followed the same way
+    const out = mergeServerSteps([d], [s(1, 'InitStep', 'c = 3\r\nd = 4\re')], false, 1e12)
+    expect(out[0]).toMatchObject({ source: 'c = 3\nd = 4\ne', savedSource: 'c = 3\nd = 4\ne' })
+    expect(isDirty(out[0])).toBe(false)
+  })
+
   it('matches file-mode steps by name', () => {
     const d = draftFromStep(s(null, 'Round'))
     const out = mergeServerSteps([d], [s(null, 'Round', 'changed()'), s(null, 'Extra')], true, 1e12)
@@ -209,9 +232,162 @@ describe('saving', () => {
     expect(unsavedDrafts.value).toHaveLength(1)
   })
 
+  it('waits for a save already on its way instead of failing', async () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 3, name: 'A', source: 'a()' }))
+    const d = b.drafts[0]
+    d.source = 'b()'
+    let answer!: (v: any) => void
+    post.mockReturnValueOnce(new Promise(resolve => { answer = resolve }))
+    const first = saveDraft(b, d)
+    const second = saveDraft(b, d)
+    answer({ id: 3, name: 'A', source: 'b()' })
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it('saves again what was typed while a save was on its way', async () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 3, name: 'A', source: 'a()' }))
+    const d = b.drafts[0]
+    d.source = 'b()'
+    let answer!: (v: any) => void
+    post.mockReturnValueOnce(new Promise(resolve => { answer = resolve }))
+    const first = saveDraft(b, d)
+    d.source = 'c()'
+    const second = saveDraft(b, d)
+    post.mockResolvedValueOnce({ id: 3, name: 'A', source: 'c()' })
+    answer({ id: 3, name: 'A', source: 'b()' })
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(post).toHaveBeenLastCalledWith('/steps/3', { experimentId: 7, stepSource: 'c()', name: 'A' })
+    expect(isDirty(d)).toBe(false)
+  })
+
+  it('gives a reason when it refuses', async () => {
+    const b = ensureBucket(7, true)
+    b.drafts.push(draftFromStep({ id: null, name: 'A', source: 'a()' }))
+    b.drafts[0].source = 'b()'
+    expect(await saveDraft(b, b.drafts[0])).toBe(false)
+    expect(b.drafts[0].error).toMatch(/file mode/)
+    expect(post).not.toHaveBeenCalled()
+  })
+
   it('says what went wrong in words', () => {
     expect(errorText(new (HttpError as any)(500, ''))).toMatch(/server had a problem/)
     expect(errorText(new TypeError('Failed to fetch'))).toMatch(/Could not reach the server/)
+  })
+})
+
+describe('the live engine', () => {
+  let outId = 1000
+  function reply (source: string) {
+    admin.output.push({ id: ++outId, kind: 'output', text: source.trim() + '\n\n==>', at: Date.now() })
+  }
+  beforeEach(() => {
+    admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps: [] }
+    admin.engineReloadedAt = Date.now() + Math.random()
+  })
+
+  it('is current again once every saved change has been run', async () => {
+    await nextTick()
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }), draftFromStep({ id: 2, name: 'B', source: 'b()' }))
+    const [a, bb] = b.drafts
+    a.engineBehind = bb.engineBehind = true
+    admin.engine = 'stale'
+    runDraft(a)
+    reply('a()')
+    await flushPromises()
+    expect(a.engineBehind).toBe(false)
+    expect(admin.engine).toBe('stale') // B is still behind
+    runDraft(bb)
+    reply('b()')
+    await flushPromises()
+    expect(admin.engine).toBe('ready')
+  })
+
+  it('stays stale when a reload did not finish, whatever was run since', async () => {
+    await nextTick()
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    b.drafts[0].engineBehind = true
+    admin.engine = 'stale'
+    admin.engineProblem = 'The engine did not finish reloading.'
+    runDraft(b.drafts[0])
+    reply('a()')
+    await flushPromises()
+    expect(admin.engine).toBe('stale')
+    admin.engineProblem = ''
+  })
+
+  it('stays stale after a delete, until the engine reloads', async () => {
+    await nextTick()
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }), draftFromStep({ id: 2, name: 'Gone', source: 'g()' }))
+    ;(http.del as any).mockResolvedValueOnce(null)
+    expect(await deleteDraft(b, b.drafts[1])).toBe(true)
+    admin.engine = 'stale'
+    b.drafts[0].engineBehind = true
+    runDraft(b.drafts[0])
+    reply('a()')
+    await flushPromises()
+    expect(admin.engine).toBe('stale')
+    // a reload loads everything that is saved
+    b.drafts[0].engineBehind = true
+    admin.engineReloadedAt = Date.now() + 1
+    await nextTick()
+    expect(b.drafts[0].engineBehind).toBe(false)
+  })
+
+  it('never keeps one account’s unsaved steps for another', async () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    b.drafts[0].source = 'edited()'
+    expect(unsavedDrafts.value).toHaveLength(1)
+    admin.email = 'other@lab.org'
+    await nextTick()
+    expect(unsavedDrafts.value).toHaveLength(0)
+    expect(buckets.size).toBe(0)
+    admin.email = 'r@lab.org'
+    await nextTick()
+  })
+
+  it('offers no way back when signing out clears the experiment', async () => {
+    await nextTick()
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    b.drafts[0].source = 'edited()'
+    toasts.splice(0)
+    admin.experiment = null
+    await nextTick()
+    expect(toasts.some(x => x.title.startsWith('Unsaved steps'))).toBe(false)
+  })
+
+  it('asks before switching back while a session is running', async () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    b.drafts[0].source = 'edited()'
+    toasts.splice(0)
+    admin.instance = { id: 5, status: 'RUNNING' }
+    admin.experiment = { id: 8, name: 'Other', fileMode: false, steps: [] }
+    await nextTick()
+    const t = toasts.find(x => x.title.startsWith('Unsaved steps'))!
+    expect(t.action?.label).toBe('Switch back')
+    actions.selectExperiment.mockResolvedValueOnce(null)
+    t.action!.run()
+    await flushPromises()
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.req).toMatchObject({ danger: true, title: 'Switch to “Trust game”?' })
+    expect(actions.selectExperiment).not.toHaveBeenCalled()
+    settleConfirm(true)
+    await flushPromises()
+    expect(actions.selectExperiment).toHaveBeenCalledWith(7)
+    // the server didn't confirm: say so
+    expect(toasts.some(x => x.title.includes('didn’t confirm the switch'))).toBe(true)
+    admin.instance = null
   })
 })
 
@@ -284,6 +460,24 @@ describe('StepsPage', () => {
     await flushPromises()
     expect(post).toHaveBeenCalledWith('/steps/1', { experimentId: 7, stepSource: 'initStep = 2', name: 'InitStep' })
     expect(actions.runStep).toHaveBeenCalledWith({ id: 1, name: 'InitStep', source: 'initStep = 2' })
+    w.unmount()
+  })
+
+  it('runs after a save that was already on its way (Cmd+S, then Cmd+Enter)', async () => {
+    const { w } = await open()
+    await w.find('textarea.code-stub').setValue('initStep = 3')
+    toasts.splice(0)
+    let answer!: (v: any) => void
+    post.mockReturnValueOnce(new Promise(resolve => { answer = resolve }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true }))
+    await nextTick()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }))
+    await nextTick()
+    answer({ id: 1, name: 'InitStep', source: 'initStep = 3' })
+    await flushPromises()
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(actions.runStep).toHaveBeenCalledWith({ id: 1, name: 'InitStep', source: 'initStep = 3' })
+    expect(toasts.some(t => t.kind === 'error')).toBe(false)
     w.unmount()
   })
 

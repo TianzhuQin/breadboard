@@ -31,6 +31,8 @@ export interface AutopilotStatus {
   experimentName: string | null
   instance: { id: number, name: string, status: string } | null
   links: { login: string, prolific: string } | null
+  /** why the autopilot, switched on, can't keep a session open (the server's words); null when all is well */
+  problem: string | null
 }
 export interface AutopilotState {
   settings: AutopilotSettings
@@ -116,8 +118,22 @@ export function normalizeState (raw: any): AutopilotState {
       experimentName: typeof s.experimentName === 'string' ? s.experimentName : null,
       instance: inst ? { id: Number(inst.id), name: String(inst.name ?? ''), status: String(inst.status ?? '') } : null,
       links: links ? { login: String(links.login || ''), prolific: String(links.prolific || '') } : null,
+      problem: typeof s.problem === 'string' && s.problem.trim() ? s.problem.trim() : null,
     },
   }
+}
+
+const LIVE = new Set(['RUNNING', 'TESTING'])
+
+/**
+ * Whether saving these settings makes the server open a session right away: the autopilot is on and
+ * the engine runs no open session of its experiment. The server then opens one even while the engine
+ * runs a session of another experiment, which ends that session.
+ */
+export function saveOpensSession (next: Pick<AutopilotSettings, 'enabled' | 'experimentId'>, status: AutopilotStatus): boolean {
+  if (!next.enabled || next.experimentId == null) return false
+  const inst = status.instance
+  return !(inst && status.experimentId === next.experimentId && LIVE.has(inst.status))
 }
 
 /** A deep copy to edit (from saved settings, or of another form). */

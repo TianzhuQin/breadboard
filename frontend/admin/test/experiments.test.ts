@@ -218,16 +218,29 @@ describe('checking a zip before it is uploaded', () => {
     expect(c.steps).toBe(2)
   })
 
-  it('refuses an export without a Content folder, and says how to fix it', () => {
+  it('accepts an export without a Content folder (an experiment with no content items), as the server does', () => {
     const c = checkExperimentZip(makeZip(EXPORTED.filter(f => !f.name.startsWith('Content/'))))
-    expect(c.ok).toBe(false)
-    expect(c.problem).toMatch(/no Content folder/)
+    expect(c.ok).toBe(true)
+    expect(c.problem).toBeUndefined()
+    expect(c.root).toBe('')
+    expect([c.steps, c.content]).toEqual([2, 0])
+  })
+
+  it('accepts a zip whose only folder is Steps or Content, reading it from the top level', () => {
+    const steps = checkExperimentZip(makeZip([{ name: 'Steps/A.groovy' }, { name: 'Steps/B.groovy' }]))
+    expect(steps.ok).toBe(true)
+    expect(steps.root).toBe('')
+    expect(steps.steps).toBe(2)
+    const content = checkExperimentZip(makeZip([{ name: 'Content/eng/intro.html' }]))
+    expect(content.ok).toBe(true)
+    expect(content.root).toBe('')
+    expect(content.content).toBe(1)
   })
 
   it('refuses files that are not experiments', () => {
     expect(checkExperimentZip(new TextEncoder().encode('hello, not a zip')).problem).toMatch(/isn't a zip/)
     expect(checkExperimentZip(makeZip([])).problem).toMatch(/empty/)
-    expect(checkExperimentZip(makeZip([{ name: 'photos/a.jpg' }, { name: 'notes.txt' }])).problem).toMatch(/Steps folder and a Content folder/)
+    expect(checkExperimentZip(makeZip([{ name: 'photos/a.jpg' }, { name: 'notes.txt' }])).problem).toMatch(/needs a Steps or Content folder/)
     expect(checkExperimentZip(makeZip([{ name: 'only/readme.txt' }])).ok).toBe(false)
   })
 
@@ -462,5 +475,46 @@ describe('Experiments page', () => {
     await deleteFromMenu(w, 0)
     expect(store.actions.deleteExperiment).not.toHaveBeenCalled()
     w.unmount()
+  })
+
+  const workOn = (w: any, index: number) => w.findAll('.xcard')[index].findAll('button').find((b: any) => b.text().includes('Work on this'))
+
+  it('switches at once when no session appears to be running', async () => {
+    store.actions.selectExperiment.mockClear()
+    const { w } = await mountAt('/experiments')
+    await workOn(w, 1).trigger('click')
+    await flushPromises()
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(store.actions.selectExperiment).toHaveBeenCalledWith(301)
+    w.unmount()
+  })
+
+  it('asks before switching while a session someone else started appears to be running', async () => {
+    store.actions.selectExperiment.mockClear()
+    // not this account's current session, but a running row of the experiment it works on
+    ;(store as any).admin.experiment = { ...A, instances: [...A.instances, { id: 2, name: 'lab manager run', status: 'RUNNING', creationTime: '2026-10-02 10:00:00,0' }] }
+    confirmMock.mockResolvedValueOnce(false)
+    const { w } = await mountAt('/experiments')
+    await workOn(w, 1).trigger('click')
+    await flushPromises()
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(confirmMock.mock.calls[0][0]).toMatchObject({ danger: true, title: 'Switch to “Beta”?' })
+    expect(confirmMock.mock.calls[0][0].message).toContain('“lab manager run” appears to be running')
+    expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('says when the experiment being deleted is the autopilot’s', async () => {
+    http.get.mockImplementation(async (url: string) => url === '/autopilot'
+      ? { source: 'admin', settings: { enabled: true, experimentId: 301 }, status: { on: true, experimentId: 301 } }
+      : null)
+    try {
+      const { w } = await mountAt('/experiments')
+      await deleteFromMenu(w, 1)
+      expect(confirmMock.mock.calls[0][0].message).toMatch(/autopilot runs this experiment, so it stops opening sessions/)
+      w.unmount()
+    } finally {
+      http.get.mockReset()
+    }
   })
 })

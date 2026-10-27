@@ -190,6 +190,17 @@ export function normalizeEvent (e: any): SessionEvent {
   return { id, name: valueText(e?.name) || '(unnamed)', time: parseServerTime(raw), raw, data }
 }
 
+/**
+ * Whether an event the server pushed live belongs to this session. The push goes to every console
+ * whatever session recorded it; newer servers name that session (experimentInstanceId). Without
+ * the name, an event is only taken while this session is the one running, the best guess there is.
+ */
+export function liveEventOf (e: { experimentInstanceId?: unknown }, sessionId: number, running: boolean): boolean {
+  const id = e.experimentInstanceId
+  if (id === undefined) return running
+  return id !== null && id !== '' && Number(id) === sessionId
+}
+
 /** By time, then by id (events in the same millisecond keep the order they were recorded in). */
 export function sortEvents (events: readonly SessionEvent[]): SessionEvent[] {
   return [...events].sort((a, b) => {

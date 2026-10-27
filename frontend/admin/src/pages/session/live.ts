@@ -154,12 +154,17 @@ export function detectGameStarted (opts: { hasStarted?: unknown, events: FeedEve
 
 export type StartOutcome = { kind: 'started' } | { kind: 'already' } | { kind: 'error', message: string } | { kind: 'timeout' }
 
-/** Is this server message the engine's answer to RunGame? */
+/**
+ * Is this server message the engine's answer to RunGame? Its output ("initStep.start() ==> …"),
+ * the "started already" error, or a reply tagged {"request": "RunGame"}. Other engine errors are
+ * common while people join (a late joiner's OnJoinStep, a timer) and are not taken for the answer:
+ * an untagged failed start ends in "no answer yet", which is better than a false failure.
+ */
 export function isStartReply (m: any): boolean {
   if (!m || typeof m !== 'object' || 'action' in m) return false
+  if (m.request === 'RunGame') return true
   if (typeof m.output === 'string' && m.output.startsWith(START_OUTPUT)) return true
-  // a failed start answers with an error and no output
-  return typeof m.error === 'string' && m.error.trim() !== '' && !(typeof m.output === 'string' && m.output.trim())
+  return typeof m.error === 'string' && m.error.includes(ALREADY)
 }
 
 export function classifyStartReply (m: any): StartOutcome {
@@ -167,6 +172,8 @@ export function classifyStartReply (m: any): StartOutcome {
   if (typeof m.output === 'string' && m.output.startsWith(START_OUTPUT)) return { kind: 'started' }
   const err = typeof m.error === 'string' ? m.error : ''
   if (err.includes(ALREADY)) return { kind: 'already' }
+  // a tagged answer with no error is a start, whatever the output says
+  if (m.request === 'RunGame' && !err.trim()) return { kind: 'started' }
   return { kind: 'error', message: cleanError(err) || 'The engine reported an error.' }
 }
 

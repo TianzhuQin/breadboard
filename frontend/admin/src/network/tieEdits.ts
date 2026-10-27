@@ -2,6 +2,7 @@ import { shallowRef, watch } from 'vue'
 import { actions, admin, graph } from '@/store/admin'
 import { toast } from '@/ui/toast'
 import type { TieEditResult } from '@/store/types'
+import { tieBetween } from './players'
 
 /**
  * Adding and cutting ties as the researcher (EditTie → edgeEdits.adminEdit on the server).
@@ -20,6 +21,12 @@ export const pendingEdits = shallowRef<TieEdit[]>([])
 export const editHistory = shallowRef<TieEdit[]>([])
 
 const HISTORY_CAP = 50
+
+/**
+ * Bumped whenever the network is rebuilt (another session, an engine reload): edits made before
+ * belong to a network that is gone, so they can't be undone any more.
+ */
+let generation = 0
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '')
 /** The undo shortcut as this computer writes it. */
@@ -79,10 +86,17 @@ export async function editTie (op: 'add' | 'remove', a: string, b: string, opts:
   if (!a || !b || a === b) return refuse('Pick two different people.')
   if (isPending(a, b)) return refuse('That tie is already being changed. Wait a moment.')
   if (!graph.nodes.has(a) || !graph.nodes.has(b)) return refuse('One of them is no longer in the session.', 'error')
-  const tied = !!graph.linkBetween(a, b)
+  // only "connected" edges are ties; the server neither adds nor cuts edges of other kinds
+  const tied = !!tieBetween(graph, a, b)
   if (op === 'add' && tied) return refuse(`${name(a)} and ${name(b)} are already tied.`)
-  if (op === 'remove' && !tied) return refuse(`${name(a)} and ${name(b)} aren't tied.`)
+  if (op === 'remove' && !tied) {
+    const other = graph.linkBetween(a, b)
+    return refuse(other?.label
+      ? `${name(a)} and ${name(b)} are joined by a “${other.label}” link, not a tie. Only ties can be cut here.`
+      : `${name(a)} and ${name(b)} aren't tied.`)
+  }
 
+  const gen = generation
   pendingEdits.value = [...pendingEdits.value, edit]
   let result: TieEditResult
   try {
@@ -94,13 +108,16 @@ export async function editTie (op: 'add' | 'remove', a: string, b: string, opts:
   }
 
   if (result.ok) {
-    if (opts.record !== false) {
+    // an answer that arrives after the network was rebuilt can't be undone on the new one
+    const current = gen === generation
+    if (opts.record !== false && current) {
       editHistory.value = [...editHistory.value, edit].slice(-HISTORY_CAP)
     }
-    const undoable = opts.undoable !== false
+    // Undo goes through the history, so only remembered edits offer it
+    const undoable = opts.undoable !== false && opts.record !== false && current
     toast('success', describe(edit, name, !!opts.undoing), undoable ? `${undoShortcut} also undoes it.` : undefined, {
       timeout: undoable ? 8000 : 3500,
-      action: undoable ? { label: 'Undo', run: () => { void undoEdit(edit, opts.name) } } : undefined,
+      action: undoable ? { label: 'Undo', run: () => undoFromToast(edit, gen, opts.name) } : undefined,
     })
   } else {
     toast('error', describeFailure(edit, name), friendlyReason(result.reason))
@@ -108,10 +125,27 @@ export async function editTie (op: 'add' | 'remove', a: string, b: string, opts:
   return result
 }
 
-/** Take back an earlier edit (the opposite edit, no further undo). */
+function undoFromToast (edit: TieEdit, gen: number, name?: (id: string) => string) {
+  if (gen !== generation) {
+    toast('info', 'Nothing to undo', 'The network was rebuilt since, so that change no longer applies.')
+    return
+  }
+  void undoEdit(edit, name)
+}
+
+/**
+ * Take back an earlier edit (the opposite edit, no further undo). Only edits still remembered can
+ * be taken back: one already undone (Ctrl/Cmd+Z, or its toast) or made on a network that has since
+ * been rebuilt is left alone, so a late click on an old toast can't change a newer tie.
+ */
 export function undoEdit (edit: TieEdit, name?: (id: string) => string): Promise<TieEditResult> {
   const i = editHistory.value.lastIndexOf(edit)
-  if (i >= 0) editHistory.value = editHistory.value.filter((_, j) => j !== i)
+  if (i < 0) {
+    const reason = 'That change was already taken back.'
+    toast('info', 'Nothing to undo', reason)
+    return Promise.resolve({ ok: false, op: edit.op, a: edit.a, b: edit.b, reason })
+  }
+  editHistory.value = editHistory.value.filter((_, j) => j !== i)
   const inv = inverseOf(edit)
   return editTie(inv.op, inv.a, inv.b, { name, undoable: false, record: false, undoing: true })
 }
@@ -126,10 +160,19 @@ export function undoLast (name?: (id: string) => string): Promise<TieEditResult>
   return undoEdit(last, name)
 }
 
-// Another session's edits can't be undone here.
+function forgetEdits () {
+  generation++
+  editHistory.value = []
+  pendingEdits.value = []
+}
+
+// Another session's edits can't be undone here. (Sync: an answer handled in the same turn as the
+// change must already see the new generation.)
 watch(() => admin.instance?.id ?? null, (now, before) => {
-  if (now !== before) {
-    editHistory.value = []
-    pendingEdits.value = []
-  }
-})
+  if (now !== before) forgetEdits()
+}, { flush: 'sync' })
+// Nor can edits made before the engine reloaded: it empties the network and builds a new one
+// (often with the same people), which the researcher never edited.
+watch(() => admin.engine, (state) => {
+  if (state === 'loading') forgetEdits()
+}, { flush: 'sync' })

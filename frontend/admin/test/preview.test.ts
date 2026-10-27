@@ -185,9 +185,44 @@ describe('PreviewPage', () => {
     expect(frames).toHaveLength(1)
     expect(frames[0].attributes('src')).toBe(`${window.location.origin}/game/7/44/p1/connected`)
     expect(frames[0].attributes('title')).toBe('Participant page of p1')
-    // the sandbox keeps the page from navigating the console away
+    // the sandbox keeps a well-behaved page from navigating the console away, and its pop-ups sandboxed
     expect(frames[0].attributes('sandbox')).not.toContain('allow-top-navigation')
+    expect(frames[0].attributes('sandbox')).not.toContain('allow-popups-to-escape-sandbox')
     w.unmount()
+  })
+
+  it('always says that previews run with the researcher\'s sign-in', async () => {
+    addPlayer('p1', { testmode: true })
+    await settle()
+    const w = await mountPage()
+    await settle()
+    // the live-preview notice can be put away; the warning can't
+    await w.find('.pv__notice button').trigger('click')
+    expect(w.find('.pv__notice').exists()).toBe(false)
+    const warn = w.find('.pv__warn')
+    expect(warn.text()).toMatch(/run with your researcher sign-in/)
+    expect(warn.find('button').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('opens a new tab cut off from the console before the participant page loads', async () => {
+    addPlayer('p1', { testmode: true })
+    await settle()
+    const tab = { opener: {} as any, location: { href: '' } }
+    const open = vi.spyOn(window, 'open').mockImplementation(() => tab as any)
+    try {
+      const w = await mountPage()
+      await settle()
+      const PreviewTile = (await import('../src/pages/preview/PreviewTile.vue')).default
+      w.findComponent(PreviewTile).vm.$emit('open-tab')
+      await flushPromises()
+      expect(open).toHaveBeenCalledWith('about:blank', '_blank')
+      expect(tab.opener).toBeNull()
+      expect(tab.location.href).toBe(`${window.location.origin}/game/7/44/p1/connected`)
+      w.unmount()
+    } finally {
+      open.mockRestore()
+    }
   })
 
   it('asks before previewing a connected participant, and respects no', async () => {

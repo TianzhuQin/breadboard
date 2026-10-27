@@ -1,0 +1,152 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// The store's HTTP calls are answered here; the 401 handler it registers is kept for the tests.
+const h = vi.hoisted(() => ({ unauthorized: null as null | ((body: any) => void) }))
+vi.mock('@/lib/http', async (orig) => {
+  const real = await orig<typeof import('../src/lib/http')>()
+  return {
+    ...real,
+    http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() },
+    onUnauthorized: (fn: (body: any) => void) => { h.unauthorized = fn },
+  }
+})
+
+import { http, HttpError } from '@/lib/http'
+import { admin, actions, connection, graph, logout, __receive } from '../src/store/admin'
+import { confirmEngineRebuild } from '../src/store/engineGuard'
+import { confirmState, settleConfirm } from '../src/ui/confirm'
+import { toasts } from '../src/ui/toast'
+
+const get = vi.mocked(http.get)
+const tick = () => new Promise(r => setTimeout(r, 0))
+const STALE = 'You are not signed in (or your sign-in has expired). Sign in again.'
+
+function signedInAs (email: string, uid: string) {
+  admin.auth = 'signedIn'
+  admin.email = email
+  admin.uid = uid
+  admin.ready = true
+}
+/** What an account saw: output with an error, a session, a live event, a pending request. */
+function somethingSeen () {
+  __receive({ user: { email: admin.email, experiments: [], currentScript: '' }, experimentInstance: { id: 4, name: 'A', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] } })
+  __receive({ error: 'Caught error: boom (participant 5f3c9a1b)' })
+  __receive({ event: { id: 1, name: 'clientLogIn', datetime: '', data: { prolificPid: '5f3c9a1b' } } })
+  __receive({ tieEdit: { ok: true, op: 'add', a: 'p1', b: 'p2' } })
+  __receive({ action: 'addNode', id: 'p1' })
+}
+function expectForgotten () {
+  expect(admin.user).toBe(null)
+  expect(admin.instance).toBe(null)
+  expect(admin.output).toEqual([])
+  expect(admin.events).toEqual([])
+  expect(admin.unseenErrors).toBe(0)
+  expect(admin.requestError).toBe(null)
+  expect(admin.lastTieEdit).toBe(null)
+  expect(admin.engine).toBe('ready')
+  expect(graph.nodes.size).toBe(0)
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks()
+  get.mockReset()
+  toasts.splice(0, toasts.length)
+  vi.spyOn(connection, 'start').mockImplementation(() => {})
+})
+
+describe('a sign-in changed in another tab', () => {
+  it('reconnects with the current sign-in when the server refuses the old one', async () => {
+    signedInAs('r@lab', 'old')
+    get.mockResolvedValue({ uid: 'new', email: 'r@lab', connectSocket: 'auto' })
+    __receive({ error: STALE, request: 'SelectExperiment' })
+    await vi.waitFor(() => expect(connection.start).toHaveBeenCalledWith('new', 'auto'))
+    expect(get).toHaveBeenCalledWith('/state', { quiet401: true })
+    expect(admin.uid).toBe('new')
+    expect(admin.auth).toBe('signedIn')
+    expect(toasts.some(t => t.title === 'Reconnected')).toBe(true)
+  })
+
+  it('signs out instead of looping when the current sign-in is the one refused', async () => {
+    signedInAs('r@lab', 'same')
+    somethingSeen()
+    get.mockResolvedValue({ uid: 'same', email: 'r@lab', connectSocket: 'auto' })
+    __receive({ error: STALE, request: 'LogIn' })
+    await vi.waitFor(() => expect(admin.auth).toBe('signedOut'))
+    expect(connection.start).not.toHaveBeenCalled()
+    expectForgotten()
+  })
+
+  it('signs out when there is no sign-in any more', async () => {
+    signedInAs('r@lab', 'old')
+    get.mockRejectedValue(new HttpError(401, 'Please sign in'))
+    __receive({ error: STALE, request: 'RunGame' })
+    await vi.waitFor(() => expect(admin.auth).toBe('signedOut'))
+  })
+})
+
+describe('signing out', () => {
+  it('forgets what the account saw once the server ended the session', async () => {
+    signedInAs('r@lab', 'u1')
+    somethingSeen()
+    const stop = vi.spyOn(connection, 'stop')
+    // the server answers /logout with 401 once the session is cleared
+    get.mockRejectedValue(new HttpError(401, 'Please sign in'))
+    expect(await logout()).toBe(true)
+    expect(stop).toHaveBeenCalled()
+    expect(admin.auth).toBe('signedOut')
+    expectForgotten()
+  })
+
+  it('stays signed in, and says so, when the server could not be told', async () => {
+    signedInAs('r@lab', 'u1')
+    const stop = vi.spyOn(connection, 'stop')
+    get.mockRejectedValue(new TypeError('Failed to fetch'))
+    expect(await logout()).toBe(false)
+    expect(admin.auth).toBe('signedIn')
+    expect(stop).not.toHaveBeenCalled()
+    expect(toasts.some(t => t.kind === 'error' && t.title === 'Could not sign out')).toBe(true)
+
+    get.mockRejectedValue(new HttpError(502, 'Bad Gateway'))
+    expect(await logout()).toBe(false)
+    expect(admin.auth).toBe('signedIn')
+  })
+
+  it('forgets everything when the session expires, and answers pending requests', async () => {
+    signedInAs('r@lab', 'u1')
+    somethingSeen()
+    vi.spyOn(connection, 'send').mockReturnValue(true)
+    const pending = actions.selectInstance(4)
+    h.unauthorized!({})
+    expect(await pending).toBe(null)
+    expect(admin.auth).toBe('signedOut')
+    expectForgotten()
+  })
+})
+
+describe('asking before an engine rebuild', () => {
+  it('does not ask while nobody uses the engine', async () => {
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    graph.clear()
+    get.mockRejectedValue(new TypeError('Failed to fetch'))
+    expect(await confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })).toBe(true)
+    expect(confirmState.open).toBe(false)
+  })
+
+  it('names the players of a session that is not ours, and the autopilot\'s session', async () => {
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    __receive({ action: 'addNode', id: 'p1' })
+    __receive({ action: 'addNode', id: 'p2' })
+    get.mockResolvedValue({ status: { on: true, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+    const answer = confirmEngineRebuild({ title: 'Switch to “B”?', action: 'Switching experiments', confirmLabel: 'Switch anyway' })
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(get).toHaveBeenCalledWith('/autopilot', { quiet401: true })
+    expect(confirmState.req).toMatchObject({ title: 'Switch to “B”?', danger: true, confirmLabel: 'Switch anyway' })
+    expect(confirmState.req!.message).toContain('2 players are in the network')
+    expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
+    expect(confirmState.req!.message).toContain('disconnected')
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+    graph.clear()
+    await tick()
+  })
+})

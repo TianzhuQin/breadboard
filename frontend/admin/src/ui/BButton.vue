@@ -76,7 +76,7 @@ const iconOnly = computed(() => !!props.icon && !slots.default)
 .b-btn--secondary:hover { background: var(--surface-hover); }
 .b-btn--ghost { background: transparent; color: var(--text-soft); }
 .b-btn--ghost:hover { background: var(--surface-hover); color: var(--text); }
-.b-btn--danger { background: var(--danger); color: #fff; box-shadow: var(--shadow-sm); }
+.b-btn--danger { background: var(--danger); color: var(--on-danger); box-shadow: var(--shadow-sm); }
 .b-btn--danger:hover { background: var(--danger-hover); }
 .b-btn--danger-ghost { background: transparent; color: var(--danger); }
 .b-btn--danger-ghost:hover { background: var(--danger-soft); }

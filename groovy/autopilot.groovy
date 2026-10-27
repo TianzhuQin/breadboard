@@ -163,9 +163,13 @@ class Autopilot {
     int seconds = room.countdownSeconds
     if (seconds > 0) {
       countdownEndsAt = System.currentTimeMillis() + seconds * 1000L
-      def players = connectedPlayers()
-      players.each { countdown(it, seconds, players.size()) }
-      countdownTimer = schedule(seconds) { launch() }
+      // The timer is set whatever happens to the pages: with starting set, nothing else starts the game.
+      try {
+        def players = connectedPlayers()
+        players.each { countdown(it, seconds, players.size()) }
+      } finally {
+        countdownTimer = schedule(seconds) { launch() }
+      }
     } else {
       launch()
     }
@@ -189,15 +193,20 @@ class Autopilot {
     // starting a game that already began some other way.
     if (launched) return
     launched = true
-    // Whoever left before the start doesn't get a seat in the network.
-    g.getVertices().findAll { v ->
-      isParticipant(v) && v.getProperty("_system")?.connected != true
-    }.toList().each { v -> g.removePlayer(v.id) }
-    def players = connectedPlayers()
-    clearStatus()
-    track("autopilotStart", [[name: "players", value: players.size().toString()]])
-    if (room?.onStart != null) room.onStart(players)
-    startGame()
+    // From here the game starts even if something below fails (a page update, the experiment's
+    // onStart): with launched set, nothing else would start it, and everyone would wait for good.
+    try {
+      // Whoever left before the start doesn't get a seat in the network.
+      g.getVertices().findAll { v ->
+        isParticipant(v) && v.getProperty("_system")?.connected != true
+      }.toList().each { v -> g.removePlayer(v.id) }
+      def players = connectedPlayers()
+      clearStatus()
+      track("autopilotStart", [[name: "players", value: players.size().toString()]])
+      if (room?.onStart != null) room.onStart(players)
+    } finally {
+      startGame()
+    }
   }
 
   synchronized def giveUp() {

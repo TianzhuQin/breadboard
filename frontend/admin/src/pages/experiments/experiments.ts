@@ -206,8 +206,9 @@ function foldersIn (names: string[], prefix: string): Set<string> {
 }
 
 /**
- * Checks a zip the way ExperimentController.importExperiment does: after dropping __MACOSX, one
- * top-level folder must hold Steps or Content; otherwise the top level needs both.
+ * Checks a zip the way ExperimentController.importExperiment does: after dropping __MACOSX, the top
+ * level must hold a Steps or a Content folder; failing that, its only entry must be a folder that
+ * does. (An export of an experiment without content items has no Content folder.)
  */
 export function checkExperimentZip (bytes: Uint8Array): ZipCheck {
   const none: ZipCheck = { ok: false, root: '', steps: 0, content: 0, images: 0 }
@@ -225,37 +226,26 @@ export function checkExperimentZip (bytes: Uint8Array): ZipCheck {
   if (!names.length) return { ...none, problem: 'This zip file is empty.' }
 
   const top = new Set(names.map(n => n.split('/')[0]).filter(Boolean))
+  const only = top.size === 1 ? [...top][0] : null
+  const topFolders = foldersIn(names, '')
+  const inner = only != null ? foldersIn(names, `${only}/`) : new Set<string>()
+  const exact = (folders: Set<string>) => folders.has('Steps') || folders.has('Content')
+  // a server on a case-insensitive disk (macOS) finds these too; one on Linux does not
+  const loose = (folders: Set<string>) => [...folders].some(f => /^(steps|content)$/i.test(f))
+  const caseWarning = 'Its folders are not named exactly “Steps” and “Content”. Some servers will not find them.'
   let root = ''
-  let ok = false
   let warning: string | undefined
-  if (top.size === 1) {
-    const only = [...top][0]
-    const inner = foldersIn(names, `${only}/`)
-    if (inner.has('Steps') || inner.has('Content')) {
-      root = `${only}/`
-      ok = true
-    } else if ([...inner].some(f => /^(steps|content)$/i.test(f))) {
-      root = `${only}/`
-      ok = true
-      warning = 'Its folders are not named exactly “Steps” and “Content”. Some servers will not find them.'
-    }
+  if (exact(topFolders)) {
+    root = ''
+  } else if (only != null && exact(inner)) {
+    root = `${only}/`
+  } else if (loose(topFolders)) {
+    warning = caseWarning
+  } else if (only != null && loose(inner)) {
+    root = `${only}/`
+    warning = caseWarning
   } else {
-    const folders = foldersIn(names, '')
-    if (folders.has('Steps') && folders.has('Content')) {
-      ok = true
-    } else if (folders.has('Steps') && ![...folders].some(f => /^content$/i.test(f))) {
-      return {
-        ...none,
-        problem: 'This zip has a Steps folder but no Content folder, and the server needs both. ' +
-          'Unzip it, add an empty folder named “Content” next to “Steps”, zip it again and import that.',
-      }
-    } else if ([...folders].some(f => /^steps$/i.test(f)) && [...folders].some(f => /^content$/i.test(f))) {
-      ok = true
-      warning = 'Its folders are not named exactly “Steps” and “Content”. Some servers will not find them.'
-    }
-  }
-  if (!ok) {
-    return { ...none, problem: 'This zip doesn\'t look like a Breadboard experiment: it needs a Steps folder and a Content folder.' }
+    return { ...none, problem: 'This zip doesn\'t look like a Breadboard experiment: it needs a Steps or Content folder.' }
   }
   const under = (dir: string, ext: RegExp) => kept.filter(e => {
     const lower = e.name.toLowerCase()

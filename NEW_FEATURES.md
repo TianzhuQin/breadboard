@@ -79,7 +79,14 @@ choices it waits for the whole duration. Steps without `duration` behave as befo
 
 ## Running without anyone at the admin console (autopilot)
 
-In `application.conf` (or as `-D` options):
+The simplest way is the console's **Autopilot** page. Pick the experiment, the waiting room
+(minimum and maximum players, how long to wait) and what happens when someone drops out, then
+save. The settings are kept in the database and take effect at once. The page shows the
+session that is open and the two links to give participants: the sign-in link and the Prolific
+study URL.
+
+Settings saved there take precedence over the ones in the experiment's steps. Alternatively, in
+`application.conf` (or as `-D` options), in which case the Autopilot page only shows them:
 
 ```
 breadboard.autopilot.experiment = "My experiment"
@@ -177,6 +184,31 @@ parameter, and code loaded on demand has content-hashed file names.
 A page that reconnects after its session has ended (for example after the autopilot gave up on it)
 is not let into the session the server runs now. It gets back the last screen it had, such as its
 completion code, or else a "This session has ended" notice.
+
+## The researcher console
+
+The console is new: open the server's address and sign in. The previous console still works at
+`/legacy-admin`, and both can be open at the same time.
+
+- **Run:** Live session (open, start, stop and resume sessions; who is waiting, who is
+  connected, the events as they happen), Network, Players and the Script console.
+- **Build:** Steps, Content, Parameters, Participant page, Images and Preview (the participant
+  page exactly as chosen players see it).
+- **Recruit and data:** Autopilot, Recruitment (Prolific and Mechanical Turk) and Sessions &
+  data (every session, its events and CSV downloads).
+- **Experiments and Settings:** create, duplicate, import, export and delete experiments, file
+  mode, password and theme.
+
+**Editing the network.** On the Network page, choose **Tie** (key `C`) and click two people, or
+drag from one to the other. Choose **Cut** (key `X`) and click a tie to remove it. Every edit
+goes through `edgeEdits.adminEdit`, so the experiment's rules and the event log apply as for any
+other edit. A toast offers Undo, and Cmd/Ctrl+Z works too. The player panel lists each person's
+ties with a Cut button and a "Tie to…" picker.
+
+**Several consoles.** Each open console gets the answers to its own actions; the server used to
+send them to whichever console had connected last. OnJoinStep and OnLeaveStep run once per
+person, whether no console, one or several are open, and a second account signing in no longer
+restarts the running session.
 
 ## Data
 

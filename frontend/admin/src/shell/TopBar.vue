@@ -1,6 +1,16 @@
 <template>
   <header class="topbar">
-    <button type="button" class="topbar__menu" aria-label="Open navigation" @click="emit('menu')"><Menu :size="20" /></button>
+    <button
+      ref="menuBtn"
+      type="button"
+      class="topbar__menu"
+      aria-label="Open navigation"
+      aria-controls="shell-nav"
+      :aria-expanded="navOpen ? 'true' : 'false'"
+      @click="emit('menu')"
+    >
+      <Menu :size="20" />
+    </button>
     <div class="topbar__titles">
       <h1 class="topbar__title">{{ title }}</h1>
       <p v-if="admin.experiment" class="topbar__sub">{{ admin.experiment.name }}<span v-if="admin.experiment.fileMode" class="topbar__file"> · file mode</span></p>
@@ -44,14 +54,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Menu, WifiOff, PanelBottom, Cpu, CircleCheck, TriangleAlert, RotateCw } from 'lucide-vue-next'
 import { BMenu, BSpinner, confirm, type MenuItem } from '@/ui'
-import { admin, actions, connectionState, running } from '@/store/admin'
+import { admin, actions, connectionState, ensureConnected } from '@/store/admin'
+import { engineUsers } from '@/store/engineGuard'
 
-defineProps<{ outputOpen: boolean }>()
+defineProps<{ outputOpen: boolean, navOpen?: boolean }>()
 const emit = defineEmits<{ menu: [], 'toggle-output': [] }>()
+const menuBtn = ref<HTMLButtonElement>()
+/** For the shell: give focus back to the menu button when the phone navigation closes. */
+defineExpose({ focusMenu: () => menuBtn.value?.focus() })
 const route = useRoute()
 const title = computed(() => (route.meta.title as string) || 'Breadboard')
 
@@ -73,22 +87,30 @@ const sessionTitle = computed(() => admin.instance ? `Session "${admin.instance.
 const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Reloading…', loaded: 'Reloaded', stale: 'Reload needed' }[admin.engine]))
 const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, stale: TriangleAlert }[admin.engine]))
 const engineTitle = computed(() => admin.engine === 'stale'
-  ? 'The steps changed since the engine loaded them. Reload it to use the new steps.'
+  ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')
   : 'The script engine that runs the experiment')
+const engineHeading = computed(() => {
+  if (admin.engine !== 'stale') return 'Script engine'
+  return admin.engineProblem ? 'The last reload may not have finished' : 'Steps changed since the last load'
+})
 
 async function reload () {
+  if (!ensureConnected()) return
+  // the engine is shared by every account and the autopilot, so the people in it may not be ours
+  const who = await engineUsers()
   const ok = await confirm({
     title: 'Reload the script engine?',
-    message: running.value
-      ? 'This restarts the experiment\'s scripts from its steps. Everyone in the running session is disconnected and the network is emptied.'
+    message: who
+      ? `${who}\n\nReloading restarts the experiment's scripts from its steps. The engine is shared by every researcher on this server, so everyone in the network is disconnected and the network is emptied.`
       : 'This restarts the experiment\'s scripts from its steps.',
     confirmLabel: 'Reload',
-    danger: !!running.value,
+    danger: !!who,
   })
-  if (ok) actions.reloadEngine()
+  // (the connection may have dropped while the question was open)
+  if (ok && !actions.reloadEngine()) ensureConnected()
 }
 const engineItems = computed<MenuItem[]>(() => [
-  { heading: admin.engine === 'stale' ? 'Steps changed since the last load' : 'Script engine' },
+  { heading: engineHeading.value },
   { label: 'Reload engine', icon: RotateCw, disabled: admin.engine === 'loading', run: reload },
 ])
 </script>
@@ -177,7 +199,7 @@ const engineItems = computed<MenuItem[]>(() => [
   padding: 0 4px;
   border-radius: 999px;
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
   font-size: 10.5px;
   font-weight: 700;
   line-height: 17px;
@@ -186,7 +208,16 @@ const engineItems = computed<MenuItem[]>(() => [
   box-sizing: content-box;
 }
 @media (max-width: 1100px) {
-  .topbar__chip-text { display: none; }
+  /* icon only; the words stay for screen readers (the connection chip is a status) */
+  .topbar__chip-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
   .topbar__sub { display: none; }
 }
 @media (max-width: 900px) {

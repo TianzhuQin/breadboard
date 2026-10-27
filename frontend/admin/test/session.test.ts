@@ -334,12 +334,30 @@ describe('live session state', () => {
     expect(isStartReply({ action: 'addNode', id: 'p1' })).toBe(false)
     expect(isStartReply({ user: {} })).toBe(false)
     expect(isStartReply({})).toBe(false)
+    // other engine errors (a late joiner's OnJoinStep) are not the answer to the start
+    expect(isStartReply({ error: 'Caught error: groovy.lang.MissingPropertyException: No such property: x for class: OnJoinStep\n' })).toBe(false)
+    // a reply the server tags as the start's own is, error or not
+    expect(isStartReply({ request: 'RunGame', error: 'Caught error: Boom\n' })).toBe(true)
+    expect(isStartReply({ request: 'RunGame', error: '', output: 'x' })).toBe(true)
+    expect(classifyStartReply({ request: 'RunGame', error: 'Caught error: Boom\n' })).toEqual({ kind: 'error', message: 'Boom' })
+    expect(classifyStartReply({ request: 'RunGame', error: '', output: 'initStep.start()' })).toEqual({ kind: 'started' })
+    expect(classifyStartReply({ request: 'RunGame', error: '' })).toEqual({ kind: 'started' })
     expect(classifyStartReply({ error: '', output: 'initStep.start()\n\n==>' })).toEqual({ kind: 'started' })
     expect(classifyStartReply({ error: 'Caught error: initStep started already\n' })).toEqual({ kind: 'already' })
     expect(classifyStartReply({ error: 'Caught error: MissingPropertyException: No such property: x\n  at InitStep.groovy:3' }))
       .toEqual({ kind: 'error', message: 'MissingPropertyException: No such property: x' })
     expect(classifyStartReply(null)).toEqual({ kind: 'timeout' })
     expect(cleanError('Caught error: Boom\nmore')).toBe('Boom')
+  })
+
+  it('shows the network preview at its own fit, not the Network page\'s zoom and pan', async () => {
+    const NetworkPreview = (await import('../src/pages/session/NetworkPreview.vue')).default
+    const w = mount(NetworkPreview, { props: { people: 40, ties: 1 }, global: { stubs: { AdminNetwork: true, RouterLink: true } } })
+    expect(w.text()).toContain('40 people · 1 tie')
+    const net = w.findComponent({ name: 'AdminNetwork' })
+    expect(net.exists()).toBe(true)
+    expect(net.props('rememberView')).toBe(false)
+    w.unmount()
   })
 
   it('formats durations and file names', () => {

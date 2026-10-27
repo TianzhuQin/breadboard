@@ -36,6 +36,20 @@ test("the game starts as soon as maxPlayers are here") {
   ap.stop()
 }
 
+test("the game starts even when the experiment's onStart fails") {
+  def hooks = [:]
+  def ap = pilot('ap-onstart-', hooks)
+  ap.waitingRoom([minPlayers: 1, maxPlayers: 1, countdownSeconds: 0,
+                  onStart: { players -> throw new IllegalStateException("a broken onStart") }])
+  try {
+    arrive(ap, 'ap-onstart-1')
+  } catch (IllegalStateException expected) {
+    // reported, but the game was started all the same
+  }
+  assert hooks.started == 1
+  ap.stop()
+}
+
 test("waiting participants are told how many are here") {
   def ap = pilot('ap-text-', [:])
   ap.waitingRoom([minPlayers: 3, waitSeconds: 60])

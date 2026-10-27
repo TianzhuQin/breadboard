@@ -379,6 +379,35 @@ describe('useSessionActions', () => {
     expect(ui.notify.success).toHaveBeenCalled()
   })
 
+  it('warns about sessions someone else or the autopilot runs, not only the researcher\'s own', async () => {
+    // not this account's current session: another account's (a RUNNING row) and the autopilot's
+    store.admin.instance = null
+    store.admin.experiment.instances.push(session(8, 'auto 3', 'RUNNING'))
+    httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
+      ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: { id: 8, name: 'auto 3', status: 'RUNNING' } } }
+      : null)
+    ui.confirm.mockResolvedValueOnce(false)
+    try {
+      expect(await actionsApi.resume(store.admin.experiment.instances[0])).toBe(false)
+      const req = ui.confirm.mock.calls[0][0]
+      expect(req.danger).toBe(true)
+      expect(req.message).not.toContain('is running now')
+      expect(req.message).toContain('“pilot 2” and “auto 3” (the autopilot’s) appear to be running')
+      expect(store.actions.selectInstance).not.toHaveBeenCalled()
+    } finally {
+      httpMod.http.get.mockReset()
+    }
+  })
+
+  it('resumes without a warning when nothing appears to be running', async () => {
+    store.admin.instance = null
+    store.admin.experiment.instances[1].status = 'FINISHED'
+    ui.confirm.mockResolvedValueOnce(false)
+    await actionsApi.resume(store.admin.experiment.instances[0])
+    expect(ui.confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: false }))
+    expect(ui.confirm.mock.calls[0][0].message).not.toMatch(/running/)
+  })
+
   it('stops a session that is not the current one, saying the current one is not affected', async () => {
     store.admin.instance = null
     store.actions.stopInstance.mockImplementationOnce(async () => {
@@ -508,5 +537,105 @@ describe('SessionsPage', () => {
     await nextTick()
     expect(document.body.textContent).toContain('Couldn’t load the events')
     w2.unmount()
+  })
+})
+
+describe('SessionEventsDrawer', () => {
+  afterEach(() => { document.body.innerHTML = '' })
+  beforeEach(() => {
+    vi.clearAllMocks()
+    store.admin.experiment = { id: 5, name: 'Trust game', instances: [session(3, 'main', 'RUNNING')] }
+    store.admin.instance = store.admin.experiment.instances[0]
+    store.admin.events = []
+  })
+
+  async function mountDrawer (s: any) {
+    const Drawer = (await import('../src/pages/sessions/SessionEventsDrawer.vue')).default
+    const w = mount(Drawer, { props: { open: true, session: s }, attachTo: document.body })
+    await flushPromises()
+    return w
+  }
+  const rows = () => [...document.body.querySelectorAll('.sev tbody tr')].map(r => r.textContent || '')
+
+  it('leaves out live events another session recorded', async () => {
+    store.actions.instanceEvents.mockResolvedValueOnce({ name: 'main', events: [] })
+    const w = await mountDrawer(store.admin.instance)
+    store.admin.events.push(
+      { id: 1, name: 'mine', datetime: '2026-10-27T13:06:00.000Z', data: {}, experimentInstanceId: 3 },
+      { id: 2, name: 'theirs', datetime: '2026-10-27T13:06:01.000Z', data: {}, experimentInstanceId: 9 },
+      { id: 3, name: 'unnamed', datetime: '2026-10-27T13:06:02.000Z', data: {} },
+    )
+    await flushPromises()
+    // an older server names no session: taken while this one runs
+    expect(rows().join(' ')).toContain('mine')
+    expect(rows().join(' ')).toContain('unnamed')
+    expect(rows().join(' ')).not.toContain('theirs')
+
+    // once it has finished, an event that names no session could be anyone's
+    store.admin.instance.status = 'FINISHED'
+    await flushPromises()
+    expect(rows().join(' ')).toContain('mine')
+    expect(rows().join(' ')).not.toContain('unnamed')
+    w.unmount()
+  })
+
+  it('loads the events again in full before exporting a live session', async () => {
+    const long = 'x'.repeat(2500)
+    store.actions.instanceEvents.mockResolvedValueOnce({ name: 'main', events: [] })
+    const w = await mountDrawer(store.admin.instance)
+    // the live push cut the value short
+    store.admin.events.push({ id: 7, name: 'chat', datetime: '2026-10-27T13:06:00.000Z', data: { text: `${'x'.repeat(2000)}…` }, experimentInstanceId: 3 })
+    await flushPromises()
+    store.actions.instanceEvents.mockResolvedValueOnce({ name: 'main', events: [
+      { id: 6, name: 'clientLogIn', datetime: '2026-10-27 13:05:59,0', data: [{ name: 'clientId', value: 'p1' }] },
+      { id: 7, name: 'chat', datetime: '2026-10-27 13:06:00,0', data: [{ name: 'text', value: long }] },
+    ] })
+    const exportAll = [...document.body.querySelectorAll<HTMLButtonElement>('.sev button')].find(b => b.textContent?.includes('Export all'))!
+    exportAll.click()
+    await flushPromises()
+    expect(store.actions.instanceEvents).toHaveBeenCalledTimes(2)
+    const [, csv] = httpMod.saveText.mock.calls[0]
+    expect(csv).toContain(long)
+    expect(csv).toContain('clientLogIn')
+    expect(csv).not.toContain('…')
+    w.unmount()
+  })
+
+  it('does not export a list it could not load again', async () => {
+    store.actions.instanceEvents.mockResolvedValueOnce({ name: 'main', events: [{ id: 6, name: 'a', datetime: '2026-10-27 13:05:59,0', data: [] }] })
+    const w = await mountDrawer(store.admin.instance)
+    store.actions.instanceEvents.mockResolvedValueOnce(null)
+    const exportAll = [...document.body.querySelectorAll<HTMLButtonElement>('.sev button')].find(b => b.textContent?.includes('Export all'))!
+    exportAll.click()
+    await flushPromises()
+    expect(httpMod.saveText).not.toHaveBeenCalled()
+    expect(ui.notify.error).toHaveBeenCalledWith('Couldn’t export the events', expect.stringContaining('server’s CSV'))
+    w.unmount()
+  })
+})
+
+describe('SessionDetails', () => {
+  it('offers Stop for a running session that isn’t current, without steering to “Make current”', async () => {
+    const SessionDetails = (await import('../src/pages/sessions/SessionDetails.vue')).default
+    const w = mount(SessionDetails, {
+      props: { session: session(9, 'old run', 'RUNNING') as any, experimentId: 5, current: false, locked: false, busy: { resume: false, stop: false, delete: false, data: false } },
+    })
+    expect(w.text()).not.toMatch(/Make it current/)
+    expect(w.findAll('button').some(b => b.text() === 'Stop')).toBe(true)
+    // a finished session still says why it can't run again
+    await w.setProps({ session: session(9, 'old run', 'FINISHED') as any })
+    expect(w.text()).toMatch(/A finished session can’t be resumed/)
+  })
+})
+
+describe('liveEventOf', () => {
+  it('takes events named for this session, and unnamed ones only while it runs', async () => {
+    const { liveEventOf } = await import('../src/pages/sessions/sessionData')
+    expect(liveEventOf({ experimentInstanceId: 3 }, 3, false)).toBe(true)
+    expect(liveEventOf({ experimentInstanceId: '3' }, 3, false)).toBe(true)
+    expect(liveEventOf({ experimentInstanceId: 4 }, 3, true)).toBe(false)
+    expect(liveEventOf({ experimentInstanceId: null }, 3, true)).toBe(false)
+    expect(liveEventOf({}, 3, true)).toBe(true)
+    expect(liveEventOf({}, 3, false)).toBe(false)
   })
 })

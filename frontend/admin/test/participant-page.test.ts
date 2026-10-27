@@ -19,7 +19,7 @@ vi.mock('@/lib/http', () => ({
 const store = vi.hoisted(() => ({ admin: null as any, refresh: vi.fn() }))
 vi.mock('@/store/admin', async () => {
   const { reactive } = await import('vue')
-  store.admin = reactive({ experiment: null, instance: null })
+  store.admin = reactive({ email: 'r@lab.org', experiment: null, instance: null })
   return { admin: store.admin, actions: { refresh: store.refresh } }
 })
 const leave = vi.hoisted(() => ({ guard: null as null | (() => any) }))
@@ -106,7 +106,10 @@ describe('ParticipantPagePage', () => {
     store.refresh.mockReset()
     store.refresh.mockResolvedValue({ user: {} })
     store.admin.experiment = reactive({ id: 4, name: 'Trust', fileMode: false, style: '', clientHtmlHash: 0, clientGraphHash: 0 })
+    store.admin.email = 'r@lab.org'
     leave.guard = null
+    const { docs } = await import('../src/pages/participant-page/pageDocs')
+    docs.clear()
   })
 
   async function mountPage () {
@@ -185,6 +188,75 @@ describe('ParticipantPagePage', () => {
     expect(ui.confirmState.req?.message).toMatch(/Client HTML/)
     ui.settleConfirm(false)
     expect(await pending).toBe(false)
+    w.unmount()
+  })
+
+  // signing out (or a 401) swaps the console for the sign-in form: the page goes without a route change
+  it('keeps unsaved edits when the page is taken down without leaving it', async () => {
+    http.get.mockResolvedValue({ clientHtml: 'a' })
+    store.admin.experiment.clientHtmlHash = javaHashCode('a')
+    let w = await mountPage()
+    await w.find('textarea.stub-editor').setValue('a, edited')
+    w.unmount()
+    w = await mountPage()
+    expect((w.find('textarea.stub-editor').element as HTMLTextAreaElement).value).toBe('a, edited')
+    expect(w.text()).toMatch(/Unsaved changes/)
+    expect(w.text()).not.toMatch(/changed somewhere else/)
+    expect(http.get).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+
+  it('notices a change made elsewhere while the kept edits were away', async () => {
+    http.get.mockResolvedValue({ clientHtml: 'a' })
+    store.admin.experiment.clientHtmlHash = javaHashCode('a')
+    let w = await mountPage()
+    await w.find('textarea.stub-editor').setValue('a, edited')
+    w.unmount()
+    store.admin.experiment.clientHtmlHash = javaHashCode('theirs')
+    w = await mountPage()
+    expect(w.text()).toMatch(/changed somewhere else/)
+    expect((w.find('textarea.stub-editor').element as HTMLTextAreaElement).value).toBe('a, edited')
+    w.unmount()
+  })
+
+  it('says nothing about kept edits when the experiment goes away (signing out)', async () => {
+    http.get.mockResolvedValue({ clientHtml: 'a' })
+    const w = await mountPage()
+    await w.find('textarea.stub-editor').setValue('a, edited')
+    const { toasts } = await import('@/ui/toast')
+    toasts.splice(0)
+    store.admin.experiment = null
+    await flushPromises()
+    expect(toasts.some(t => /unsaved changes are kept/.test(t.title))).toBe(false)
+    w.unmount()
+    const { docs } = await import('../src/pages/participant-page/pageDocs')
+    expect(docs.size).toBe(1)
+  })
+
+  it('never shows one account’s unsaved edits to another', async () => {
+    http.get.mockResolvedValueOnce({ clientHtml: 'a' }).mockResolvedValueOnce({ clientHtml: 'b' })
+    let w = await mountPage()
+    await w.find('textarea.stub-editor').setValue('a, edited')
+    w.unmount()
+    store.admin.email = 'other@lab.org'
+    await flushPromises()
+    w = await mountPage()
+    expect((w.find('textarea.stub-editor').element as HTMLTextAreaElement).value).toBe('b')
+    expect(w.text()).not.toMatch(/Unsaved changes/)
+    w.unmount()
+  })
+
+  it('drops the edits when the researcher leaves the page without saving', async () => {
+    http.get.mockResolvedValueOnce({ clientHtml: 'a' }).mockResolvedValueOnce({ clientHtml: 'a' })
+    let w = await mountPage()
+    await w.find('textarea.stub-editor').setValue('a, edited')
+    const ui = await import('@/ui/confirm')
+    const pending = leave.guard!()
+    ui.settleConfirm(true)
+    expect(await pending).toBe(true)
+    w.unmount()
+    w = await mountPage()
+    expect((w.find('textarea.stub-editor').element as HTMLTextAreaElement).value).toBe('a')
     w.unmount()
   })
 

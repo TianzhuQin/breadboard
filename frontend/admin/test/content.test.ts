@@ -19,7 +19,7 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/store/admin', async () => {
   const { computed, reactive, ref } = await import('vue')
-  const admin = reactive({ experiment: null as any, user: null as any, instance: null as any })
+  const admin = reactive({ email: 'r@lab.org', experiment: null as any, user: null as any, instance: null as any })
   store.admin = admin
   return {
     admin,
@@ -51,7 +51,7 @@ import {
   afterSave, buildItems, buildSavePayload, createDraft, duplicateNames, lacking, langKey, languageSets, mergeByName,
   rebase, setName, setText, statusOf, textOf, upsertContent, validateName, type Drafts,
 } from '../src/pages/content/contentModel'
-import { explain } from '../src/pages/content/useContent'
+import { dropKeptDrafts, explain, unsavedContentCount } from '../src/pages/content/useContent'
 import { HttpError } from '../src/lib/http'
 import ContentPage from '../src/pages/content/ContentPage.vue'
 import VisualEditor from '../src/pages/content/VisualEditor.vue'
@@ -453,6 +453,8 @@ function tab (wrapper: any, name: string) {
 describe('ContentPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    store.admin.email = 'r@lab.org'
+    dropKeptDrafts()
     localStorage.clear()
     localStorage.setItem('bb-content-mode', 'html')
     localStorage.setItem('bb-content-preview-html', '0')
@@ -575,6 +577,47 @@ describe('ContentPage', () => {
     confirmMock.mockResolvedValueOnce(true)
     await router.push('/other')
     expect(router.currentRoute.value.path).toBe('/other')
+    wrapper.unmount()
+  })
+
+  // signing out (or a 401) swaps the console for the sign-in form: the page goes without a route change
+  it('keeps unsaved edits when the page is taken down without leaving it', async () => {
+    let { wrapper } = await mountPage()
+    await wrapper.find('textarea.code-stub').setValue('<p>Kept</p>')
+    wrapper.unmount()
+    expect(unsavedContentCount.value).toBe(1)
+    ;({ wrapper } = await mountPage())
+    expect((wrapper.find('textarea.code-stub').element as HTMLTextAreaElement).value).toBe('<p>Kept</p>')
+    expect(saveButton(wrapper).text()).toBe('Save')
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledWith('/content/11', expect.objectContaining({ translations: [expect.objectContaining({ html: '<p>Kept</p>' })] }))
+    wrapper.unmount()
+  })
+
+  it('never shows one account’s unsaved edits to another', async () => {
+    let { wrapper } = await mountPage()
+    await wrapper.find('textarea.code-stub').setValue('<p>Mine</p>')
+    wrapper.unmount()
+    store.admin.email = 'other@lab.org'
+    await flushPromises()
+    expect(unsavedContentCount.value).toBe(0)
+    ;({ wrapper } = await mountPage())
+    expect((wrapper.find('textarea.code-stub').element as HTMLTextAreaElement).value).toBe('<p>Bye</p>')
+    expect(saveButton(wrapper).text()).toBe('All saved')
+    wrapper.unmount()
+  })
+
+  it('drops the edits when the researcher leaves the page without saving', async () => {
+    let { wrapper, router } = await mountPage()
+    await wrapper.find('textarea.code-stub').setValue('<p>Gone</p>')
+    confirmMock.mockResolvedValueOnce(true)
+    await router.push('/other')
+    expect(router.currentRoute.value.path).toBe('/other')
+    expect(unsavedContentCount.value).toBe(0)
+    wrapper.unmount()
+    ;({ wrapper } = await mountPage())
+    expect(saveButton(wrapper).text()).toBe('All saved')
     wrapper.unmount()
   })
 

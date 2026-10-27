@@ -24,9 +24,10 @@ public class AutopilotController extends Controller {
 
   /**
    * Save the settings (keys left out keep their value) and act on them: with the autopilot on, a
-   * session of the experiment opens now unless one is open; turned off, no new sessions open (a
-   * running one continues). 400 {message} for a value that can't be accepted; 409 {message} while
-   * application.conf is in charge.
+   * session of the experiment opens now unless one is open, or the engine runs a live session of
+   * another experiment (then it waits for that one to end, unless the body has {@code takeOver: true});
+   * turned off, no new sessions open (a running one continues). A save also lifts a pause. 400
+   * {message} for a value that can't be accepted; 409 {message} while application.conf is in charge.
    */
   @Security.Authenticated(Secured.class)
   public static Result save() {
@@ -53,6 +54,11 @@ public class AutopilotController extends Controller {
       return badRequest(message("Choose the experiment to run (experimentId)."));
     }
     boolean sameExperiment = next.experimentId != null && next.experimentId.equals(current.settings.experimentId);
+    if (next.experimentId != null && !next.enabled && sameExperiment && Experiment.findById(next.experimentId) == null) {
+      // Switching off (or editing while off) after the experiment was deleted: the console posts the
+      // id it still has, and refusing it left no way to turn the autopilot off.
+      next.experimentId = null;
+    }
     if (next.experimentId != null) {
       Experiment experiment = Experiment.findById(next.experimentId);
       if (experiment == null) {
@@ -71,7 +77,10 @@ public class AutopilotController extends Controller {
       next.operatorEmail = user.email;
     }
     next.save();
-    Autopilot.settingsSaved(next);
+    // Only with takeOver: true (which the console sends after asking) does opening a session end a
+    // live session of another experiment; otherwise the autopilot waits for it to end.
+    JsonNode takeOver = body.get("takeOver");
+    Autopilot.settingsSaved(next, takeOver != null && takeOver.isBoolean() && takeOver.booleanValue());
     return ok(Autopilot.stateJson());
   }
 

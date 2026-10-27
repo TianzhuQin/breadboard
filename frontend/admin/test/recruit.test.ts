@@ -46,7 +46,7 @@ import {
 } from '@/pages/recruit/mturk/lib'
 import { FORM_KEY, defaultHitForm, hitFormBody, loadHitForm, validateHitForm } from '@/pages/recruit/mturk/hitForm'
 import { toRow } from '@/pages/recruit/mturk/rows'
-import { prolificBonusLines, prolificPlayers, prolificStudyUrl, groovyString } from '@/pages/recruit/prolific/prolific'
+import { prolificBonusLines, prolificPlayers, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
 import BonusDialog from '@/pages/recruit/mturk/BonusDialog.vue'
 import CreateHitTab from '@/pages/recruit/mturk/CreateHitTab.vue'
 import RecruitPage from '@/pages/recruit/RecruitPage.vue'
@@ -317,6 +317,30 @@ describe('Prolific helpers', () => {
     expect(prolificStudyUrl('https://bb.example.org', 12)).toBe('https://bb.example.org/play/12/prolific?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}')
   })
 
+  it('points at the newest running session whose game hasn’t started, as the server does', () => {
+    const s = (id: number, status: string, hasStarted = false) => ({ id, status, hasStarted, name: `s${id}` })
+    expect(prolificTarget([s(9, 'RUNNING', true), s(5, 'RUNNING'), s(7, 'RUNNING'), s(8, 'FINISHED')]))
+      .toEqual({ open: s(7, 'RUNNING'), started: s(9, 'RUNNING', true) })
+    // the only running session has started: nothing is open, and that is why
+    const only = prolificTarget([s(9, 'RUNNING', true), s(3, 'STOPPED')])
+    expect(only.open).toBeNull()
+    expect(only.started?.id).toBe(9)
+    expect(prolificTarget([])).toEqual({ open: null, started: null })
+  })
+
+  it('says the study link leads nowhere while the only running session’s game has started', async () => {
+    const StudyLinkCard = (await import('@/pages/recruit/prolific/StudyLinkCard.vue')).default
+    const exp = { id: 12, name: 'Game', instances: [] }
+    const started = { id: 9, name: 'Friday pilot', status: 'RUNNING', hasStarted: true }
+    const stubs = { RouterLink: { template: '<a><slot /></a>' } }
+    const w = mount(StudyLinkCard, { props: { experiment: exp as any, target: null, started: started as any }, global: { stubs } })
+    expect(w.find('.rc-note--success').exists()).toBe(false)
+    expect(w.find('.rc-note--warning').text()).toMatch(/game in Friday pilot has already started/)
+    expect(w.find('.rc-note--warning').text()).toMatch(/No session is open right now/)
+    await w.setProps({ target: { id: 10, name: 'Saturday', status: 'RUNNING', hasStarted: false } as any })
+    expect(w.find('.rc-note--success').text()).toMatch(/leads to Saturday/)
+  })
+
   it('lists Prolific players and their bonuses', () => {
     const nodes = [
       { id: 'p1', data: { _system: { recruitment: { source: 'prolific', prolificPid: 'PID-B', completed: true, completionCode: 'C1', bonus: 1.255 } } } },
@@ -501,5 +525,91 @@ describe('HIT submissions', () => {
     await flushPromises()
     expect(api.approve.mock.calls.map(c => (c as unknown[])[0])).toEqual(['A1', 'A3'])
     expect(w.emitted('reviewed')![0]).toEqual([2])
+  })
+
+  function deferred () {
+    let resolve!: () => void
+    let reject!: (e: unknown) => void
+    const promise = new Promise<null>((res, rej) => { resolve = () => res(null); reject = rej })
+    return { promise, resolve, reject }
+  }
+  const buttonStarting = (w: ReturnType<typeof mount>, label: string) => w.findAll('button').find(b => b.text().startsWith(label))!
+
+  it('keeps every row of a bonus run out of the buttons until the run and the payments reload are over', async () => {
+    const many = ['A1', 'A2', 'A3', 'A4'].map((id, i) => ({
+      assignmentId: id, workerId: `W${i}AAAAAAAAAA`, approvalTime: null, rejectionTime: null, answer: answersXml([['bonus', '0.50']]), assignmentCompleted: false,
+    }))
+    const calls: Record<string, ReturnType<typeof deferred>> = {}
+    const api = {
+      ...fakeApi(),
+      listAssignments: vi.fn(async () => ({ assignments: many, nextToken: null })),
+      listBonusPayments: vi.fn(async () => ({ bonusPayments: [], nextToken: null })),
+      sendBonus: vi.fn((id: string) => { calls[id] = deferred(); return calls[id].promise }),
+    }
+    const w = mount(HitDetail, {
+      props: { hit: { hitid: 'H1', title: 'Game', reward: '1.00', maxAssignments: 20 }, annotation: { breadboard: false, experimentUid: null, experimentName: null }, api: api as any },
+      global: { stubs: { teleport: true } },
+    })
+    await flushPromises()
+    await w.find('thead input[type="checkbox"]').setValue(true)
+    expect(buttonStarting(w, 'Bonus').text()).toBe('Bonus · $2.00…')
+
+    const dialog = w.findComponent(BonusDialog)
+    const items = (dialog.props('rows') as any[]).map(row => ({ row, amount: 0.5 }))
+    dialog.vm.$emit('pay', items, 'Score')
+    await flushPromises()
+    // two at a time: the other two wait, and nothing can be paid, approved or rejected meanwhile
+    expect(api.sendBonus.mock.calls.map(c => c[0])).toEqual(['A1', 'A2'])
+    expect(w.text().match(/Waiting…/g)?.length).toBe(2)
+    expect(buttonStarting(w, 'Bonus').attributes('disabled')).toBeDefined()
+    expect(buttonStarting(w, 'Bonus').text()).toBe('Bonus…')
+    expect(buttonStarting(w, 'Approve').attributes('disabled')).toBeDefined()
+    expect(buttonStarting(w, 'Reject').attributes('disabled')).toBeDefined()
+    expect(dialog.props('rows')).toEqual([])
+
+    // a second click on the same rows is ignored
+    dialog.vm.$emit('pay', items, 'Score')
+    await flushPromises()
+    expect(api.sendBonus).toHaveBeenCalledTimes(2)
+
+    calls.A1.resolve(); calls.A2.resolve()
+    await flushPromises()
+    calls.A3.resolve(); calls.A4.resolve()
+    await flushPromises()
+    expect(api.sendBonus).toHaveBeenCalledTimes(4)
+    expect(api.listBonusPayments).toHaveBeenCalledTimes(2)
+    expect(w.text()).not.toContain('Waiting…')
+    // every paid row left the selection
+    expect(w.find('.hd__count').text()).toBe('4 submissions')
+  })
+
+  it('treats a lost or 5xx bonus answer as maybe paid, and a refusal as not paid', async () => {
+    const api = {
+      ...fakeApi(),
+      sendBonus: vi.fn(async (id: string) => {
+        if (id === 'A1') throw new HttpError(504, 'Gateway Timeout', '<html><body>504</body></html>')
+        throw new HttpError(400, 'Insufficient funds (Service: AmazonMTurk; Status Code: 400)')
+      }),
+    }
+    const w = mount(HitDetail, {
+      props: { hit: { hitid: 'H1', title: 'Game', reward: '1.00', maxAssignments: 20 }, annotation: { breadboard: false, experimentUid: null, experimentName: null }, api: api as any },
+      global: { stubs: { teleport: true } },
+    })
+    await flushPromises()
+    await w.find('thead input[type="checkbox"]').setValue(true)
+    const dialog = w.findComponent(BonusDialog)
+    expect((dialog.props('rows') as any[]).map(r => r.id)).toEqual(['A1', 'A3'])
+    dialog.vm.$emit('pay', (dialog.props('rows') as any[]).map(row => ({ row, amount: 0.5 })), 'Score')
+    await flushPromises()
+
+    expect(w.text()).toContain('may or may not have been paid')
+    expect(w.text()).toContain('Insufficient funds')
+    // A3 was refused outright and can be tried again; A1 may have been paid, so it is left out
+    expect((dialog.props('rows') as any[]).map(r => r.id)).toEqual(['A3'])
+    expect(buttonStarting(w, 'Bonus').attributes('title')).toMatch(/Leaves out 1 worker who may already have a bonus/)
+
+    // once the researcher has checked, they can allow it again
+    await buttonStarting(w, 'Not paid?').trigger('click')
+    expect((dialog.props('rows') as any[]).map(r => r.id)).toEqual(['A1', 'A3'])
   })
 })

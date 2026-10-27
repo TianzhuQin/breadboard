@@ -8,6 +8,7 @@ import play.mvc.Http;
 import play.mvc.Result;
 import security.ParticipantAuth;
 
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -23,9 +24,11 @@ public class ParticipantAuthTest extends BaseTest {
     private ExperimentInstance instance;
     private String e;
     private String i;
+    private Field engineSession;
+    private Object previousEngineSession;
 
     @Before
-    public void setUpInstance() {
+    public void setUpInstance() throws Exception {
         ParticipantAuth.reset();
         experiment = createExperiment("AuthTest");
         instance = createInstance("auth-instance", experiment);
@@ -33,11 +36,19 @@ public class ParticipantAuthTest extends BaseTest {
         instance.save();
         e = experiment.id.toString();
         i = instance.id.toString();
+        // As if the engine ran this session: only the engine's session lets newcomers in.
+        engineSession = ScriptBoard.class.getDeclaredField("engineGameListener");
+        engineSession.setAccessible(true);
+        previousEngineSession = engineSession.get(null);
+        GameListener running = new GameListener();
+        running.experimentInstance = instance;
+        engineSession.set(null, running);
     }
 
     @After
-    public void clearSeats() {
+    public void clearSeats() throws Exception {
         ParticipantAuth.reset();
+        engineSession.set(null, previousEngineSession);
     }
 
     // === ParticipantAuth itself ===
@@ -229,6 +240,26 @@ public class ParticipantAuthTest extends BaseTest {
         Result login = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("LATE1")));
         assertEquals(FORBIDDEN, status(login));
         assertTrue(contentAsString(login).contains("already started"));
+    }
+
+    @Test
+    public void aSessionTheEngineDoesntRunTakesNoNewcomers() throws Exception {
+        // e.g. one left running before a restart, or one the engine moved off
+        engineSession.set(null, null);
+        Result login = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("P9")));
+        assertEquals(FORBIDDEN, status(login));
+        assertTrue(contentAsString(login), contentAsString(login).contains("running right now"));
+        assertFalse(ParticipantAuth.isClaimed(i, "P9"));
+
+        Result prolific = route(fakeRequest(GET, prolificUrl("PIDGONE")));
+        assertEquals(OK, status(prolific));
+        assertTrue(contentAsString(prolific).contains("not running"));
+        assertFalse(ParticipantAuth.isClaimed(i, ParticipantAuth.prolificClientId(i, "PIDGONE")));
+
+        // Nor does a session of another experiment that the URL claims as this one's.
+        Experiment other = createExperiment("Other");
+        Result wrong = route(fakeRequest(POST, "/game/" + other.id + "/" + i + "/login").withFormUrlEncodedBody(form("P8")));
+        assertEquals(FORBIDDEN, status(wrong));
     }
 
     private static Map<String, String> form(String id) {

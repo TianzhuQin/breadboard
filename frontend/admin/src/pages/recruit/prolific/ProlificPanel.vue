@@ -3,7 +3,7 @@
 
   <div v-else class="pl">
     <div class="pl__main">
-      <StudyLinkCard :experiment="admin.experiment" :target="target" />
+      <StudyLinkCard :experiment="admin.experiment" :target="target.open" :started="target.started" />
 
       <BPanel title="When a participant arrives" subtitle="What Breadboard does with each person Prolific sends.">
         <ol class="pl-steps">
@@ -49,9 +49,10 @@ import StudyLinkCard from './StudyLinkCard.vue'
 import CompletionCard from './CompletionCard.vue'
 import AutopilotCard from './AutopilotCard.vue'
 import ProlificPlayers from './ProlificPlayers.vue'
+import { prolificTarget } from './prolific'
 
-/** Where /play/<e>/prolific leads: the newest running session (the server also skips started games). */
-const target = computed(() => instances.value.find(i => i.status === 'RUNNING') || null)
+/** Where /play/<e>/prolific leads: the newest running session whose game hasn't started. */
+const target = computed(() => prolificTarget(instances.value))
 </script>
 
 <style>

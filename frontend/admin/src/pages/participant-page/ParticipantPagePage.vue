@@ -122,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
   AlertCircle, AlertTriangle, Braces, CloudOff, FileCode2, MonitorSmartphone, Palette, RotateCw, Save, SaveAll,
@@ -134,8 +134,9 @@ import { admin, actions } from '@/store/admin'
 import FileModeNotice from '../parameters/FileModeNotice.vue'
 import {
   PARTS, canSave, isCustomClientGraph, isDirty, isLegacyPage, isPartKey, newPart, normalize, partInfo, readPart,
-  serverDiffers, type PartKey, type PartState,
+  serverDiffers, type PartKey,
 } from './participantPage'
+import { claimDocs, docDirty, docs, type PageDoc } from './pageDocs'
 import { DEFAULT_CLIENT_GRAPH, DEFAULT_CLIENT_HTML } from './templates'
 
 const route = useRoute()
@@ -154,16 +155,10 @@ watch(active, (k) => {
 watch(() => route.query.tab, (t) => { if (isPartKey(t) && t !== active.value) active.value = t })
 
 // ---- one draft per experiment, so switching experiments never throws edits away ----
+// (kept in ./pageDocs, so they also outlive this page being taken down by a sign-out)
 
-interface PageDoc {
-  experimentId: number
-  experimentName: string
-  parts: Record<PartKey, PartState>
-  busy: boolean
-}
-const docs = reactive(new Map<number, PageDoc>())
+claimDocs()
 const doc = computed(() => admin.experiment ? docs.get(admin.experiment.id) || null : null)
-const docDirty = (d: PageDoc) => PARTS.some(p => isDirty(d.parts[p.key]))
 const dirtyLabels = (d: PageDoc) => PARTS.filter(p => isDirty(d.parts[p.key])).map(p => p.label).join(', ')
 const otherDirty = computed(() => [...docs.values()].filter(d => d.experimentId !== admin.experiment?.id && docDirty(d)))
 
@@ -171,7 +166,7 @@ watch(() => admin.experiment?.id, (id, old) => {
   if (old != null) {
     const prev = docs.get(old)
     if (prev && !docDirty(prev)) docs.delete(old)
-    else if (prev) notify.warning('Your unsaved changes are kept', `The participant page of ${prev.experimentName} has unsaved changes; save or discard them from the note at the top.`)
+    else if (prev && id != null) notify.warning('Your unsaved changes are kept', `The participant page of ${prev.experimentName} has unsaved changes; save or discard them from the note at the top.`)
   }
   if (id == null) return
   if (!docs.has(id)) {
@@ -281,6 +276,8 @@ watch(
       else load(d, key)
     }
   },
+  // at once too: edits kept from before (see ./pageDocs) may predate a change made meanwhile
+  { immediate: true },
 )
 
 // ---- saving ----
@@ -416,16 +413,21 @@ async function insertStandardGraph () {
 // ---- leaving with unsaved edits ----
 
 const anyDirty = computed(() => [...docs.values()].some(docDirty))
+let leftPage = false
 onBeforeRouteLeave(async () => {
-  if (!anyDirty.value) return true
+  if (!anyDirty.value) {
+    leftPage = true
+    return true
+  }
   const where = [...docs.values()].filter(docDirty).map(d => `${dirtyLabels(d)}${docs.size > 1 ? ` (${d.experimentName})` : ''}`).join('; ')
-  return await confirm({
+  leftPage = await confirm({
     title: 'Leave without saving?',
     message: `You have unsaved changes to ${where}. They will be lost.`,
     confirmLabel: 'Leave without saving',
     cancelLabel: 'Stay',
     danger: true,
   })
+  return leftPage
 })
 function onBeforeUnload (e: BeforeUnloadEvent) {
   if (!anyDirty.value) return
@@ -446,6 +448,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
   window.removeEventListener('keydown', onKey)
+  // Leaving the page drops every draft. Taken down without leaving (signed out), keep only the
+  // unsaved ones: the rest load fresh next time.
+  for (const d of [...docs.values()]) if (leftPage || !docDirty(d)) docs.delete(d.experimentId)
 })
 </script>
 

@@ -11,6 +11,8 @@ public class ThrottledWebSocketOut {
   private long lastSent = Long.MAX_VALUE;
   private long wait;
   private boolean scheduled = false;
+  // Set when the socket has closed (see markClosed).
+  private volatile boolean closed = false;
 
   public ThrottledWebSocketOut(WebSocket.Out<JsonNode> out, long wait) {
     this.out = out;
@@ -54,5 +56,17 @@ public class ThrottledWebSocketOut {
 
   public void close () {
     this.out.close();
+  }
+
+  /**
+   * The socket has closed. Its console's Admin is registered two actor hops after it logged in, so
+   * the close can come first; registerAdmin checks this so it never adds an Admin for a dead socket.
+   */
+  public void markClosed() {
+    closed = true;
+  }
+
+  public boolean isClosed() {
+    return closed;
   }
 }

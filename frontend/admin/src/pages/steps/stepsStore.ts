@@ -1,8 +1,8 @@
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, toRaw, watch } from 'vue'
 import { http, HttpError } from '@/lib/http'
-import { admin, actions } from '@/store/admin'
+import { admin, actions, running } from '@/store/admin'
 import type { Step } from '@/store/types'
-import { toast } from '@/ui'
+import { confirm, notify, toast } from '@/ui'
 import { expectReply, lastOutputId } from '../console/engineReplies'
 import {
   copyName, isDirty, isNew, mergeServerSteps, newDraft, uniqueName, validateName,
@@ -26,6 +26,14 @@ export interface StepsBucket {
 }
 
 export const buckets = reactive(new Map<string, StepsBucket>())
+
+// The drafts belong to the account that typed them: signing in as someone else starts clean.
+let bucketsFor = admin.email
+watch(() => admin.email, (email) => {
+  if (email === bucketsFor) return
+  buckets.clear()
+  bucketsFor = email
+})
 
 export function bucketKey (experimentId: number, fileMode: boolean) {
   return `${experimentId}:${fileMode ? 'file' : 'db'}`
@@ -105,9 +113,33 @@ export function removeDraft (b: StepsBucket, d: StepDraft) {
   if (b.selected === d.uid) b.selected = null
 }
 
-/** Save one step (POST /steps/:id, -1 for a new one). Resolves whether it worked; errors go on the draft. */
-export async function saveDraft (b: StepsBucket, d: StepDraft): Promise<boolean> {
-  if (b.fileMode || d.status === 'saving' || d.status === 'deleting') return false
+// The save each draft is waiting for, so a second Save (Cmd+S then Cmd+Enter) waits for it.
+const savesInFlight = new WeakMap<StepDraft, Promise<boolean>>()
+
+/**
+ * Save one step (POST /steps/:id, -1 for a new one). Resolves whether it worked; errors go on the
+ * draft. While a save is on its way, another call waits for it, then saves again if more was typed.
+ */
+export function saveDraft (b: StepsBucket, d: StepDraft): Promise<boolean> {
+  const key = toRaw(d)
+  const pending = savesInFlight.get(key)
+  if (pending) return pending.then(ok => ok && isDirty(d) ? saveDraft(b, d) : ok)
+  const p = saveNow(b, d).finally(() => {
+    if (savesInFlight.get(key) === p) savesInFlight.delete(key)
+  })
+  savesInFlight.set(key, p)
+  return p
+}
+
+async function saveNow (b: StepsBucket, d: StepDraft): Promise<boolean> {
+  if (b.fileMode) {
+    d.error = 'This experiment is in file mode, so its steps can only be changed in their files.'
+    return false
+  }
+  if (d.status === 'deleting') {
+    d.error = 'This step is being deleted.'
+    return false
+  }
   const problem = validateName(d.name, b.drafts, d)
   if (problem) {
     d.status = 'error'
@@ -154,9 +186,39 @@ export function runDraft (d: StepDraft) {
     run.status = reply.ok ? 'ok' : 'error'
     run.values = reply.values
     run.error = reply.error
-    if (reply.ok && d.source === source) d.engineBehind = false
+    if (reply.ok && d.source === source) {
+      d.engineBehind = false
+      engineCaughtUp()
+    }
   })
 }
+
+// ---- is the live engine running the saved steps? ----------------------------------------------
+
+/** A saved step was deleted since the engine last loaded: only a reload drops what it defined. */
+let stepDeletedSinceReload = false
+
+/**
+ * Once every saved change has been loaded with Run, the engine is current again: clear the
+ * "Reload needed" mark, so nobody reloads (and disconnects a running session) for nothing.
+ */
+function engineCaughtUp () {
+  if (admin.engine !== 'stale' || stepDeletedSinceReload) return
+  // stale for another reason too (a reload that didn't finish): only a reload clears that
+  if ((admin as { engineProblem?: string }).engineProblem) return
+  const id = admin.experiment?.id
+  for (const b of buckets.values()) {
+    if (b.experimentId === id && b.drafts.some(d => d.engineBehind)) return
+  }
+  // (the store has markEngineStale but no way back, so this page undoes its own mark)
+  admin.engine = 'ready'
+}
+
+// A reload (or an experiment switch) loads every saved step, so nothing is behind any more.
+watch(() => admin.engineReloadedAt, () => {
+  stepDeletedSinceReload = false
+  for (const b of buckets.values()) for (const d of b.drafts) d.engineBehind = false
+})
 
 /** Delete a step (DELETE /steps/:id); a step never saved is just dropped. */
 export async function deleteDraft (b: StepsBucket, d: StepDraft): Promise<boolean> {
@@ -169,6 +231,7 @@ export async function deleteDraft (b: StepsBucket, d: StepDraft): Promise<boolea
   try {
     await http.del(`/steps/${d.id}`)
     removeDraft(b, d)
+    stepDeletedSinceReload = true
     return true
   } catch (e) {
     d.status = 'error'
@@ -201,14 +264,30 @@ if (typeof window !== 'undefined') {
 }
 
 // Switching experiment keeps the old one's drafts; say so, and offer the way back.
+// (Not when no experiment is selected any more, as on signing out: there is nothing to switch from.)
 watch(() => admin.experiment?.id, (now, before) => {
-  if (before == null || now === before) return
+  if (before == null || now == null || now === before) return
   const b = buckets.get(bucketKey(before, false))
   const n = b ? b.drafts.filter(isDirty).length : 0
   if (!n) return
   const name = admin.user?.experiments?.find(e => e.id === before)?.name || 'the previous experiment'
   toast('warning', `Unsaved steps in “${name}”`, `${n} step${n === 1 ? ' has' : 's have'} unsaved changes. They are kept in this tab; switch back to save them.`, {
     timeout: 12000,
-    action: { label: 'Switch back', run: () => { actions.selectExperiment(before) } },
+    action: { label: 'Switch back', run: () => { switchBack(before, name) } },
   })
 })
+
+/** The toast's way back. Switching rebuilds the engine, so ask first while a session is running. */
+async function switchBack (id: number, name: string) {
+  if (running.value) {
+    const ok = await confirm({
+      title: `Switch to “${name}”?`,
+      message: 'Switching experiments reloads the script engine: everyone in the running session is disconnected.',
+      confirmLabel: 'Switch experiment',
+      danger: true,
+    })
+    if (!ok) return
+  }
+  const res = await actions.selectExperiment(id)
+  if (!res) notify.warning('The server didn’t confirm the switch', 'Check the experiment switcher at the top left.')
+}

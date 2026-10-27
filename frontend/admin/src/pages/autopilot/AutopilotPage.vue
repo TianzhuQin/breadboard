@@ -301,11 +301,12 @@ import { BButton, BCheckbox, BEmpty, BField, BInput, BPage, BSelect, BSpinner, B
 import { HttpError } from '@/lib/http'
 import { admin, experiments, graph, running } from '@/store/admin'
 import { describeError } from '../experiments/experiments'
+import { liveEventOf } from '../sessions/sessionData'
 import AutopilotStatus from './AutopilotStatus.vue'
 import { useUnsavedGuard } from './useUnsavedGuard'
 import {
   autopilotActivity, describeWaitingRoom, fetchAutopilot, humanSeconds, participantLinks, sameForm, saveAutopilot,
-  DEFAULTS, toForm, toSettings, validateAutopilot, waitingRoomLive,
+  saveOpensSession, DEFAULTS, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm, type AutopilotState,
 } from './autopilot'
 
@@ -357,7 +358,13 @@ const live = computed(() => {
   void graph.version.value
   return isCurrent.value ? waitingRoomLive(graph.nodes.values()) : null
 })
-const activity = computed(() => (isCurrent.value ? autopilotActivity(admin.events) : []))
+const activity = computed(() => {
+  const inst = state.value?.status.instance
+  if (!isCurrent.value || !inst) return []
+  // only what its own session recorded: pushes from every session reach this console
+  const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
+  return autopilotActivity(admin.events.filter(e => liveEventOf(e as { experimentInstanceId?: unknown }, inst.id, live)))
+})
 
 // ---- loading -----------------------------------------------------------------------------------
 
@@ -447,19 +454,24 @@ async function save () {
     || (state.value.status.experimentId === next.experimentId ? state.value.status.experimentName : null)
     || `experiment #${next.experimentId}`
   const turningOn = next.enabled && (!prev.enabled || prev.experimentId !== next.experimentId || state.value.source === 'off')
-  if (turningOn) {
-    const parts = [
-      `Breadboard opens a session of “${name}” right away if none is open${next.continuous ? ', and a new one each time a session ends' : ''}.`,
-      'Participants join through the links on this page.',
-    ]
-    if (running.value && admin.instance) {
-      parts.push(`\n\nYou are running “${admin.instance.name}” right now. If the autopilot opens a new session, the script engine restarts and that session's participants are disconnected.`)
+  // Any save while it is on opens a session at once if none of its experiment is open, even when
+  // the shared engine runs something else; that session then ends.
+  const atRisk = saveOpensSession(next, state.value.status) && running.value && admin.instance ? admin.instance : null
+  if (turningOn || atRisk) {
+    const parts = turningOn
+      ? [
+          `Breadboard opens a session of “${name}” right away if none is open${next.continuous ? ', and a new one each time a session ends' : ''}.`,
+          'Participants join through the links on this page.',
+        ]
+      : [`The autopilot is on and no session of “${name}” is open, so saving opens one right away.`]
+    if (atRisk) {
+      parts.push(`\n\n“${atRisk.name}” appears to be running right now. Opening a new session restarts the script engine, which ends that session and disconnects its participants.`)
     }
     const ok = await confirm({
-      title: `Run “${name}” unattended?`,
+      title: turningOn ? `Run “${name}” unattended?` : `Save and open a session of “${name}”?`,
       message: parts.join(' '),
-      confirmLabel: 'Turn on and save',
-      danger: !!running.value,
+      confirmLabel: turningOn ? 'Turn on and save' : 'Save and open a session',
+      danger: !!atRisk,
     })
     if (!ok) return
   }

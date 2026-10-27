@@ -68,7 +68,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { FlaskConical, ChevronsUpDown, Search, Check, Plus, Upload, Settings2 } from 'lucide-vue-next'
-import { admin, actions, experiments, running } from '@/store/admin'
+import { admin, actions, ensureConnected, experiments, running } from '@/store/admin'
+import { confirmEngineRebuild } from '@/store/engineGuard'
 import type { Experiment } from '@/store/types'
 import { notify } from '@/ui'
 import { uid } from '@/ui/uid'
@@ -113,6 +114,9 @@ async function pick (e: Experiment) {
   if (running.value) return
   close(true)
   if (admin.experiment && e.id === admin.experiment.id) return
+  if (!ensureConnected()) return
+  // the engine is shared: another researcher's session (or the autopilot's) may be live on it
+  if (!await confirmEngineRebuild({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
   await actions.selectExperiment(e.id)
   if (admin.experiment?.id === e.id) notify.success(`Switched to ${e.name}`)
   else notify.error(`Could not switch to ${e.name}`, admin.requestError?.request === 'SelectExperiment' ? admin.requestError.text : 'The server did not confirm the switch. The output panel may say why.')

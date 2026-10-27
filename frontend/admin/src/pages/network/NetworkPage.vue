@@ -324,6 +324,8 @@ const SHORTCUTS: [string[], string][] = [
   [[undoShortcut], 'Undo the last tie you added or cut'],
   [['0'], 'Fit everyone in view'],
   [['+', '−'], 'Zoom in and out'],
+  [['Scroll'], 'Zoom in and out around the pointer (or pinch)'],
+  [['Shift', 'Scroll'], 'Pan (or drag the background, or swipe sideways on a trackpad)'],
   [['←', '→', '↑', '↓'], 'On the network: move between people (Enter selects)'],
   [['Shift', '↑'], 'On the network: pan'],
   [['?'], 'This list'],

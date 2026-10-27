@@ -7,6 +7,7 @@ import models.*;
 
 import net.lingala.zip4j.core.ZipFile;
 import net.lingala.zip4j.exception.ZipException;
+import net.lingala.zip4j.model.FileHeader;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.io.FileUtils;
@@ -133,7 +134,14 @@ public class ExperimentController extends Controller {
     File rootOutputFolder = Files.createTempDirectory("breadboard-import").toFile();
     try {
       try {
-        new ZipFile(zippedFile).extractAll(rootOutputFolder.getPath());
+        ZipFile zip = new ZipFile(zippedFile);
+        String unsafe = unsafeEntry(zip.getFileHeaders(), rootOutputFolder);
+        if (unsafe != null) {
+          Logger.warn("Import: refused a zip with the entry \"" + unsafe + "\"");
+          return badRequest("The zip file can't be imported: it contains \"" + unsafe + "\", which would be unpacked "
+              + "outside its folder or is a link. Please upload an experiment exported from Breadboard.");
+        }
+        zip.extractAll(rootOutputFolder.getPath());
       } catch (ZipException e) {
         Logger.debug("Import: not a zip file: " + e.getMessage());
         return badRequest("The file is not a zip file. Please upload an experiment exported from Breadboard.");
@@ -189,6 +197,40 @@ public class ExperimentController extends Controller {
     } finally {
       FileUtils.deleteQuietly(rootOutputFolder);
     }
+  }
+
+  /**
+   * The name of the first zip entry (zip4j FileHeaders) that would not be unpacked inside
+   * {@code folder} (e.g. "../../groovy/x.groovy", which zip4j 1.3.2 writes where it points), or that
+   * is a symbolic link; null when every entry is safe to unpack.
+   */
+  static String unsafeEntry(List<?> headers, File folder) throws IOException {
+    String root = folder.getCanonicalPath();
+    for (Object header : headers) {
+      FileHeader entry = (FileHeader) header;
+      String name = entry.getFileName();
+      if (name == null) {
+        continue;
+      }
+      // An absolute name: zip4j 1.3.2 puts it inside, but other versions and tools need not.
+      if (name.startsWith("/") || name.startsWith("\\") || name.matches("^[A-Za-z]:.*")) {
+        return name;
+      }
+      // Where zip4j puts it: the folder, a separator, then the name as it is.
+      String target = new File(folder.getPath() + File.separator + name).getCanonicalPath();
+      if (!target.equals(root) && !target.startsWith(root + File.separator)) {
+        return name;
+      }
+      byte[] attributes = entry.getExternalFileAttr();
+      if (attributes != null && attributes.length == 4) {
+        // Unix file mode in the upper two bytes (little-endian); 0120000 is a symbolic link.
+        int mode = ((attributes[3] & 0xff) << 8) | (attributes[2] & 0xff);
+        if ((mode & 0170000) == 0120000) {
+          return name;
+        }
+      }
+    }
+    return null;
   }
 
   /**

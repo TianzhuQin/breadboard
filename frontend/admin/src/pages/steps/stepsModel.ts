@@ -123,14 +123,23 @@ export function nextUid (prefix = 's') {
   return `${prefix}${++uidSeq}`
 }
 
+/**
+ * A step's code with "\n" line endings, as the code editor gives it back. Steps written on Windows
+ * (or imported from there) have "\r\n"; without this they would look edited after an undo or a revert.
+ */
+export function normalizeEol (source: string | null | undefined): string {
+  return (source ?? '').replace(/\r\n?/g, '\n')
+}
+
 export function draftFromStep (s: Step): StepDraft {
+  const source = normalizeEol(s.source)
   return {
     uid: nextUid(),
     id: s.id ?? null,
     name: s.name,
     savedName: s.name,
-    source: s.source ?? '',
-    savedSource: s.source ?? '',
+    source,
+    savedSource: source,
     template: null,
     status: 'idle',
     error: null,
@@ -240,7 +249,7 @@ export function mergeServerSteps (drafts: StepDraft[], steps: Step[], fileMode: 
     const busy = d.status === 'saving' || d.status === 'deleting' || now - d.savedAt < RECENT
     if (!isDirty(d) && !busy) {
       d.name = d.savedName = s.name
-      d.source = d.savedSource = s.source ?? ''
+      d.source = d.savedSource = normalizeEol(s.source)
     }
     out.push(d)
   }

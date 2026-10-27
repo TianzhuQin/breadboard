@@ -4,19 +4,29 @@
       <span class="apst__icon" aria-hidden="true"><Bot :size="20" /></span>
       <div class="apst__titles" aria-live="polite">
         <h2 id="apst-title" class="apst__title">
-          {{ status.on ? 'The autopilot is on' : 'The autopilot is off' }}
+          {{ status.on ? 'The autopilot is on' : stalled ? 'The autopilot can’t run' : 'The autopilot is off' }}
         </h2>
         <p class="apst__sub">
           <template v-if="status.on && expName">Running “{{ expName }}” unattended.</template>
           <template v-else-if="status.on">Running an experiment unattended.</template>
+          <template v-else-if="stalled && status.problem">It is switched on below, but no session opens by itself until the problem below is fixed.</template>
+          <template v-else-if="stalled">It is switched on below, but the server isn’t running it. Refresh in a moment, or check the server log.</template>
           <template v-else>Nothing opens sessions by itself. Turn it on below to run an experiment unattended.</template>
         </p>
       </div>
       <div class="apst__badges">
         <BBadge v-if="source === 'config'" tone="info"><Lock :size="12" aria-hidden="true" /> application.conf</BBadge>
-        <BBadge :tone="status.on ? 'success' : 'neutral'" :dot="true" :pulse="status.on">{{ status.on ? 'On' : 'Off' }}</BBadge>
+        <BBadge :tone="status.on ? 'success' : stalled ? 'warning' : 'neutral'" :dot="true" :pulse="status.on">{{ status.on ? 'On' : stalled ? 'Not running' : 'Off' }}</BBadge>
       </div>
     </header>
+
+    <div v-if="status.problem" class="apst__problem" role="alert">
+      <TriangleAlert :size="16" aria-hidden="true" />
+      <div>
+        <p class="apst__problem-title">{{ status.on ? 'The autopilot has a problem' : 'Why it isn’t running' }}</p>
+        <p class="apst__problem-text">{{ status.problem }}</p>
+      </div>
+    </div>
 
     <div v-if="status.on || status.instance" class="apst__block" aria-live="polite">
       <h3 class="apst__label">Open session</h3>
@@ -26,7 +36,7 @@
         <RouterLink v-if="isCurrent" to="/session" class="apst__watch">Watch it live <ArrowRight :size="14" aria-hidden="true" /></RouterLink>
       </div>
       <p v-else class="apst__muted">
-        No session is open right now. {{ status.on ? 'The autopilot opens one shortly.' : '' }}
+        No session is open right now. {{ status.on && !status.problem ? 'The autopilot opens one shortly.' : '' }}
       </p>
       <p v-if="liveText" class="apst__live">
         <component :is="live?.state === 'cancelled' ? CircleX : (live?.state === 'starting' ? Timer : Hourglass)" :size="15" aria-hidden="true" />
@@ -90,6 +100,8 @@ const emit = defineEmits<{ refresh: [] }>()
 const status = computed(() => props.state.status)
 const source = computed(() => props.state.source)
 const expName = computed(() => status.value.experimentName || props.experimentName || null)
+/** switched on in the settings, yet the server says it isn't running */
+const stalled = computed(() => props.state.settings.enabled && !status.value.on)
 
 const sessionLabel = computed(() => {
   const s = status.value.instance?.status || ''
@@ -140,6 +152,20 @@ function timeOf (iso: string) {
 .apst__session { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .apst__session-name { font-weight: 600; overflow-wrap: anywhere; }
 .apst__watch { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: var(--text-sm); font-weight: 600; }
+.apst__problem {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0 20px 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning-soft-text);
+  font-size: var(--text-sm);
+}
+.apst__problem svg { flex: none; margin-top: 2px; }
+.apst__problem-title { font-weight: 650; }
+.apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .apst__live { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-soft-text); font-size: var(--text-sm); }
 .apst__links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 4px; }
 @media (max-width: 760px) { .apst__links { grid-template-columns: minmax(0, 1fr); } }

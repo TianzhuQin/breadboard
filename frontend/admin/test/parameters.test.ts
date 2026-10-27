@@ -15,6 +15,15 @@ vi.mock('@/lib/http', () => ({
   },
 }))
 
+// the Parameters page reads the selected experiment from the store
+const store = vi.hoisted(() => ({ admin: null as any, refresh: null as any }))
+vi.mock('@/store/admin', async () => {
+  const { reactive } = await import('vue')
+  store.admin = reactive({ experiment: null as any, instance: null as any })
+  store.refresh = vi.fn(() => Promise.resolve({}))
+  return { admin: store.admin, actions: { refresh: store.refresh } }
+})
+
 const P = (over: Partial<Parameter>): Parameter => ({
   id: 1, name: 'nRounds', type: 'Integer', minVal: '1', maxVal: '20', defaultVal: '10', description: '', ...over,
 })
@@ -149,6 +158,7 @@ describe('helpers', () => {
 describe('ParameterDialog', () => {
   beforeEach(() => {
     http.put.mockReset()
+    http.post.mockReset()
     http.del.mockReset()
   })
 
@@ -169,7 +179,7 @@ describe('ParameterDialog', () => {
     await nextTick()
   }
   async function submit () {
-    q<HTMLFormElement>('form.pd')!.dispatchEvent(new Event('submit', { cancelable: true }))
+    q<HTMLFormElement>('form.prmd')!.dispatchEvent(new Event('submit', { cancelable: true }))
     await flushPromises()
   }
 
@@ -177,7 +187,7 @@ describe('ParameterDialog', () => {
     http.put.mockResolvedValue({ parameter: { id: 9, name: 'showNetwork', type: 'Boolean', minVal: '', maxVal: '', defaultVal: 'false', description: '' } })
     const w = await open()
     await type('[data-field="name"]', 'showNetwork')
-    const radio = q<HTMLInputElement>('.pd__types input[value="Boolean"]')!
+    const radio = q<HTMLInputElement>('.prmd__types input[value="Boolean"]')!
     radio.checked = true
     radio.dispatchEvent(new Event('change'))
     await nextTick()
@@ -200,16 +210,33 @@ describe('ParameterDialog', () => {
     w.unmount()
   })
 
-  it('edits by adding the new version, then removing the old one', async () => {
-    http.put.mockResolvedValue({ parameter: P({ id: 5, defaultVal: '12' }) })
-    http.del.mockResolvedValue(null)
+  it('edits in place, keeping the name, without creating or deleting anything', async () => {
+    http.post.mockResolvedValue({ parameter: P({ id: 1, defaultVal: '12' }) })
     const old = P({ id: 1 })
     const w = await open({ existing: [old], editing: old })
     await type('[data-field="defaultVal"]', '12')
     await submit()
-    expect(http.put.mock.calls[0][1]).toMatchObject({ name: 'nRounds', defaultVal: '12', minVal: '1', maxVal: '20' })
-    expect(http.del).toHaveBeenCalledWith('/parameters/12/1')
-    expect(w.emitted('saved')![0]).toEqual([expect.objectContaining({ id: 5 }), 1, ''])
+    expect(http.post).toHaveBeenCalledTimes(1)
+    const [url, body] = http.post.mock.calls[0]
+    expect(url).toBe('/parameters/12/1')
+    expect(body).toMatchObject({ name: 'nRounds', defaultVal: '12', minVal: '1', maxVal: '20' })
+    expect(http.put).not.toHaveBeenCalled()
+    expect(http.del).not.toHaveBeenCalled()
+    expect(w.emitted('saved')![0]).toEqual([expect.objectContaining({ id: 1, defaultVal: '12' })])
+    expect(w.emitted('update:open')![0]).toEqual([false])
+    w.unmount()
+  })
+
+  it('keeps the dialog open when an edit is refused, and loses nothing', async () => {
+    const { HttpError } = await import('@/lib/http')
+    http.post.mockRejectedValue(new (HttpError as any)(400, 'There is already a parameter named "rounds".'))
+    const old = P({ id: 1 })
+    const w = await open({ existing: [old], editing: old })
+    await type('[data-field="defaultVal"]', '12')
+    await submit()
+    expect(document.body.textContent).toMatch(/already a parameter named "rounds"/)
+    expect(http.del).not.toHaveBeenCalled()
+    expect(w.emitted('saved')).toBeUndefined()
     w.unmount()
   })
 
@@ -218,7 +245,7 @@ describe('ParameterDialog', () => {
     http.put.mockRejectedValue(new (HttpError as any)(400, 'Invalid experiment ID'))
     const w = await open()
     await type('[data-field="name"]', 'cond')
-    const radio = q<HTMLInputElement>('.pd__types input[value="Text"]')!
+    const radio = q<HTMLInputElement>('.prmd__types input[value="Text"]')!
     radio.checked = true
     radio.dispatchEvent(new Event('change'))
     await nextTick()
@@ -242,6 +269,32 @@ describe('ParameterDialog', () => {
     ;[...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Discard')!.click()
     await nextTick()
     expect(w.emitted('update:open')).toHaveLength(2)
+    w.unmount()
+  })
+})
+
+describe('ParametersPage', () => {
+  it('shows an edit at once, in the same row, until the server sends it', async () => {
+    // jsdom has no scrolling; the page scrolls the saved row into view
+    if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
+    const { default: ParametersPage } = await import('../src/pages/parameters/ParametersPage.vue')
+    const { default: ParameterDialog } = await import('../src/pages/parameters/ParameterDialog.vue')
+    store.admin.experiment = { id: 12, name: 'Trust game', fileMode: false, steps: [], parameters: [P({ id: 1 }), P({ id: 2, name: 'bonus', type: 'Decimal' })] }
+    const w = mount(ParametersPage, { attachTo: document.body })
+    await nextTick()
+    const names = () => w.findAll('tbody th code').map(c => c.text())
+    const firstDefault = () => w.find('tbody tr td.pp-default code').text()
+    expect(names()).toEqual(['nRounds', 'bonus'])
+    w.findComponent(ParameterDialog).vm.$emit('saved', P({ id: 1, defaultVal: '12' }))
+    await nextTick()
+    expect(names()).toEqual(['nRounds', 'bonus'])
+    expect(firstDefault()).toBe('12')
+    expect(store.refresh).toHaveBeenCalled()
+    // the server's push shows the same change
+    store.admin.experiment.parameters = [P({ id: 1, defaultVal: '12' }), P({ id: 2, name: 'bonus', type: 'Decimal' })]
+    await nextTick()
+    expect(names()).toEqual(['nRounds', 'bonus'])
+    expect(firstDefault()).toBe('12')
     w.unmount()
   })
 })

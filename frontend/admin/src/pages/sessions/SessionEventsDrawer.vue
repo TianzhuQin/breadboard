@@ -35,7 +35,7 @@
             @click="newestFirst = !newestFirst"
           />
           <BButton size="sm" variant="ghost" :icon="RotateCw" :loading="loading" aria-label="Load again" title="Load again" @click="load" />
-          <BButton size="sm" :icon="Download" :disabled="!filtered.length" title="Save the events listed here as a CSV file" @click="exportView">
+          <BButton size="sm" :icon="Download" :disabled="!filtered.length || loading" :loading="exporting" title="Save the events listed here as a CSV file" @click="exportView">
             Export {{ isFiltered ? 'filtered' : 'all' }}
           </BButton>
         </div>
@@ -152,7 +152,7 @@
             <div v-if="openGroups.has(g.name)" :id="groupId(g.name)" class="sev__gbody">
               <div class="sev__gtools">
                 <BButton size="sm" variant="ghost" :icon="ListFilter" @click="showInTimeline(g.name)">Show in timeline</BButton>
-                <BButton size="sm" :icon="Sheet" title="One row per event, one column per data name" @click="exportGroup(g)">Export as table</BButton>
+                <BButton size="sm" :icon="Sheet" :disabled="loading" :loading="exporting" title="One row per event, one column per data name" @click="exportGroup(g.name)">Export as table</BButton>
               </div>
               <div class="sev__gscroll">
                 <table class="sev__table is-wide">
@@ -198,7 +198,7 @@ import { admin } from '@/store/admin'
 import type { Instance } from '@/store/types'
 import {
   eventNameCounts, eventsToCsv, eventsToWideCsv, filterEvents, formatClock, formatDateTime, formatDay, formatSpan,
-  groupEvents, mergeEvents, normalizeEvent, safeFileName, sameDay, sortEvents, type EventGroup, type SessionEvent,
+  groupEvents, liveEventOf, mergeEvents, normalizeEvent, safeFileName, sameDay, sortEvents, type EventGroup, type SessionEvent,
 } from './sessionData'
 import { loadSessionEvents } from './eventsLoader'
 
@@ -216,12 +216,18 @@ const newestFirst = ref(false)
 const limit = ref(PAGE)
 const openGroups = reactive(new Set<string>())
 const groupLimits = reactive<Record<string, number>>({})
+const exporting = ref(false)
 let requestNo = 0
 
 /** The current session keeps recording while the drawer is open: its pushed events join in. */
 const isLive = computed(() => !!props.session && admin.instance?.id === props.session.id &&
   (admin.instance.status === 'RUNNING' || admin.instance.status === 'TESTING'))
-const live = computed(() => props.session && admin.instance?.id === props.session.id ? admin.events.map(normalizeEvent) : [])
+// pushes from another session (another account's, or the autopilot's) are left out
+const live = computed(() => {
+  const s = props.session
+  if (!s || admin.instance?.id !== s.id) return []
+  return admin.events.filter(e => liveEventOf(e as { experimentInstanceId?: unknown }, s.id, isLive.value)).map(normalizeEvent)
+})
 const events = computed(() => sortEvents(mergeEvents(loaded.value, live.value)))
 
 const isFiltered = computed(() => !!query.value.trim() || !!nameFilter.value)
@@ -333,14 +339,37 @@ function baseName () {
   const s = props.session
   return s ? `${safeFileName(s.name)}_${s.id}` : 'session'
 }
-function exportView () {
+/**
+ * Live pushes keep only the newest 1000 events and cut values over 2000 characters short, so while
+ * they are part of the list the events are loaded again in full before a file is made.
+ */
+async function freshForExport (): Promise<boolean> {
+  if (!isLive.value && !live.value.length) return true
+  exporting.value = true
+  try {
+    await load()
+    if (!failed.value) return true
+    notify.error('Couldn’t export the events',
+      'They could not be loaded again in full, and the live list may miss some or have long values cut short. Try again, or download the server’s CSV instead.')
+    return false
+  } finally {
+    exporting.value = false
+  }
+}
+
+async function exportView () {
+  if (!filtered.value.length || !(await freshForExport())) return
+  // the filters still apply to the reloaded list
   const list = filtered.value
   if (!list.length) return
   const file = `${baseName()}_events${isFiltered.value ? '_filtered' : ''}.csv`
   saveText(file, eventsToCsv(list))
   notify.success(`Saved ${file}`, `${list.length.toLocaleString()} ${list.length === 1 ? 'event' : 'events'}, one row per data item. Times are in UTC.`)
 }
-function exportGroup (g: EventGroup) {
+async function exportGroup (name: string) {
+  if (!(await freshForExport())) return
+  const g = groups.value.find(x => x.name === name)
+  if (!g) return
   const file = `${baseName()}_${safeFileName(g.name, 'event')}.csv`
   saveText(file, eventsToWideCsv(g.events, g.keys))
   notify.success(`Saved ${file}`, `${g.events.length.toLocaleString()} “${g.name}” events, one column per data name.`)

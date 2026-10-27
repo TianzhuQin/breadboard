@@ -158,18 +158,30 @@ public class ConsoleRoutesTest extends BaseTest {
             "currentPassword", "secret-1", "newPassword", "a-new-one-1", "confirmPassword", "a-new-one-2"))));
         assertTrue(User.findByEmail(alice.email).passwordMatches("secret-1"));
 
-        assertNull(error(changePassword(alice, form("email", alice.email.toUpperCase(), "currentPassword", "secret-1",
-            "newPassword", "a-new-one-1", "confirmPassword", "a-new-one-1"))));
+        String oldToken = alice.uid;
+        Result changedResult = changePassword(alice, form("email", alice.email.toUpperCase(), "currentPassword", "secret-1",
+            "newPassword", "a-new-one-1", "confirmPassword", "a-new-one-1"));
+        assertNull(error(changedResult));
         User changed = User.findByEmail(alice.email);
         assertTrue(changed.passwordMatches("a-new-one-1"));
         assertTrue("stored hashed", changed.password.startsWith("$2"));
+
+        // The sign-in token is replaced: whoever held the old one is signed out; this session goes on
+        // with the new one, which the answer carries for the console's websocket.
+        String newToken = Json.parse(contentAsString(changedResult)).get("uid").asText();
+        assertNotEquals(oldToken, newToken);
+        assertEquals(newToken, changed.uid);
+        assertEquals(newToken, session(changedResult).get("uid"));
+        assertNull(User.findByUID(oldToken));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/state").withSession("uid", oldToken))));
+        assertEquals(OK, status(route(fakeRequest(GET, "/state").withSession("uid", newToken))));
 
         // JSON works too (no email: the session says whose).
         ObjectNode json = Json.newObject();
         json.put("currentPassword", "a-new-one-1");
         json.put("newPassword", "another-one-2");
         json.put("confirmPassword", "another-one-2");
-        Result viaJson = route(fakeRequest(POST, "/saveUserSettings").withJsonBody(json).withSession("uid", alice.uid));
+        Result viaJson = route(fakeRequest(POST, "/saveUserSettings").withJsonBody(json).withSession("uid", newToken));
         assertNull(error(viaJson));
         assertTrue(User.findByEmail(alice.email).passwordMatches("another-one-2"));
     }
@@ -288,6 +300,26 @@ public class ConsoleRoutesTest extends BaseTest {
     }
 
     @Test
+    public void aZipThatWouldUnpackOutsideItsFolderIsRefused() throws Exception {
+        User user = user("slip");
+        int before = Experiment.findAll().size();
+        String evil = "evil-" + UUID.randomUUID() + ".groovy";
+        File outside = new File(System.getProperty("java.io.tmpdir"), evil);
+        Map<String, String> entries = new HashMap<String, String>();
+        entries.put("Steps/InitStep.groovy", "initStep = stepFactory.createStep('InitStep')");
+        entries.put("../" + evil, "println 'pwned'");
+        try {
+            Result result = ExperimentController.importZip(user, "Slip", zip(entries));
+            assertEquals(contentAsString(result), BAD_REQUEST, status(result));
+            assertTrue(contentAsString(result), contentAsString(result).contains("outside its folder"));
+            assertFalse("nothing was written next to the temporary folder", outside.exists());
+            assertEquals("no experiment", before, Experiment.findAll().size());
+        } finally {
+            FileUtils.deleteQuietly(outside);
+        }
+    }
+
+    @Test
     public void anExportWithoutContentCanBeImported() throws Exception {
         User user = user("importer2");
         Map<String, String> entries = new HashMap<String, String>();
@@ -363,6 +395,39 @@ public class ConsoleRoutesTest extends BaseTest {
         JsonNode second = Json.parse(contentAsString(again));
         assertEquals("logo-2.png", second.get("fileName").asText());
         assertEquals("image/png", Image.findById(second.get("id").asLong()).contentType);
+    }
+
+    // ---- file-mode images stay in their folder ---------------------------------------------------------
+
+    @Test
+    public void aFileModeImageIsServedButNothingOutsideItsFolder() throws Exception {
+        Experiment experiment = new Experiment();
+        experiment.name = "File images";
+        experiment.uid = UUID.randomUUID().toString();
+        experiment.fileMode = true;
+        experiment.save();
+        File dev = new File(play.Play.application().path(), "dev");
+        boolean devExisted = dev.exists();
+        File folder = new File(dev, experiment.getDirectoryName());
+        try {
+            File images = new File(folder, "Images");
+            assertTrue(images.mkdirs());
+            Files.write(new File(images, "logo.png").toPath(), new byte[]{(byte) 0x89, 'P', 'N', 'G'});
+            FileUtils.writeStringToFile(new File(folder, "Steps/InitStep.groovy"), "// a step");
+
+            Result image = route(fakeRequest(GET, "/images/" + experiment.id + "/logo.png"));
+            assertEquals(OK, status(image));
+            assertEquals("nosniff", header("X-Content-Type-Options", image));
+
+            // No sign-in is needed for this route; the name is decoded before it arrives.
+            for (String name : new String[]{"..%2FSteps%2FInitStep.groovy", "..%2F..%2F..%2Fconf%2Fapplication.conf",
+                "..%2F..%2F..%2Fbuild.sbt", "..", "%2E%2E", "missing.png"}) {
+                Result result = route(fakeRequest(GET, "/images/" + experiment.id + "/" + name));
+                assertEquals(name, NOT_FOUND, status(result));
+            }
+        } finally {
+            FileUtils.deleteQuietly(devExisted ? folder : dev);
+        }
     }
 
     // ---- file mode's steps folder (§3.6.1) -----------------------------------------------------------

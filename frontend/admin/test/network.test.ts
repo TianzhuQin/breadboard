@@ -2,15 +2,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { scaleFor, NEUTRAL, CATEGORICAL_LIGHT, CATEGORICAL_DARK, CATEGORY20, rampColor } from '../src/network/palette'
 import { parseFilter, matchFilter, describeFilter } from '../src/network/filter'
 import {
-  isAi, connectionOf, discoverProperties, colorableProperties, compareValues, compareIds, labelOf, valueOf, choicesOf, formatValue,
+  isAi, connectionOf, discoverProperties, colorableProperties, compareValues, compareIds, labelOf, valueOf, choicesOf, formatValue, isTie, tieBetween,
 } from '../src/network/players'
-import { NetworkLayout } from '../src/network/layout'
+import { NetworkLayout, layoutFor } from '../src/network/layout'
 import { placeLabels, sceneToSvg, PAPER_THEME, type Scene } from '../src/network/render'
 import { networkGraphml, networkJson, exportFileName } from '../src/network/exporters'
 import { LiveGraph, type GraphNode } from '../src/lib/graph'
-import { actions, graph, __receive } from '../src/store/admin'
+import { actions, admin, graph, __receive } from '../src/store/admin'
 import { toasts } from '../src/ui/toast'
-import { editTie, undoLast, pendingEdits, editHistory, friendlyReason, inverseOf } from '../src/network/tieEdits'
+import { editTie, undoLast, undoEdit, pendingEdits, editHistory, friendlyReason, inverseOf } from '../src/network/tieEdits'
 
 const node = (id: string, data: Record<string, any> = {}): GraphNode => ({ id, data })
 
@@ -381,7 +381,45 @@ describe('drawing and exports', () => {
     expect(doc.querySelector('key[attr\\.name="score"]')!.getAttribute('attr.type')).toBe('double')
     expect(xml).not.toContain('big html')
     expect(xml).toContain('a &amp; &quot;b&quot; &lt;c&gt;')
-    expect(xml).toContain('<data key="x">1.2</data>')
+    expect(xml).toContain('<data key="layout_x">1.2</data>')
+  })
+
+  it('keeps GraphML valid and unambiguous: a plain graph id, its own position keys, no illegal characters', () => {
+    const g = new LiveGraph()
+    g.apply({ action: 'addNode', id: 'p1' })
+    g.apply({ action: 'nodePropertyChanged', id: 'p1', key: 'x', value: 40 })
+    g.apply({ action: 'nodePropertyChanged', id: 'p1', key: 'answer', value: 'bad\u0001\u0008 text\uFFFF \uD800 ok 😀' })
+    const xml = networkGraphml(g, { experiment: 'My study', session: 'Wave 1/2', positions: new Map([['p1', { x: 7, y: 8 }]]) })
+    const doc = new DOMParser().parseFromString(xml, 'application/xml')
+    expect(doc.querySelector('parsererror')).toBe(null)
+    // ids are NMTOKENs; the names go in a description and graph data
+    expect(doc.querySelector('graph')!.getAttribute('id')).toBe('network')
+    expect(doc.querySelector('graph > desc')!.textContent).toBe('My study / Wave 1/2')
+    expect(doc.querySelector('key[for="graph"][attr\\.name="session"]')).not.toBe(null)
+    expect(xml).toContain('<data key="g_session">Wave 1/2</data>')
+    // the experiment's own x is kept apart from where the picture put them
+    const xKey = doc.querySelector('key[for="node"][attr\\.name="x"]')!.getAttribute('id')!
+    expect(xml).toContain(`<data key="${xKey}">40</data>`)
+    expect(xml).toContain('<data key="layout_x">7</data>')
+    expect(doc.querySelectorAll('key[attr\\.name="x"]').length).toBe(1)
+    expect(xml).toContain('bad text  ok 😀')
+  })
+
+  it('exports each tie\'s kind (its label) in GraphML and JSON', () => {
+    const g = liveGraph(3, [[0, 1]])
+    g.apply({ action: 'addLink', id: 'pp', source: 'p1', target: 'p2', value: 'partner' })
+    const xml = networkGraphml(g)
+    const doc = new DOMParser().parseFromString(xml, 'application/xml')
+    expect(doc.querySelector('parsererror')).toBe(null)
+    expect(doc.querySelector('key#e_label')!.getAttribute('attr.name')).toBe('label')
+    expect(doc.querySelector('edge[id="pp"] > data[key="e_label"]')!.textContent).toBe('partner')
+    expect(doc.querySelector('edge[id="e0"] > data[key="e_label"]')!.textContent).toBe('connected')
+    // a tie property already called "label" keeps its name; the kind is then "tie_label"
+    g.apply({ action: 'linkPropertyChanged', id: 'pp', key: 'label', value: 'mine' })
+    expect(networkGraphml(g)).toContain('attr.name="tie_label"')
+    const data = JSON.parse(networkJson(g))
+    expect(data.links.find((l: any) => l.id === 'pp').label).toBe('partner')
+    expect(data.links.find((l: any) => l.id === 'e0').label).toBe('connected')
   })
 
   it('exports JSON with every property, ties and positions', () => {
@@ -495,6 +533,59 @@ describe('tie edits', () => {
     expect(inverseOf({ op: 'add', a: 'x', b: 'y' })).toEqual({ op: 'remove', a: 'x', b: 'y' })
   })
 
+  it('only adds and cuts ties ("connected" edges), not links of other kinds', async () => {
+    __receive({ action: 'addLink', id: 'p', source: 'a', target: 'c', value: 'partner' })
+    expect(isTie(graph.links.get('p'))).toBe(false)
+    expect(isTie(graph.links.get('1'))).toBe(true)
+    expect(isTie({})).toBe(true)
+    expect(tieBetween(graph, 'c', 'a')).toBeUndefined()
+    expect(tieBetween(graph, 'b', 'a')!.id).toBe('1')
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    const cut = await editTie('remove', 'a', 'c')
+    expect(cut.reason).toMatch(/“partner” link, not a tie/)
+    expect(spy).not.toHaveBeenCalled()
+    // partners can still be tied
+    expect((await editTie('add', 'a', 'c')).ok).toBe(true)
+    expect(spy).toHaveBeenCalledWith('add', 'a', 'c')
+  })
+
+  it('forgets the undo history when the engine reloads, and an old toast\'s Undo does nothing', async () => {
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    await editTie('remove', 'a', 'b')
+    const undo = toasts[toasts.length - 1].action!
+    expect(editHistory.value.length).toBe(1)
+    __receive({ notify: { ScriptEngineReloading: true } })
+    await vi.waitFor(() => expect(editHistory.value).toEqual([]))
+    __receive({ notify: { ScriptEngineReloaded: true } })
+    // the rebuilt network has the same people and the old tie
+    for (const id of ['a', 'b', 'c']) __receive({ action: 'addNode', id })
+    __receive({ action: 'addLink', id: '7', source: 'a', target: 'b', value: 'connected' })
+    expect(undoLast()).toBe(null)
+    undo.run()
+    expect(toasts[toasts.length - 1].title).toBe('Nothing to undo')
+    expect(toasts[toasts.length - 1].detail).toMatch(/rebuilt/)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(admin.engine).toBe('loaded')
+  })
+
+  it('an edit already taken back can\'t be undone again from its toast', async () => {
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    await editTie('add', 'a', 'c')
+    const first = toasts[toasts.length - 1].action!
+    __receive({ action: 'addLink', id: '2', source: 'a', target: 'c' })
+    await undoLast()
+    __receive({ action: 'removeLink', id: '2' })
+    await editTie('add', 'a', 'c')
+    __receive({ action: 'addLink', id: '3', source: 'a', target: 'c' })
+    expect(spy).toHaveBeenCalledTimes(3)
+    // the first toast's Undo would cut the tie made by the second edit
+    first.run()
+    expect(toasts[toasts.length - 1].title).toBe('Nothing to undo')
+    expect(spy).toHaveBeenCalledTimes(3)
+    expect(editHistory.value).toEqual([{ op: 'add', a: 'a', b: 'c' }])
+    expect((await undoEdit({ op: 'add', a: 'x', b: 'y' })).ok).toBe(false)
+  })
+
   it('forgets the undo history when the session changes', async () => {
     vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
     const exp = { id: 1, name: 'E', uid: 'u', fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 }
@@ -573,6 +664,87 @@ describe('AdminNetwork', () => {
     await w.trigger('keydown', { key: 'Enter' })
     expect(w.emitted('edit')).toBeUndefined()
     expect(w.emitted('notice')![0][0]).toMatch(/already tied/)
+    w.unmount()
+  })
+
+  it('zooms with the wheel, also in the small steps of a smooth-scrolling mouse; pans sideways or with Shift', async () => {
+    const { w, g } = await mountNet(2)
+    const layout = layoutFor(g)
+    const viewNow = () => { w.unmount(); return layout.view! }
+    await w.trigger('wheel', { deltaY: -4, deltaX: 0, deltaMode: 0 })
+    const zoomed = viewNow()
+    expect(zoomed.k).toBeGreaterThan(1)
+
+    const second = await mountNet(2)
+    const l2 = layoutFor(second.g)
+    await second.w.trigger('wheel', { deltaY: 0, deltaX: 30, deltaMode: 0 })
+    // the rest of the same gesture keeps panning, even straight up and down
+    await second.w.trigger('wheel', { deltaY: 20, deltaX: 0, deltaMode: 0 })
+    second.w.unmount()
+    expect(l2.view!.k).toBe(1)
+    expect(l2.view!.x).toBe(-30)
+    expect(l2.view!.y).toBe(-20)
+    expect(l2.follow).toBe(false)
+
+    const third = await mountNet(2)
+    await third.w.trigger('wheel.shift', { deltaY: 20, deltaX: 0, deltaMode: 0 })
+    third.w.unmount()
+    expect(layoutFor(third.g).view).toEqual({ k: 1, x: 0, y: -20 })
+  })
+
+  it('a preview fits its own view and leaves the Network page\'s zoom and pan alone', async () => {
+    const { mount } = await import('@vue/test-utils')
+    const AdminNetwork = (await import('../src/network/AdminNetwork.vue')).default
+    const g = liveGraph(3, [[0, 1]])
+    const layout = layoutFor(g)
+    // the Network page was left zoomed into a corner
+    layout.view = { k: 6, x: -4000, y: -3000 }
+    layout.follow = false
+    const w = mount(AdminNetwork, { props: { graph: g, rememberView: false, controls: false }, attachTo: document.body })
+    await new Promise(r => setTimeout(r, 20))
+    await w.trigger('wheel', { deltaY: -40, deltaX: 0, deltaMode: 0 })
+    w.unmount()
+    expect(layout.view).toEqual({ k: 6, x: -4000, y: -3000 })
+    expect(layout.follow).toBe(false)
+  })
+
+  it('shows a tie\'s properties on hover, and won\'t cut a link that isn\'t a tie', async () => {
+    const { mount } = await import('@vue/test-utils')
+    const AdminNetwork = (await import('../src/network/AdminNetwork.vue')).default
+    const g = liveGraph(2)
+    g.apply({ action: 'addLink', id: 'pp', source: 'p0', target: 'p1', value: 'partner' })
+    g.apply({ action: 'linkPropertyChanged', id: 'pp', key: 'weight', value: '2.5' })
+    g.apply({ action: 'linkPropertyChanged', id: 'pp', key: 'inProps', value: '{}' })
+    const w = mount(AdminNetwork, { props: { graph: g, frozen: true }, attachTo: document.body })
+    await new Promise(r => setTimeout(r, 20))
+    const pos = (w.vm as any).positions() as Map<string, { x: number, y: number }>
+    const a = pos.get('p0')!
+    const b = pos.get('p1')!
+    const mid = { clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 }
+    await w.trigger('pointermove', { ...mid, pointerId: 1, pointerType: 'mouse' })
+    const tip = w.find('.an__tip')
+    expect(tip.exists()).toBe(true)
+    expect(tip.text()).toContain('p0 – p1')
+    expect(tip.text()).toContain('“partner” link')
+    expect(tip.text()).toContain('weight')
+    expect(tip.text()).toContain('2.5')
+    expect(tip.text()).not.toContain('inProps')
+    // in cut mode it says it can't be cut, and a click explains instead of proposing an edit
+    await w.setProps({ mode: 'cut' })
+    await w.trigger('pointermove', { ...mid, pointerId: 1, pointerType: 'mouse' })
+    expect(w.find('.an__tip').text()).toContain('Only ties can be cut here')
+    await w.trigger('pointerdown', { ...mid, pointerId: 1, pointerType: 'mouse', button: 0 })
+    await w.trigger('pointerup', { ...mid, pointerId: 1, pointerType: 'mouse', button: 0 })
+    expect(w.emitted('edit')).toBeUndefined()
+    expect(w.emitted('notice')![0][0]).toMatch(/“partner” link, not a tie/)
+    // when a tie runs along the same line, Cut picks the tie
+    g.apply({ action: 'addLink', id: 'tt', source: 'p0', target: 'p1', value: 'connected' })
+    await new Promise(r => setTimeout(r, 30))
+    await w.trigger('pointermove', { ...mid, pointerId: 1, pointerType: 'mouse' })
+    expect(w.find('.an__tip').text()).toContain('Click to cut this tie')
+    await w.trigger('pointerdown', { ...mid, pointerId: 1, pointerType: 'mouse', button: 0 })
+    await w.trigger('pointerup', { ...mid, pointerId: 1, pointerType: 'mouse', button: 0 })
+    expect(w.emitted('edit')![0][0]).toEqual({ op: 'remove', a: 'p0', b: 'p1' })
     w.unmount()
   })
 

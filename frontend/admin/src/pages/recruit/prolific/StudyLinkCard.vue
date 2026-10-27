@@ -16,8 +16,16 @@
       <div v-if="target" class="rc-note rc-note--success">
         <CircleCheck :size="16" aria-hidden="true" />
         <span>
-          Right now it leads to <strong>{{ target.name }}</strong>, the newest running session.
+          Right now it leads to <strong>{{ target.name }}</strong>, the newest running session whose game hasn’t started.
           Once that session’s game has started, newcomers are turned away until another session opens.
+        </span>
+      </div>
+      <div v-else-if="started" class="rc-note rc-note--warning">
+        <TriangleAlert :size="16" aria-hidden="true" />
+        <span>
+          The game in <strong>{{ started.name }}</strong> has already started, so right now the link shows
+          “No session is open right now”. Start a new session on <RouterLink to="/session">Live session</RouterLink>, or let
+          <RouterLink to="/autopilot">Autopilot</RouterLink> keep one open.
         </span>
       </div>
       <div v-else class="rc-note rc-note--warning">
@@ -45,7 +53,13 @@ import type { Experiment, Instance } from '@/store/types'
 import CopyButton from '../CopyButton.vue'
 import { prolificStudyUrl, prolificTestUrl, randomToken } from './prolific'
 
-const props = defineProps<{ experiment: Experiment, target: Instance | null }>()
+const props = defineProps<{
+  experiment: Experiment
+  /** the session the link leads to now */
+  target: Instance | null
+  /** a running session whose game has started (why there is no target) */
+  started?: Instance | null
+}>()
 
 // written as data so the template doesn't read the braces as its own syntax
 const PID_PLACEHOLDER = '{{%PROLIFIC_PID%}}'

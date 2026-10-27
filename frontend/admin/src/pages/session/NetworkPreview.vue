@@ -10,9 +10,10 @@
       <BButton size="sm" variant="ghost" :icon-right="ArrowRight" href="#/network">Open</BButton>
     </template>
     <div class="live-net__stage">
-      <!-- a glance only: the full, editable view is on the Network page -->
+      <!-- a glance only: the full, editable view is on the Network page. It always fits everyone
+           in, whatever zoom and pan the Network page was left at -->
       <div class="live-net__view" inert>
-        <AdminNetwork :graph="graph" mode="view" :controls="false">
+        <AdminNetwork :graph="graph" mode="view" :controls="false" :remember-view="false">
           <template #empty><p class="live-net__empty">No one has joined yet.</p></template>
         </AdminNetwork>
       </div>

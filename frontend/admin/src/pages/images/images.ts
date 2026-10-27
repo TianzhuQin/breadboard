@@ -68,7 +68,10 @@ export function formatBytes (n: number): string {
 }
 
 export interface ImageLinks {
-  /** /images/<experimentId>/<fileName>: survives export, import and file mode */
+  /**
+   * /images/<experimentId>/<fileName>: works in file mode too, while the experiment keeps its id
+   * (an imported copy gets a new one, so its links need updating)
+   */
   byName: string
   /** /images/<id>: only while the image is in this database (null in file mode) */
   byId: string | null
@@ -76,10 +79,13 @@ export interface ImageLinks {
   tag: string
 }
 
-/** Absolute links to an image. File names are encoded, so spaces, # and ? don't break them. */
-export function imageLinks (origin: string, experimentId: number, img: Image): ImageLinks {
-  const byName = `${origin}/images/${experimentId}/${encodeURIComponent(img.fileName)}`
-  const byId = img.id != null ? `${origin}/images/${img.id}` : null
+/**
+ * Links to an image, starting at the site root, so they work on whatever address participants use
+ * (not just the one the console is open on). File names are encoded, so spaces, # and ? don't break them.
+ */
+export function imageLinks (experimentId: number, img: Image): ImageLinks {
+  const byName = `/images/${experimentId}/${encodeURIComponent(img.fileName)}`
+  const byId = img.id != null ? `/images/${img.id}` : null
   return { byName, byId, tag: imgTag(byName, img.fileName) }
 }
 

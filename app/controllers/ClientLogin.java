@@ -123,7 +123,9 @@ public class ClientLogin extends Controller {
 
     ExperimentInstance experimentInstance = ExperimentInstance.findById(experimentInstanceId);
     Experiment experiment = Experiment.findById(experimentId);
-    if (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING) {
+    if (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING
+        || !ScriptBoard.runsSession(experimentId, experimentInstance)) {
+      // (Also when the engine runs another session: this one's game is not there to join.)
       return ok(amtError.render());
     }
 
@@ -180,6 +182,11 @@ public class ClientLogin extends Controller {
         loginForm.reject("This session has already started.");
         return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
+      if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
+        // The engine runs another session (or none): this one's game is not there to join.
+        loginForm.reject("This session isn't running right now. Please check the link you were given.");
+        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      }
       String token = ParticipantAuth.claim(experimentInstanceId, clientId);
       if (token == null) {
         loginForm.reject("This ID is already in use.");
@@ -220,6 +227,11 @@ public class ClientLogin extends Controller {
     if (ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
       // The same browser coming back: it already holds this seat.
       return redirect(routes.ClientController.index(experimentId, experimentInstanceId, clientId, null).url());
+    }
+    if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
+      // The engine runs another session (or none since a restart): this one's game is not there to join.
+      return ok(participantMessage.render("This study is not running",
+          "There is no session running at the moment. Please return the study on Prolific."));
     }
     if (closedToNewcomers(experimentInstanceId, clientId)) {
       return ok(participantMessage.render("The session has already started",

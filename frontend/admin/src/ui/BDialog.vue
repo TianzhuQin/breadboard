@@ -68,6 +68,10 @@ function onBackdrop () {
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]'
+function focusables () {
+  if (!panel.value) return []
+  return Array.from(panel.value.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => el.offsetParent !== null)
+}
 function onKeydown (e: KeyboardEvent) {
   if (e.key === 'Escape' && props.dismissable) {
     e.stopPropagation()
@@ -75,17 +79,35 @@ function onKeydown (e: KeyboardEvent) {
     return
   }
   if (e.key !== 'Tab' || !panel.value) return
-  const items = Array.from(panel.value.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => el.offsetParent !== null)
-  if (!items.length) return
+  const items = focusables()
+  if (!items.length) { e.preventDefault(); return }
   const first = items[0]
   const last = items[items.length - 1]
-  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
-  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+  // Tab stays inside, also from the panel itself (focused when nothing asks for focus) or from
+  // anywhere outside it
+  const active = document.activeElement
+  const inside = !!active && active !== panel.value && panel.value.contains(active)
+  if (e.shiftKey && (!inside || active === first)) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && (!inside || active === last)) { e.preventDefault(); first.focus() }
+}
+
+// The dialog is modal: while it is the top one, focus that gets out (e.g. by a click on a toast)
+// comes back to it.
+const self = Symbol('dialog')
+function onFocusIn (e: FocusEvent) {
+  if (openStack[openStack.length - 1] !== self || !panel.value) return
+  if (e.target instanceof Node && panel.value.contains(e.target)) return
+  ;(focusables()[0] || panel.value).focus()
 }
 
 watch(() => props.open, async (open) => {
   if (open) {
-    if (!isOpen) { isOpen = true; openCount++ }
+    if (!isOpen) {
+      isOpen = true
+      openCount++
+      openStack.push(self)
+      document.addEventListener('focusin', onFocusIn)
+    }
     layer.value = 100 + openCount
     opener = document.activeElement as HTMLElement | null
     document.body.classList.add('b-no-scroll')
@@ -99,7 +121,13 @@ watch(() => props.open, async (open) => {
   }
 }, { immediate: true })
 function release () {
-  if (isOpen) { isOpen = false; openCount = Math.max(0, openCount - 1) }
+  if (isOpen) {
+    isOpen = false
+    openCount = Math.max(0, openCount - 1)
+    const i = openStack.indexOf(self)
+    if (i >= 0) openStack.splice(i, 1)
+    document.removeEventListener('focusin', onFocusIn)
+  }
   if (!openCount) document.body.classList.remove('b-no-scroll')
 }
 onBeforeUnmount(release)
@@ -107,6 +135,8 @@ onBeforeUnmount(release)
 
 <script lang="ts">
 let openCount = 0
+/** The open dialogs, newest (top) last. */
+const openStack: symbol[] = []
 </script>
 
 <style>

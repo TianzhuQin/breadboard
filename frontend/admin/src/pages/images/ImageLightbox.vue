@@ -37,7 +37,7 @@
       <div class="lb__side">
         <h3 class="lb__side-title">Use this image</h3>
         <p class="lb__side-text">Paste a link into a content item, a step’s text or the participant page.</p>
-        <CopyField label="Link" badge="recommended" :value="links.byName" hint="By file name. Keeps working after export and import, and in file mode." />
+        <CopyField label="Link" badge="recommended" :value="links.byName" hint="By file name, and works in file mode too. An imported copy of the experiment gets a new ID, so update these links after importing it." />
         <CopyField v-if="links.byId" label="Link by ID" :value="links.byId" hint="Shorter, but only valid in this database: an imported copy of the experiment gets new IDs." />
         <CopyField label="HTML tag" :value="links.tag" hint="For HTML content. Change the alt text to describe the picture for screen readers." />
         <div class="lb__side-actions">
@@ -66,7 +66,7 @@ const src = computed(() => props.image ? imageSrc(props.experimentId, props.imag
 watch(src, () => { state.value = 'loading'; dims.value = '' }, { immediate: true })
 const ext = computed(() => props.image ? extensionOf(props.image.fileName) : '')
 const links = computed(() => props.image
-  ? imageLinks(window.location.origin, props.experimentId, props.image)
+  ? imageLinks(props.experimentId, props.image)
   : { byName: '', byId: null, tag: '' })
 
 function onLoad (e: Event) {

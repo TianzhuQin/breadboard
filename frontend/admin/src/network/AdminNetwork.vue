@@ -70,7 +70,9 @@ import {
   drawScene, drawLegend, placeLabels, readTheme, sceneToSvg, PAPER_THEME,
   type RenderTheme, type Scene, type SceneNode, type SceneLink, type LegendBlock, type LabelCandidate,
 } from './render'
-import { NOISY_KEYS, formatValue, isAi, connectionOf, labelOf as labelFor, propertyTitle, statusOf, valueOf } from './players'
+import {
+  NOISY_KEYS, NOISY_LINK_KEYS, formatValue, isAi, isTie, connectionOf, labelOf as labelFor, propertyTitle, statusOf, tieBetween, valueOf,
+} from './players'
 
 export type NetworkMode = 'view' | 'connect' | 'cut'
 export interface PendingEdit { op: 'add' | 'remove', a: string, b: string }
@@ -79,9 +81,11 @@ export interface PendingEdit { op: 'add' | 'remove', a: string, b: string }
  * The live network of the session, drawn on a canvas so hundreds of people stay smooth.
  *
  * View mode: click to select, drag people to move them (they stay where you put them), drag the
- * background to pan, wheel or pinch to zoom, double-click to zoom (Shift: out).
+ * background (or scroll with Shift, or two fingers sideways) to pan, wheel or pinch to zoom,
+ * double-click to zoom (Shift: out). Hovering a tie shows its properties.
  * Connect mode: click one person then another (or drag from one to the other) to propose a tie.
- * Cut mode: click a tie to propose cutting it.
+ * Cut mode: click a tie to propose cutting it. Only ties ("connected" edges) can be added or cut;
+ * edges of other kinds an experiment adds are drawn and can be inspected, but not edited here.
  * Edits are only proposed (`edit` event); the page sends them and passes them back as `pending`.
  * Keyboard: arrows move between people, Enter selects (or picks, in connect mode), +/− zoom,
  * 0 fits, Shift+arrows pan.
@@ -103,9 +107,14 @@ const props = withDefaults(defineProps<{
   frozen?: boolean
   /** Zoom buttons in the corner. */
   controls?: boolean
+  /**
+   * Share the zoom and pan with the network's other views and restore it on return (the Network
+   * page). Off for a small preview, which always fits everyone in and leaves the shared view alone.
+   */
+  rememberView?: boolean
 }>(), {
   mode: 'view', selectedId: null, colorBy: null, labelBy: null, sizeByDegree: true, showAllLabels: false,
-  pending: () => [], highlight: null, frozen: false, controls: true,
+  pending: () => [], highlight: null, frozen: false, controls: true, rememberView: true,
 })
 
 const emit = defineEmits<{
@@ -146,6 +155,15 @@ let lastClick = { id: '', at: 0 }
 
 const reducedMotion = typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 const layout = layoutFor(props.graph)
+
+// Whether the view keeps fitting everyone in (until the researcher pans or zooms). The layout's
+// flag is shared by every view of the network; a view that doesn't remember its view keeps its own.
+let ownFollow = true
+function following () { return props.rememberView ? layout.follow : ownFollow }
+function setFollowing (on: boolean) {
+  if (props.rememberView) layout.follow = on
+  else ownFollow = on
+}
 
 // ---- colours, labels ----------------------------------------------------------------------------
 
@@ -246,6 +264,8 @@ function nodeAt (sx: number, sy: number, slop = 4): string | null {
 function linkAt (sx: number, sy: number, tol = 7): { id: string, a: string, b: string } | null {
   let best: { id: string, a: string, b: string } | null = null
   let bestD = tol
+  let bestTie: { id: string, a: string, b: string } | null = null
+  let bestTieD = tol
   for (const l of layout.links) {
     const p = toScreen(l.source)
     const q = toScreen(l.target)
@@ -255,8 +275,13 @@ function linkAt (sx: number, sy: number, tol = 7): { id: string, a: string, b: s
     const t = len2 ? Math.max(0, Math.min(1, ((sx - p.x) * dx + (sy - p.y) * dy) / len2)) : 0
     const d = Math.hypot(sx - (p.x + t * dx), sy - (p.y + t * dy))
     if (d <= bestD) { bestD = d; best = { id: l.id, a: l.source.id, b: l.target.id } }
+    if (props.mode === 'cut' && d <= bestTieD && isTie(props.graph.links.get(l.id))) {
+      bestTieD = d
+      bestTie = { id: l.id, a: l.source.id, b: l.target.id }
+    }
   }
-  return best
+  // in Cut mode a tie wins over a link of another kind drawn along the same line
+  return bestTie || best
 }
 
 // ---- the scene ----------------------------------------------------------------------------------
@@ -337,7 +362,7 @@ function buildScene (o: BuildOptions): Scene {
   for (const sn of nodes) if (shown.has(sn.id)) sn.label = nameOf(sn.id)
 
   const links: SceneLink[] = []
-  const cut = o.live && props.mode === 'cut' ? hoverLink.value : null
+  const cut = o.live && props.mode === 'cut' && hoverLink.value && isTie(props.graph.links.get(hoverLink.value.id)) ? hoverLink.value : null
   for (const l of layout.links) {
     const a = pos.get(l.source.id)
     const b = pos.get(l.target.id)
@@ -366,7 +391,7 @@ function buildScene (o: BuildOptions): Scene {
     const a = pos.get(tieStart)
     if (a) {
       const b = target ? pos.get(target) : null
-      const ok = !!target && !props.graph.linkBetween(tieStart, target)
+      const ok = !!target && !tieBetween(props.graph, tieStart, target)
       rubber = { x1: a.x, y1: a.y, x2: b ? b.x : pointer.x, y2: b ? b.y : pointer.y, ok }
     }
   }
@@ -403,7 +428,7 @@ function frame (time: number) {
     layout.step()
     again = layout.moving
   }
-  if (fitWhenCalm && layout.follow && (props.frozen || layout.alpha < 0.12 || !layout.moving)) {
+  if (fitWhenCalm && following() && (props.frozen || layout.alpha < 0.12 || !layout.moving)) {
     fitWhenCalm = false
     fit(true, true)
   }
@@ -416,7 +441,7 @@ function frame (time: number) {
     if (t >= 1) anim = null
     else again = true
   }
-  if (!reducedMotion && (props.pending.length || (props.mode === 'cut' && hoverLink.value))) again = true
+  if (!reducedMotion && (props.pending.length || (props.mode === 'cut' && hoverLink.value && isTie(props.graph.links.get(hoverLink.value.id))))) again = true
   draw(time)
   if (!reducedMotion && !again) {
     // keep going while someone is popping in
@@ -465,7 +490,7 @@ function setView (target: { k: number, x: number, y: number }, animate: boolean)
 function zoomAt (factor: number, sx: number, sy: number, animate = false) {
   const k = Math.min(K_MAX, Math.max(K_MIN, view.k * factor))
   const w = toWorld(sx, sy)
-  layout.follow = false
+  setFollowing(false)
   setView({ k, x: sx - w.x * k, y: sy - w.y * k }, animate)
 }
 function zoomBy (factor: number) {
@@ -490,14 +515,14 @@ function fit (animate = false, keepFollow = false) {
   if (!size.w || !size.h) return
   const pad = Math.min(64, Math.max(28, Math.min(size.w, size.h) * 0.08))
   setView(fitView(size.w, size.h, { top: pad + 8, right: pad, bottom: pad + 16, left: pad }), animate)
-  if (!keepFollow) layout.follow = true
+  if (!keepFollow) setFollowing(true)
 }
 
 /** Centre the view on someone (e.g. a search result) and zoom in a little. */
 function focusOn (id: string) {
   const n = layout.nodes.get(id)
   if (!n || !size.w) return
-  layout.follow = false
+  setFollowing(false)
   const k = Math.max(view.k, Math.min(1.6, Math.max(1, view.k * 1.4)))
   setView({ k, x: size.w / 2 - (n.x || 0) * k, y: size.h / 2 - (n.y || 0) * k }, true)
 }
@@ -513,7 +538,7 @@ function reveal (id: string, cover: { right?: number, bottom?: number } = {}) {
   const w = Math.max(80, size.w - (cover.right || 0))
   const h = Math.max(80, size.h - (cover.bottom || 0))
   if (p.x >= m && p.y >= m && p.x <= w - m && p.y <= h - m) return
-  layout.follow = false
+  setFollowing(false)
   setView({ k: view.k, x: w / 2 - (n.x || 0) * view.k, y: h / 2 - (n.y || 0) * view.k }, true)
 }
 /** Free everyone you pinned and lay the network out afresh. */
@@ -521,26 +546,38 @@ function relayout () {
   layout.unpinAll()
   layout.reheat(1)
   if (reducedMotion) layout.settle(150, 600)
-  layout.follow = true
+  setFollowing(true)
   fitWhenCalm = true
   invalidate()
 }
 
+/** The scroll gesture under way: wheel events less than WHEEL_GAP ms apart belong to one gesture. */
+let wheelGesture: { pan: boolean, at: number } | null = null
+const WHEEL_GAP = 180
+
 function onWheel (e: WheelEvent) {
   const p = localPoint(e)
-  layout.follow = false
+  setFollowing(false)
   anim = null
   if (e.ctrlKey || e.metaKey) {
     // a trackpad pinch arrives as a wheel event with ctrlKey
     zoomAt(Math.exp(-e.deltaY * 0.01), p.x, p.y)
-  } else if (e.deltaMode === 0 && (Math.abs(e.deltaX) > 0 || Math.abs(e.deltaY) < 40)) {
-    // two-finger scrolling on a trackpad moves the picture
-    view.x -= e.deltaX
-    view.y -= e.deltaY
+    wheelGesture = null
+    return
+  }
+  // Scrolling zooms around the pointer, as in the old console, whatever the wheel's step size
+  // (smooth-scrolling mice send small steps). A gesture that moves sideways (two fingers on a
+  // trackpad) or holds Shift pans instead, and keeps panning until it ends.
+  const now = performance.now()
+  const sameGesture = !!wheelGesture && now - wheelGesture.at < WHEEL_GAP
+  const pan = e.shiftKey || e.deltaX !== 0 || (sameGesture && wheelGesture!.pan)
+  wheelGesture = { pan, at: now }
+  const lines = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1
+  if (pan) {
+    view.x -= e.deltaX * lines
+    view.y -= e.deltaY * lines
     invalidate()
   } else {
-    // a mouse wheel zooms around the pointer
-    const lines = e.deltaMode === 1 ? 40 : 1
     zoomAt(Math.exp(-Math.sign(e.deltaY) * Math.min(120, Math.abs(e.deltaY) * lines) * 0.0022), p.x, p.y)
   }
 }
@@ -553,12 +590,14 @@ function setCursor (c: string) {
 function updateHover (p: { x: number, y: number }) {
   const touch = pointer.type === 'touch'
   const node = touch ? null : nodeAt(p.x, p.y)
-  const link = !touch && !node && props.mode === 'cut' ? linkAt(p.x, p.y) : null
+  // ties show their properties in every mode; not while a new tie is being drawn
+  const drawing = props.mode === 'connect' && !!(connectFrom.value || dragTie.value)
+  const link = !touch && !node && !drawing ? linkAt(p.x, p.y) : null
   if (node !== hoverNode.value) hoverNode.value = node
   if ((link?.id || null) !== (hoverLink.value?.id || null)) hoverLink.value = link
   if (props.mode === 'connect') setCursor(node ? 'pointer' : 'crosshair')
   else if (node) setCursor('pointer')
-  else if (link) setCursor('pointer')
+  else if (link && props.mode === 'cut') setCursor(isTie(props.graph.links.get(link.id)) ? 'pointer' : 'not-allowed')
   else setCursor('grab')
 }
 
@@ -618,7 +657,7 @@ function onPointerMove (e: PointerEvent) {
     const k = Math.min(K_MAX, Math.max(K_MIN, pinch.k * dist / pinch.dist))
     const wx = (pinch.midX - pinch.x) / pinch.k
     const wy = (pinch.midY - pinch.y) / pinch.k
-    layout.follow = false
+    setFollowing(false)
     anim = null
     view.k = k
     view.x = midX - wx * k
@@ -659,7 +698,7 @@ function onPointerMove (e: PointerEvent) {
     if (!pan.moved && Math.hypot(dx, dy) < 4) return
     pan.moved = true
     panning.value = true
-    layout.follow = false
+    setFollowing(false)
     anim = null
     view.x = pan.vx + dx
     view.y = pan.vy + dy
@@ -672,7 +711,8 @@ function onPointerMove (e: PointerEvent) {
   const before = hoverNode.value
   const beforeLink = hoverLink.value
   updateHover(p)
-  if (before !== hoverNode.value || beforeLink !== hoverLink.value || (props.mode === 'connect' && connectFrom.value)) invalidate()
+  // a tie's tooltip follows the pointer along the tie
+  if (before !== hoverNode.value || beforeLink !== hoverLink.value || hoverLink.value || (props.mode === 'connect' && connectFrom.value)) invalidate()
 }
 
 function onPointerUp (e: PointerEvent) {
@@ -710,7 +750,9 @@ function onPointerUp (e: PointerEvent) {
     const l = linkDown
     linkDown = null
     if (Math.hypot(p.x - l.startX, p.y - l.startY) < 8 && props.mode === 'cut') {
-      emit('edit', { op: 'remove', a: l.a, b: l.b })
+      const link = props.graph.links.get(l.id)
+      if (!link || isTie(link)) emit('edit', { op: 'remove', a: l.a, b: l.b })
+      else emit('notice', `That is a “${link.label}” link, not a tie. Only ties can be cut here.`)
     }
     return
   }
@@ -794,7 +836,7 @@ function clickNode (id: string) {
 }
 
 function proposeAdd (a: string, b: string) {
-  if (props.graph.linkBetween(a, b)) {
+  if (tieBetween(props.graph, a, b)) {
     emit('notice', `${nameOf(a)} and ${nameOf(b)} are already tied.`)
   } else {
     emit('edit', { op: 'add', a, b })
@@ -842,7 +884,7 @@ function onKey (e: KeyboardEvent) {
   if (dir) {
     e.preventDefault()
     if (e.shiftKey) {
-      layout.follow = false
+      setFollowing(false)
       view.x -= dir[0] * 80
       view.y -= dir[1] * 80
     } else {
@@ -909,7 +951,7 @@ const hint = computed(() => {
     const from = connectFrom.value || dragTie.value
     if (!from) return 'Click a person, then who to tie them to. Or drag from one to the other.'
     const over = hoverNode.value
-    if (over && over !== from && props.graph.linkBetween(from, over)) return `${nameOf(from)} and ${nameOf(over)} are already tied`
+    if (over && over !== from && tieBetween(props.graph, from, over)) return `${nameOf(from)} and ${nameOf(over)} are already tied`
     return `Now click who to tie ${nameOf(from)} to · Esc cancels`
   }
   if (props.mode === 'cut') return 'Click a tie to cut it'
@@ -934,9 +976,7 @@ const tooltip = computed(() => {
   void props.graph.version.value
   if (panning.value || pointer.type === 'touch') return null
   const link = hoverLink.value
-  if (!hoverNode.value && link && props.mode === 'cut') {
-    return { title: `${nameOf(link.a)} – ${nameOf(link.b)}`, sub: '', note: 'Click to cut this tie', rows: [] as [string, string][], color: '', ai: false }
-  }
+  if (!hoverNode.value && link) return linkTooltip(link)
   const id = hoverNode.value
   if (!id || (drag && drag.moved && props.mode !== 'connect')) return null
   const g = props.graph.nodes.get(id)
@@ -969,6 +1009,29 @@ const tooltip = computed(() => {
     ai: isAi(g),
   }
 })
+
+/** A tie's tooltip: who it joins, its kind when it isn't a plain tie, and its properties. */
+function linkTooltip (hover: { id: string, a: string, b: string }) {
+  const l = props.graph.links.get(hover.id)
+  const tie = isTie(l)
+  const rows: [string, string][] = []
+  for (const [key, v] of Object.entries(l?.data || {})) {
+    if (rows.length >= 6) break
+    if (NOISY_LINK_KEYS.has(key) || v === null || v === undefined) continue
+    if (typeof v === 'object' && !Object.keys(v).length) continue
+    rows.push([key, formatValue(v, 32)])
+  }
+  let note = ''
+  if (props.mode === 'cut') note = tie ? 'Click to cut this tie' : 'Only ties can be cut here'
+  return {
+    title: `${nameOf(hover.a)} – ${nameOf(hover.b)}`,
+    sub: !tie && l?.label ? `“${l.label}” link` : '',
+    note,
+    rows,
+    color: '',
+    ai: false,
+  }
+}
 
 // ---- exports ------------------------------------------------------------------------------------
 
@@ -1042,7 +1105,7 @@ function syncLayout () {
         layout.reheat(r.added + r.removed > 2 ? 0.5 : 0.25)
       }
     }
-    if (layout.follow) {
+    if (following()) {
       if (!firstFitDone) { fit(false, true); firstFitDone = true }
       fitWhenCalm = true
     }
@@ -1102,9 +1165,9 @@ function measureStage () {
   c.style.width = `${w}px`
   c.style.height = `${h}px`
   if (first) {
-    if (layout.view && !layout.follow) Object.assign(view, layout.view)
+    if (props.rememberView && layout.view && !following()) Object.assign(view, layout.view)
     else { fit(false, true); firstFitDone = layout.nodes.size > 0 }
-  } else if (layout.follow) {
+  } else if (following()) {
     fit(false, true)
   } else {
     // keep the middle of the picture in the middle
@@ -1121,7 +1184,8 @@ onMounted(() => {
   theme = readTheme(stage.value || null)
   themeTick.value++
   layout.sync(props.graph)
-  if (layout.view) {
+  // a preview always starts from a fit of its own size, never the Network page's zoom and pan
+  if (props.rememberView && layout.view) {
     Object.assign(view, layout.view)
     firstFitDone = true
   }
@@ -1150,7 +1214,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   mounted = false
-  layout.view = { ...view }
+  if (props.rememberView) layout.view = { ...view }
   if (raf) cancelAnimationFrame(raf)
   raf = 0
   ro?.disconnect()

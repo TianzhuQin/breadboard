@@ -1,4 +1,4 @@
-import type { GraphNode } from '@/lib/graph'
+import type { GraphLink, GraphNode, LiveGraph } from '@/lib/graph'
 
 /**
  * What the console knows about a player (a vertex of the session's graph), read from its
@@ -208,3 +208,26 @@ export function compareIds (a: string, b: string): number {
   if (aa !== bb) return aa ? 1 : -1
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
 }
+
+// ---- ties ---------------------------------------------------------------------------------------
+
+/**
+ * Whether an edge is one of the network's ties, the kind the console can add and cut. EditTie
+ * (edgeEdits.adminEdit) only touches edges labelled "connected"; an experiment may add other kinds
+ * (e.g. "partner"), which are drawn but can't be edited here. An edge without a label counts as a tie.
+ */
+export function isTie (l: { label?: string } | null | undefined): boolean {
+  return !!l && (!l.label || l.label === 'connected')
+}
+
+/** The tie between two people (either way round), ignoring edges of other kinds. */
+export function tieBetween (graph: LiveGraph, a: string, b: string): GraphLink | undefined {
+  for (const l of graph.links.values()) {
+    if (!isTie(l)) continue
+    if ((l.source === a && l.target === b) || (l.source === b && l.target === a)) return l
+  }
+  return undefined
+}
+
+/** Edge properties that are the engine's plumbing (each end's private values). */
+export const NOISY_LINK_KEYS = new Set(['inProps', 'outProps'])

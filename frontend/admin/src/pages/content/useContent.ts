@@ -24,6 +24,29 @@ export function explain (e: unknown): string {
   return (e as any)?.message || String(e)
 }
 
+// ---- unsaved edits, kept outside the page ----
+/**
+ * Unsaved edits per experiment. They live here, not in the page, so they survive the page being
+ * taken down without a route change: a 401 or Sign out swaps the whole console for the sign-in
+ * form, and after signing in again the page comes back with them. They belong to one account:
+ * signing in as someone else drops them. Leaving the page with "Leave without saving" drops them too.
+ */
+const keptDrafts = reactive<Record<number, Drafts>>({})
+let keptFor: string | undefined
+function claimKeptDrafts () {
+  if (admin.email === keptFor) return
+  if (keptFor !== undefined) dropKeptDrafts()
+  keptFor = admin.email
+}
+/** Throw away every unsaved edit (all experiments). */
+export function dropKeptDrafts () {
+  for (const id of Object.keys(keptDrafts)) delete keptDrafts[Number(id)]
+}
+watch(() => admin.email, claimKeptDrafts)
+
+/** How many texts have unsaved edits, in any experiment, whether or not the page is open. */
+export const unsavedContentCount = computed(() => Object.values(keptDrafts).reduce((n, d) => n + Object.keys(d).length, 0))
+
 function readPref (key: string): string | null {
   try { return localStorage.getItem(key) } catch (e) { return null }
 }
@@ -72,7 +95,8 @@ export function useContent () {
   }
 
   // ---- drafts ----
-  const draftsByExp = reactive<Record<number, Drafts>>({})
+  claimKeptDrafts()
+  const draftsByExp = keptDrafts
   const EMPTY: Drafts = {}
   const drafts = computed<Drafts>(() => (expId.value != null && draftsByExp[expId.value]) || EMPTY)
   function ensureDrafts (): Drafts | null {

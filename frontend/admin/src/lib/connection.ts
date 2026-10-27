@@ -4,6 +4,26 @@ import { Socket } from '@human-nature-lab/breadboard-core/src/socket'
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'retrying' | 'closed'
 
 /**
+ * The core Socket, made to stay closed once closed. Between retries the core Socket's close() only
+ * drops its listeners: the pending retry would still open a new connection later (and send what it
+ * had queued). A closed AdminSocket never connects again and keeps nothing queued.
+ */
+export class AdminSocket extends Socket {
+  private closed = false
+
+  connect () {
+    if (this.closed) return
+    super.connect()
+  }
+
+  close () {
+    this.closed = true
+    super.close()
+    this['_clearBuffer']()
+  }
+}
+
+/**
  * The console's websocket (/connect, app/models/Breadboard.java). Every message carries the
  * admin's uid; the server answers with a stream of JSON messages, sometimes batched as
  * {queuedMessages: [...]}. Reconnects by itself with back-off; on every (re)connect it logs in
@@ -19,7 +39,7 @@ export class AdminConnection {
   start (uid: string, configured: string | undefined) {
     this.stop()
     this.uid = uid
-    const socket = new Socket(socketUrl(configured))
+    const socket = new AdminSocket(socketUrl(configured))
     this.socket = socket
     socket.on('connect', () => { this.state.value = this.state.value === 'idle' ? 'connecting' : this.state.value })
     socket.on('open', () => {
@@ -58,13 +78,18 @@ export class AdminConnection {
     return () => { this.listeners = this.listeners.filter(l => l !== fn) }
   }
 
-  /** Send an action (see the catalogue in app/models/Breadboard.java). */
-  send (action: string, payload: Record<string, any> = {}) {
+  /**
+   * Send an action (see the catalogue in app/models/Breadboard.java). Only while the connection is
+   * open: returns false otherwise and sends nothing. (The socket would queue it and send it after the
+   * next reconnect, perhaps minutes after the console said the action had failed.)
+   */
+  send (action: string, payload: Record<string, any> = {}): boolean {
+    if (this.state.value !== 'open' || !this.socket) return false
     this.rawSend({ ...payload, action, uid: this.uid })
+    return true
   }
 
   private rawSend (msg: Record<string, any>) {
-    // queued by Socket until the connection is open
     this.socket?.send(JSON.stringify(msg))
   }
 

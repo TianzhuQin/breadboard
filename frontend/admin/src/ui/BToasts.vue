@@ -1,7 +1,17 @@
 <template>
   <div class="b-toasts" aria-live="polite" aria-relevant="additions">
     <TransitionGroup name="b-toast">
-      <div v-for="t in toasts" :key="t.id" class="b-toast" :class="`b-toast--${t.kind}`" :role="t.kind === 'error' ? 'alert' : 'status'">
+      <div
+        v-for="t in toasts"
+        :key="t.id"
+        class="b-toast"
+        :class="`b-toast--${t.kind}`"
+        :role="t.kind === 'error' ? 'alert' : 'status'"
+        @mouseenter="holdToast(t.id, 'pointer')"
+        @mouseleave="releaseToast(t.id, 'pointer')"
+        @focusin="holdToast(t.id, 'focus')"
+        @focusout="onFocusOut($event, t.id)"
+      >
         <component :is="icons[t.kind]" class="b-toast__icon" :size="18" aria-hidden="true" />
         <div class="b-toast__text">
           <div class="b-toast__title">{{ t.title }}</div>
@@ -16,8 +26,14 @@
 
 <script setup lang="ts">
 import { CircleCheck, CircleAlert, Info, TriangleAlert, X } from 'lucide-vue-next'
-import { toasts, dismiss } from './toast'
+import { toasts, dismiss, holdToast, releaseToast } from './toast'
 const icons = { success: CircleCheck, error: CircleAlert, info: Info, warning: TriangleAlert }
+
+// (moving between the toast's own buttons keeps it held)
+function onFocusOut (ev: FocusEvent, id: number) {
+  const el = ev.currentTarget as HTMLElement
+  if (!el.contains(ev.relatedTarget as Node | null)) releaseToast(id, 'focus')
+}
 </script>
 
 <style>
@@ -57,4 +73,9 @@ const icons = { success: CircleCheck, error: CircleAlert, info: Info, warning: T
 .b-toast-enter-active, .b-toast-leave-active { transition: all 220ms var(--ease); }
 .b-toast-enter-from { opacity: 0; transform: translateY(8px); }
 .b-toast-leave-to { opacity: 0; transform: translateX(16px); }
+@media (max-width: 640px) {
+  /* dialogs become bottom sheets here, with their buttons at the very bottom: keep off them */
+  .b-toasts { top: calc(12px + env(safe-area-inset-top, 0px)); bottom: auto; }
+  .b-toast-enter-from { transform: translateY(-8px); }
+}
 </style>

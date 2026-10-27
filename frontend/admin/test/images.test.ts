@@ -44,14 +44,15 @@ describe('checkUploadResponse (the server says "Error uploading" with HTTP 200)'
 })
 
 describe('image links', () => {
-  it('builds absolute links and encodes the file name', () => {
-    const l = imageLinks('https://lab.org', 7, { id: 41, fileName: 'my photo #1?.png' })
-    expect(l.byName).toBe('https://lab.org/images/7/my%20photo%20%231%3F.png')
-    expect(l.byId).toBe('https://lab.org/images/41')
-    expect(l.tag).toBe('<img src="https://lab.org/images/7/my%20photo%20%231%3F.png" alt="my photo #1?">')
+  it('builds links from the site root, whatever host the console is on, and encodes the file name', () => {
+    const l = imageLinks(7, { id: 41, fileName: 'my photo #1?.png' })
+    expect(l.byName).toBe('/images/7/my%20photo%20%231%3F.png')
+    expect(l.byId).toBe('/images/41')
+    expect(l.tag).toBe('<img src="/images/7/my%20photo%20%231%3F.png" alt="my photo #1?">')
+    for (const v of [l.byName, l.byId!, l.tag]) expect(v).not.toContain(window.location.origin)
   })
   it('has no ID link in file mode (images have no id there)', () => {
-    const l = imageLinks('http://x', 7, { id: null, fileName: 'a.png' })
+    const l = imageLinks(7, { id: null, fileName: 'a.png' })
     expect(l.byId).toBeNull()
     expect(imageSrc(7, { id: null, fileName: 'a b.png' })).toBe('/images/7/a%20b.png')
     expect(imageSrc(7, { id: 3, fileName: 'a b.png' })).toBe('/images/3')

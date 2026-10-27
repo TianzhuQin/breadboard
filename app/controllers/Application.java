@@ -142,7 +142,7 @@ public class Application extends Controller {
   }
 
   /** Shortest password accepted by the password change. */
-  static final int PASSWORD_MIN_LENGTH = 8;
+  static final int PASSWORD_MIN_LENGTH = User.PASSWORD_MIN_LENGTH;
 
   /**
    * Change the signed-in account's password: {@code currentPassword}, {@code newPassword},
@@ -185,8 +185,16 @@ public class Application extends Controller {
     }
 
     user.changePassword(newPassword);
+    // A new token too: whoever held the old one (another browser, a copied token) is signed out.
+    // This session carries on with the new one, which is also returned: the console's websocket
+    // must use it from now on (frames with the old one are refused).
+    String uid = UUID.randomUUID().toString();
+    user.uid = uid;
     user.update();
+    session("uid", uid);
+    session("juid", uid);
     result.put("success", true);
+    result.put("uid", uid);
     return ok(result);
   }
 

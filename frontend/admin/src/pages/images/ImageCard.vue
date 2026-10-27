@@ -51,7 +51,7 @@ const dims = ref('')
 const src = computed(() => imageSrc(props.experimentId, props.image))
 watch(src, () => { state.value = 'loading'; dims.value = '' })
 const ext = computed(() => extensionOf(props.image.fileName))
-const links = computed(() => imageLinks(window.location.origin, props.experimentId, props.image))
+const links = computed(() => imageLinks(props.experimentId, props.image))
 
 function onLoad (e: Event) {
   const img = e.target as HTMLImageElement
