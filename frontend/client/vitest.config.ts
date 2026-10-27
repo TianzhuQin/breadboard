@@ -11,6 +11,14 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  css: {
+    // The workspace pins sass 1.32, which predates the compileStringAsync API that
+    // Vite 6 uses by default; the legacy API exists in both.
+    preprocessorOptions: {
+      sass: { api: 'legacy' },
+      scss: { api: 'legacy' },
+    },
+  },
   test: {
     environment: 'jsdom',
     include: ['test/**/*.test.ts'],
