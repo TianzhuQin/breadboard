@@ -57,7 +57,13 @@ edgeEdits.adminEdit("add" | "remove", id1, id2)   // researcher edits
 ```
 
 The client sees its rules in `player.edgeEdits` and sends `Breadboard.sendEdgeEdit(op, a, b)`.
-Every edit, accepted or not, is logged as an `edgeEdit` event naming the actor.
+The answer (`bb:edge-edit-result`) says whether the edit was accepted (`ok`). It also says whether
+the network changed (`applied`), which is false when `onEdit` only collects it. Every edit,
+accepted or not, is logged as an `edgeEdit` event naming the actor.
+
+Scopes `amongNeighbors` and `visible` concern ties among a participant's neighbors. Turn those ties
+on with `g.setVisibility("egoTies")`. Under the default visibility the page cannot tell which
+neighbors are tied, so it doesn't offer to connect two of them, and the server logs a warning.
 
 ## Steps with a time limit
 
@@ -95,10 +101,82 @@ autopilot.waitingRoom([
 autopilot.replaceDisconnected([afterSeconds: 30, returnToHuman: true])
 ```
 
+While people wait, each one's `player._system.autopilot` holds the waiting state, which the new
+participant page shows as a waiting screen. Older pages show the waiting text instead. The waiting
+state is cleared however the game starts, whether by the autopilot, the admin's Run button or the
+AMT timer, because the server sends a `bb:game-start` event that scripts can also listen for.
+People who come back after a session was given up get its "could not start" notice, and are passed
+to `onCancel` too.
+
 The server opens a session at startup. Participants enter through `/play/{e}/login` or
 `/play/{e}/prolific?...` and wait in the waiting room. The game starts by itself, and people who
 left before the start get no seat. Someone who drops out mid-game is played by the computer after
 the grace period. A new session opens when the game finishes.
+
+## The participant page
+
+New experiments start with a redesigned page (`conf/defaults/default-client-html.html`):
+
+```html
+<v-app class="bb-app">
+  <ConnectionStatus />
+  <BBMain :player="player">
+    <BBGame :player="player" :graph="graph" />
+  </BBMain>
+</v-app>
+```
+
+- **`BBGame`** lays out the network next to the experiment's text, timers, choices and forms. On
+  phones they are stacked, with the experiment's part first.
+  - While an autopilot session fills up, it shows a waiting screen with the number of people there
+    and a countdown. Whatever the experiment shows meanwhile (timers, choices, forms) appears under
+    it and stays as it is when the game starts.
+  - Slots: `network`, `text`, `panel-top`, `panel-bottom`, `waiting`.
+- **`BBNetwork`** draws the participant in the middle and their neighbors on a circle.
+  - With `g.setVisibility("egoTies")`, ties among neighbors are drawn darker. Neighbors who know
+    each other sit next to each other, and longer ties curve around the outside.
+  - When the experiment allows edits (`edgeEdits.allow`), participants click (or tap) a tie to cut
+    it, or click two people to connect them. They confirm before anything is sent and then see the
+    server's answer.
+  - Moves the experiment marks unavailable are greyed out, and tapping one says why.
+  - Every possible change is also listed under the picture, for keyboards, screen readers and
+    crowded networks. The list is folded away until opened, and opens by itself when people are
+    drawn too small to tap.
+  - Neighbors without a name are called "Person A", "Person B", ... so every change can be put in
+    words.
+  - Options, passed through `BBGame`'s `network-props`:
+
+    | Option | Meaning |
+    |---|---|
+    | `layout` | `"ring"` or `"force"` |
+    | `nodeLabel` | Text under each person |
+    | `nodeBadge` | A small tag under the label |
+    | `nodeColor` | Fill colour |
+    | `nodeRadius` | Size of each person |
+    | `egoLabel` | Label on the participant (default "You") |
+    | `showMoveList` | Offer the changes as a list too (default on) |
+    | `editable` | Keep room for editing from the start, so the picture doesn't shrink when a later round allows it |
+
+  - Like `SVGGraph`, it sets `node.isEgo` and emits `nodeClick` and `edgeClick` for clicks on any
+    person or tie. `SVGGraph`'s layout props and edge-label slots don't apply.
+- Sign-in, message and loading pages use the same look.
+- The new look only applies inside `class="bb-app"`. The page is always light, so what
+  participants see doesn't depend on their system's dark mode.
+
+**Existing experiments keep their own client HTML and look unchanged.**
+- Vuetify's colours change only for pages marked `class="bb-app"`.
+- `SVGGraph` and every other component still work.
+- Imported and upgraded experiments keep the previous default page,
+  `conf/defaults/legacy-client-html.html`; only new experiments get `BBGame`.
+To move an old page over, replace `<SVGGraph ...>` with `<BBNetwork :player="player" :graph="graph" />`,
+or the whole layout with `BBGame`.
+
+After an update, browsers fetch the new client right away: the entry scripts carry a version
+parameter, and code loaded on demand has content-hashed file names.
+
+A page that reconnects after its session has ended (for example after the autopilot gave up on it)
+is not let into the session the server runs now. It gets back the last screen it had, such as its
+completion code, or else a "This session has ended" notice.
 
 ## Data
 
