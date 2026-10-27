@@ -49,7 +49,8 @@
                 size="lg"
                 :icon="Play"
                 :loading="busy.start"
-                title="Runs initStep.start()"
+                :disabled="!!startBlocked"
+                :title="startBlocked || 'Runs initStep.start()'"
                 @click="onStart"
               >Start the game</BButton>
               <span v-else class="live-hero__started">
@@ -71,7 +72,7 @@
         <!-- what this state means and what happens next, in plain words -->
         <p class="live-hero__explain">
           {{ explanation }}
-          <button v-if="isRunning && started.source === 'events'" type="button" class="live-linkbtn" @click="onStart">Not started? Start it anyway</button>
+          <button v-if="isRunning && started.started && !started.sure && !startBlocked" type="button" class="live-linkbtn" @click="onStart">Not started? Start it anyway</button>
         </p>
 
         <div v-if="isDone" class="live-done">
@@ -159,7 +160,7 @@ import {
   ArrowRight, Bot, CircleAlert, CircleCheck, CircleStop, Download, Hourglass, PanelBottom, Play, Plus, Share2, Timer, Users, Wifi,
 } from 'lucide-vue-next'
 import { BBadge, BButton, BPage, BSpinner } from '@/ui'
-import { admin, graph } from '@/store/admin'
+import { admin, engineElsewhere, graph } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import NewSessionDialog from './NewSessionDialog.vue'
 import NoSession from './NoSession.vue'
@@ -168,7 +169,7 @@ import JoinLinks from './JoinLinks.vue'
 import NetworkPreview from './NetworkPreview.vue'
 import SessionParams from './SessionParams.vue'
 import { FEED_CAP, fromLive, fromSeed, mergeFeed, parseServerTime, participantsSeen } from './events'
-import { cleanError, detectGameStarted, formatDuration, formatWhen, networkStats, waitingRoom } from './live'
+import { cleanError, detectGameStarted, engineElsewhereText, formatDuration, formatWhen, networkStats, waitingRoom } from './live'
 import { busy, dismissedErrorId, downloadData, resumeSession, startGame, stopSession } from './controls'
 import { autopilotRuns, useAutopilotStatus } from './autopilot'
 
@@ -230,6 +231,9 @@ const started = computed(() => detectGameStarted({
   output: admin.output,
   since: admin.engineReloadedAt,
 }))
+
+// the shared engine runs another experiment, so the server refuses a start here; '' otherwise
+const startBlocked = computed(() => engineElsewhere.value ? engineElsewhereText(engineElsewhere.value) : '')
 
 function onStart () {
   const r = room.value
@@ -294,6 +298,8 @@ const explanation = computed(() => {
   if (!i) return ''
   if (i.status === 'TESTING') return 'This is the test session for trying the experiment out. What happens in it is not saved.'
   if (isRunning.value) {
+    if (startBlocked.value) return startBlocked.value
+    if (started.value.started && !started.value.sure) return 'The session\'s log shows the game starting at about the time the engine last reloaded, and a reload forgets a start, so the game may not be running now.'
     if (started.value.started) return 'The game is on and new arrivals are turned away. Stop the session when you are done, or let the experiment finish it.'
     if (room.value && room.value.state !== 'cancelled') return 'People are gathering in the waiting room, which starts the game by itself.'
     return 'People can join with the links below. When everyone you need is here, start the game: everyone waiting is let in and newcomers are turned away.'

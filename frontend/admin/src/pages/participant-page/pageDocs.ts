@@ -1,5 +1,6 @@
 import { computed, reactive, watch } from 'vue'
 import { admin } from '@/store/admin'
+import { registerUnsaved } from '@/shell/unsaved'
 import { PARTS, isDirty, type PartKey, type PartState } from './participantPage'
 
 /** One experiment's participant page as edited here. */
@@ -29,3 +30,5 @@ export const docDirty = (d: PageDoc) => PARTS.some(p => isDirty(d.parts[p.key]))
 
 /** How many experiments have unsaved participant-page edits, whether or not the page is open. */
 export const unsavedPageCount = computed(() => [...docs.values()].filter(docDirty).length)
+// signing out asks first while there are any
+registerUnsaved('participant-page', () => unsavedPageCount.value, 'Participant page')

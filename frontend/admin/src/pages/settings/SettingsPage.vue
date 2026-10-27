@@ -120,7 +120,7 @@
           <span class="set-legacy__icon" aria-hidden="true"><History :size="18" /></span>
           <div class="set-legacy__text">
             <p>The previous console works with the same experiments and sessions.</p>
-            <p class="set__note">Use one console at a time: the server answers whichever console connected last, so the other one can miss updates.</p>
+            <p class="set__note">You can keep both open at the same time.</p>
           </div>
           <BButton href="/legacy-admin" :icon-right="ArrowRight">Open it</BButton>
         </div>
@@ -171,7 +171,8 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ArrowRight, ArrowUpRight, History, KeyRound, LogOut, Monitor, Moon, Sun } from 'lucide-vue-next'
 import { BBadge, BButton, BCheckbox, BField, BInput, BPage, notify } from '@/ui'
-import { admin, connectionState, experiments, logout } from '@/store/admin'
+import { admin, adoptUid, connectionState, experiments, logout } from '@/store/admin'
+import { confirmSignOut } from '@/shell/unsaved'
 import { theme, setTheme, type ThemeChoice } from '@/lib/theme'
 import { version } from '../../../package.json'
 import { useUnsavedGuard } from '../autopilot/useUnsavedGuard'
@@ -194,6 +195,9 @@ const connectionText = computed(() => ({
 
 const signingOut = ref(false)
 async function signOut () {
+  if (signingOut.value) return
+  // unsaved work on other pages (step drafts, content…) would be lost
+  if (!await confirmSignOut()) return
   signingOut.value = true
   try {
     await logout()
@@ -243,6 +247,8 @@ async function savePassword () {
   try {
     const res = await changePassword(admin.email, { ...pw })
     if (res.success) {
+      // the account has a new uid now; without it every later request would be refused
+      if (res.uid) adoptUid(res.uid)
       resetPassword()
       notify.success('Password changed', 'Use the new password the next time you sign in.')
     } else {

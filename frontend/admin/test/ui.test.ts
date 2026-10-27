@@ -5,6 +5,7 @@ import BSelect from '../src/ui/BSelect.vue'
 import BTabs from '../src/ui/BTabs.vue'
 import BDialog from '../src/ui/BDialog.vue'
 import BToasts from '../src/ui/BToasts.vue'
+import BMenu from '../src/ui/BMenu.vue'
 import { confirm, confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts, toast, dismiss, holdToast, releaseToast } from '../src/ui/toast'
 import { scaleFor, NEUTRAL } from '../src/network/palette'
@@ -178,5 +179,71 @@ describe('network colours', () => {
     const s = scaleFor(Array.from({ length: 20 }, (_, i) => i))
     expect(s.kind).toBe('numeric')
     expect(s.color(0)).not.toBe(s.color(19))
+  })
+})
+
+describe('BMenu', () => {
+  afterEach(() => { document.body.innerHTML = '' })
+
+  /** A menu whose second item runs `act` with a field outside the menu (like Steps > New, which focuses the new step's name). */
+  async function openMenu (act: (field: HTMLInputElement) => void) {
+    const field = document.createElement('input')
+    document.body.appendChild(field)
+    const w = mount(BMenu, {
+      attachTo: document.body,
+      props: { items: [{ label: 'Plain', run: () => {} }, { label: 'Name it', run: () => act(field) }] },
+      slots: { trigger: (p: any) => h('button', { type: 'button', class: 'trig', ...p.attrs, onClick: p.toggle }, 'New') },
+    })
+    const trigger = w.find('.trig').element as HTMLElement
+    const open = async () => {
+      await w.find('.trig').trigger('click')
+      await nextTick()
+      await nextTick()
+      // (opening focuses the first item)
+      expect(w.find('[role=menu]').element.contains(document.activeElement)).toBe(true)
+    }
+    const choose = (i: number) => w.findAll('[role=menuitem]')[i].trigger('click')
+    return { w, field, trigger, open, choose }
+  }
+
+  it('gives focus back to its trigger after an item that does not move it', async () => {
+    const { w, trigger, open, choose } = await openMenu(() => {})
+    await open()
+    await choose(0)
+    expect(w.find('[role=menu]').exists()).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+    await open()
+    await w.find('.b-menu').trigger('keydown', { key: 'Escape' })
+    expect(document.activeElement).toBe(trigger)
+    w.unmount()
+  })
+
+  it('leaves focus where the chosen item\'s action put it, so Enter there does not reopen the menu', async () => {
+    const now = await openMenu(f => f.focus())
+    await now.open()
+    await now.choose(1)
+    expect(document.activeElement).toBe(now.field)
+    expect(now.w.find('[role=menu]').exists()).toBe(false)
+    now.w.unmount()
+
+    // also when the field only appears (and takes focus) a moment later
+    const later = await openMenu(f => { void nextTick(() => nextTick(() => f.focus())) })
+    await later.open()
+    await later.choose(1)
+    await nextTick()
+    await nextTick()
+    expect(document.activeElement).toBe(later.field)
+    later.w.unmount()
+  })
+
+  it('does not take focus back from elsewhere when closed', async () => {
+    const { w, field, open } = await openMenu(() => {})
+    await open()
+    field.focus()
+    ;(w.vm as any).close(true)
+    await nextTick()
+    expect(w.find('[role=menu]').exists()).toBe(false)
+    expect(document.activeElement).toBe(field)
+    w.unmount()
   })
 })

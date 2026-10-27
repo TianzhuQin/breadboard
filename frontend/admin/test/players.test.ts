@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { actions, graph, __receive } from '../src/store/admin'
+import { actions, connection, graph, __receive } from '../src/store/admin'
 import { toasts } from '../src/ui/toast'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { pendingEdits, editHistory } from '../src/network/tieEdits'
@@ -15,8 +15,9 @@ const tick = () => new Promise(r => setTimeout(r, 30))
 const node = (id: string, data: Record<string, any> = {}): GraphNode => ({ id, data })
 const exp = { id: 1, name: 'E', uid: 'u', fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '.x{color:red}', clientGraphHash: 0, clientHtmlHash: 0 }
 
-function session (status = 'RUNNING') {
-  __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: { id: 9, name: 's', status } })
+/** `engine`: what the server says the shared engine runs (none when left out). */
+function session (status = 'RUNNING', engine: any = null) {
+  __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: { id: 9, name: 's', status }, engine })
 }
 function seed () {
   graph.clear()
@@ -162,7 +163,17 @@ describe('choosing for a player', () => {
 
   it('says so at once when there is no connection', async () => {
     vi.spyOn(actions, 'makeChoice').mockImplementation(() => false)
-    expect(await submitChoice('p1', 'c1', 2000)).toMatchObject({ ok: false, error: expect.stringMatching(/Not connected/) })
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, offline: true })
+  })
+
+  it('never takes an error from OnJoinStep or OnLeaveStep (tagged with its source) for the choice\'s', async () => {
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
+      setTimeout(() => __receive({ source: 'OnJoinStep', error: 'Caught error: onJoinStep failed for p7' }), 2)
+      setTimeout(() => __receive({ request: 'MakeChoice', choice: 'made' }), 600)
+      return true
+    })
+    // longer than the grace an untagged error gets
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
   })
 
   it('says so when nothing happens', async () => {
@@ -176,6 +187,7 @@ describe('choosing for a player', () => {
 describe('PlayerDetails', () => {
   beforeEach(async () => {
     vi.restoreAllMocks()
+    connection.state.value = 'open'
     session()
     seed()
     toasts.splice(0, toasts.length)
@@ -183,6 +195,7 @@ describe('PlayerDetails', () => {
     editHistory.value = []
     await tick()
   })
+  afterEach(() => { connection.state.value = 'idle' })
 
   it('shows who they are, live badges, and their screen in a sandbox', async () => {
     const w = mount(PlayerDetails, { props: { id: 'p1', labelBy: 'name' }, attachTo: document.body })
@@ -292,6 +305,47 @@ describe('PlayerDetails', () => {
     const w = mount(PlayerDetails, { props: { id: 'p1' } })
     expect(w.find('[aria-label="Cut the tie between p1 and p2"]').attributes('disabled')).toBeDefined()
     expect(w.find('input[role="combobox"]').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('does not ask to choose while offline, and says so when the connection drops meanwhile', async () => {
+    const spy = vi.spyOn(actions, 'makeChoice').mockImplementation(() => false)
+    const w = mount(PlayerDetails, { props: { id: 'p1' } })
+    const coop = () => w.findAll('.pd__choice-list button').find(b => b.text() === 'Cooperate')!
+    connection.state.value = 'retrying'
+    await coop().trigger('click')
+    expect(confirmState.open).toBe(false)
+    expect(toasts[toasts.length - 1].title).toBe('Not connected to the server')
+    expect(spy).not.toHaveBeenCalled()
+
+    connection.state.value = 'open'
+    await coop().trigger('click')
+    settleConfirm(true)
+    await vi.waitFor(() => expect(toasts[toasts.length - 1].detail).toMatch(/Nothing was sent, so “Cooperate” is still waiting on p1's screen/))
+    expect(toasts.some(t => /failed/.test(t.title))).toBe(false)
+    w.unmount()
+  })
+
+  it('locks ties and choices while the engine runs another experiment, and says why', async () => {
+    const tieSpy = vi.spyOn(actions, 'editTie')
+    session('RUNNING', { experimentId: 2, experimentName: 'Other study', sessionId: 4, sessionName: 'S', owner: 'bob@lab.org' })
+    const w = mount(PlayerDetails, { props: { id: 'p1' } })
+    const cut = w.find('[aria-label="Cut the tie between p1 and p2"]')
+    expect(cut.attributes('disabled')).toBeDefined()
+    expect(cut.attributes('title')).toBe('The engine is running “Other study” right now, so ties can\'t be changed here')
+    const picker = w.find('input[role="combobox"]')
+    expect(picker.attributes('disabled')).toBeDefined()
+    expect(picker.attributes('placeholder')).toMatch(/running “Other study”/)
+    const coop = w.findAll('.pd__choice-list button').find(b => b.text() === 'Cooperate')!
+    expect(coop.attributes('disabled')).toBeDefined()
+    expect(w.find('.pd__note').text()).toMatch(/running “Other study” right now, so choices can't be made from here/)
+    await cut.trigger('click')
+    expect(tieSpy).not.toHaveBeenCalled()
+    // the engine runs this experiment again
+    session('RUNNING', { experimentId: 1, experimentName: 'E', sessionId: 9, sessionName: 's', owner: 'r' })
+    await tick()
+    expect(w.find('[aria-label="Cut the tie between p1 and p2"]').attributes('disabled')).toBeUndefined()
+    expect(w.findAll('.pd__choice-list button').find(b => b.text() === 'Cooperate')!.attributes('disabled')).toBeUndefined()
     w.unmount()
   })
 

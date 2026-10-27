@@ -128,13 +128,14 @@ import {
   Copy, Database, Download, FileArchive, FlaskConical, HardDrive, Plus, Search, Upload,
 } from 'lucide-vue-next'
 import { BButton, BEmpty, BInput, BPage, BSelect, confirm, notify, toast } from '@/ui'
-import { admin, actions, experiments, running } from '@/store/admin'
+import { admin, actions, ensureConnected, experiments, running } from '@/store/admin'
+import { confirmEngineRebuild } from '@/store/engineGuard'
 import type { Experiment } from '@/store/types'
 import ExperimentCard from './ExperimentCard.vue'
 import NewExperimentDialog from './NewExperimentDialog.vue'
 import ImportExperimentDialog from './ImportExperimentDialog.vue'
 import FileModeDialog from './FileModeDialog.vue'
-import { autopilotNow, runningSessions, sessionNames } from '../sessions/runningSessions'
+import { autopilotNow } from '../autopilot/autopilot'
 import {
   describeError, devDirName, downloadExperiment, lastSession, plural, runningSession, zipFileName,
 } from './experiments'
@@ -219,24 +220,18 @@ async function select (e: Experiment) {
       'Switching experiments restarts the script engine, which disconnects everyone in the session.')
     return
   }
-  if (selectingId.value != null) return
+  if (selectingId.value != null || !ensureConnected()) return
   selectingId.value = e.id
   try {
-    // the engine is shared, so a session another account or the autopilot runs ends too
-    const others = await runningSessions()
-    if (others.length) {
-      const ok = await confirm({
-        title: `Switch to “${e.name}”?`,
-        message: `${sessionNames(others)} ${others.length === 1 ? 'appears' : 'appear'} to be running. ` +
-          'Switching experiments restarts the script engine, which every account and the autopilot share: the session it is running ends, and everyone in it is disconnected.',
-        confirmLabel: 'Switch anyway',
-        danger: true,
-      })
-      if (!ok) return
-    }
+    // the engine is shared: another researcher's session (or the autopilot's) may be live on it
+    if (!await confirmEngineRebuild({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
     await actions.selectExperiment(e.id)
     if (admin.experiment?.id === e.id) notify.success(`Now working on “${e.name}”`)
-    else notify.error(`Couldn't switch to “${e.name}”`, 'The server didn\'t confirm the change. Try again, or reload the page.')
+    else {
+      notify.error(`Couldn't switch to “${e.name}”`, admin.requestError?.request === 'SelectExperiment'
+        ? admin.requestError.text
+        : 'The server didn\'t confirm the change. Try again, or reload the page.')
+    }
   } finally {
     selectingId.value = null
   }
@@ -278,9 +273,10 @@ async function remove (e: Experiment) {
     return
   }
   if (running.value) {
-    // DeleteExperiment empties the engine's network, whichever experiment it deletes
+    // DeleteExperiment clears the account's current session (ScriptBoard.deleteExperiment), whichever
+    // experiment it deletes, so the console would lose track of the one still running
     notify.warning('Stop the running session first',
-      'Deleting an experiment resets the script engine, which would empty the running session\'s network.')
+      'Deleting an experiment makes the console forget your current session, even while it is still running.')
     return
   }
   const n = e.instances?.length || 0

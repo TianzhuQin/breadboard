@@ -10,6 +10,7 @@
       v-model:size-by-degree="prefs.sizeByDegree"
       v-model:frozen="prefs.frozen"
       :can-edit="canEdit"
+      :edit-hint="tieEditsBlocked"
       :match-count="matches.length"
       :match-index="matchIndex"
       :search-error="parsed.error"
@@ -131,7 +132,7 @@ import { admin, graph, running } from '@/store/admin'
 import AdminNetwork, { type NetworkMode, type PendingEdit } from '@/network/AdminNetwork.vue'
 import type { ColorScale, LegendEntry } from '@/network/palette'
 import { selectedPlayer, selectPlayer, networkPrefs as prefs, viewPrefs, setViewPref } from '@/network/selection'
-import { editTie, pendingEdits, undoLast, undoShortcut } from '@/network/tieEdits'
+import { editTie, pendingEdits, tieEditsBlocked, undoLast, undoShortcut } from '@/network/tieEdits'
 import { parseFilter, matchFilter } from '@/network/filter'
 import {
   colorableProperties, compareIds, connectionOf, discoverProperties, isAi, labelOf, labelableProperties, propertyTitle, valueOf,
@@ -152,8 +153,13 @@ const legend = shallowRef<LegendEntry[]>([])
 const legendScale = shallowRef<ColorScale | null>(null)
 const shortcutsOpen = ref(false)
 
-const canEdit = computed(() => !!running.value)
+// off while the session isn't running, or while the engine runs another experiment
+const canEdit = computed(() => !tieEditsBlocked.value)
 watch(canEdit, (v) => { if (!v) mode.value = 'view' })
+/** Say why ties can't be changed now. */
+function sayEditsBlocked () {
+  notify.info(tieEditsBlocked.value || 'Ties can\'t be changed right now')
+}
 
 const statusWord = computed(() => ({ STOPPED: 'stopped', FINISHED: 'finished', ARCHIVED: 'archived' } as Record<string, string>)[admin.instance?.status || ''] || 'not running')
 
@@ -283,7 +289,7 @@ function closePanel () {
 
 function onEdit (e: PendingEdit) {
   if (!canEdit.value) {
-    notify.info('Start the session to change ties')
+    sayEditsBlocked()
     return
   }
   void editTie(e.op, e.a, e.b, { name: nameFor })
@@ -348,8 +354,8 @@ function onKey (e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey || e.altKey) return
   switch (k.toLowerCase()) {
     case 'v': mode.value = 'view'; break
-    case 'c': if (canEdit.value) mode.value = 'connect'; else notify.info('Start the session to change ties'); break
-    case 'x': if (canEdit.value) mode.value = 'cut'; else notify.info('Start the session to change ties'); break
+    case 'c': if (canEdit.value) mode.value = 'connect'; else sayEditsBlocked(); break
+    case 'x': if (canEdit.value) mode.value = 'cut'; else sayEditsBlocked(); break
     case 'f': prefs.frozen = !prefs.frozen; break
     case 'l': prefs.showAllLabels = !prefs.showAllLabels; break
     case '0': net.value?.fit(true); break

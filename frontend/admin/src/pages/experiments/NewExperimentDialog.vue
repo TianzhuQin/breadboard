@@ -78,6 +78,7 @@ import { http } from '@/lib/http'
 import { admin, actions, experiments, running } from '@/store/admin'
 import type { Experiment } from '@/store/types'
 import { describeError, validateExperimentName } from './experiments'
+import { switchToNew } from './switchTo'
 
 const props = defineProps<{ open: boolean, copyFrom?: number | null }>()
 const emit = defineEmits<{ 'update:open': [v: boolean], created: [exp: Experiment] }>()
@@ -141,8 +142,7 @@ async function submit () {
     // PUT /experiment doesn't push the researcher's state, so ask for it
     await actions.refresh()
     if (switchTo.value && !running.value && created && typeof created.id === 'number') {
-      await actions.selectExperiment(created.id)
-      notify.success(`Created “${finalName}”`, 'You are now working on it.')
+      await switchToNew(created.id, finalName, `Created “${finalName}”`)
     } else {
       notify.success(`Created “${finalName}”`)
     }

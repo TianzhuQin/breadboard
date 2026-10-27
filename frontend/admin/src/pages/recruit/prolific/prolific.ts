@@ -1,4 +1,5 @@
 /** Prolific helpers: the study URL, the test link and the participants seen in the live session. */
+import { groovyLiteral } from '@/pages/console/snippets'
 import { moneyString } from '../mturk/lib'
 
 /** Prolific's placeholder syntax; Prolific swaps these for each participant's ids. */
@@ -85,7 +86,10 @@ export function prolificBonusLines (players: ProlificPlayer[]): string {
     .join('\n')
 }
 
-/** A Groovy string literal for the completion snippet. */
+/**
+ * A Groovy string literal for the completion snippet: single-quoted (so `${…}` is never run), with
+ * backslashes, quotes and line breaks escaped, as the script console's snippets do.
+ */
 export function groovyString (s: string): string {
-  return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+  return groovyLiteral(s)
 }

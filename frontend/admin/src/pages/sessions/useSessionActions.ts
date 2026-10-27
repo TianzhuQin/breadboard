@@ -1,11 +1,11 @@
 import { computed, reactive } from 'vue'
 import { admin, actions, connectionState } from '@/store/admin'
+import { engineUsers } from '@/store/engineGuard'
 import { http, saveText } from '@/lib/http'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Experiment, Instance } from '@/store/types'
 import { canDelete, canResume, canStop, csvDataRows, describeError, safeFileName, waitUntil } from './sessionData'
-import { runningSessions, sessionNames } from './runningSessions'
 
 type Job = 'resume' | 'stop' | 'delete' | 'data' | 'list'
 
@@ -45,24 +45,20 @@ export function useSessionActions () {
   /** Make a session the current one and (re)start it: SelectInstance. */
   async function resume (s: Instance): Promise<boolean> {
     if (!canResume(s) || !connected()) return false
-    // the engine is shared, so a session someone else (or the autopilot) runs ends too
-    const others = await runningSessions(s.id)
-    const mine = others.find(o => o.mine)
-    const rest = others.filter(o => !o.mine)
+    // the engine is shared: who it would disconnect, whoever's session they are in ('' when nobody)
+    const who = await engineUsers()
     const verb = s.status === 'STOPPED' ? 'Resume' : 'Make current'
     const lines = [
       `The script engine restarts with this session's launch parameters, and the network starts empty: people who were in it have to join again (once its game has started, nobody can).`,
     ]
-    if (mine) lines.push(`“${mine.name}” is running now. It will be stopped, and everyone in it is disconnected.`)
-    if (rest.length) {
-      lines.push(`${sessionNames(rest)} ${rest.length === 1 ? 'appears' : 'appear'} to be running${mine ? ' as well' : ''}. ` +
-        'The script engine is shared by every account and the autopilot, so restarting it ends the session it is running, and everyone in it is disconnected.')
+    if (who) {
+      lines.push(`${who} Every researcher on this server and the autopilot share the script engine, so restarting it ends the session it is running, and everyone in the network is disconnected.`)
     }
     const ok = await confirm({
       title: `${verb} “${s.name}”?`,
       message: lines.join('\n\n'),
       confirmLabel: s.status === 'STOPPED' ? 'Resume session' : 'Make current',
-      danger: others.length > 0,
+      danger: !!who,
     })
     if (!ok) return false
     return !!await run('resume', s.id, async () => {

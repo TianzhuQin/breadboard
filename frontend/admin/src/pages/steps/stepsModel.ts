@@ -85,7 +85,8 @@ export function templateSource (name: string, kind: TemplateKind): string {
 // ---- drafts -----------------------------------------------------------------------------------
 
 export interface StepRun {
-  status: 'pending' | 'ok' | 'error' | 'noreply'
+  /** notsent: the connection was down, so it was not sent at all */
+  status: 'pending' | 'ok' | 'error' | 'noreply' | 'notsent'
   values: string[]
   error: string | null
   at: number

@@ -4,10 +4,11 @@
       <span class="apst__icon" aria-hidden="true"><Bot :size="20" /></span>
       <div class="apst__titles" aria-live="polite">
         <h2 id="apst-title" class="apst__title">
-          {{ status.on ? 'The autopilot is on' : stalled ? 'The autopilot can’t run' : 'The autopilot is off' }}
+          {{ status.on ? (status.paused ? 'The autopilot is paused' : 'The autopilot is on') : stalled ? 'The autopilot can’t run' : 'The autopilot is off' }}
         </h2>
         <p class="apst__sub">
-          <template v-if="status.on && expName">Running “{{ expName }}” unattended.</template>
+          <template v-if="status.on && status.paused">Its session was stopped, so it opens no new one for now. Press Resume below to start again.</template>
+          <template v-else-if="status.on && expName">Running “{{ expName }}” unattended.</template>
           <template v-else-if="status.on">Running an experiment unattended.</template>
           <template v-else-if="stalled && status.problem">It is switched on below, but no session opens by itself until the problem below is fixed.</template>
           <template v-else-if="stalled">It is switched on below, but the server isn’t running it. Refresh in a moment, or check the server log.</template>
@@ -16,15 +17,22 @@
       </div>
       <div class="apst__badges">
         <BBadge v-if="source === 'config'" tone="info"><Lock :size="12" aria-hidden="true" /> application.conf</BBadge>
-        <BBadge :tone="status.on ? 'success' : stalled ? 'warning' : 'neutral'" :dot="true" :pulse="status.on">{{ status.on ? 'On' : stalled ? 'Not running' : 'Off' }}</BBadge>
+        <BBadge :tone="badge.tone" :dot="true" :pulse="badge.pulse">{{ badge.label }}</BBadge>
       </div>
     </header>
 
-    <div v-if="status.problem" class="apst__problem" role="alert">
+    <div v-if="status.problem && kind === 'error'" class="apst__problem" role="alert">
       <TriangleAlert :size="16" aria-hidden="true" />
       <div>
         <p class="apst__problem-title">{{ status.on ? 'The autopilot has a problem' : 'Why it isn’t running' }}</p>
         <p class="apst__problem-text">{{ status.problem }}</p>
+      </div>
+    </div>
+    <div v-else-if="status.problem" class="apst__problem is-info" role="status">
+      <component :is="kind === 'waiting' ? Hourglass : kind === 'paused' ? CirclePause : Info" :size="16" aria-hidden="true" />
+      <div>
+        <p class="apst__problem-title">{{ infoTitle }}</p>
+        <p class="apst__problem-text">{{ infoText }}</p>
       </div>
     </div>
 
@@ -36,7 +44,10 @@
         <RouterLink v-if="isCurrent" to="/session" class="apst__watch">Watch it live <ArrowRight :size="14" aria-hidden="true" /></RouterLink>
       </div>
       <p v-else class="apst__muted">
-        No session is open right now. {{ status.on && !status.problem ? 'The autopilot opens one shortly.' : '' }}
+        No session is open right now. {{ status.on && !status.problem && !nextOpen ? 'The autopilot opens one shortly.' : '' }}
+      </p>
+      <p v-if="nextOpen" class="apst__muted">
+        The next session opens at <time class="tabular" :datetime="status.nextOpenAt!">{{ nextOpen }}</time>.
       </p>
       <p v-if="liveText" class="apst__live">
         <component :is="live?.state === 'cancelled' ? CircleX : (live?.state === 'starting' ? Timer : Hourglass)" :size="15" aria-hidden="true" />
@@ -79,10 +90,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowRight, Bot, CircleX, Hourglass, Lock, RefreshCw, Timer, TriangleAlert } from 'lucide-vue-next'
+import { ArrowRight, Bot, CirclePause, CircleX, Hourglass, Info, Lock, RefreshCw, Timer, TriangleAlert } from 'lucide-vue-next'
 import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
-import type { AutopilotState, WaitingRoomLive } from './autopilot'
+import { describeEngineSession, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
 
 const props = defineProps<{
   state: AutopilotState
@@ -102,6 +113,34 @@ const source = computed(() => props.state.source)
 const expName = computed(() => status.value.experimentName || props.experimentName || null)
 /** switched on in the settings, yet the server says it isn't running */
 const stalled = computed(() => props.state.settings.enabled && !status.value.on)
+/** what status.problem is about: a fault, or the autopilot waiting by design */
+const kind = computed(() => problemKind(props.state))
+
+const badge = computed<{ tone: 'success' | 'warning' | 'neutral', label: string, pulse: boolean }>(() => {
+  if (status.value.on && status.value.paused) return { tone: 'warning', label: 'Paused', pulse: false }
+  if (status.value.on) return { tone: 'success', label: 'On', pulse: true }
+  return stalled.value ? { tone: 'warning', label: 'Not running', pulse: false } : { tone: 'neutral', label: 'Off', pulse: false }
+})
+
+const infoTitle = computed(() => ({
+  paused: 'Paused until you resume it',
+  done: 'Its one session has finished',
+  waiting: 'Waiting for another session to end',
+} as Record<string, string>)[kind.value || ''] || 'Note')
+const infoText = computed(() => {
+  const other = status.value.engineSession
+  if (kind.value === 'waiting' && other) {
+    return `${describeEngineSession(other)} is running on the script engine, which every researcher shares. The autopilot opens its own session when that one ends.`
+  }
+  return status.value.problem || ''
+})
+
+/** When the next session opens, as a time of day; '' when none is due. */
+const nextOpen = computed(() => {
+  const at = status.value.nextOpenAt ? new Date(status.value.nextOpenAt) : null
+  if (!at || isNaN(at.getTime())) return ''
+  return at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+})
 
 const sessionLabel = computed(() => {
   const s = status.value.instance?.status || ''
@@ -163,6 +202,7 @@ function timeOf (iso: string) {
   color: var(--warning-soft-text);
   font-size: var(--text-sm);
 }
+.apst__problem.is-info { background: var(--info-soft); color: var(--info-soft-text); }
 .apst__problem svg { flex: none; margin-top: 2px; }
 .apst__problem-title { font-weight: 650; }
 .apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }

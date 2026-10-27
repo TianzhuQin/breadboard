@@ -70,6 +70,11 @@ public class Breadboard extends UntypedActor {
 
   /** {@code {"error": message, "request": action}} to one socket. */
   static void replyError(ThrottledWebSocketOut out, String request, String message) {
+    replyError(out, request, message, null);
+  }
+
+  /** As above, with {@code "status": status} too when it is not null (e.g. "unauthorized"). */
+  static void replyError(ThrottledWebSocketOut out, String request, String message, String status) {
     if (out == null) {
       return;
     }
@@ -77,6 +82,9 @@ public class Breadboard extends UntypedActor {
     error.put("error", message);
     if (request != null) {
       error.put("request", request);
+    }
+    if (status != null) {
+      error.put("status", status);
     }
     try {
       out.write(error);
@@ -117,7 +125,7 @@ public class Breadboard extends UntypedActor {
       if (user == null) {
         // A stale or forged admin session (reading user.uid here used to throw on every message).
         Logger.error("user not found with UID: " + uid);
-        replyError(out, action, "You are not signed in (or your sign-in has expired). Sign in again.");
+        replyError(out, action, "You are not signed in (or your sign-in has expired). Sign in again.", "unauthorized");
         return;
       }
       dispatch(action, jsonInput, user, out);
@@ -963,10 +971,18 @@ public class Breadboard extends UntypedActor {
 
   public static class RunStep extends BreadboardMessage {
     final String source;
+    // The console request it answers ("SendStep"), sent back as "request" on its frames; null for
+    // the steps a launch re-runs, whose frames carry "source": "Steps" instead.
+    final String request;
 
     public RunStep(User user, String source, ThrottledWebSocketOut out) {
+      this(user, source, out, null);
+    }
+
+    public RunStep(User user, String source, ThrottledWebSocketOut out, String request) {
       super(user, out);
       this.source = source;
+      this.request = request;
     }
   }
 

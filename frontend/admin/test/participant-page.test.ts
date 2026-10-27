@@ -206,6 +206,21 @@ describe('ParticipantPagePage', () => {
     w.unmount()
   })
 
+  it('counts unsaved pages for the sign-out question, until they are left behind', async () => {
+    http.get.mockResolvedValue({ clientHtml: 'a' })
+    const { unsavedTotal } = await import('../src/shell/unsaved')
+    const w = await mountPage()
+    expect(unsavedTotal()).toBe(0)
+    await w.find('textarea.stub-editor').setValue('a, edited')
+    expect(unsavedTotal()).toBe(1)
+    // taken down without leaving (signed out): still there to lose
+    w.unmount()
+    expect(unsavedTotal()).toBe(1)
+    const { docs } = await import('../src/pages/participant-page/pageDocs')
+    docs.clear()
+    expect(unsavedTotal()).toBe(0)
+  })
+
   it('notices a change made elsewhere while the kept edits were away', async () => {
     http.get.mockResolvedValue({ clientHtml: 'a' })
     store.admin.experiment.clientHtmlHash = javaHashCode('a')

@@ -12,19 +12,23 @@ vi.mock('@/store/admin', async () => {
     instance: null as any,
     engine: 'ready',
     engineReloadedAt: 0,
+    engineProblem: '',
+    requestError: null as any,
     output: [] as any[],
   })
   const actions = {
-    runScript: vi.fn(),
-    runStep: vi.fn(),
+    runScript: vi.fn(() => true),
+    runStep: vi.fn(() => true),
     refresh: vi.fn(() => Promise.resolve(null)),
     markEngineStale: vi.fn(() => { admin.engine = 'stale' }),
-    reloadEngine: vi.fn(),
+    markEngineCurrent: vi.fn(() => { if (admin.engine === 'stale' && !admin.engineProblem) admin.engine = 'ready' }),
+    reloadEngine: vi.fn(() => true),
     selectExperiment: vi.fn(),
   }
   return {
     admin,
     actions,
+    ensureConnected: vi.fn(() => true),
     running: computed(() => admin.instance?.status === 'RUNNING'),
     connectionState: ref('open'),
     graph: { nodes: new Map(), version: ref(0) },
@@ -48,6 +52,7 @@ import {
 } from '../src/pages/steps/stepsModel'
 import { buckets, deleteDraft, errorText, saveDraft, ensureBucket, runDraft, unsavedDrafts } from '../src/pages/steps/stepsStore'
 import { toasts } from '../src/ui/toast'
+import { unsavedTotal } from '../src/shell/unsaved'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import StepsPage from '../src/pages/steps/StepsPage.vue'
 
@@ -303,10 +308,38 @@ describe('the live engine', () => {
     await flushPromises()
     expect(a.engineBehind).toBe(false)
     expect(admin.engine).toBe('stale') // B is still behind
+    expect(actions.markEngineCurrent).not.toHaveBeenCalled()
     runDraft(bb)
     reply('b()')
     await flushPromises()
+    // through the store, which leaves a reload that did not finish marked
+    expect(actions.markEngineCurrent).toHaveBeenCalledTimes(1)
     expect(admin.engine).toBe('ready')
+  })
+
+  it('says at once that a step did not run while the connection is down', () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    const d = b.drafts[0]
+    d.engineBehind = true
+    actions.runStep.mockReturnValueOnce(false)
+    expect(runDraft(d)).toBe(false)
+    expect(d.run).toMatchObject({ status: 'notsent' })
+    expect(d.engineBehind).toBe(true)
+  })
+
+  it('counts unsaved steps for the sign-out question', () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }), draftFromStep({ id: 2, name: 'B', source: 'b()' }))
+    expect(unsavedTotal()).toBe(0)
+    b.drafts[0].source = 'edited()'
+    b.drafts[1].source = 'edited too()'
+    expect(unsavedTotal()).toBe(2)
+    // file mode: the files are the truth, nothing to lose here
+    const f = ensureBucket(7, true)
+    f.drafts.push(draftFromStep({ id: null, name: 'C', source: 'c()' }))
+    f.drafts[0].source = 'edited()'
+    expect(unsavedTotal()).toBe(2)
   })
 
   it('stays stale when a reload did not finish, whatever was run since', async () => {
@@ -366,12 +399,27 @@ describe('the live engine', () => {
     expect(toasts.some(x => x.title.startsWith('Unsaved steps'))).toBe(false)
   })
 
+  it('switches back at once while nobody is using the engine', async () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
+    b.drafts[0].source = 'edited()'
+    toasts.splice(0)
+    admin.experiment = { id: 8, name: 'Other', fileMode: false, steps: [] }
+    await nextTick()
+    const t = toasts.find(x => x.title.startsWith('Unsaved steps'))!
+    actions.selectExperiment.mockResolvedValueOnce({ experiment: { id: 7 } })
+    t.action!.run()
+    await flushPromises()
+    expect(confirmState.open).toBe(false)
+    expect(actions.selectExperiment).toHaveBeenCalledWith(7)
+  })
+
   it('asks before switching back while a session is running', async () => {
     const b = ensureBucket(7, false)
     b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
     b.drafts[0].source = 'edited()'
     toasts.splice(0)
-    admin.instance = { id: 5, status: 'RUNNING' }
+    admin.instance = { id: 5, name: 'Pilot', status: 'RUNNING' }
     admin.experiment = { id: 8, name: 'Other', fileMode: false, steps: [] }
     await nextTick()
     const t = toasts.find(x => x.title.startsWith('Unsaved steps'))!
@@ -381,6 +429,7 @@ describe('the live engine', () => {
     await flushPromises()
     expect(confirmState.open).toBe(true)
     expect(confirmState.req).toMatchObject({ danger: true, title: 'Switch to “Trust game”?' })
+    expect(confirmState.req!.message).toContain('Your session “Pilot” is running.')
     expect(actions.selectExperiment).not.toHaveBeenCalled()
     settleConfirm(true)
     await flushPromises()
@@ -499,6 +548,45 @@ describe('StepsPage', () => {
     expect(w.text()).toContain('Read from files')
     expect(w.findAll('button').some(b => b.text() === 'Save')).toBe(false)
     expect(w.find('textarea.code-stub').attributes('readonly')).toBeDefined()
+    w.unmount()
+  })
+
+  it('says at once when Save & run could not reach the engine', async () => {
+    const { w } = await open()
+    await w.find('textarea.code-stub').setValue('initStep = 4')
+    post.mockResolvedValueOnce({ id: 1, name: 'InitStep', source: 'initStep = 4' })
+    actions.runStep.mockReturnValueOnce(false)
+    await w.findAll('button').find(b => b.text() === 'Save & run')!.trigger('click')
+    await flushPromises()
+    expect(actions.runStep).toHaveBeenCalled()
+    expect(w.find('.srun.is-notsent').text()).toContain('not connected to the server')
+    // saved, but not in the engine yet
+    expect(actions.markEngineStale).toHaveBeenCalled()
+    admin.engine = 'ready'
+    w.unmount()
+  })
+
+  it('reloads the engine from the banner, asking only while someone is using it', async () => {
+    const { w } = await open()
+    admin.engine = 'stale'
+    await nextTick()
+    const reload = () => w.findAll('.steps__banner button').find(b => b.text() === 'Reload engine')!.trigger('click')
+    await reload()
+    await flushPromises()
+    expect(confirmState.open).toBe(false)
+    expect(actions.reloadEngine).toHaveBeenCalledTimes(1)
+
+    admin.instance = { id: 5, name: 'Pilot', status: 'RUNNING' }
+    await reload()
+    await flushPromises()
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.req).toMatchObject({ danger: true, title: 'Reload the script engine?' })
+    expect(confirmState.req!.message).toContain('Your session “Pilot” is running.')
+    settleConfirm(false)
+    await flushPromises()
+    expect(actions.reloadEngine).toHaveBeenCalledTimes(1)
+    admin.instance = null
+    admin.engine = 'ready'
     w.unmount()
   })
 })

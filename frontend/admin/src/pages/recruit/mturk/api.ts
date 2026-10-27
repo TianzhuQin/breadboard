@@ -206,9 +206,14 @@ export function mturkApi (mode: MturkMode) {
       return call(() => http.post(`/amtadmin/rejectAssignment/${seg(assignmentId)}${qs({ sandbox })}`, { requesterFeedback }))
     },
 
-    /** `bonusAmount` is a string such as "1.50" (the server refuses numbers). */
-    sendBonus (assignmentId: string, workerId: string, bonusAmount: string, reason: string) {
-      return call(() => http.post(`/amtadmin/sendBonus/${seg(assignmentId)}${qs({ sandbox })}`, { workerId, bonusAmount, reason }))
+    /**
+     * `bonusAmount` is a string such as "1.50" (the server refuses numbers). With the same
+     * `uniqueRequestToken`, MTurk pays a retried bonus only once: `duplicate` says it had already.
+     */
+    sendBonus (assignmentId: string, workerId: string, bonusAmount: string, reason: string, uniqueRequestToken?: string) {
+      const body: Record<string, string> = { workerId, bonusAmount, reason }
+      if (uniqueRequestToken) body.uniqueRequestToken = uniqueRequestToken
+      return call(() => http.post<{ sent?: boolean, duplicate?: boolean } | null>(`/amtadmin/sendBonus/${seg(assignmentId)}${qs({ sandbox })}`, body))
     },
 
     /** Local bookkeeping only (no MTurk call), so it has no mode. */

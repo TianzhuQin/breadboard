@@ -218,8 +218,9 @@ describe('ParameterDialog', () => {
     await submit()
     expect(http.post).toHaveBeenCalledTimes(1)
     const [url, body] = http.post.mock.calls[0]
+    // POST /parameters/:experimentId/:parameterId, with the same body as a create (every value a string)
     expect(url).toBe('/parameters/12/1')
-    expect(body).toMatchObject({ name: 'nRounds', defaultVal: '12', minVal: '1', maxVal: '20' })
+    expect(body).toEqual({ name: 'nRounds', type: 'Integer', minVal: '1', maxVal: '20', defaultVal: '12', description: '' })
     expect(http.put).not.toHaveBeenCalled()
     expect(http.del).not.toHaveBeenCalled()
     expect(w.emitted('saved')![0]).toEqual([expect.objectContaining({ id: 1, defaultVal: '12' })])
@@ -227,9 +228,25 @@ describe('ParameterDialog', () => {
     w.unmount()
   })
 
+  it('sends no range when an edit makes it a Text parameter', async () => {
+    http.post.mockResolvedValue({ parameter: P({ id: 1, type: 'Text', minVal: '', maxVal: '', defaultVal: '10' }) })
+    const old = P({ id: 1 })
+    const w = await open({ existing: [old], editing: old })
+    const radio = q<HTMLInputElement>('.prmd__types input[value="Text"]')!
+    radio.checked = true
+    radio.dispatchEvent(new Event('change'))
+    await nextTick()
+    await submit()
+    const [url, body] = http.post.mock.calls[0]
+    expect(url).toBe('/parameters/12/1')
+    expect(body).toMatchObject({ type: 'Text', minVal: '', maxVal: '' })
+    w.unmount()
+  })
+
   it('keeps the dialog open when an edit is refused, and loses nothing', async () => {
     const { HttpError } = await import('@/lib/http')
-    http.post.mockRejectedValue(new (HttpError as any)(400, 'There is already a parameter named "rounds".'))
+    // a 400 {"message": …}, as the HTTP layer hands it on
+    http.post.mockRejectedValue(new (HttpError as any)(400, 'There is already a parameter named "rounds".', { message: 'There is already a parameter named "rounds".' }))
     const old = P({ id: 1 })
     const w = await open({ existing: [old], editing: old })
     await type('[data-field="defaultVal"]', '12')

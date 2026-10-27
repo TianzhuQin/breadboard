@@ -7,6 +7,7 @@ vi.mock('@/lib/http', async (orig) => {
 })
 
 const logout = vi.hoisted(() => vi.fn(async () => {}))
+const adoptUid = vi.hoisted(() => vi.fn())
 vi.mock('@/store/admin', async () => {
   const { computed, reactive, ref } = await import('vue')
   return {
@@ -14,6 +15,7 @@ vi.mock('@/store/admin', async () => {
     connectionState: ref('open'),
     experiments: computed(() => []),
     logout,
+    adoptUid,
   }
 })
 
@@ -22,6 +24,8 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { changePassword, friendlyPasswordError, validatePasswordChange } from '../src/pages/settings/settings'
 import SettingsPage from '../src/pages/settings/SettingsPage.vue'
 import { theme } from '../src/lib/theme'
+import { registerUnsaved } from '../src/shell/unsaved'
+import { confirmState, settleConfirm } from '../src/ui/confirm'
 
 describe('password change checks', () => {
   it('asks for every field', () => {
@@ -57,6 +61,10 @@ describe('saving a new password', () => {
       email: 'r@lab.org', currentPassword: 'old-pass', newPassword: 'new-password', confirmPassword: 'new-password',
     }, { form: true })
   })
+  it('passes the new uid on', async () => {
+    http.post.mockResolvedValue({ success: true, uid: 'new-uid' })
+    expect(await changePassword('r@lab.org', { current: 'old-pass', next: 'new-password', confirm: 'new-password' })).toEqual({ success: true, uid: 'new-uid' })
+  })
   it('passes the server\'s error back', async () => {
     http.post.mockResolvedValue({ success: false, error: 'Current password is missing' })
     expect(await changePassword('r@lab.org', { current: '', next: 'x', confirm: 'x' })).toEqual({ success: false, error: 'Current password is missing' })
@@ -72,13 +80,58 @@ describe('Settings page', () => {
     await flushPromises()
     return w
   }
-  beforeEach(() => { http.post.mockReset(); logout.mockClear(); document.body.innerHTML = '' })
+  beforeEach(() => { http.post.mockReset(); logout.mockClear(); adoptUid.mockClear(); document.body.innerHTML = '' })
 
   it('shows the account and signs out', async () => {
     const w = await mountPage()
     expect(w.text()).toMatch(/r@lab\.org/)
     await w.findAll('button').find(b => /Sign out/.test(b.text()))!.trigger('click')
+    await flushPromises()
     expect(logout).toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('asks before signing out while work elsewhere is unsaved', async () => {
+    const unregister = registerUnsaved('steps', () => 2, 'Steps')
+    try {
+      const w = await mountPage()
+      const signOut = w.findAll('button').find(b => /Sign out/.test(b.text()))!
+      await signOut.trigger('click')
+      await flushPromises()
+      expect(confirmState.open).toBe(true)
+      expect(confirmState.req).toMatchObject({ danger: true, confirmLabel: 'Sign out anyway' })
+      expect(confirmState.req!.message).toMatch(/Steps \(2\)/)
+      settleConfirm(false)
+      await flushPromises()
+      expect(logout).not.toHaveBeenCalled()
+
+      await signOut.trigger('click')
+      await flushPromises()
+      settleConfirm(true)
+      await flushPromises()
+      expect(logout).toHaveBeenCalledTimes(1)
+      w.unmount()
+    } finally {
+      unregister()
+    }
+  })
+
+  it('keeps the connection working after a password change by taking the new uid', async () => {
+    http.post.mockResolvedValue({ success: true, uid: 'fresh-uid' })
+    const w = await mountPage()
+    const [cur, next, rep] = w.findAll('.set-pw input.b-input__el')
+    await cur.setValue('old-pass')
+    await next.setValue('long-enough-1')
+    await rep.setValue('long-enough-1')
+    await w.find('form.set-pw').trigger('submit')
+    await flushPromises()
+    expect(adoptUid).toHaveBeenCalledWith('fresh-uid')
+    w.unmount()
+  })
+
+  it('no longer tells researchers to use one console at a time', async () => {
+    const w = await mountPage()
+    expect(w.text()).not.toMatch(/whichever console connected last|one console at a time/)
     w.unmount()
   })
 

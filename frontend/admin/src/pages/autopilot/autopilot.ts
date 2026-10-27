@@ -25,14 +25,32 @@ export interface AutopilotSettings {
   waitingRoom: WaitingRoomSettings
   replaceDisconnected: ReplaceDisconnectedSettings
 }
+/** A live session of another experiment that holds the shared script engine. */
+export interface EngineSession {
+  id: number
+  name: string
+  experimentId: number | null
+  experimentName: string | null
+  /** the email of the account that runs it, when the server knows */
+  owner: string | null
+}
 export interface AutopilotStatus {
   on: boolean
   experimentId: number | null
   experimentName: string | null
   instance: { id: number, name: string, status: string } | null
   links: { login: string, prolific: string } | null
-  /** why the autopilot, switched on, can't keep a session open (the server's words); null when all is well */
+  /**
+   * Why the autopilot, switched on, opens no session (the server's words); null when all is well.
+   * It can be by design (paused, done, waiting for another session: see problemKind) or a fault.
+   */
   problem: string | null
+  /** a researcher stopped its session, so it opens none until the settings are saved again */
+  paused: boolean
+  /** when the next session opens (ISO time), while the pause after a finished session runs */
+  nextOpenAt: string | null
+  /** another experiment's live session holds the engine: the autopilot waits for it to end */
+  engineSession: EngineSession | null
 }
 export interface AutopilotState {
   settings: AutopilotSettings
@@ -104,11 +122,26 @@ export function normalizeSettings (raw: any): AutopilotSettings {
   }
 }
 
+const text = (v: any) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+const idOrNull = (v: any) => (v == null || v === '' || isNaN(Number(v)) ? null : Number(v))
+
+function normalizeEngineSession (raw: any): EngineSession | null {
+  if (!raw || typeof raw !== 'object' || idOrNull(raw.id) == null) return null
+  return {
+    id: Number(raw.id),
+    name: String(raw.name ?? ''),
+    experimentId: idOrNull(raw.experimentId),
+    experimentName: text(raw.experimentName),
+    owner: text(raw.owner),
+  }
+}
+
 export function normalizeState (raw: any): AutopilotState {
   const r = raw && typeof raw === 'object' ? raw : {}
   const s = r.status && typeof r.status === 'object' ? r.status : {}
   const inst = s.instance && typeof s.instance === 'object' && s.instance.id != null ? s.instance : null
   const links = s.links && typeof s.links === 'object' && (s.links.login || s.links.prolific) ? s.links : null
+  const next = text(s.nextOpenAt)
   return {
     settings: normalizeSettings(r.settings),
     source: r.source === 'config' || r.source === 'admin' ? r.source : 'off',
@@ -118,7 +151,10 @@ export function normalizeState (raw: any): AutopilotState {
       experimentName: typeof s.experimentName === 'string' ? s.experimentName : null,
       instance: inst ? { id: Number(inst.id), name: String(inst.name ?? ''), status: String(inst.status ?? '') } : null,
       links: links ? { login: String(links.login || ''), prolific: String(links.prolific || '') } : null,
-      problem: typeof s.problem === 'string' && s.problem.trim() ? s.problem.trim() : null,
+      problem: text(s.problem),
+      paused: s.paused === true,
+      nextOpenAt: next && !isNaN(Date.parse(next)) ? next : null,
+      engineSession: normalizeEngineSession(s.engineSession),
     },
   }
 }
@@ -126,14 +162,43 @@ export function normalizeState (raw: any): AutopilotState {
 const LIVE = new Set(['RUNNING', 'TESTING'])
 
 /**
- * Whether saving these settings makes the server open a session right away: the autopilot is on and
- * the engine runs no open session of its experiment. The server then opens one even while the engine
- * runs a session of another experiment, which ends that session.
+ * The live session that saving these settings would have to end to open the autopilot's own, as
+ * the server reports it; null when there is none (the engine is free, or it already runs a session
+ * of this experiment). That is another experiment's session (status.engineSession), or the
+ * autopilot's own open session when the save moves it to another experiment. A plain save leaves
+ * that session alone and waits for it to end; only a save with takeOver ends it.
  */
-export function saveOpensSession (next: Pick<AutopilotSettings, 'enabled' | 'experimentId'>, status: AutopilotStatus): boolean {
-  if (!next.enabled || next.experimentId == null) return false
-  const inst = status.instance
-  return !(inst && status.experimentId === next.experimentId && LIVE.has(inst.status))
+export function takeOverTarget (next: Pick<AutopilotSettings, 'enabled' | 'experimentId'>, status: AutopilotStatus): EngineSession | null {
+  if (!next.enabled || next.experimentId == null) return null
+  const other = status.engineSession
+  if (other) return other.experimentId === next.experimentId ? null : other
+  const own = status.instance
+  if (own && LIVE.has(own.status) && status.experimentId != null && status.experimentId !== next.experimentId) {
+    return { id: own.id, name: own.name, experimentId: status.experimentId, experimentName: status.experimentName, owner: null }
+  }
+  return null
+}
+
+/** “pilot 3” of “Trust game”, run by a@lab.org (the parts the server sent). */
+export function describeEngineSession (s: EngineSession): string {
+  const name = `“${s.name || `Session #${s.id}`}”`
+  const of = s.experimentName ? ` of “${s.experimentName}”` : ''
+  return `${name}${of}${s.owner ? `, run by ${s.owner}` : ''}`
+}
+
+/**
+ * What status.problem is about. 'paused', 'done' and 'waiting' are the autopilot waiting by design
+ * (for a save, or for another session to end): information, not a fault. 'error' needs fixing.
+ */
+export type ProblemKind = 'paused' | 'done' | 'waiting' | 'error'
+export function problemKind (state: Pick<AutopilotState, 'settings' | 'status'>): ProblemKind | null {
+  const s = state.status
+  if (!s.problem) return null
+  if (s.paused) return 'paused'
+  // its one session finished and "continuous" is off (the server's "has finished" message)
+  if (!state.settings.continuous && /has finished/i.test(s.problem)) return 'done'
+  if (s.engineSession) return 'waiting'
+  return 'error'
 }
 
 /** A deep copy to edit (from saved settings, or of another form). */
@@ -286,8 +351,23 @@ export async function fetchAutopilot (): Promise<AutopilotState> {
   return normalizeState(await http.get('/autopilot'))
 }
 
-export async function saveAutopilot (s: AutopilotSettings): Promise<AutopilotState> {
-  return normalizeState(await http.post('/autopilot', s))
+/** GET /autopilot, or null when it fails or takes too long (an older server, a busy one, no connection). */
+export async function autopilotNow (ms = 4000): Promise<AutopilotState | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ms) })
+  try {
+    return await Promise.race([fetchAutopilot().catch(() => null), late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Save the settings. With `takeOver` (sent only after the researcher agreed), opening the session
+ * ends a live session of another experiment; without it the autopilot waits for that one to end.
+ */
+export async function saveAutopilot (s: AutopilotSettings, opts: { takeOver?: boolean } = {}): Promise<AutopilotState> {
+  return normalizeState(await http.post('/autopilot', opts.takeOver ? { ...s, takeOver: true } : s))
 }
 
 // ---- live monitoring (the open session's waiting room and events) -----------------------------

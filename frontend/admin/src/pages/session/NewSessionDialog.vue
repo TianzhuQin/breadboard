@@ -123,7 +123,8 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { RotateCcw, TriangleAlert, CircleAlert, PanelBottom } from 'lucide-vue-next'
 import { BButton, BDialog, BField, BInput, BSwitch, notify } from '@/ui'
 import { uid } from '@/ui/uid'
-import { admin, actions, instances } from '@/store/admin'
+import { admin, actions, ensureConnected, instances } from '@/store/admin'
+import { confirmEngineRebuild } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import {
   TYPE_LABEL, buildFields, buildLaunchParams, checkSessionName, fieldErrors, rangeText, suggestName,
@@ -141,6 +142,8 @@ const values = reactive<Record<string, FieldValue>>({})
 const touched = reactive(new Set<string>())
 const submitted = ref(false)
 const busy = ref(false)
+/** Asking whether to rebuild the engine (a second submit meanwhile must not launch twice). */
+let asking = false
 const failure = ref('')
 const announce = ref('')
 
@@ -222,6 +225,22 @@ async function submit () {
     return
   }
   const sessionName = name.value.trim()
+  if (asking || !ensureConnected()) return
+  // a launch rebuilds the engine every account and the autopilot share: say whose session and
+  // players it disconnects (no question when nobody is using it)
+  asking = true
+  let go = false
+  try {
+    go = await confirmEngineRebuild({
+      title: `Create “${sessionName}” now?`,
+      action: 'Creating a session',
+      confirmLabel: replacing.value ? 'Stop it and create' : 'Create anyway',
+    })
+  } finally {
+    asking = false
+  }
+  // (the connection may have dropped while the question was open)
+  if (!go || !ensureConnected()) return
   busy.value = true
   announce.value = 'Creating the session…'
   try {

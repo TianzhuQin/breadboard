@@ -50,7 +50,7 @@
         </div>
       </div>
 
-      <form ref="formEl" class="ap-form" novalidate @submit.prevent="save">
+      <form ref="formEl" class="ap-form" novalidate @submit.prevent="save()">
         <p v-if="saveError" class="ap-error" role="alert">{{ saveError }}</p>
 
         <!-- On / off and which experiment -->
@@ -61,7 +61,8 @@
               <h2 id="ap-sec-run" class="ap-sec__title">Run unattended</h2>
               <p class="ap-sec__desc">
                 While it's on, Breadboard keeps a session of this experiment open: right after saving, when the server
-                starts, and after each session ends. Turning it off stops new sessions; one that is open keeps running.
+                starts, and after each session ends. While another researcher's session is running, it waits for that
+                one to end. Turning it off stops new sessions; one that is open keeps running.
               </p>
             </div>
           </div>
@@ -90,6 +91,17 @@
                 </div>
               </template>
             </BField>
+            <div v-if="holder" class="ap-preview ap-holder" role="note">
+              <Hourglass :size="15" aria-hidden="true" />
+              <div>
+                <p>
+                  {{ describeEngineSession(holder) }} is running on the script engine, which every researcher shares.
+                  {{ dirty || !state.settings.enabled ? 'When you save, the autopilot waits' : 'The autopilot waits' }}
+                  for that session to end, then opens its own.
+                </p>
+                <BButton class="ap-holder__btn" size="sm" variant="danger" :disabled="saving" @click="save(true)">Save and end it now…</BButton>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -280,11 +292,12 @@
           <span class="ap-savebar__text" role="status">
             <template v-if="dirty"><span class="ap-savebar__dot" aria-hidden="true" /> Unsaved changes</template>
             <template v-else-if="state.source === 'off'">Not set up yet: these are the suggested settings.</template>
+            <template v-else-if="paused">Paused. Resume to let it open sessions again with these settings.</template>
             <template v-else>All changes saved.</template>
           </span>
           <BButton v-if="dirty" variant="ghost" :icon="Undo2" :disabled="saving" @click="discard">Discard</BButton>
-          <BButton type="submit" variant="primary" :icon="Save" :loading="saving" :disabled="!dirty && state.source !== 'off'">
-            Save
+          <BButton type="submit" variant="primary" :icon="paused && !dirty ? Play : Save" :loading="saving" :disabled="!dirty && state.source !== 'off' && !paused">
+            {{ paused && !dirty ? 'Resume' : 'Save' }}
           </BButton>
         </div>
       </form>
@@ -294,20 +307,18 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import {
-  Bot, Hourglass, Info, Lock, RefreshCw, Repeat, Save, ServerCog, TriangleAlert, Undo2, UserRoundX,
-} from 'lucide-vue-next'
+import { Bot, Hourglass, Info, Lock, RefreshCw, Repeat, Save, ServerCog, TriangleAlert, Undo2, UserRoundX, Play } from 'lucide-vue-next'
 import { BButton, BCheckbox, BEmpty, BField, BInput, BPage, BSelect, BSpinner, BSwitch, confirm, notify } from '@/ui'
 import { HttpError } from '@/lib/http'
-import { admin, experiments, graph, running } from '@/store/admin'
+import { admin, experiments, graph } from '@/store/admin'
 import { describeError } from '../experiments/experiments'
 import { liveEventOf } from '../sessions/sessionData'
 import AutopilotStatus from './AutopilotStatus.vue'
 import { useUnsavedGuard } from './useUnsavedGuard'
 import {
-  autopilotActivity, describeWaitingRoom, fetchAutopilot, humanSeconds, participantLinks, sameForm, saveAutopilot,
-  saveOpensSession, DEFAULTS, toForm, toSettings, validateAutopilot, waitingRoomLive,
-  type AutopilotForm, type AutopilotState,
+  autopilotActivity, describeEngineSession, describeWaitingRoom, fetchAutopilot, humanSeconds, participantLinks, sameForm,
+  saveAutopilot, takeOverTarget, DEFAULTS, toForm, toSettings, validateAutopilot, waitingRoomLive,
+  type AutopilotForm, type AutopilotState, type EngineSession,
 } from './autopilot'
 
 type Phase = 'loading' | 'ready' | 'unavailable' | 'error'
@@ -324,6 +335,8 @@ const saveError = ref('')
 const formEl = ref<HTMLFormElement>()
 
 const readOnly = computed(() => state.value?.source === 'config')
+/** Stopped by a researcher: saving (even unchanged settings) lets it open sessions again. */
+const paused = computed(() => !!state.value?.status.on && !!state.value.status.paused)
 const dirty = computed(() => phase.value === 'ready' && !readOnly.value && !sameForm(form.value, baseline.value))
 const errors = computed<Record<string, string>>(() => (readOnly.value ? {} : validateAutopilot(form.value)))
 const roomOff = computed(() => readOnly.value || !form.value.waitingRoom.enabled)
@@ -339,6 +352,18 @@ const experimentOptions = computed(() => {
     opts.unshift({ value: id, label: name ? `${name} (not in your list)` : `Experiment #${id} (not in your list)` })
   }
   return opts
+})
+/**
+ * The live session that opening the autopilot's session would end (the server's engineSession, or
+ * its own open session when the form moves it to another experiment); null when there is none.
+ * The console's engine info names the account that runs it when the autopilot's status doesn't.
+ */
+const holder = computed<EngineSession | null>(() => {
+  if (!state.value || readOnly.value) return null
+  const t = takeOverTarget(form.value, state.value.status)
+  if (!t || t.owner) return t
+  const e = admin.user?.engine
+  return e && e.sessionId === t.id && e.owner ? { ...t, owner: e.owner } : t
 })
 const savedExperimentName = computed(() => {
   const id = state.value?.settings.experimentId
@@ -363,7 +388,7 @@ const activity = computed(() => {
   if (!isCurrent.value || !inst) return []
   // only what its own session recorded: pushes from every session reach this console
   const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
-  return autopilotActivity(admin.events.filter(e => liveEventOf(e as { experimentInstanceId?: unknown }, inst.id, live)))
+  return autopilotActivity(admin.events.filter(e => liveEventOf(e, inst.id, live)))
 })
 
 // ---- loading -----------------------------------------------------------------------------------
@@ -439,7 +464,12 @@ function discard () {
   saveError.value = ''
 }
 
-async function save () {
+/**
+ * Save the settings. With `takeOver` (the "Save and end it now" button) a live session that holds
+ * the engine is ended so the autopilot's session opens at once; a plain save never ends one: the
+ * server then waits for it to end.
+ */
+async function save (takeOver = false) {
   if (!state.value || readOnly.value || saving.value) return
   saveError.value = ''
   if (Object.keys(errors.value).length) {
@@ -450,37 +480,46 @@ async function save () {
   }
   const next = toSettings(form.value)
   const prev = state.value.settings
+  const wasPaused = state.value.status.on && state.value.status.paused
   const name = experiments.value.find(e => e.id === next.experimentId)?.name
     || (state.value.status.experimentId === next.experimentId ? state.value.status.experimentName : null)
     || `experiment #${next.experimentId}`
   const turningOn = next.enabled && (!prev.enabled || prev.experimentId !== next.experimentId || state.value.source === 'off')
-  // Any save while it is on opens a session at once if none of its experiment is open, even when
-  // the shared engine runs something else; that session then ends.
-  const atRisk = saveOpensSession(next, state.value.status) && running.value && admin.instance ? admin.instance : null
-  if (turningOn || atRisk) {
-    const parts = turningOn
-      ? [
-          `Breadboard opens a session of “${name}” right away if none is open${next.continuous ? ', and a new one each time a session ends' : ''}.`,
-          'Participants join through the links on this page.',
-        ]
-      : [`The autopilot is on and no session of “${name}” is open, so saving opens one right away.`]
-    if (atRisk) {
-      parts.push(`\n\n“${atRisk.name}” appears to be running right now. Opening a new session restarts the script engine, which ends that session and disconnects its participants.`)
-    }
+  const each = next.continuous ? ', and a new one each time a session ends' : ''
+  const other = holder.value
+  if (takeOver && other) {
     const ok = await confirm({
-      title: turningOn ? `Run “${name}” unattended?` : `Save and open a session of “${name}”?`,
-      message: parts.join(' '),
-      confirmLabel: turningOn ? 'Turn on and save' : 'Save and open a session',
-      danger: !!atRisk,
+      title: `End “${other.name || `Session #${other.id}`}” and run “${name}”?`,
+      message: `${describeEngineSession(other)} is running on the script engine, which every researcher on this server shares. ` +
+        `Saving now ends that session and disconnects everyone in it, then opens a session of “${name}”${each}.` +
+        '\n\nTo let it finish instead, use Save: the autopilot then waits for it to end.',
+      confirmLabel: 'End it and save',
+      danger: true,
+    })
+    if (!ok) return
+  } else if (turningOn) {
+    const ok = await confirm({
+      title: `Run “${name}” unattended?`,
+      message: [
+        other
+          ? `${describeEngineSession(other)} is running on the script engine, so Breadboard waits for it to end, then opens a session of “${name}”${each}.`
+          : `Breadboard opens a session of “${name}” right away if none is open${each}.`,
+        'Participants join through the links on this page.',
+      ].join(' '),
+      confirmLabel: 'Turn on and save',
     })
     if (!ok) return
   }
+  const ending = takeOver && !!other
   saving.value = true
   try {
-    const saved = await saveAutopilot(next)
+    const saved = await saveAutopilot(next, { takeOver: ending })
     adopt(saved, true)
-    if (saved.settings.enabled) {
-      notify.success('The autopilot is on', `“${name}” runs unattended. Share the participant links on this page.`)
+    const waitingFor = saved.status.engineSession
+    if (saved.settings.enabled && !ending && waitingFor && waitingFor.experimentId !== saved.settings.experimentId) {
+      notify.success('The autopilot is on', `It opens a session of “${name}” once “${waitingFor.name || `Session #${waitingFor.id}`}” ends.`)
+    } else if (saved.settings.enabled) {
+      notify.success(wasPaused ? 'The autopilot is running again' : 'The autopilot is on', `“${name}” runs unattended. Share the participant links on this page.`)
     } else if (prev.enabled) {
       notify.success('The autopilot is off', 'No new sessions will open. A session that is already open keeps running.')
     } else {
@@ -559,6 +598,7 @@ useUnsavedGuard(dirty, { what: 'the autopilot settings', save: () => { if (dirty
   line-height: 1.5;
 }
 .ap-preview svg { flex: none; margin-top: 2px; color: var(--info); }
+.ap-holder__btn { margin-top: 8px; }
 
 .ap-savebar {
   position: relative;

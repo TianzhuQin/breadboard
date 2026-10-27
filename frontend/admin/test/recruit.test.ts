@@ -25,11 +25,14 @@ vi.mock('@/lib/http', async () => {
 })
 
 vi.mock('@/store/admin', async () => {
-  const { reactive, computed, shallowRef } = await import('vue')
+  const { reactive, computed, ref, shallowRef } = await import('vue')
   const admin = reactive<{ experiment: any, instance: any, ready: boolean }>({ experiment: null, instance: null, ready: true })
   return {
     admin,
     connection: { send: vi.fn() },
+    connectionState: ref('open'),
+    nextMessage: vi.fn(async () => null),
+    NOT_CONNECTED: 'Not connected to the server',
     actions: { refresh: vi.fn(() => Promise.resolve(null)), selectExperiment: vi.fn() },
     experiments: computed(() => (admin.experiment ? [admin.experiment] : [])),
     instances: computed(() => (admin.experiment?.instances || [])),
@@ -38,19 +41,22 @@ vi.mock('@/store/admin', async () => {
 })
 
 import { http, HttpError } from '@/lib/http'
-import { admin as realAdmin, connection } from '@/store/admin'
+import { admin as realAdmin, connection, connectionState, nextMessage } from '@/store/admin'
 import {
   assignmentsCsv, bonusFromAnswers, bonusTotal, buildRequirement, csvCell, describeError, describeRequirement, hitCounts, mapPool,
   MASTERS_ID, newRequirement, parseAnnotation, parseAnswers, parseIntegerList, parseMoney, parseWorkerIds, toCsv, validateRequirement,
   MAX_AUTOSTART_SECONDS,
 } from '@/pages/recruit/mturk/lib'
-import { FORM_KEY, defaultHitForm, hitFormBody, loadHitForm, validateHitForm } from '@/pages/recruit/mturk/hitForm'
+import { FORM_KEY, defaultHitForm, hitFormBody, loadHitForm, readSchedules, validateHitForm } from '@/pages/recruit/mturk/hitForm'
+import { bonusToken, newRequestToken, TOKEN_RE } from '@/pages/recruit/mturk/bonusTokens'
+import { toasts } from '@/ui/toast'
 import { toRow } from '@/pages/recruit/mturk/rows'
 import { prolificBonusLines, prolificPlayers, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
 import BonusDialog from '@/pages/recruit/mturk/BonusDialog.vue'
 import CreateHitTab from '@/pages/recruit/mturk/CreateHitTab.vue'
 import RecruitPage from '@/pages/recruit/RecruitPage.vue'
 import HitDetail from '@/pages/recruit/mturk/HitDetail.vue'
+import AutopilotCard from '@/pages/recruit/prolific/AutopilotCard.vue'
 import { moneyState, settleMoney } from '@/pages/recruit/mturk/moneyConfirm'
 
 // the mocked store holds partial objects
@@ -356,6 +362,9 @@ describe('Prolific helpers', () => {
 
   it('writes completion codes as safe Groovy strings', () => {
     expect(groovyString("it's")).toBe("'it\\'s'")
+    // a line break or a backslash must not end or bend the literal
+    expect(groovyString('a\nb\rc\\d')).toBe("'a\\nb\\rc\\\\d'")
+    expect(groovyString('${x}')).toBe("'${x}'")
   })
 })
 
@@ -427,10 +436,28 @@ describe('Bonus dialog', () => {
   })
 })
 
+describe('Prolific autopilot card', () => {
+  it('says when the autopilot of this experiment is paused', async () => {
+    vi.mocked(http.get).mockResolvedValueOnce({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game', paused: true } })
+    const w = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
+    await flushPromises()
+    expect(w.text()).toContain('Paused for this experiment')
+    vi.mocked(http.get).mockResolvedValueOnce({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game' } })
+    const w2 = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
+    await flushPromises()
+    expect(w2.text()).toContain('On for this experiment')
+  })
+})
+
 describe('Create HIT', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.mocked(connection.send).mockReset()
+    vi.mocked(connection.send).mockReturnValue(true)
+    vi.mocked(nextMessage).mockReset()
+    vi.mocked(nextMessage).mockResolvedValue({ output: 'AMT HIT created, initStep will automatically start in 10.0 minutes and 0.0 seconds.' })
+    ;(connectionState as any).value = 'open'
+    toasts.splice(0, toasts.length)
     admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', instances: [] }
     admin.instance = { id: 7, name: 's1', status: 'RUNNING', hits: [] }
   })
@@ -450,6 +477,43 @@ describe('Create HIT', () => {
     expect(body).toMatchObject({ title: 'Play a game', experimentId: '3', experimentInstanceId: '7', reward: '1.00', qualificationRequirements: [] })
     expect(connection.send).toHaveBeenCalledWith('SubmitAMTTask', { lifetimeInSeconds: 300, tutorialTime: 300 })
     expect(w.text()).toContain('HIT1')
+    expect(readSchedules().HIT1).toBeTruthy()
+  })
+
+  async function postWithAutoStart () {
+    localStorage.setItem(FORM_KEY, JSON.stringify({ title: 'Play a game', description: 'A short game', keywords: 'game' }))
+    const created = { id: 1, hitId: 'HIT2', title: 'Play a game', creationTime: '2026-10-27 14:00:00,0', description: 'A short game', lifetimeInSeconds: '300', tutorialTime: '300', maxAssignments: '20', externalURL: 'https://bb.example.org/game/3/7/amt', reward: '1.00', disallowPrevious: 'type', sandbox: true }
+    const api = { mode: 'sandbox', sandbox: true, createHit: vi.fn(async (_body: unknown) => created), experimentTypeId: vi.fn() }
+    const w = mount(CreateHitTab, { props: { api: api as any }, global: { plugins: [makeRouter()], stubs: { teleport: true } } })
+    await flushPromises()
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    return { w, api }
+  }
+
+  it('says the game won\'t start by itself when the connection dropped after posting', async () => {
+    vi.mocked(connection.send).mockReturnValue(false)
+    const { api } = await postWithAutoStart()
+    expect(api.createHit).toHaveBeenCalledTimes(1)
+    expect(readSchedules().HIT2).toBeUndefined()
+    const warning = toasts.find(t => t.kind === 'warning')!
+    expect(warning.title).toBe('The game won’t start by itself')
+    expect(warning.detail).toMatch(/Not connected to the server/)
+    expect(warning.timeout).toBe(0)
+  })
+
+  it('says the game won\'t start by itself when the server refuses the automatic start', async () => {
+    vi.mocked(nextMessage).mockResolvedValue({ error: 'Another researcher\'s experiment is loaded.', request: 'SubmitAMTTask' })
+    await postWithAutoStart()
+    expect(readSchedules().HIT2).toBeUndefined()
+    expect(toasts.find(t => t.kind === 'warning')!.detail).toMatch(/Another researcher's experiment is loaded\./)
+  })
+
+  it('does not post a HIT that should start by itself while disconnected', async () => {
+    ;(connectionState as any).value = 'retrying'
+    const { w, api } = await postWithAutoStart()
+    expect(api.createHit).not.toHaveBeenCalled()
+    expect(w.text()).toMatch(/Not connected to the server/)
   })
 
   it('shows what is missing instead of posting', async () => {
@@ -611,5 +675,58 @@ describe('HIT submissions', () => {
     // once the researcher has checked, they can allow it again
     await buttonStarting(w, 'Not paid?').trigger('click')
     expect((dialog.props('rows') as any[]).map(r => r.id)).toEqual(['A1', 'A3'])
+  })
+
+  it('sends each payment with its own request token, reuses it on a retry, and takes a repeat as already paid', async () => {
+    localStorage.clear()
+    let lost = true
+    const api = {
+      ...fakeApi(),
+      sendBonus: vi.fn(async (id: string) => {
+        if (id === 'A1' && lost) { lost = false; throw new HttpError(504, 'Gateway Timeout', '<html><body>504</body></html>') }
+        return id === 'A1' ? { sent: true, duplicate: true } : { sent: true }
+      }),
+    }
+    const w = mount(HitDetail, {
+      props: { hit: { hitid: 'H1', title: 'Game', reward: '1.00', maxAssignments: 20 }, annotation: { breadboard: false, experimentUid: null, experimentName: null }, api: api as any },
+      global: { stubs: { teleport: true } },
+    })
+    await flushPromises()
+    await w.find('thead input[type="checkbox"]').setValue(true)
+    const dialog = w.findComponent(BonusDialog)
+    dialog.vm.$emit('pay', (dialog.props('rows') as any[]).map(row => ({ row, amount: 0.5 })), 'Score')
+    await flushPromises()
+    const [a1, a3] = api.sendBonus.mock.calls.map(c => (c as unknown[])[4] as string)
+    expect(a1).toMatch(TOKEN_RE)
+    expect(a3).toMatch(TOKEN_RE)
+    expect(a1).not.toBe(a3)
+    expect(w.text()).toContain('may or may not have been paid')
+
+    // the retry carries the same token, and MTurk's "already paid" counts as paid
+    await buttonStarting(w, 'Not paid?').trigger('click')
+    await w.find('thead input[type="checkbox"]').setValue(true)
+    const retry = (dialog.props('rows') as any[]).find(r => r.id === 'A1')
+    expect(retry).toBeTruthy()
+    dialog.vm.$emit('pay', [{ row: retry, amount: 0.75 }], 'Score')
+    await flushPromises()
+    expect(api.sendBonus).toHaveBeenCalledTimes(3)
+    expect((api.sendBonus.mock.calls[2] as unknown[])[4]).toBe(a1)
+    expect(w.text()).not.toContain('may or may not have been paid')
+    expect(w.findAll('tbody tr').find(tr => tr.text().includes('A1'))!.text()).not.toContain('Not paid?')
+    // and a reload of the page keeps it
+    expect(bonusToken('A1')).toBe(a1)
+  })
+
+  it('makes request tokens MTurk accepts, even without randomUUID', () => {
+    expect(newRequestToken()).toMatch(TOKEN_RE)
+    const real = globalThis.crypto
+    Object.defineProperty(globalThis, 'crypto', { value: { getRandomValues: real.getRandomValues.bind(real) }, configurable: true })
+    try {
+      expect(newRequestToken()).toMatch(TOKEN_RE)
+      Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true })
+      expect(newRequestToken()).toMatch(TOKEN_RE)
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', { value: real, configurable: true })
+    }
   })
 })

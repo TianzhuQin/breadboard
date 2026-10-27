@@ -1,5 +1,5 @@
-import { shallowRef, watch } from 'vue'
-import { actions, admin, graph } from '@/store/admin'
+import { computed, shallowRef, watch } from 'vue'
+import { actions, admin, engineElsewhere, graph, running } from '@/store/admin'
 import { toast } from '@/ui/toast'
 import type { TieEditResult } from '@/store/types'
 import { tieBetween } from './players'
@@ -31,6 +31,22 @@ let generation = 0
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '')
 /** The undo shortcut as this computer writes it. */
 export const undoShortcut = isMac ? '⌘Z' : 'Ctrl+Z'
+
+/** Why the server refuses tie edits while the shared engine runs another experiment; '' otherwise. */
+function engineElsewhereReason (): string {
+  const e = engineElsewhere.value
+  if (!e) return ''
+  return `The engine is running ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'} right now, so ties can't be changed here`
+}
+
+/**
+ * Why ties can't be changed now, in words ('' when they can): the session isn't running, or the
+ * shared engine runs another experiment (the top bar says whose), so the server would refuse.
+ */
+export const tieEditsBlocked = computed(() => {
+  if (!running.value) return 'Start the session to change ties'
+  return engineElsewhereReason()
+})
 
 export function inverseOf (e: TieEdit): TieEdit {
   return { op: e.op === 'add' ? 'remove' : 'add', a: e.a, b: e.b }
@@ -84,6 +100,8 @@ export async function editTie (op: 'add' | 'remove', a: string, b: string, opts:
     return { ok: false, op, a, b, reason }
   }
   if (!a || !b || a === b) return refuse('Pick two different people.')
+  const elsewhere = engineElsewhereReason()
+  if (elsewhere) return refuse(`${elsewhere}.`)
   if (isPending(a, b)) return refuse('That tie is already being changed. Wait a moment.')
   if (!graph.nodes.has(a) || !graph.nodes.has(b)) return refuse('One of them is no longer in the session.', 'error')
   // only "connected" edges are ties; the server neither adds nor cuts edges of other kinds

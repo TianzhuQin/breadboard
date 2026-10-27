@@ -183,7 +183,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Activity, CirclePlay, Eraser, FlaskConical, Info, Send, TriangleAlert } from 'lucide-vue-next'
 import { BBadge, BButton, BEmpty, BField, BInput, BPanel, BSelect, BSwitch, notify, toast } from '@/ui'
-import { actions, admin } from '@/store/admin'
+import { actions, admin, connectionState } from '@/store/admin'
 import CopyButton from '../CopyButton.vue'
 import ErrorNote from '../ErrorNote.vue'
 import DurationInput from './DurationInput.vue'
@@ -299,6 +299,11 @@ async function submit () {
     formError.value = { message: 'The session stopped. Start a session on Live session and try again.' }
     return
   }
+  if (form.autoLaunch && connectionState.value !== 'open') {
+    // the automatic start is asked for over the connection, right after posting
+    formError.value = { message: 'Not connected to the server, so the game couldn’t be set to start by itself. Wait until the connection is back (see the top bar), or turn off “Start the game by itself”.' }
+    return
+  }
   if (!props.api.sandbox && cost.value) {
     const ok = await confirmMoney({
       title: 'Post this HIT to production?',
@@ -325,14 +330,21 @@ async function submit () {
     const body = hitFormBody(form, { experimentId: exp.id, instanceId: inst.id, requirements: wire })
     const created = await track(() => props.api.createHit(body))
     saveHitForm(form)
-    // the HIT exists once the server says OK, so the automatic start is set up either way
-    if (form.autoLaunch) scheduleAutoStart(created?.hitId || '', body.hitLifetime, body.tutorialTime)
     tried.value = false
     if (created && created.hitId) {
       justCreated.value = created
       notify.success('HIT posted', `“${body.title}” is on the ${props.api.sandbox ? 'sandbox' : 'production'} site.`)
     } else {
       notify.warning('HIT posted', 'The server didn’t send its details. Open the HITs tab to see it.')
+    }
+    // the HIT exists once the server says OK, so the automatic start is asked for either way
+    if (form.autoLaunch) {
+      const started = await scheduleAutoStart(created?.hitId || '', body.hitLifetime, body.tutorialTime)
+      if (!started.ok) {
+        toast('warning', 'The game won’t start by itself',
+          `${started.reason} The HIT is posted, so start the game yourself on Live session once enough workers have joined.`,
+          { timeout: 0 })
+      }
     }
     await nextTick()
     createdRef.value?.reload()

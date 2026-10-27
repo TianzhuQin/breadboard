@@ -49,15 +49,25 @@ export class LiveGraph {
   private changed () {
     if (this.pending) return
     this.pending = true
+    let done = false
+    let frame: number | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
     const flush = () => {
+      if (done) return
+      done = true
+      if (frame !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame)
+      if (timer !== null) clearTimeout(timer)
       this.pending = false
       this.version.value++
       triggerRef(this.version)
     }
     if (typeof requestAnimationFrame === 'function' && typeof document !== 'undefined' && !document.hidden) {
-      requestAnimationFrame(flush)
+      // Frames can stop while the page still counts as visible (a window behind others, some
+      // embedded views): a timer then flushes instead, whichever comes first.
+      frame = requestAnimationFrame(flush)
+      timer = setTimeout(flush, 120)
     } else {
-      setTimeout(flush, 16)
+      timer = setTimeout(flush, 16)
     }
   }
 

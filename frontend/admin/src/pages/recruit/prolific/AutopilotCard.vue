@@ -29,7 +29,8 @@ import { http } from '@/lib/http'
 
 interface AutopilotStatus {
   source: 'admin' | 'config' | 'off'
-  status: { on: boolean, experimentId: number | null, experimentName: string | null }
+  /** paused: a researcher stopped its session, and it opens none until the settings are saved */
+  status: { on: boolean, experimentId: number | null, experimentName: string | null, paused?: boolean }
 }
 
 const props = defineProps<{ experimentId: number }>()
@@ -39,10 +40,12 @@ const state = ref<'loading' | 'ready' | 'unknown'>('loading')
 const ap = ref<AutopilotStatus | null>(null)
 
 const forThis = computed(() => !!ap.value?.status?.on && ap.value.status.experimentId === props.experimentId)
-const tone = computed(() => (forThis.value ? 'success' : ap.value?.status?.on ? 'warning' : 'neutral'))
+const paused = computed(() => forThis.value && ap.value?.status?.paused === true)
+const tone = computed(() => (paused.value ? 'warning' : forThis.value ? 'success' : ap.value?.status?.on ? 'warning' : 'neutral'))
 const label = computed(() => {
   const s = ap.value?.status
   if (!s?.on) return 'Off'
+  if (paused.value) return 'Paused for this experiment'
   if (forThis.value) return 'On for this experiment'
   return `On for ${s.experimentName || 'another experiment'}`
 })

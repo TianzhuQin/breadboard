@@ -94,8 +94,9 @@ public class EventTracker {
 
   /**
    * {@code {"event": {"id": 12|null, "name": "...", "datetime": "2026-10-27T14:03:05.123Z",
-   * "data": {"<name>": "<value>", ...}}}}: the datetime in UTC with milliseconds, values longer
-   * than {@value #LIVE_VALUE_LIMIT} characters cut short (ending in an ellipsis).
+   * "data": {"<name>": "<value>", ...}, "experimentInstanceId": 7|null}}}: the datetime in UTC with
+   * milliseconds, values longer than {@value #LIVE_VALUE_LIMIT} characters cut short (ending in an
+   * ellipsis), and the session it was recorded in (every console gets every session's events).
    */
   static ObjectNode liveJson(Event event) {
     ObjectNode body = Json.newObject();
@@ -115,6 +116,7 @@ public class EventTracker {
         data.put(d.name, value);
       }
     }
+    body.put("experimentInstanceId", event.experimentInstance == null ? null : event.experimentInstance.id);
     ObjectNode message = Json.newObject();
     message.put("event", body);
     return message;

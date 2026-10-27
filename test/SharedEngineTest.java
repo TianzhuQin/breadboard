@@ -190,7 +190,10 @@ public class SharedEngineTest extends BaseTest {
 
         final AdminSocketsTest.Tab t = loggedIn(user);
         t.send("SelectExperiment", "experimentId", first.id);
-        await("selected", () -> first.id.equals(User.findByEmail(user.email).selectedExperiment.id));
+        await("selected", () -> {
+            Experiment selection = User.findByEmail(user.email).selectedExperiment;
+            return selection != null && first.id.equals(selection.id);
+        });
         t.send("LaunchGame", "name", "S1", "parameters", Json.newObject());
         await("running", () -> sessions(first).size() == 1 && sessions(first).get(0).status == ExperimentInstance.Status.RUNNING);
         final ExperimentInstance s1 = sessions(first).get(0);

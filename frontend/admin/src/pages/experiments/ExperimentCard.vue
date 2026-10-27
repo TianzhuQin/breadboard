@@ -60,7 +60,7 @@ import {
 import { BBadge, BButton, BMenu, type MenuItem } from '@/ui'
 import { uid } from '@/ui/uid'
 import type { Experiment } from '@/store/types'
-import { formatWhen, lastSession, parseServerTime, runningSession } from './experiments'
+import { formatWhen, lastSession, parseServerTime, runningSession, uniqueLanguages } from './experiments'
 
 const props = defineProps<{
   exp: Experiment
@@ -76,7 +76,7 @@ const live = computed(() => runningSession(props.exp))
 const last = computed(() => lastSession(props.exp))
 const sessions = computed(() => props.exp.instances?.length || 0)
 const whenText = computed(() => formatWhen(parseServerTime(last.value?.creationTime)))
-const languageNames = computed(() => (props.exp.languages || []).map(l => l.name || l.code).filter(Boolean))
+const languageNames = computed(() => uniqueLanguages(props.exp.languages).map(l => l.name || l.code).filter(Boolean))
 const languageText = computed(() => {
   const n = languageNames.value
   if (!n.length) return 'No languages'

@@ -27,13 +27,15 @@ vi.mock('@/store/admin', async () => {
   const list = reactive(store.exps)
   const running = ref(false)
   Object.defineProperty(store.running, 'value', { get: () => running.value, set: (v) => { running.value = v } })
-  const admin = reactive({ experiment: null as any, instance: null as any, email: 'r@lab.org', events: [] })
+  const admin = reactive({ experiment: null as any, instance: null as any, email: 'r@lab.org', events: [], user: null as any, requestError: null as any })
   ;(store as any).admin = admin
   return {
     admin,
     actions: store.actions,
     experiments: computed(() => list),
     running,
+    ensureConnected: () => true,
+    graph: { nodes: new Map() },
   }
 })
 
@@ -44,7 +46,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import ExperimentsPage from '../src/pages/experiments/ExperimentsPage.vue'
 import {
   checkExperimentZip, describeError, devDirName, formatWhen, importNameFromFile, importUrl, lastSession, manifestName,
-  parseServerTime, readZipEntries, runningSession, validateExperimentName, zipFileName,
+  parseServerTime, readZipEntries, runningSession, uniqueLanguages, validateExperimentName, zipFileName,
 } from '../src/pages/experiments/experiments'
 import { HttpError } from '../src/lib/http'
 import ImportExperimentDialog from '../src/pages/experiments/ImportExperimentDialog.vue'
@@ -180,6 +182,14 @@ describe('sessions and dates', () => {
     expect(formatWhen(new Date(2025, 0, 2), now)).toMatch(/2025/)
     expect(formatWhen(null)).toBe('—')
   })
+  it('names each language once, by id and then by code', () => {
+    const en = { id: 1, code: 'en', name: 'English' }
+    expect(uniqueLanguages([en, { ...en }, { id: 3, code: 'EN', name: 'English' }, { id: 2, code: 'de', name: 'German' }]).map(l => l.id))
+      .toEqual([1, 2])
+    expect(uniqueLanguages([{ id: 4, code: 'fr', name: 'French' }, { id: 5, code: '', name: 'Custom' }, { id: 6, code: '', name: 'Other' }]).map(l => l.id))
+      .toEqual([4, 5, 6])
+    expect(uniqueLanguages(undefined)).toEqual([])
+  })
 })
 
 describe('errors in words', () => {
@@ -292,6 +302,25 @@ describe('Import dialog', () => {
     w.unmount()
   })
 
+  it('asks before switching to the import while someone uses the engine', async () => {
+    http.post.mockResolvedValue({ id: 44, name: 'Shared' })
+    ;(store as any).admin.user = { engine: { experimentId: 1, experimentName: 'Existing', sessionId: 41, sessionName: 'live run', owner: 'boss@lab.org' } }
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(false)
+    try {
+      const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Shared.zip'))
+      submit().click()
+      await flushPromises()
+      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Shared” now?', danger: true })
+      expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+      // the new experiment still shows up in the list
+      expect(store.actions.refresh).toHaveBeenCalled()
+      w.unmount()
+    } finally {
+      ;(store as any).admin.user = null
+    }
+  })
+
   it('uses the name recorded in the zip when there is one', async () => {
     const w = await openWith(new File([makeZip(EXPORTED) as BlobPart], 'Public-goods_12.zip'))
     expect(input().value).toBe('Public goods')
@@ -362,6 +391,33 @@ describe('New experiment dialog', () => {
     expect(store.actions.refresh).toHaveBeenCalled()
     expect(store.actions.selectExperiment).toHaveBeenCalledWith(6)
     w.unmount()
+  })
+
+  it('asks before switching to it while someone uses the engine, and stays put on Cancel', async () => {
+    http.put.mockResolvedValue({ id: 6, name: 'Fresh' })
+    ;(store as any).admin.user = { engine: { experimentId: 5, experimentName: 'Base', sessionId: 40, sessionName: 'their run', owner: 'boss@lab.org' } }
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(false)
+    try {
+      const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+      await w.setProps({ open: true })
+      const name = document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!
+      name.value = 'Fresh'
+      name.dispatchEvent(new Event('input'))
+      document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+      await flushPromises()
+      expect(http.put).toHaveBeenCalledTimes(1)
+      expect(confirmMock).toHaveBeenCalledTimes(1)
+      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Fresh” now?', danger: true })
+      expect(confirmMock.mock.calls[0][0].message).toContain('boss@lab.org has session “their run” of “Base” running.')
+      expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+      // created all the same, so the dialog closes
+      const opened = w.emitted('update:open') || []
+      expect(opened[opened.length - 1]).toEqual([false])
+      w.unmount()
+    } finally {
+      ;(store as any).admin.user = null
+    }
   })
 
   it('starts as a copy with a free name when asked to duplicate', async () => {
@@ -489,18 +545,29 @@ describe('Experiments page', () => {
     w.unmount()
   })
 
-  it('asks before switching while a session someone else started appears to be running', async () => {
+  it('asks before switching while another account\'s session runs on the shared engine', async () => {
     store.actions.selectExperiment.mockClear()
-    // not this account's current session, but a running row of the experiment it works on
-    ;(store as any).admin.experiment = { ...A, instances: [...A.instances, { id: 2, name: 'lab manager run', status: 'RUNNING', creationTime: '2026-10-02 10:00:00,0' }] }
+    // not this account's session: the engine info in the User JSON says who runs what
+    ;(store as any).admin.user = { engine: { experimentId: 300, experimentName: 'Alpha', sessionId: 2, sessionName: 'lab manager run', owner: 'boss@lab.org' } }
     confirmMock.mockResolvedValueOnce(false)
+    try {
+      const { w } = await mountAt('/experiments')
+      await workOn(w, 1).trigger('click')
+      await flushPromises()
+      expect(confirmMock).toHaveBeenCalledTimes(1)
+      expect(confirmMock.mock.calls[0][0]).toMatchObject({ danger: true, title: 'Switch to “Beta”?', confirmLabel: 'Switch anyway' })
+      expect(confirmMock.mock.calls[0][0].message).toContain('boss@lab.org has session “lab manager run” of “Alpha” running.')
+      expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+      w.unmount()
+    } finally {
+      ;(store as any).admin.user = null
+    }
+  })
+
+  it('lists each language once on the cards', async () => {
+    store.exps.splice(1, 1, { ...B, languages: [{ id: 1, code: 'en', name: 'English' }, { id: 1, code: 'en', name: 'English' }, { id: 7, code: 'EN', name: 'English' }, { id: 2, code: 'de', name: 'German' }] })
     const { w } = await mountAt('/experiments')
-    await workOn(w, 1).trigger('click')
-    await flushPromises()
-    expect(confirmMock).toHaveBeenCalledTimes(1)
-    expect(confirmMock.mock.calls[0][0]).toMatchObject({ danger: true, title: 'Switch to “Beta”?' })
-    expect(confirmMock.mock.calls[0][0].message).toContain('“lab manager run” appears to be running')
-    expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+    expect(w.findAll('.xcard')[1].find('.xcard__langs-text').text()).toBe('Languages: English, German')
     w.unmount()
   })
 

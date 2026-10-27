@@ -8,7 +8,8 @@ export enum SocketState {
 }
 
 /**
- * A WebSocket wrapper with automatic reconnection with exponential backoff and message queuing
+ * A WebSocket wrapper with automatic reconnection with exponential backoff and message queuing.
+ * Once closed with close(), it stays closed: it never reconnects and sends nothing more.
  */
 export class Socket extends Emitter {
   public state: SocketState = SocketState.CLOSED
@@ -16,7 +17,11 @@ export class Socket extends Emitter {
   private nTries = 0
   private maxWait = 2 * 1000 * 60
   private buffer: any[] = []
-  
+  /** The reconnect waiting to happen after the connection dropped */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  /** close() was called */
+  private closed = false
+
   constructor (private url: string, private protocols?: string | string[]) {
     super()
     this.connect = this.connect.bind(this)
@@ -26,6 +31,9 @@ export class Socket extends Emitter {
    * Open the WebSocket connection
    */
   public connect () {
+    // (a retry scheduled before close() must not open a connection nobody listens to)
+    if (this.closed) return
+    this.clearRetry()
     console.log('socket.connect')
     this.state = SocketState.PENDING
     this.emit('connect')
@@ -41,15 +49,28 @@ export class Socket extends Emitter {
   }
 
   /**
-   * Put the socket into a closing state
+   * Close the connection for good: no reconnect follows, also when one was waiting to happen, and
+   * nothing queued is sent
    */
   public close () {
+    this.closed = true
+    this.clearRetry()
     if (this.state !== SocketState.CLOSING && this.state !== SocketState.CLOSED) {
       this.socket.close()
       this.state = SocketState.CLOSING
-      this._clearBuffer()
     }
+    this._clearBuffer()
     this.removeListeners()
+  }
+
+  /**
+   * Cancel a pending reconnect
+   */
+  private clearRetry () {
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
   }
 
   /**
@@ -84,6 +105,7 @@ export class Socket extends Emitter {
    * @param message 
    */
   public send (message: any) {
+    if (this.closed) return
     if (this.state === SocketState.OPEN) {
       this._send(message)
     } else {
@@ -122,13 +144,15 @@ export class Socket extends Emitter {
    * Handle the WebSocket.onclose event internally
    */
   private onClose () {
-    if (this.state !== SocketState.CLOSING) {
+    if (this.state !== SocketState.CLOSING && !this.closed) {
       this.nTries++
       // Exponential back-off w/ randomness to make it easier for the server to come back online w/out a huge, immediate traffic spike
       const wait = clamp(this.nTries * 2000 + randomInt(500, 4000), 1000, this.maxWait)
       console.debug(`Connection closed. Retrying in ${wait}ms....`)
+      this.clearRetry()
+      // (before telling the listeners, so one that closes the socket cancels it)
+      this.retryTimer = setTimeout(this.connect, wait)
       this.emit('retry', wait)
-      setTimeout(this.connect, wait)
     }
     this.state = SocketState.CLOSED
     this.emit('close')

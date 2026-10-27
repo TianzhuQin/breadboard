@@ -40,7 +40,7 @@ public class ScriptBoard extends UntypedActor {
   private static BreadboardGraphChangedListener graphChangedListener;
   private static FileWatcher fileWatcher;
   private static EventTracker eventTracker = new EventTracker();
-  private static EventBus<Map> eventBus = new EventBus();
+  private static final EventBus<Map> eventBus = EventBus.forScripts();
 
   private static Random rand = new Random();
   private static final Map<String, Client> clients = new java.util.concurrent.ConcurrentHashMap<>();
@@ -282,7 +282,33 @@ public class ScriptBoard extends UntypedActor {
     amtTimers.add(startInitStepTimer);
   }
 
+  // One rebuild at a time. Every account's actor (and the autopilot's) rebuilds the one shared
+  // engine, and a rebuild that started while another was half-way through found the new engine
+  // without its scripts (playerActions not set yet) and threw.
+  private static final Object REBUILD_LOCK = new Object();
+
   private void resetEngine(Experiment experiment) throws IOException, ScriptException {
+    try {
+      synchronized (REBUILD_LOCK) {
+        buildEngine(experiment);
+      }
+    } catch (Throwable failed) {
+      // Every console saw "Reloading", so every console hears that it failed, not only the one
+      // that asked (which also gets the error itself).
+      toAllAdmins(reloadFailed(failed));
+      throw failed;
+    }
+  }
+
+  /** {@code {"notify": {"ScriptEngineReloadFailed": "<why, in words>"}}}. */
+  static ObjectNode reloadFailed(Throwable failure) {
+    ObjectNode failed = Json.newObject();
+    failed.putObject("notify").put("ScriptEngineReloadFailed",
+        "The script engine could not be rebuilt: " + ScriptBoardSupport.describeError(failure));
+    return failed;
+  }
+
+  private void buildEngine(Experiment experiment) throws IOException, ScriptException {
     // When started, tell every open console
     ObjectNode reloading = Json.newObject();
     reloading.putObject("notify").put("ScriptEngineReloading", new Date().getTime());
@@ -408,13 +434,17 @@ public class ScriptBoard extends UntypedActor {
     Logger.debug("ScriptEngine reload complete");
   }
 
+  // The "source" of the frames an experiment's steps send while they load (on a rebuild or a launch):
+  // no console request is waiting for them.
+  static final String STEPS_SOURCE = "Steps";
+
   private void loadSteps(Experiment experiment, ThrottledWebSocketOut out) {
     if (experiment == null) {
       return;
     }
     for (Step step : experiment.getSteps()) {
       //should call RunStep?
-      processScript(step.source + ";null;", out, step.name);
+      processScript(step.source + ";null;", out, step.name, "source", STEPS_SOURCE);
     }
     afterStepsLoaded(experiment);
   }
@@ -872,8 +902,8 @@ public class ScriptBoard extends UntypedActor {
       replayGraph(admin);
     } else if (message instanceof Breadboard.RunGame) {
       if (breadboardMessage.user != null) {
-        // Run Game
-        processScript("initStep.start()", breadboardMessage.out, null);
+        // Run Game (every frame tagged, "started already" included, so the console knows it is the answer)
+        processScript("initStep.start()", breadboardMessage.out, null, "request", "RunGame");
       }
 
     } else if (message instanceof Breadboard.HitCreated) {
@@ -914,7 +944,7 @@ public class ScriptBoard extends UntypedActor {
         breadboardMessage.user.update();
 
         // Process script
-        processScript(sendScript.script, breadboardMessage.out, null);
+        processScript(sendScript.script, breadboardMessage.out, null, "request", "SendScript");
       }
 
     } else if (message instanceof Breadboard.MakeChoice) {
@@ -929,7 +959,7 @@ public class ScriptBoard extends UntypedActor {
       if (breadboardMessage.user != null && breadboardMessage.user.selectedExperiment != null) {
         Logger.debug("SendStep: " + sendStep.id + ", " + sendStep.name + ", " + sendStep.source);
         // Now we only run the step
-        getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out), null);
+        getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out, "SendStep"), null);
         // A re-run step may set the autopilot up itself; the console's settings apply again after it.
         getSelf().tell(new Breadboard.StepsLoaded(breadboardMessage.user, engineExperiment(), breadboardMessage.out), null);
       } else {
@@ -938,7 +968,11 @@ public class ScriptBoard extends UntypedActor {
     } else if (message instanceof Breadboard.RunStep) {
       // TODO: Compile step here and make available to scripting engine
       Breadboard.RunStep runStep = (Breadboard.RunStep) message;
-      processScript(runStep.source, breadboardMessage.out, null);
+      if (runStep.request != null) {
+        processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request);
+      } else {
+        processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE);
+      }
     } else if (message instanceof Breadboard.StepsLoaded) {
       afterStepsLoaded(((Breadboard.StepsLoaded) message).experiment);
     } else if (message instanceof Breadboard.ChangeExperiment) {
@@ -1035,7 +1069,8 @@ public class ScriptBoard extends UntypedActor {
         Vertex player = runOnJoinStep.vertex;
         // A quoted literal, not "..." around the raw id: a client id is typed by the participant,
         // and "${...}" inside a double-quoted Groovy string would run as code.
-        processScript("onJoinStep.start(" + groovyString(player.getId().toString()) + ")", runOnJoinStep.out, null);
+        processScript("onJoinStep.start(" + groovyString(player.getId().toString()) + ")", runOnJoinStep.out, null,
+            "source", Experiment.ON_JOIN_STEP_NAME);
       }
 
     } // END else if(message instanceof Breadboard.RunOnJoinStep)
@@ -1048,7 +1083,8 @@ public class ScriptBoard extends UntypedActor {
         // This used to test the binding "onLeaveStep.start()", which nothing ever sets, so the
         // OnLeaveStep never ran. The step itself is bound as "onLeaveStep".
         if (engine != null && engine.get("onLeaveStep") != null) {
-          processScript("onLeaveStep.start(" + groovyString(player.getId().toString()) + ")", runOnLeaveStep.out, null);
+          processScript("onLeaveStep.start(" + groovyString(player.getId().toString()) + ")", runOnLeaveStep.out, null,
+              "source", Experiment.ON_LEAVE_STEP_NAME);
         }
       }
 
@@ -1622,30 +1658,83 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
-  private static void makeChoice(String clientId, String uid, String params, ThrottledWebSocketOut out) {
+  // Held (per player) from checking that a choice is still offered until it has been made, so a
+  // participant and a researcher answering the same choice at once don't both run it, and the
+  // researcher is told "made" only when theirs ran.
+  private static final Object[] CHOICE_LOCKS = new Object[32];
+  static {
+    for (int i = 0; i < CHOICE_LOCKS.length; i++) {
+      CHOICE_LOCKS[i] = new Object();
+    }
+  }
+
+  private static Object choiceLock(String playerId) {
+    return CHOICE_LOCKS[(playerId.hashCode() & 0x7fffffff) % CHOICE_LOCKS.length];
+  }
+
+  /**
+   * A participant's choice (clientId set), answered with {} or {"error"}, or a researcher's choice
+   * on a player's behalf from the console (clientId null), answered with
+   * {"request": "MakeChoice", "choice": "made"}, {"request": "MakeChoice", "choice": "gone"} when
+   * the choice is no longer offered (answered, expired or the game moved on), or
+   * {"error", "request": "MakeChoice"}.
+   */
+  static void makeChoice(String clientId, String uid, String params, ThrottledWebSocketOut out) {
+    boolean console = clientId == null;
     ObjectNode jsonOutput = Json.newObject();
     try {
-      // A choice uid is only valid for the participant it was shown to. clientId is null when an
-      // admin makes the choice on a player's behalf from the admin panel.
-      String owner = (playerActions == null || uid == null) ? null : playerActions.ownerOf(uid);
-      if (clientId != null && (owner == null || !owner.equals(clientId))) {
-        Logger.info("Ignored choice " + uid + " from " + clientId + ": not offered to this participant");
-        out.write(jsonOutput);
-        return;
+      boolean made = false;
+      // A choice uid is only valid for the participant it was shown to.
+      PlayerActionsInterface actions = playerActions;
+      String owner = (actions == null || uid == null) ? null : actions.ownerOf(uid);
+      if (owner != null && (console || owner.equals(clientId))) {
+        synchronized (choiceLock(owner)) {
+          // Someone else may have answered it in the meantime.
+          if (owner.equals(actions.ownerOf(uid))) {
+            actions.choose(uid, params);
+            made = true;
+          }
+        }
       }
-      playerActions.choose(uid, params);
+      if (console) {
+        jsonOutput.put("request", "MakeChoice");
+        jsonOutput.put("choice", made ? "made" : "gone");
+      } else if (!made) {
+        Logger.info("Ignored choice " + uid + " from " + clientId + ": not (or no longer) offered to this participant");
+      }
     } catch (Exception e) {
       ScriptLoader.humanizeStackTrace(e);
       Logger.error("Failed to make choice " + uid, e);
+      if (console) {
+        // The script's own error, not the proxy's wrapping of it (UndeclaredThrowableException).
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+          root = root.getCause();
+        }
+        Breadboard.replyError(out, "MakeChoice", "The choice could not be made: " + ScriptBoardSupport.describeError(root));
+        return;
+      }
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
     }
     out.write(jsonOutput);
   }
 
   public static void processScript(String script, ThrottledWebSocketOut out, String scriptName) {
+    processScript(script, out, scriptName, null, null);
+  }
+
+  /**
+   * As above, with {@code tag: tagValue} on every frame it sends (its output, its error, "started
+   * already"), e.g. {@code "request": "RunGame"} or {@code "source": "OnJoinStep"}, so a console can
+   * tell whose answer a frame is. No tag when {@code tag} is null.
+   */
+  static void processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue) {
     if (scriptName == null) scriptName = "Unnamed Script";
 
     ObjectNode jsonOutput = Json.newObject();
+    if (tag != null) {
+      jsonOutput.put(tag, tagValue);
+    }
     if (engine == null) {
       // Nothing has built an engine yet (no experiment selected since the server started).
       jsonOutput.put("error", "Caught error: The script engine isn't running yet. Select an experiment first.\n");

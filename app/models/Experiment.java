@@ -25,8 +25,10 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Entity
@@ -157,8 +159,25 @@ public class Experiment extends Model {
       this.images.add(new Image(image));
     }
     for(Language language : experiment.languages) {
-      this.languages.add(language);
+      addLanguage(language);
     }
+  }
+
+  /** Add a language unless the experiment has it already (or it is null). */
+  public void addLanguage(Language language) {
+    // (Through getId(): Ebean's enhancement turns another entity's ".id" in here into this one's.)
+    if (language != null && !hasLanguage(language.getId())) {
+      languages.add(language);
+    }
+  }
+
+  private boolean hasLanguage(Long languageId) {
+    for (Language l : languages) {
+      if (l != null && l.getId() != null && l.getId().equals(languageId)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public String getDirectoryName() {
@@ -614,9 +633,13 @@ public class Experiment extends Model {
       jsonSteps.add(s.toJson());
     }
 
+    // Each language once: experiments created before this was fixed hold their first one twice.
     ArrayNode jsonLanguages = experiment.putArray("languages");
+    Set<Long> listed = new HashSet<>();
     for (Language l : languages) {
-      jsonLanguages.add(l.toJson());
+      if (l != null && (l.getId() == null || listed.add(l.getId()))) {
+        jsonLanguages.add(l.toJson());
+      }
     }
 
     ArrayNode jsonContent = experiment.putArray("content");

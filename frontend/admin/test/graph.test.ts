@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { LiveGraph } from '../src/lib/graph'
 
 describe('LiveGraph', () => {
@@ -68,5 +68,55 @@ describe('LiveGraph', () => {
     g.apply({ action: 'nodePropertyChanged', id: 'a', key: 'num', value: '5' })
     g.apply({ action: 'nodePropertyChanged', id: 'a', key: 'yes', value: 'true' })
     expect(g.nodes.get('a')!.data).toEqual({ n: 7, o: { x: 1 }, s: 'plain', num: '5', yes: 'true' })
+  })
+})
+
+describe('LiveGraph redraw signal', () => {
+  /** Frames that only come when the test says so (or never: a window behind others). */
+  let frames: FrameRequestCallback[] = []
+  function visibleWithFrames () {
+    frames = []
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => frames.push(cb))
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames[id - 1] = () => {} })
+  }
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    delete (document as any).hidden
+  })
+
+  it('still redraws when the browser sends no frames', () => {
+    visibleWithFrames()
+    const g = new LiveGraph()
+    const v0 = g.version.value
+    g.apply({ action: 'addNode', id: 'a' })
+    g.apply({ action: 'addNode', id: 'b' })
+    expect(frames.length).toBe(1)
+    vi.advanceTimersByTime(119)
+    expect(g.version.value).toBe(v0)
+    vi.advanceTimersByTime(1)
+    expect(g.version.value).toBe(v0 + 1)
+    // the frame that comes late does not bump it again
+    frames[0](0)
+    vi.advanceTimersByTime(1000)
+    expect(g.version.value).toBe(v0 + 1)
+  })
+
+  it('redraws once on the next frame when frames come', () => {
+    visibleWithFrames()
+    const g = new LiveGraph()
+    const v0 = g.version.value
+    g.apply({ action: 'addNode', id: 'a' })
+    frames[0](0)
+    expect(g.version.value).toBe(v0 + 1)
+    vi.advanceTimersByTime(1000)
+    expect(g.version.value).toBe(v0 + 1)
+    // the next change is signalled again
+    g.apply({ action: 'addNode', id: 'b' })
+    expect(frames.length).toBe(2)
+    frames[1](0)
+    expect(g.version.value).toBe(v0 + 2)
   })
 })

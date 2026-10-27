@@ -124,9 +124,12 @@ watch(() => consoleState.history, (h) => {
 
 // ---- running ----------------------------------------------------------------------------------
 
-/** Send a script to the engine and follow its answer. */
-export function runConsoleScript (script: string, meta: { label: string, fromLine: number | null }): ConsoleRun {
-  actions.runScript(script)
+/**
+ * Send a script to the engine and follow its answer. Null when it could not be sent (the connection
+ * is down): nothing is run, logged or kept in the history then.
+ */
+export function runConsoleScript (script: string, meta: { label: string, fromLine: number | null }): ConsoleRun | null {
+  if (!actions.runScript(script)) return null
   // runScript logs the script itself as the newest output line; the answer comes after it
   const afterId = lastOutputId()
   const run = reactive<ConsoleRun>({
@@ -144,7 +147,7 @@ export function runConsoleScript (script: string, meta: { label: string, fromLin
   if (consoleState.runs.length > RUNS_CAP) consoleState.runs.splice(0, consoleState.runs.length - RUNS_CAP)
   consoleState.history = addToHistory(consoleState.history, script, run.at)
 
-  expectReply(script, afterId).then(reply => {
+  expectReply(script, afterId, 'SendScript').then(reply => {
     run.doneAt = Date.now()
     if (!reply) {
       run.status = 'noreply'

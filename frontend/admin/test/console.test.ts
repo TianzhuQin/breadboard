@@ -19,7 +19,7 @@ vi.mock('@/store/admin', async () => {
   })
   const push = (kind: string, text: string, source?: string) => { admin.output.push({ id: ++seq, kind, text, source, at: Date.now() }) }
   const actions = {
-    runScript: vi.fn((script: string) => push('input', script)),
+    runScript: vi.fn((script: string) => { push('input', script); return true }),
     runStep: vi.fn(),
     refresh: vi.fn(() => Promise.resolve(null)),
     markEngineStale: vi.fn(),
@@ -29,6 +29,7 @@ vi.mock('@/store/admin', async () => {
   return {
     admin,
     actions,
+    ensureConnected: vi.fn(() => true),
     __push: push,
     running: computed(() => false),
     connectionState: ref('open'),
@@ -46,7 +47,9 @@ vi.stubGlobal('localStorage', {
   removeItem: (k: string) => { memory.delete(k) },
   clear: () => memory.clear(),
 })
-import { echoPrefix, expectReply, lastOutputId, matchReply, splitValues, __resetReplies } from '../src/pages/console/engineReplies'
+import {
+  echoPrefix, expectReply, lastOutputId, matchReply, showsTags, splitValues, __resetReplies,
+} from '../src/pages/console/engineReplies'
 import { parseGroovyError, humanType } from '../src/pages/console/groovyError'
 import {
   addToHistory, consoleState, initialBuffer, markHistory, runConsoleScript, sanitizeHistory, searchHistory, seedConsole,
@@ -95,6 +98,61 @@ describe('engine replies', () => {
     expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Something went wrong', source: 'SendStep' })).toBe(0)
   })
 
+  it('pairs a tagged answer only with a script sent with the same request', () => {
+    const waiting = [{ script: 'a()', afterId: 10, request: 'SendScript' as const }, { script: 'a()', afterId: 11, request: 'SendStep' as const }]
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Caught error: boom', source: 'SendStep' })).toBe(1)
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Caught error: boom', source: 'SendScript' })).toBe(0)
+    expect(matchReply(waiting, { id: 12, kind: 'output', text: 'a()\n\n==>1', source: 'SendStep' })).toBe(1)
+    expect(matchReply(waiting, { id: 12, kind: 'output', text: 'a()\n\n==>1', source: 'SendScript' })).toBe(0)
+    // the echo still has to match
+    expect(matchReply(waiting, { id: 12, kind: 'output', text: 'b()\n\n==>1', source: 'SendStep' })).toBe(-1)
+    // frames of OnJoin/OnLeave and of the steps loading are never an answer, whatever they say
+    for (const source of ['OnJoinStep', 'OnLeaveStep', 'Steps', 'RunGame']) {
+      expect(matchReply(waiting, { id: 12, kind: 'output', text: 'a()\n\n==>1', source })).toBe(-1)
+    }
+  })
+
+  it('takes untagged frames as answers only from a server that tags nothing', () => {
+    const waiting = [{ script: 'a()', afterId: 10, request: 'SendScript' as const }]
+    const untagged = { id: 12, kind: 'error' as const, text: 'Caught error: initStep started already' }
+    expect(matchReply(waiting, untagged)).toBe(0)
+    expect(matchReply(waiting, untagged, true)).toBe(-1)
+    expect(matchReply(waiting, { id: 12, kind: 'output', text: 'a()\n\n==>1' }, true)).toBe(-1)
+  })
+
+  it('tells a server that tags its answers by its frames', () => {
+    expect(showsTags({ kind: 'output', text: 'a()\n\n==>1', source: 'SendScript' })).toBe(true)
+    expect(showsTags({ kind: 'error', text: 'Caught error: boom', source: 'SendStep' })).toBe(true)
+    expect(showsTags({ kind: 'error', text: 'Caught error: boom', source: 'OnJoinStep' })).toBe(true)
+    expect(showsTags({ kind: 'output', text: 'x\n\n==>', source: 'Steps' })).toBe(true)
+    // refusals were tagged before the answers were
+    expect(showsTags({ kind: 'error', text: 'You are not signed in.', source: 'SendScript' })).toBe(false)
+    expect(showsTags({ kind: 'error', text: 'Could not delete the session.', source: 'DeleteInstance' })).toBe(false)
+    expect(showsTags({ kind: 'error', text: 'Caught error: boom' })).toBe(false)
+    expect(showsTags({ kind: 'input', text: 'a()', source: 'console' })).toBe(false)
+  })
+
+  it('ignores untagged errors once the server has shown that it tags its answers', async () => {
+    push('output', 'x = 1\n\n==>', 'Steps')
+    push('input', 'g.V.count()')
+    const p = expectReply('g.V.count()', lastOutputId(), 'SendScript')
+    // e.g. the AMT timer starting the game
+    push('error', 'Caught error: initStep started already')
+    push('error', 'Caught error: boom', 'OnJoinStep')
+    await nextTick()
+    push('output', 'g.V.count()\n\n==>4', 'SendScript')
+    await nextTick()
+    expect(await p).toMatchObject({ ok: true, values: ['4'] })
+  })
+
+  it('still takes an untagged error as the answer from an older server', async () => {
+    push('input', 'boom()')
+    const p = expectReply('boom()', lastOutputId(), 'SendScript')
+    push('error', 'Caught error: boom')
+    await nextTick()
+    expect(await p).toMatchObject({ ok: false, error: 'Caught error: boom' })
+  })
+
   it('waits past an unrelated error for its own answer', async () => {
     push('input', 'g.V.count()')
     const p = expectReply('g.V.count()', lastOutputId())
@@ -116,7 +174,7 @@ describe('engine replies', () => {
 
   it('gives up after the timeout', async () => {
     vi.useFakeTimers()
-    const p = expectReply('slow()', lastOutputId(), 1000)
+    const p = expectReply('slow()', lastOutputId(), undefined, 1000)
     vi.advanceTimersByTime(1001)
     expect(await p).toBeNull()
     vi.useRealTimers()
@@ -207,7 +265,7 @@ describe('history and the buffer', () => {
 
   it('runs a script and records the engine\'s answer and the history', async () => {
     seedConsole('run@x.org', '')
-    const run = runConsoleScript('g.V.count()', { label: 'Script', fromLine: 1 })
+    const run = runConsoleScript('g.V.count()', { label: 'Script', fromLine: 1 })!
     expect(actions.runScript).toHaveBeenCalledWith('g.V.count()')
     expect(run.status).toBe('pending')
     push('error', 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: g for class: Script3\n  at Script3.groovy:1')
@@ -216,6 +274,14 @@ describe('history and the buffer', () => {
     expect(run.status).toBe('error')
     expect(run.error).toMatch(/No such property/)
     expect(consoleState.history[0]).toMatchObject({ script: 'g.V.count()', ok: false })
+  })
+
+  it('adds no run and no history when the connection is down', () => {
+    seedConsole('offline@x.org', '')
+    actions.runScript.mockReturnValueOnce(false)
+    expect(runConsoleScript('g.V.count()', { label: 'Script', fromLine: 1 })).toBeNull()
+    expect(consoleState.runs).toHaveLength(0)
+    expect(consoleState.history).toHaveLength(0)
   })
 })
 
@@ -351,6 +417,24 @@ describe('ConsolePage', () => {
     const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
     const run = w.findAll('button').find(b => b.text() === 'Run script')!
     expect(run.attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('says at once that a script could not run while the connection is down', async () => {
+    seedConsole('r@lab.org', '')
+    consoleState.buffer = 'g.V.count()'
+    consoleState.runs = []
+    const conn = (store as any).connectionState
+    conn.value = 'reconnecting'
+    const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
+    await nextTick()
+    expect(w.find('.con__notice').text()).toContain('scripts can\'t run right now')
+    actions.runScript.mockReturnValueOnce(false)
+    await w.findAll('button').find(b => b.text() === 'Run script')!.trigger('click')
+    expect((store as any).ensureConnected).toHaveBeenCalled()
+    expect(consoleState.runs).toHaveLength(0)
+    expect(w.find('.run.is-pending').exists()).toBe(false)
+    conn.value = 'open'
     w.unmount()
   })
 })

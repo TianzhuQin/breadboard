@@ -73,12 +73,13 @@
               size="sm"
               :variant="choosing === c.uid ? 'primary' : 'secondary'"
               :loading="choosing === c.uid"
-              :disabled="!!choosing || c._route === 'group'"
-              :title="c._route === 'group' ? 'Group choices can only be made on the participant page' : `Choose “${c.name}” for ${name}`"
+              :disabled="!!choosing || c._route === 'group' || !!choiceBlocked"
+              :title="c._route === 'group' ? 'Group choices can only be made on the participant page' : choiceBlocked || `Choose “${c.name}” for ${name}`"
               @click="choose(c)"
             >{{ c.name }}</BButton>
           </div>
-          <p v-if="choices.some(c => c._route === 'group')" class="pd__note">Group choices can only be made on the participant page.</p>
+          <p v-if="choiceBlocked" class="pd__note">{{ choiceBlocked }}.</p>
+          <p v-else-if="choices.some(c => c._route === 'group')" class="pd__note">Group choices can only be made on the participant page.</p>
         </div>
       </section>
 
@@ -174,12 +175,12 @@ import { computed, ref, watch } from 'vue'
 import { X, Copy, Bot, UserX, MonitorSmartphone, Share2, Crosshair, Scissors, Search, ChevronRight } from 'lucide-vue-next'
 import { BBadge, BButton, BEmpty, BInput, confirm, notify, toast } from '@/ui'
 import { uid } from '@/ui/uid'
-import { admin, graph, running } from '@/store/admin'
+import { admin, engineElsewhere, ensureConnected, graph, NOT_CONNECTED } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import {
   NOISY_LINK_KEYS, autopilotOf, choicesOf, compareIds, connectionOf, isAi, isTie, labelOf, recruitmentOf, type Choice,
 } from '@/network/players'
-import { editTie, isPending } from '@/network/tieEdits'
+import { editTie, isPending, tieEditsBlocked } from '@/network/tieEdits'
 import ParticipantScreen from './ParticipantScreen.vue'
 import PropertyRow from './PropertyRow.vue'
 import TiePicker, { type TieCandidate } from './TiePicker.vue'
@@ -341,9 +342,14 @@ const shownEngine = computed(() => engineProps.value.filter(matchesQuery))
 
 const showSource = ref(false)
 const choosing = ref<string | null>(null)
+/** The server refuses choices while the shared engine runs another experiment (these players are in its session). */
+const choiceBlocked = computed(() => {
+  const e = engineElsewhere.value
+  return e ? `The engine is running ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'} right now, so choices can't be made from here` : ''
+})
 
 async function choose (c: Choice) {
-  if (c._route === 'group' || choosing.value) return
+  if (c._route === 'group' || choosing.value || choiceBlocked.value || !ensureConnected()) return
   const who = name.value
   const ok = await confirm({
     title: `Choose “${c.name}” for ${who}?`,
@@ -364,6 +370,9 @@ async function choose (c: Choice) {
         ? `“${c.name}” had already left their screen when it reached the game, so nothing changed.`
         : `“${c.name}” is no longer on their screen. They may have answered, or it expired. Nothing was sent.`,
     )
+  } else if ('offline' in outcome) {
+    // the connection dropped while the confirmation was open
+    notify.error(NOT_CONNECTED, `Nothing was sent, so “${c.name}” is still waiting on ${who}'s screen. Try again once the connection is back.`)
   } else if ('error' in outcome) {
     toast('error', `The choice for ${who} failed`, shortError(outcome.error), {
       action: { label: 'Show output', run: () => { openOutput.value = true } },
@@ -375,8 +384,9 @@ async function choose (c: Choice) {
 
 // ---- ties ----------------------------------------------------------------------------------------
 
-const canEdit = computed(() => !!running.value)
-const editBlockedReason = 'Start the session to change ties'
+// off while the session isn't running, or while the engine runs another experiment
+const canEdit = computed(() => !tieEditsBlocked.value)
+const editBlockedReason = tieEditsBlocked
 
 function cut (other: string) {
   void editTie('remove', props.id, other, { name: nameFor })

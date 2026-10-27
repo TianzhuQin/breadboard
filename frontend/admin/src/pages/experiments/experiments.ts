@@ -1,5 +1,5 @@
 import { http, HttpError } from '@/lib/http'
-import type { Experiment, Instance } from '@/store/types'
+import type { Experiment, Instance, Language } from '@/store/types'
 
 /** Pure helpers for the Experiments page (names, zip files, dates), kept here so they can be tested. */
 
@@ -12,6 +12,26 @@ export function isLive (i: Pick<Instance, 'status'>) {
 /** The session of this experiment that is running right now, if any. */
 export function runningSession (exp: Experiment): Instance | null {
   return (exp.instances || []).find(isLive) || null
+}
+
+/**
+ * An experiment's languages, each once. The server's list can name the same language twice (the
+ * cards showed "English, English"): one with an id already seen is dropped, then one whose code
+ * (ignoring case) was seen.
+ */
+export function uniqueLanguages (list: readonly Language[] | null | undefined): Language[] {
+  const ids = new Set<number>()
+  const codes = new Set<string>()
+  const out: Language[] = []
+  for (const l of list || []) {
+    if (!l) continue
+    const code = (l.code || '').trim().toLowerCase()
+    if ((l.id != null && ids.has(l.id)) || (code && codes.has(code))) continue
+    if (l.id != null) ids.add(l.id)
+    if (code) codes.add(code)
+    out.push(l)
+  }
+  return out
 }
 
 /** The newest session (ids only grow, so the biggest id is the newest). */

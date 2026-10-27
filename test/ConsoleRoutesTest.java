@@ -24,10 +24,11 @@ import static play.test.Helpers.*;
 
 /**
  * HTTP routes the new console relies on, and the old bugs in them (INVENTORY.md §3): parameter
- * values sent as JSON booleans or numbers, the password change trusting the posted email, CSV
- * escaping, imports leaving empty experiments behind, image upload failures answered as 200,
- * customize refusing an empty text, file mode's steps folder, and logout leaving the console token
- * valid.
+ * values sent as JSON booleans or numbers, parameters changed in place, the password change trusting
+ * the posted email, CSV escaping (values otherwise exact), imports leaving empty experiments behind,
+ * image upload failures answered as 200, customize refusing an empty text, file mode's steps folder,
+ * logout leaving the console token valid, a new experiment's language added twice, and MTurk bonus
+ * tokens.
  */
 public class ConsoleRoutesTest extends BaseTest {
 
@@ -91,6 +92,153 @@ public class ConsoleRoutesTest extends BaseTest {
         assertEquals(BAD_REQUEST, status(twice));
         assertTrue(contentAsString(twice).contains("already"));
         assertEquals(1, Experiment.findById(experiment.id).parameters.size());
+    }
+
+    private static Result updateParameter(User user, Long experimentId, Long parameterId, String body) {
+        return callAction(controllers.routes.ref.ParametersController.updateParameter(experimentId, parameterId),
+            fakeRequest().withJsonBody(Json.parse(body)).withSession("uid", user.uid));
+    }
+
+    private static long idOf(Result created) {
+        return Json.parse(contentAsString(created)).get("parameter").get("id").asLong();
+    }
+
+    @Test
+    public void aParameterIsChangedInPlace() {
+        User user = user("params3");
+        Experiment experiment = createExperiment("Parameters 3");
+        long rounds = idOf(createParameter(user, experiment,
+            "{\"name\": \"rounds\", \"type\": \"Integer\", \"minVal\": \"1\", \"maxVal\": \"9\", \"defaultVal\": \"3\"}"));
+        long speed = idOf(createParameter(user, experiment, "{\"name\": \"speed\", \"type\": \"Decimal\", \"defaultVal\": \"1.5\"}"));
+
+        // Renamed and changed; it keeps its id and its place, and the other one is untouched.
+        Result changed = updateParameter(user, experiment.id, rounds,
+            "{\"name\": \" turns \", \"type\": \"Integer\", \"minVal\": \"2\", \"maxVal\": \"12\", \"defaultVal\": \"4\", \"description\": \"How many\"}");
+        assertEquals(contentAsString(changed), OK, status(changed));
+        JsonNode p = Json.parse(contentAsString(changed)).get("parameter");
+        assertEquals(rounds, p.get("id").asLong());
+        assertEquals("turns", p.get("name").asText());
+        assertEquals("12", p.get("maxVal").asText());
+        Experiment stored = Experiment.findById(experiment.id);
+        assertEquals(2, stored.parameters.size());
+        Parameter turns = stored.getParameterByName("turns");
+        assertEquals(Long.valueOf(rounds), turns.id);
+        assertEquals("2", turns.minVal);
+        assertEquals("4", turns.defaultVal);
+        assertEquals("How many", turns.description);
+        assertNull(stored.getParameterByName("rounds"));
+        assertEquals("1.5", stored.getParameterByName("speed").defaultVal);
+
+        // Keeping its own name is not a duplicate; a Text has no range.
+        Result sameName = updateParameter(user, experiment.id, rounds,
+            "{\"name\": \"turns\", \"type\": \"Text\", \"minVal\": \"2\", \"maxVal\": \"12\", \"defaultVal\": \"many\"}");
+        assertEquals(contentAsString(sameName), OK, status(sameName));
+        turns = Parameter.find.byId(String.valueOf(rounds));
+        assertEquals("Text", turns.type);
+        assertEquals("", turns.minVal);
+        assertEquals("", turns.maxVal);
+        assertEquals("many", turns.defaultVal);
+
+        // Another parameter's name, a missing type, an unknown id: 400 {"message"}, nothing changed.
+        Result taken = updateParameter(user, experiment.id, rounds, "{\"name\": \"speed\", \"type\": \"Text\"}");
+        assertEquals(BAD_REQUEST, status(taken));
+        assertTrue(Json.parse(contentAsString(taken)).get("message").asText().contains("already"));
+        Result noType = updateParameter(user, experiment.id, rounds, "{\"name\": \"turns\"}");
+        assertEquals(BAD_REQUEST, status(noType));
+        assertTrue(Json.parse(contentAsString(noType)).has("message"));
+        assertEquals(BAD_REQUEST, status(updateParameter(user, experiment.id, 987654321L, "{\"name\": \"x\", \"type\": \"Text\"}")));
+        assertEquals(BAD_REQUEST, status(updateParameter(user, 987654321L, rounds, "{\"name\": \"x\", \"type\": \"Text\"}")));
+        assertEquals("turns", Parameter.find.byId(String.valueOf(rounds)).name);
+        assertEquals("Text", Parameter.find.byId(String.valueOf(rounds)).type);
+
+        // Another experiment's parameter can't be changed through this one.
+        Experiment otherExperiment = createExperiment("Parameters 4");
+        Result elsewhere = updateParameter(user, otherExperiment.id, speed, "{\"name\": \"speed\", \"type\": \"Text\"}");
+        assertEquals(BAD_REQUEST, status(elsewhere));
+        assertEquals("Decimal", Parameter.find.byId(String.valueOf(speed)).type);
+    }
+
+    // ---- MTurk bonus tokens -------------------------------------------------------------------------
+
+    @Test
+    public void aBonusTokenIsCheckedAndARepeatedOneIsNoError() {
+        assertTrue(controllers.AMTAdmin.isBonusToken("bonus_3XYZ-1"));
+        String longest = new String(new char[64]).replace('\0', 'a');
+        assertTrue(controllers.AMTAdmin.isBonusToken(longest));
+        for (String bad : new String[]{"", longest + "a", "has space", "semi;colon", "dot.ted", "ünï"}) {
+            assertFalse(bad, controllers.AMTAdmin.isBonusToken(bad));
+        }
+
+        String token = "A1B2-c3_d4";
+        assertTrue(controllers.AMTAdmin.isDuplicateBonus(
+            "The value of UniqueRequestToken " + token + " has already been used. (1698000000000)", token));
+        assertTrue(controllers.AMTAdmin.isDuplicateBonus("Bonus " + token + " already exists in the system", token));
+        assertFalse("another refusal", controllers.AMTAdmin.isDuplicateBonus(
+            "This user does not have enough funds to send the bonus.", token));
+        assertFalse("only part of another word", controllers.AMTAdmin.isDuplicateBonus("X" + token + " already", token));
+        assertFalse("no token sent", controllers.AMTAdmin.isDuplicateBonus("UniqueRequestToken already used", null));
+
+        assertEquals("{\"sent\":true}", controllers.AMTAdmin.bonusSent(false).toString());
+        assertEquals("{\"sent\":true,\"duplicate\":true}", controllers.AMTAdmin.bonusSent(true).toString());
+    }
+
+    // ---- languages ---------------------------------------------------------------------------------
+
+    private static int languageRows(long experimentId) {
+        return com.avaje.ebean.Ebean.createSqlQuery(
+                "select count(*) as n from experiments_languages where experiments_id = :id")
+            .setParameter("id", experimentId).findUnique().getInteger("n");
+    }
+
+    private static Result newExperiment(User user, String body) {
+        return callAction(controllers.routes.ref.ExperimentController.createExperiment(),
+            fakeRequest().withJsonBody(Json.parse(body)).withSession("uid", user.uid));
+    }
+
+    @Test
+    public void aNewExperimentHasTheDefaultLanguageOnce() {
+        User user = user("langs");
+        Result created = newExperiment(user, "{\"newExperimentName\": \"Languages\", \"copyExperimentId\": -1}");
+        assertEquals(contentAsString(created), OK, status(created));
+        JsonNode json = Json.parse(contentAsString(created));
+        assertEquals(1, json.get("languages").size());
+        assertEquals("eng", json.get("languages").get(0).get("code").asText());
+        assertEquals("stored once", 1, languageRows(json.get("id").asLong()));
+
+        // A copy has the languages of the one it copies, once each.
+        Result copied = newExperiment(user, "{\"newExperimentName\": \"Copy\", \"copyExperimentId\": " + json.get("id").asLong() + "}");
+        assertEquals(contentAsString(copied), OK, status(copied));
+        JsonNode copy = Json.parse(contentAsString(copied));
+        assertEquals(1, copy.get("languages").size());
+        assertEquals(1, languageRows(copy.get("id").asLong()));
+    }
+
+    @Test
+    public void aLanguageStoredTwiceIsListedOnce() {
+        // Experiments created before the fix hold their first language twice.
+        Language eng = Language.find.where().eq("code", "eng").findUnique();
+        if (eng == null) eng = createLanguage("eng", "English");
+        Language fra = createLanguage("fra", "French");
+        Experiment experiment = createExperiment("Twice");
+        for (Language l : new Language[]{eng, eng, fra}) {
+            com.avaje.ebean.Ebean.createSqlUpdate("insert into experiments_languages (experiments_id, languages_id) values (:e, :l)")
+                .setParameter("e", experiment.id).setParameter("l", l.id).execute();
+        }
+        JsonNode languages = Experiment.findById(experiment.id).toJson().get("languages");
+        assertEquals(2, languages.size());
+        assertEquals("eng", languages.get(0).get("code").asText());
+        assertEquals("fra", languages.get(1).get("code").asText());
+
+        // Removing it takes it away for good, both rows.
+        User user = user("langs2");
+        Result removed = callAction(controllers.routes.ref.LanguageController.removeLanguage(),
+            fakeRequest().withJsonBody(Json.parse("{\"experimentId\": " + experiment.id + ", \"languageId\": " + eng.id + "}"))
+                .withSession("uid", user.uid));
+        assertEquals(contentAsString(removed), OK, status(removed));
+        languages = Experiment.findById(experiment.id).toJson().get("languages");
+        assertEquals(1, languages.size());
+        assertEquals("fra", languages.get(0).get("code").asText());
+        assertEquals(1, languageRows(experiment.id));
     }
 
     // ---- customize ---------------------------------------------------------------------------------
@@ -261,6 +409,38 @@ public class ConsoleRoutesTest extends BaseTest {
         assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/csv/instances/987654321").withSession("uid", user.uid))));
         assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/csv/data/987654321").withSession("uid", user.uid))));
         assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/csv/data/0").withSession("uid", user.uid))));
+    }
+
+    @Test
+    public void csvValuesAreWrittenExactly() {
+        // Researchers analyse these files: values that look like spreadsheet formulas are not altered.
+        User user = user("csv-exact");
+        Experiment experiment = createExperiment("CSV exact");
+        ExperimentInstance instance = createInstance("=session", experiment);
+        String[] values = {"=1+2", "+5", "-0.25", "@handle"};
+        for (int i = 0; i < values.length; i++) {
+            Data d = new Data();
+            d.name = "v" + i;
+            d.value = values[i];
+            d.experimentInstance = instance;
+            d.save();
+        }
+        Event event = new Event();
+        event.name = "=HYPERLINK(\"x\")";
+        event.datetime = new Date(0L);
+        event.experimentInstance = instance;
+        event.save();
+        EventData data = new EventData();
+        data.name = "-x";
+        data.value = "=SUM(A1:A2)";
+        data.event = event;
+        data.save();
+
+        String sessions = contentAsString(route(fakeRequest(GET, "/csv/instances/" + experiment.id).withSession("uid", user.uid)));
+        assertTrue(sessions, sessions.contains(",\"=session\","));
+        assertTrue(sessions, sessions.contains(",\"=1+2\",\"+5\",\"-0.25\",\"@handle\""));
+        String events = contentAsString(route(fakeRequest(GET, "/csv/data/" + instance.id).withSession("uid", user.uid)));
+        assertTrue(events, events.contains(",\"=HYPERLINK(\"\"x\"\")\",") && events.contains(",\"-x\",\"=SUM(A1:A2)\""));
     }
 
     // ---- import (§3.2.8, §3.6.4) ---------------------------------------------------------------------

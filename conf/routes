@@ -66,6 +66,7 @@ DELETE      /content/:contentId                                                 
 # Parameters dialog
 PUT         /parameters/:experimentId                                            controllers.ParametersController.createParameter(experimentId: Long)
 DELETE      /parameters/:experimentId/:parameterId                               controllers.ParametersController.removeParameter(experimentId: Long, parameterId: Long)
+POST        /parameters/:experimentId/:parameterId                               controllers.ParametersController.updateParameter(experimentId: Long, parameterId: Long)
 
 # Create New Experiment
 PUT         /experiment                                                          controllers.ExperimentController.createExperiment()

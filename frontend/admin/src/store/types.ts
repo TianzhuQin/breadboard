@@ -53,12 +53,29 @@ export interface Experiment {
   clientHtmlHash: number
 }
 
+/**
+ * What the shared script engine runs (ScriptBoard.engineJson), which can be another experiment than
+ * the selected one, or another account's session. Every field is null when the engine has none.
+ */
+export interface EngineInfo {
+  /** The experiment whose steps the engine loaded */
+  experimentId: number | null
+  experimentName: string | null
+  /** Its session, while that session is running or testing */
+  sessionId: number | null
+  sessionName: string | null
+  /** The email of the account that loaded it */
+  owner: string | null
+}
+
 export interface User {
   email: string
   defaultLanguage: Language | null
   experiments: Experiment[]
   selectedExperiment?: string
   currentScript: string
+  /** What the engine runs (sent beside the user; the store puts it here). Null when the server does not say. */
+  engine: EngineInfo | null
 }
 
 export interface OutputEntry {
@@ -72,9 +89,10 @@ export interface OutputEntry {
 /** An event as the server records it during the session ({event: ...} push). */
 export interface LiveEvent {
   id?: number
-  /** The session it was recorded in (newer servers; every console gets every session's events). */
-  instanceId?: number | null
-  /** The same, under the name some pages read (sessions/sessionData.ts liveEventOf). */
+  /**
+   * The session it was recorded in, or null when the engine runs none (every console gets every
+   * session's events). Missing from older servers.
+   */
   experimentInstanceId?: number | null
   experimentId?: number | null
   name: string

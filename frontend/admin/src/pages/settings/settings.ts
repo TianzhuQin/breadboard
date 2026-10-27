@@ -32,13 +32,18 @@ export function friendlyPasswordError (msg: string | undefined | null): { field?
   return { text: m || 'The password was not changed.' }
 }
 
-/** POST /saveUserSettings, form-encoded, as models.UserSettings expects. Resolves to the server's answer. */
-export async function changePassword (email: string, p: PasswordChange): Promise<{ success: boolean, error?: string }> {
-  const res = await http.post<{ success?: boolean, error?: string }>('/saveUserSettings', {
+/**
+ * POST /saveUserSettings, form-encoded, as models.UserSettings expects. Resolves to the server's
+ * answer. A changed password gives the account a new uid (`uid`), which the console must use from
+ * then on: the server refuses requests that carry the old one.
+ */
+export async function changePassword (email: string, p: PasswordChange): Promise<{ success: boolean, error?: string, uid?: string }> {
+  const res = await http.post<{ success?: boolean, error?: string, uid?: string }>('/saveUserSettings', {
     email,
     currentPassword: p.current,
     newPassword: p.next,
     confirmPassword: p.confirm,
   }, { form: true })
-  return { success: !!(res && res.success), error: res?.error }
+  const uid = res && typeof res.uid === 'string' && res.uid ? res.uid : undefined
+  return { success: !!(res && res.success), error: res?.error, ...(uid ? { uid } : {}) }
 }

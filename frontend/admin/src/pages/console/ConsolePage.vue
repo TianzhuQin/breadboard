@@ -103,7 +103,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BookOpen, Check, Copy, Ellipsis, Eraser, History, Info, PanelBottom, Play, WifiOff } from 'lucide-vue-next'
 import { BButton, BCodeEditor, BDialog, BMenu, confirm, notify, toast, type MenuItem } from '@/ui'
-import { admin, connectionState, graph, running } from '@/store/admin'
+import { admin, connectionState, ensureConnected, graph, running } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import ConsoleResults from './ConsoleResults.vue'
 import ConsoleLibrary from './ConsoleLibrary.vue'
@@ -161,7 +161,7 @@ const ctxTitle = computed(() => `${runHint.value}. Experiment: ${admin.experimen
 
 const notice = computed(() => {
   if (connectionState.value !== 'open') {
-    return { tone: 'warn', icon: WifiOff, text: 'Not connected to the server. Scripts you run are sent when the connection is back.' }
+    return { tone: 'warn', icon: WifiOff, text: 'Not connected to the server, so scripts can\'t run right now. Your script stays in the editor: run it again once the connection is back.' }
   }
   if (admin.engine === 'stale') {
     return { tone: 'info', icon: Info, text: 'Steps changed since the engine last loaded them, so names they define may be out of date here. Reload the engine (top right) to load the saved steps.' }
@@ -196,6 +196,12 @@ function runFromEditor () {
 
 function start (text: string, label: string, fromLine: number | null) {
   const run = runConsoleScript(text, { label, fromLine })
+  if (!run) {
+    // nothing was sent: say so (the toast says why)
+    ensureConnected()
+    announce.value = `${label} did not run: not connected to the server.`
+    return
+  }
   announce.value = `Running ${label}`
   const stop = watch(() => run.status, (s) => {
     if (s === 'pending') return

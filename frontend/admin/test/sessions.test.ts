@@ -17,7 +17,10 @@ vi.mock('@/store/admin', async () => {
     instance: null as any,
     events: [] as any[],
     engine: 'ready',
+    email: 'r@lab.org',
+    user: null as any,
   })
+  const graph = { nodes: new Map() }
   const instances = computed(() => [...(admin.experiment?.instances || [])].sort((a: any, b: any) => b.id - a.id))
   const running = computed(() => !!admin.instance && admin.instance.status === 'RUNNING')
   const connectionState = ref('open')
@@ -27,7 +30,7 @@ vi.mock('@/store/admin', async () => {
     deleteInstance: vi.fn(async () => ({ user: {} })),
     instanceEvents: vi.fn(async () => null),
   }
-  return { admin, instances, running, connectionState, actions }
+  return { admin, instances, running, connectionState, actions, graph }
 })
 vi.mock('@/lib/http', async (orig) => {
   const real = await orig<typeof import('../src/lib/http')>()
@@ -223,6 +226,19 @@ describe('CSV', () => {
     expect(toCsv([['a', 'b'], ['line\nbreak', '"']])).toBe('"a","b"\n"line\nbreak",""""\n')
   })
 
+  it('keeps what participants typed from running as a spreadsheet formula, but not plain numbers', () => {
+    expect(csvField('=HYPERLINK("http://x","y")')).toBe('"\'=HYPERLINK(""http://x"",""y"")"')
+    expect(csvField('+1 call me')).toBe('"\'+1 call me"')
+    expect(csvField('@SUM(A1)')).toBe('"\'@SUM(A1)"')
+    expect(csvField('\tx')).toBe('"\'\tx"')
+    expect(csvField('-5')).toBe('"-5"')
+    expect(csvField(-0.5)).toBe('"-0.5"')
+    expect(csvField('+3e2')).toBe('"+3e2"')
+    expect(csvField('a=b')).toBe('"a=b"')
+    const evs = [normalizeEvent({ id: 1, name: 'chat', datetime: '2026-10-27 13:06:00,5', data: [{ name: 'text', value: '=1+1' }] })]
+    expect(eventsToCsv(evs).split('\n')[1]).toMatch(/"'=1\+1"$/)
+  })
+
   it('exports events in the server file\'s columns, keeping events without data', () => {
     const evs = [
       normalizeEvent({ id: 1, name: 'start', datetime: '2026-10-27T12:00:00.000Z', data: [] }),
@@ -374,15 +390,14 @@ describe('useSessionActions', () => {
       return { user: {} }
     })
     expect(await actionsApi.resume(s)).toBe(true)
-    // another session was running, so the confirmation says it will be stopped
-    expect(ui.confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: true, message: expect.stringContaining('“pilot 2” is running now') }))
+    // the researcher's own session was running, so the confirmation says it ends (danger)
+    expect(ui.confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: true, message: expect.stringContaining('Your session “pilot 2” is running.') }))
     expect(ui.notify.success).toHaveBeenCalled()
   })
 
-  it('warns about sessions someone else or the autopilot runs, not only the researcher\'s own', async () => {
-    // not this account's current session: another account's (a RUNNING row) and the autopilot's
+  it('warns about sessions another account or the autopilot runs on the shared engine, as the server reports them', async () => {
     store.admin.instance = null
-    store.admin.experiment.instances.push(session(8, 'auto 3', 'RUNNING'))
+    store.admin.user = { engine: { experimentId: 6, experimentName: 'Public goods', sessionId: 30, sessionName: 'their run', owner: 'boss@lab.org' } }
     httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
       ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: { id: 8, name: 'auto 3', status: 'RUNNING' } } }
       : null)
@@ -391,17 +406,19 @@ describe('useSessionActions', () => {
       expect(await actionsApi.resume(store.admin.experiment.instances[0])).toBe(false)
       const req = ui.confirm.mock.calls[0][0]
       expect(req.danger).toBe(true)
-      expect(req.message).not.toContain('is running now')
-      expect(req.message).toContain('“pilot 2” and “auto 3” (the autopilot’s) appear to be running')
+      expect(req.message).not.toContain('Your session')
+      expect(req.message).toContain('The autopilot has session “auto 3” open.')
+      expect(req.message).toContain('boss@lab.org has session “their run” of “Public goods” running.')
       expect(store.actions.selectInstance).not.toHaveBeenCalled()
     } finally {
       httpMod.http.get.mockReset()
+      store.admin.user = null
     }
   })
 
-  it('resumes without a warning when nothing appears to be running', async () => {
+  it('resumes without a warning when nobody is using the engine', async () => {
+    // a row still marked running is no evidence: the server's engine info says what runs
     store.admin.instance = null
-    store.admin.experiment.instances[1].status = 'FINISHED'
     ui.confirm.mockResolvedValueOnce(false)
     await actionsApi.resume(store.admin.experiment.instances[0])
     expect(ui.confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: false }))

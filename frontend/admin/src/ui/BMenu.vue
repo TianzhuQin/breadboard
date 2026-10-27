@@ -59,13 +59,24 @@ const menuId = uid('menu')
 const triggerAttrs = computed(() => ({ 'aria-haspopup': 'menu' as const, 'aria-expanded': open.value, 'aria-controls': menuId }))
 
 function toggle () { open.value = !open.value }
+/**
+ * Close; with `refocus`, focus goes back to the trigger, but only from the menu itself (or from
+ * nowhere): an item's action that moved focus on (to the field it opened, say) keeps it there.
+ */
 function close (refocus = false) {
   open.value = false
-  if (refocus) (root.value?.querySelector('[aria-haspopup]') as HTMLElement | null)?.focus()
+  if (!refocus || !root.value) return
+  const active = document.activeElement
+  if (active && active !== document.body && !root.value.contains(active)) return
+  (root.value.querySelector('[aria-haspopup]') as HTMLElement | null)?.focus()
 }
 function pick (item: MenuItem) {
-  close(true)
-  item.run?.()
+  // the action first, so the menu can see where it put focus
+  try {
+    item.run?.()
+  } finally {
+    close(true)
+  }
 }
 function itemEls (): HTMLElement[] {
   return Array.from(list.value?.querySelectorAll<HTMLElement>('.b-menu__item:not(:disabled)') || [])

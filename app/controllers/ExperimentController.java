@@ -69,10 +69,9 @@ public class ExperimentController extends Controller {
       experiment = newExperiment(user, true);
     }
 
+    // (The user's default language: newExperiment adds it, a copy has the copied one's. It used to be
+    // added here a second time.)
     experiment.name = newExperimentName;
-    if (user.defaultLanguage != null && copyExperiment == null) {
-      experiment.languages.add(user.defaultLanguage);
-    }
     experiment.fileMode = false;
     experiment.save();
 
@@ -201,8 +200,9 @@ public class ExperimentController extends Controller {
 
   /**
    * The name of the first zip entry (zip4j FileHeaders) that would not be unpacked inside
-   * {@code folder} (e.g. "../../groovy/x.groovy", which zip4j 1.3.2 writes where it points), or that
-   * is a symbolic link; null when every entry is safe to unpack.
+   * {@code folder} (e.g. "../../groovy/x.groovy", which zip4j 1.3.2 wrote where it points; 1.3.3
+   * refuses it too, but this check doesn't depend on that), or that is a symbolic link; null when
+   * every entry is safe to unpack.
    */
   static String unsafeEntry(List<?> headers, File folder) throws IOException {
     String root = folder.getCanonicalPath();
@@ -212,7 +212,7 @@ public class ExperimentController extends Controller {
       if (name == null) {
         continue;
       }
-      // An absolute name: zip4j 1.3.2 puts it inside, but other versions and tools need not.
+      // An absolute name: zip4j 1.3.x puts it inside, but other versions and tools need not.
       if (name.startsWith("/") || name.startsWith("\\") || name.matches("^[A-Za-z]:.*")) {
         return name;
       }
@@ -794,7 +794,7 @@ public class ExperimentController extends Controller {
     experiment.setClientHtml(isNewExperiment ? Experiment.defaultClientHTML() : Experiment.legacyClientHTML());
     experiment.setClientGraph(Experiment.defaultClientGraph());
     // Add the user's default language
-    experiment.languages.add(user.defaultLanguage);
+    experiment.addLanguage(user.defaultLanguage);
     return experiment;
   }
 }

@@ -101,10 +101,10 @@
                       v-if="uncertain.has(r.id) && !r.busy && paid(r) === 0"
                       size="sm"
                       variant="ghost"
-                      title="Only after checking that no bonus to this worker went through"
+                      title="A new try sends the same request token, so MTurk pays this bonus only once (within a day of the first try)"
                       @click="uncertain.delete(r.id)"
                     >
-                      Not paid? Allow a new bonus
+                      Not paid? Allow another try
                     </BButton>
                   </td>
                   <td class="num">
@@ -215,6 +215,7 @@ import RejectDialog from './RejectDialog.vue'
 import BonusDialog from './BonusDialog.vue'
 import { balanceChanged, hitIdOf, track, type BonusPayment, type MturkApi, type MturkHit } from './api'
 import { confirmMoney } from './moneyConfirm'
+import { bonusToken } from './bonusTokens'
 import {
   assignmentsCsv, bonusTotal, describeError, errorLine, formatMoney, formatTime, mapPool, moneyString, mturkFeeRate,
   type Annotation, type ErrorText,
@@ -507,18 +508,23 @@ async function payBonuses (items: { row: AssignmentRow, amount: number }[], reas
   if (moneyRun.value || !items.length) return
   moneyRun.value = true
   queue(items.map(x => x.row))
+  // one request token per assignment, from its first confirmed bonus on: MTurk pays a retry only once
+  const tokens = new Map(items.map(({ row }) => [row.id, bonusToken(row.id)]))
   try {
-    // two at a time, never retried automatically: MTurk's SendBonus has no idempotency token here
-    const results = await track(() => mapPool(items, 2, async ({ row, amount }) => {
+    // two at a time, never retried automatically; a retry by hand reuses the token, so it is safe
+    const results = await track(() => mapPool(items, 2, async ({ row, amount }): Promise<'paid' | 'earlier'> => {
       row.busy = 'bonus'
       try {
-        await props.api.sendBonus(row.id, row.workerId, moneyString(amount), reason)
+        const res = await props.api.sendBonus(row.id, row.workerId, moneyString(amount), reason, tokens.get(row.id))
         selected.delete(row.id)
+        uncertain.delete(row.id)
+        // MTurk had paid this one already (an earlier try went through after all): not paid again
+        return res && res.duplicate === true ? 'earlier' : 'paid'
       } catch (e) {
         if (outcomeUnknown(e)) {
           // MTurk may have paid even though the answer was lost (a timeout, a 5xx or a proxy page)
           uncertain.add(row.id)
-          row.error = 'The server gave no clear answer, so this bonus may or may not have been paid. Check the bonus payments below before paying again.'
+          row.error = 'The server gave no clear answer, so this bonus may or may not have been paid. Check the bonus payments below; trying again is safe, MTurk pays it only once.'
         } else {
           row.error = errorLine(e)
         }
@@ -528,10 +534,13 @@ async function payBonuses (items: { row: AssignmentRow, amount: number }[], reas
       }
     }))
     const failed = results.filter(r => r.status === 'rejected').length
-    const paidOk = items.filter((_, i) => results[i].status === 'fulfilled')
+    const paidOk = items.filter((_, i) => { const r = results[i]; return r.status === 'fulfilled' && r.value === 'paid' })
+    const earlier = results.filter(r => r.status === 'fulfilled' && r.value === 'earlier').length
     const sum = bonusTotal(paidOk.map(x => x.amount))
-    if (!failed) notify.success(`Paid ${formatMoney(sum)} in bonuses`, plural(paidOk.length, 'worker'))
-    else notify.warning(`Paid ${plural(paidOk.length, 'bonus', 'bonuses')}, ${failed} failed`, 'See the rows marked with an error.')
+    const already = earlier ? `${plural(earlier, 'worker')} had been paid by an earlier try, so ${earlier === 1 ? 'was' : 'were'} not paid again.` : ''
+    if (!failed && paidOk.length) notify.success(`Paid ${formatMoney(sum)} in bonuses`, [plural(paidOk.length, 'worker'), already].filter(Boolean).join('. '))
+    else if (!failed) notify.info('Nothing new was paid', already)
+    else notify.warning(`Paid ${plural(paidOk.length, 'bonus', 'bonuses')}, ${failed} failed`, ['See the rows marked with an error.', already].filter(Boolean).join(' '))
     balanceChanged()
     // the run is over only once the payments list shows what it paid
     await loadBonuses()

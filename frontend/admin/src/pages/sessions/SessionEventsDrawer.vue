@@ -226,7 +226,7 @@ const isLive = computed(() => !!props.session && admin.instance?.id === props.se
 const live = computed(() => {
   const s = props.session
   if (!s || admin.instance?.id !== s.id) return []
-  return admin.events.filter(e => liveEventOf(e as { experimentInstanceId?: unknown }, s.id, isLive.value)).map(normalizeEvent)
+  return admin.events.filter(e => liveEventOf(e, s.id, isLive.value)).map(normalizeEvent)
 })
 const events = computed(() => sortEvents(mergeEvents(loaded.value, live.value)))
 

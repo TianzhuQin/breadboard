@@ -38,6 +38,19 @@ class EventHandler<A> {
 
 public class EventBus <T> {
 
+  private static final EventBus<Map> SCRIPTS = new EventBus<Map>();
+
+  /**
+   * The one bus every script engine in this JVM binds as "events": the server's and the test
+   * harness's. groovy/events.groovy adds on, once, off and send to Vertex's metaclass, which is
+   * JVM-wide, and those closures keep using the "events" of the first engine that loaded it (a later
+   * engine's assignment doesn't replace them on vertex classes already in use). An engine bound to a
+   * bus of its own would put its players' listeners on that first bus and never hear their events.
+   */
+  public static EventBus<Map> forScripts() {
+    return SCRIPTS;
+  }
+
   private Map<String, EventHandler<T>> events = new ConcurrentHashMap();
 
   public EventHandler<T> register (String eventName) {

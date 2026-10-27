@@ -270,9 +270,18 @@ export function eventNameCounts (events: readonly SessionEvent[]): { name: strin
 
 // ---- CSV --------------------------------------------------------------------------------------
 
-/** One CSV field: always quoted, quotes doubled (RFC 4180), so commas, quotes and newlines survive. */
+const NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i
+
+/**
+ * One CSV field: always quoted, quotes doubled (RFC 4180), so commas, quotes and newlines survive.
+ * Text a spreadsheet would run as a formula (starting with = + - @, a tab or a carriage return) gets
+ * a leading apostrophe, because event data holds what participants typed; plain numbers like -5 are
+ * left alone (as in recruit/mturk/lib.ts).
+ */
 export function csvField (v: unknown): string {
-  return `"${valueText(v).replace(/"/g, '""')}"`
+  let s = valueText(v)
+  if (/^[=+\-@\t\r]/.test(s) && !NUMBER.test(s)) s = `'${s}`
+  return `"${s.replace(/"/g, '""')}"`
 }
 export function toCsv (rows: readonly (readonly unknown[])[]): string {
   return rows.map(r => r.map(csvField).join(',')).join('\n') + '\n'

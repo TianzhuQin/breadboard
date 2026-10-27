@@ -10,7 +10,7 @@ import { networkGraphml, networkJson, exportFileName } from '../src/network/expo
 import { LiveGraph, type GraphNode } from '../src/lib/graph'
 import { actions, admin, graph, __receive } from '../src/store/admin'
 import { toasts } from '../src/ui/toast'
-import { editTie, undoLast, undoEdit, pendingEdits, editHistory, friendlyReason, inverseOf } from '../src/network/tieEdits'
+import { editTie, undoLast, undoEdit, pendingEdits, editHistory, friendlyReason, inverseOf, tieEditsBlocked } from '../src/network/tieEdits'
 
 const node = (id: string, data: Record<string, any> = {}): GraphNode => ({ id, data })
 
@@ -586,6 +586,26 @@ describe('tie edits', () => {
     expect((await undoEdit({ op: 'add', a: 'x', b: 'y' })).ok).toBe(false)
   })
 
+  it('won\'t change ties while the engine runs another experiment (the server refuses)', async () => {
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    const exp = { id: 1, name: 'E', uid: 'u', fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 }
+    const user = (engine: any) => __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: { id: 1, name: 's1', status: 'RUNNING' }, engine })
+    __receive({ notify: { ScriptEngineReloaded: true } })
+    user({ experimentId: 2, experimentName: 'Other study', sessionId: 4, sessionName: 'S', owner: 'bob@lab.org' })
+    expect(tieEditsBlocked.value).toBe('The engine is running “Other study” right now, so ties can\'t be changed here')
+    const r = await editTie('add', 'a', 'c')
+    expect(r.ok).toBe(false)
+    expect(spy).not.toHaveBeenCalled()
+    expect(toasts[toasts.length - 1].detail).toMatch(/running “Other study” right now/)
+    // the engine runs this experiment's session: edits work again
+    user({ experimentId: 1, experimentName: 'E', sessionId: 1, sessionName: 's1', owner: 'r' })
+    expect(tieEditsBlocked.value).toBe('')
+    expect((await editTie('add', 'a', 'c')).ok).toBe(true)
+    // and a session that isn't running can't be edited either
+    __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: { id: 1, name: 's1', status: 'STOPPED' } })
+    expect(tieEditsBlocked.value).toBe('Start the session to change ties')
+  })
+
   it('forgets the undo history when the session changes', async () => {
     vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
     const exp = { id: 1, name: 'E', uid: 'u', fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 }
@@ -594,6 +614,26 @@ describe('tie edits', () => {
     expect(editHistory.value.length).toBe(1)
     __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: { id: 2, name: 's2', status: 'RUNNING' } })
     await vi.waitFor(() => expect(editHistory.value).toEqual([]))
+  })
+})
+
+describe('NetworkToolbar', () => {
+  it('turns off Tie and Cut with the reason ties can\'t be changed', async () => {
+    const { mount } = await import('@vue/test-utils')
+    const NetworkToolbar = (await import('../src/pages/network/NetworkToolbar.vue')).default
+    const props = {
+      mode: 'view' as const, canEdit: false, editHint: 'The engine is running “Other study” right now, so ties can\'t be changed here', query: '', matchCount: 0,
+      matchIndex: -1, colorBy: null, labelBy: null, colorOptions: [], labelOptions: [], showAllLabels: false, sizeByDegree: true, frozen: false, canExport: false,
+    }
+    const w = mount(NetworkToolbar, { props })
+    const tie = w.find('.ntb__mode.is-connect')
+    expect(tie.attributes('disabled')).toBeDefined()
+    expect(tie.attributes('title')).toBe(props.editHint)
+    expect(w.find('.ntb__mode.is-view').attributes('disabled')).toBeUndefined()
+    await w.setProps({ canEdit: true, editHint: '' })
+    expect(w.find('.ntb__mode.is-cut').attributes('disabled')).toBeUndefined()
+    expect(w.find('.ntb__mode.is-cut').attributes('title')).toBe('Cut ties: click a tie (X)')
+    w.unmount()
   })
 })
 

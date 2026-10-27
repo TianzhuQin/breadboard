@@ -9,7 +9,7 @@ import static org.junit.Assert.*;
 
 /**
  * The live event pushed to admin consoles: {"event": {"id", "name", "datetime" (UTC ISO-8601 with
- * milliseconds), "data": {name: value}}}, long values cut short.
+ * milliseconds), "data": {name: value}, "experimentInstanceId"}}, long values cut short.
  */
 public class LiveEventJsonTest {
 
@@ -37,6 +37,20 @@ public class LiveEventJsonTest {
         assertEquals("admin", body.get("data").get("actor").asText());
         assertEquals("add", body.get("data").get("op").asText());
         assertEquals(2, body.get("data").size());
+    }
+
+    @Test
+    public void itSaysWhichSessionItBelongsTo() {
+        Event e = event("clientLogIn", "clientId", "p1");
+        e.experimentInstance = new ExperimentInstance();
+        e.experimentInstance.id = 7L;
+        JsonNode body = EventTracker.liveJson(e).get("event");
+        assertEquals(7L, body.get("experimentInstanceId").asLong());
+        assertEquals("not among the event's own data", 1, body.get("data").size());
+
+        JsonNode noSession = EventTracker.liveJson(event("x")).get("event");
+        assertTrue(noSession.has("experimentInstanceId"));
+        assertTrue(noSession.get("experimentInstanceId").isNull());
     }
 
     @Test

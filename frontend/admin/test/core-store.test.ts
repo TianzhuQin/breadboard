@@ -12,7 +12,7 @@ vi.mock('@/lib/http', async (orig) => {
 })
 
 import { http, HttpError } from '@/lib/http'
-import { admin, actions, connection, graph, logout, __receive } from '../src/store/admin'
+import { admin, actions, adoptUid, boot, connection, graph, logout, __receive } from '../src/store/admin'
 import { confirmEngineRebuild } from '../src/store/engineGuard'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
@@ -84,6 +84,27 @@ describe('a sign-in changed in another tab', () => {
   })
 })
 
+describe('a new password', () => {
+  it('reconnects with the new sign-in at once, and tells the other tabs', async () => {
+    get.mockResolvedValue({ uid: 'u1', email: 'r@lab', connectSocket: 'ws://lab/connect' })
+    await boot()
+    expect(connection.start).toHaveBeenLastCalledWith('u1', 'ws://lab/connect')
+    const setItem = vi.fn()
+    vi.stubGlobal('localStorage', { setItem, getItem: () => null, removeItem () {} })
+    adoptUid('u2')
+    expect(admin.uid).toBe('u2')
+    expect(admin.auth).toBe('signedIn')
+    expect(connection.start).toHaveBeenLastCalledWith('u2', 'ws://lab/connect')
+    // (other tabs hear of it through the storage event)
+    expect(setItem).toHaveBeenCalledWith('bb-admin-auth', expect.stringMatching(/^in /))
+    // the same one again: nothing to do
+    adoptUid('u2')
+    adoptUid('')
+    expect(connection.start).toHaveBeenCalledTimes(2)
+    vi.unstubAllGlobals()
+  })
+})
+
 describe('signing out', () => {
   it('forgets what the account saw once the server ended the session', async () => {
     signedInAs('r@lab', 'u1')
@@ -148,5 +169,27 @@ describe('asking before an engine rebuild', () => {
     expect(await answer).toBe(false)
     graph.clear()
     await tick()
+  })
+
+  it('names the session the engine runs, also another account\'s', async () => {
+    const engine = { experimentId: 3, experimentName: 'Trust', sessionId: 12, sessionName: 'Pilot 2', owner: 'other@lab' }
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '', engine })
+    graph.clear()
+    get.mockRejectedValue(new TypeError('Failed to fetch'))
+    let answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 2” of “Trust” running.')
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+
+    // the autopilot's session is named once
+    get.mockResolvedValue({ status: { on: true, instance: { id: 12, name: 'Pilot 2', status: 'RUNNING' } } })
+    answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toContain('The autopilot has session “Pilot 2” open.')
+    expect(confirmState.req!.message).not.toContain('other@lab')
+    settleConfirm(false)
+    await answer
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })
 })

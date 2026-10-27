@@ -176,6 +176,7 @@
               <BSpinner v-if="cur.run.status === 'pending'" :size="13" label="Running" />
               <CircleCheck v-else-if="cur.run.status === 'ok'" :size="15" aria-hidden="true" />
               <Hourglass v-else-if="cur.run.status === 'noreply'" :size="15" aria-hidden="true" />
+              <WifiOff v-else-if="cur.run.status === 'notsent'" :size="15" aria-hidden="true" />
               <span class="srun__title">{{ runTitle }}</span>
               <span class="srun__time">{{ clock(cur.run.at) }}</span>
               <span class="steps__spacer" />
@@ -215,12 +216,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import {
   ArrowLeft, CircleAlert, CircleCheck, Copy, CopyPlus, Ellipsis, FolderOpen, Hourglass, Info, ListOrdered, Lock,
-  PanelBottom, Pencil, Play, Plus, RotateCw, Save, Trash2, TriangleAlert, Undo2, X,
+  PanelBottom, Pencil, Play, Plus, RotateCw, Save, Trash2, TriangleAlert, Undo2, WifiOff, X,
 } from 'lucide-vue-next'
 import {
   BBadge, BButton, BCodeEditor, BEmpty, BField, BInput, BMenu, BSpinner, confirm, notify, toast, type MenuItem,
 } from '@/ui'
-import { actions, admin, running } from '@/store/admin'
+import { actions, admin, ensureConnected } from '@/store/admin'
+import { confirmEngineRebuild } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
 import { goToLine, viewIn } from '../console/editorView'
@@ -434,8 +436,13 @@ async function saveAndRunCurrent () {
     notify.info('Nothing to run', 'This step has no code yet.')
     return
   }
-  runDraft(d)
-  announce.value = `Running ${d.name} in the engine.`
+  if (runDraft(d)) {
+    announce.value = `Running ${d.name} in the engine.`
+    return
+  }
+  // not sent: a version just saved is not in the engine yet
+  if (d.engineBehind) actions.markEngineStale()
+  announce.value = `${d.name} did not run: not connected to the server.`
 }
 
 const runTitle = computed(() => {
@@ -444,6 +451,7 @@ const runTitle = computed(() => {
   if (r.status === 'pending') return 'Running in the engine…'
   if (r.status === 'ok') return r.values.length ? 'Loaded into the engine. It returned:' : 'Loaded into the engine'
   if (r.status === 'error') return 'The engine reported an error'
+  if (r.status === 'notsent') return 'Not run: not connected to the server. Run it again once the connection is back.'
   return 'No answer from the engine. It may be busy or reloading; check the output panel.'
 })
 watch(() => current.value?.run?.status, (s, before) => {
@@ -574,15 +582,11 @@ async function copyCode () {
 }
 
 async function reloadEngine () {
-  const ok = await confirm({
-    title: 'Reload the script engine?',
-    message: running.value
-      ? 'This restarts the experiment\'s scripts from the saved steps. Everyone in the running session is disconnected and the network is emptied.'
-      : 'This restarts the experiment\'s scripts from the saved steps.',
-    confirmLabel: 'Reload',
-    danger: !!running.value,
-  })
-  if (ok) actions.reloadEngine()
+  if (!ensureConnected()) return
+  // the engine is shared by every account and the autopilot: ask while anyone is using it
+  if (!await confirmEngineRebuild({ title: 'Reload the script engine?', action: 'Reloading', confirmLabel: 'Reload anyway' })) return
+  // (the connection may have dropped while the question was open)
+  if (!actions.reloadEngine()) ensureConnected()
 }
 
 function reload () {
@@ -747,12 +751,12 @@ function clock (t: number) {
 }
 .srun.is-ok { border-left-color: var(--success); }
 .srun.is-error { border-left-color: var(--danger); }
-.srun.is-noreply { border-left-color: var(--warning); }
+.srun.is-noreply, .srun.is-notsent { border-left-color: var(--warning); }
 .srun__head { display: flex; align-items: center; gap: 8px; min-height: 28px; }
 .srun.is-ok .srun__head > svg { color: var(--success); }
-.srun.is-noreply .srun__head > svg { color: var(--warning); }
+.srun.is-noreply .srun__head > svg, .srun.is-notsent .srun__head > svg { color: var(--warning); }
 .srun__title { font-size: var(--text-sm); font-weight: 600; color: var(--text); }
-.srun.is-noreply .srun__title { color: var(--warning-soft-text); font-weight: 500; }
+.srun.is-noreply .srun__title, .srun.is-notsent .srun__title { color: var(--warning-soft-text); font-weight: 500; }
 .srun__time { font-size: var(--text-xs); color: var(--faint); font-variant-numeric: tabular-nums; }
 .srun__value { margin: 0; padding-right: 4px; font-size: 12.5px; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
 @media (max-width: 900px) {

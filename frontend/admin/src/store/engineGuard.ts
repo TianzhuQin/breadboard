@@ -32,6 +32,14 @@ export async function engineUsers (): Promise<string> {
   if (own) lines.push(`Your session “${own.name}” is running.`)
   const auto = await autopilotSession()
   if (auto && auto.id !== own?.id) lines.push(`The autopilot has session “${auto.name}” open.`)
+  // what the engine says it runs, which can be another account's session
+  const e = admin.user?.engine
+  if (e && e.sessionId !== null && e.sessionId !== own?.id && e.sessionId !== auto?.id) {
+    const session = `session “${e.sessionName || e.sessionId}”${e.experimentName ? ` of “${e.experimentName}”` : ''}`
+    lines.push(e.owner && e.owner.toLowerCase() !== admin.email.toLowerCase()
+      ? `${e.owner} has ${session} running.`
+      : `The engine is running ${session}.`)
+  }
   const n = graph.nodes.size
   if (n) {
     lines.push(`${n} ${n === 1 ? 'player is' : 'players are'} in the network right now` +

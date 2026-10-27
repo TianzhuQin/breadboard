@@ -962,6 +962,12 @@ public class AMTAdmin extends Controller {
     }
   }
 
+  /**
+   * Pay a worker a bonus: {@code workerId}, {@code bonusAmount}, {@code reason}, and optionally
+   * {@code uniqueRequestToken} (1-64 letters, digits, "_" or "-"), which MTurk uses to pay a retried
+   * bonus only once. 200 {"sent": true}, or {"sent": true, "duplicate": true} when MTurk says a bonus
+   * with that token was already paid (so a retry after a lost answer is not an error).
+   */
   @Security.Authenticated(Secured.class)
   public static Result sendBonus(String assignmentId, Boolean sandbox) {
     if (SECRET_KEY == null || ACCESS_KEY == null) {
@@ -970,6 +976,7 @@ public class AMTAdmin extends Controller {
     String bonusAmount = null;
     String reason = null;
     String workerId = null;
+    String token = null;
     JsonNode json = request().body().asJson();
     if(json == null) {
       return badRequest("Expecting Json data");
@@ -977,10 +984,15 @@ public class AMTAdmin extends Controller {
       bonusAmount = json.findPath("bonusAmount").textValue();
       reason = json.findPath("reason").textValue();
       workerId = json.findPath("workerId").textValue();
+      JsonNode tokenNode = json.get("uniqueRequestToken");
+      token = (tokenNode == null || tokenNode.isNull()) ? null : tokenNode.asText();
     }
 
     if (bonusAmount == null || reason == null || workerId == null) {
       return badRequest("Please provide workerId, bonusAmount, and reason.");
+    }
+    if (token != null && !isBonusToken(token)) {
+      return badRequest("The uniqueRequestToken must be 1 to 64 letters, digits, \"_\" or \"-\".");
     }
     try {
       AWSStaticCredentialsProvider awsCredentials = new AWSStaticCredentialsProvider(new BasicAWSCredentials(ACCESS_KEY, SECRET_KEY));
@@ -988,13 +1000,52 @@ public class AMTAdmin extends Controller {
       builder.setEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration((sandbox ? SANDBOX_ENDPOINT : PRODUCTION_ENDPOINT), SIGNING_REGION));
       AmazonMTurk mTurk = builder.build();
       SendBonusRequest sendBonusRequest= new SendBonusRequest().withAssignmentId(assignmentId).withBonusAmount(bonusAmount).withReason(reason).withWorkerId(workerId);
+      if (token != null) {
+        sendBonusRequest.setUniqueRequestToken(token);
+      }
       mTurk.sendBonus(sendBonusRequest);
-      return ok();
+      return ok(bonusSent(false));
     } catch (AmazonServiceException ase) {
+      if (ase instanceof RequestErrorException && isDuplicateBonus(ase.getErrorMessage(), token)) {
+        return ok(bonusSent(true));
+      }
       return badRequest(ase.getMessage());
     } catch (AmazonClientException ace) {
       return internalServerError(ace.getMessage());
     }
+  }
+
+  /** Whether a uniqueRequestToken is one MTurk takes: 1-64 letters, digits, "_" or "-". */
+  public static boolean isBonusToken(String token) {
+    return token.matches("[A-Za-z0-9_-]{1,64}");
+  }
+
+  /**
+   * Whether MTurk refused a bonus because one with this token was paid before. MTurk answers that
+   * with a RequestError whose message names the token; there is no error code of its own.
+   */
+  public static boolean isDuplicateBonus(String message, String token) {
+    if (message == null || token == null) {
+      return false;
+    }
+    String lower = message.toLowerCase(java.util.Locale.ROOT);
+    if (lower.contains("uniquerequesttoken") || lower.contains("unique request token")) {
+      return true;
+    }
+    boolean namesToken = java.util.regex.Pattern
+        .compile("(^|[^A-Za-z0-9_-])" + java.util.regex.Pattern.quote(token) + "($|[^A-Za-z0-9_-])")
+        .matcher(message).find();
+    return namesToken && (lower.contains("already") || lower.contains("duplicate") || lower.contains("exists"));
+  }
+
+  /** {"sent": true}, with "duplicate": true when MTurk had paid it already. */
+  public static ObjectNode bonusSent(boolean duplicate) {
+    ObjectNode sent = Json.newObject();
+    sent.put("sent", true);
+    if (duplicate) {
+      sent.put("duplicate", true);
+    }
+    return sent;
   }
 
   @Security.Authenticated(Secured.class)

@@ -158,6 +158,7 @@ public class Application extends Controller {
     User user = User.findByUID(session("uid"));
     if (user == null) {
       result.put("error", "You are not signed in. Sign in again, then retry.");
+      result.put("status", "unauthorized");
       return ok(result);
     }
     String email = field("email");
@@ -298,6 +299,10 @@ public class Application extends Controller {
     csv.append('\n');
   }
 
+  /**
+   * One quoted field. The value is written exactly as recorded, with no spreadsheet-formula escaping
+   * (no ' put before =, +, - or @): researchers analyse these files, so values must stay exact.
+   */
   static String csvField(Object value) {
     String text = value == null ? "" : value.toString();
     return "\"" + text.replace("\"", "\"\"") + "\"";

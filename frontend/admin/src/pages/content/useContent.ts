@@ -1,6 +1,7 @@
 import { computed, inject, reactive, ref, shallowRef, watch, type InjectionKey } from 'vue'
 import { admin, actions, experiments } from '@/store/admin'
 import { http, HttpError } from '@/lib/http'
+import { registerUnsaved } from '@/shell/unsaved'
 import { confirm, notify } from '@/ui'
 import type { Content, Language } from '@/store/types'
 import {
@@ -46,6 +47,8 @@ watch(() => admin.email, claimKeptDrafts)
 
 /** How many texts have unsaved edits, in any experiment, whether or not the page is open. */
 export const unsavedContentCount = computed(() => Object.values(keptDrafts).reduce((n, d) => n + Object.keys(d).length, 0))
+// signing out asks first while there are any
+registerUnsaved('content', () => unsavedContentCount.value, 'Content')
 
 function readPref (key: string): string | null {
   try { return localStorage.getItem(key) } catch (e) { return null }

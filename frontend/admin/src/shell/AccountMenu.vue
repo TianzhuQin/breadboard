@@ -16,8 +16,12 @@ import { MoreHorizontal, Sun, Moon, Monitor, History, LogOut } from 'lucide-vue-
 import { BMenu, type MenuItem } from '@/ui'
 import { admin, logout } from '@/store/admin'
 import { theme, setTheme } from '@/lib/theme'
+import { confirmSignOut } from './unsaved'
 
 const initial = computed(() => (admin.email || '?').trim().charAt(0).toUpperCase())
+async function signOut () {
+  if (await confirmSignOut()) await logout()
+}
 const items = computed<MenuItem[]>(() => [
   { heading: 'Appearance' },
   { label: 'System', icon: Monitor, active: theme.value === 'system', run: () => setTheme('system') },
@@ -25,7 +29,7 @@ const items = computed<MenuItem[]>(() => [
   { label: 'Dark', icon: Moon, active: theme.value === 'dark', run: () => setTheme('dark') },
   { divider: true },
   { label: 'Open the previous console', icon: History, run: () => { window.location.href = '/legacy-admin' } },
-  { label: 'Sign out', icon: LogOut, run: () => logout() },
+  { label: 'Sign out', icon: LogOut, run: signOut },
 ])
 </script>
 

@@ -1,8 +1,10 @@
 import { computed, reactive, toRaw, watch } from 'vue'
 import { http, HttpError } from '@/lib/http'
-import { admin, actions, running } from '@/store/admin'
+import { admin, actions, ensureConnected } from '@/store/admin'
+import { confirmEngineRebuild } from '@/store/engineGuard'
 import type { Step } from '@/store/types'
-import { confirm, notify, toast } from '@/ui'
+import { registerUnsaved } from '@/shell/unsaved'
+import { notify, toast } from '@/ui'
 import { expectReply, lastOutputId } from '../console/engineReplies'
 import {
   copyName, isDirty, isNew, mergeServerSteps, newDraft, uniqueName, validateName,
@@ -170,14 +172,20 @@ async function saveNow (b: StepsBucket, d: StepDraft): Promise<boolean> {
   }
 }
 
-/** Run a step's code in the live engine (SendStep) and keep the engine's answer on the draft. */
-export function runDraft (d: StepDraft) {
+/**
+ * Run a step's code in the live engine (SendStep) and keep the engine's answer on the draft. False
+ * when it could not be sent (the connection is down): the draft says so at once.
+ */
+export function runDraft (d: StepDraft): boolean {
   const source = d.source
   const afterId = lastOutputId()
-  actions.runStep({ id: d.id, name: d.name, source })
+  if (!actions.runStep({ id: d.id, name: d.name, source })) {
+    d.run = { status: 'notsent', values: [], error: null, at: Date.now() }
+    return false
+  }
   d.run = { status: 'pending', values: [], error: null, at: Date.now() }
   const run = d.run
-  expectReply(source, afterId).then(reply => {
+  expectReply(source, afterId, 'SendStep').then(reply => {
     if (d.run !== run) return
     if (!reply) {
       run.status = 'noreply'
@@ -191,6 +199,7 @@ export function runDraft (d: StepDraft) {
       engineCaughtUp()
     }
   })
+  return true
 }
 
 // ---- is the live engine running the saved steps? ----------------------------------------------
@@ -204,14 +213,12 @@ let stepDeletedSinceReload = false
  */
 function engineCaughtUp () {
   if (admin.engine !== 'stale' || stepDeletedSinceReload) return
-  // stale for another reason too (a reload that didn't finish): only a reload clears that
-  if ((admin as { engineProblem?: string }).engineProblem) return
   const id = admin.experiment?.id
   for (const b of buckets.values()) {
     if (b.experimentId === id && b.drafts.some(d => d.engineBehind)) return
   }
-  // (the store has markEngineStale but no way back, so this page undoes its own mark)
-  admin.engine = 'ready'
+  // (the store keeps the mark of a reload that didn't finish: only a reload clears that)
+  actions.markEngineCurrent()
 }
 
 // A reload (or an experiment switch) loads every saved step, so nothing is behind any more.
@@ -255,6 +262,9 @@ export const unsavedDrafts = computed(() => {
   return out
 })
 
+// signing out asks first while there are any (they are kept, but only in this tab)
+registerUnsaved('steps', () => unsavedDrafts.value.length, 'Steps')
+
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', (e) => {
     if (!unsavedDrafts.value.length) return
@@ -277,17 +287,16 @@ watch(() => admin.experiment?.id, (now, before) => {
   })
 })
 
-/** The toast's way back. Switching rebuilds the engine, so ask first while a session is running. */
+/** The toast's way back. Switching rebuilds the shared engine, so ask first while anyone is using it. */
 async function switchBack (id: number, name: string) {
-  if (running.value) {
-    const ok = await confirm({
-      title: `Switch to “${name}”?`,
-      message: 'Switching experiments reloads the script engine: everyone in the running session is disconnected.',
-      confirmLabel: 'Switch experiment',
-      danger: true,
-    })
-    if (!ok) return
-  }
+  if (!ensureConnected()) return
+  if (!await confirmEngineRebuild({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+  const asked = Date.now()
   const res = await actions.selectExperiment(id)
-  if (!res) notify.warning('The server didn’t confirm the switch', 'Check the experiment switcher at the top left.')
+  if (!res) {
+    // the server's reason when it refused (a refusal resolves null at once)
+    const refusal = admin.requestError
+    const why = refusal && refusal.request === 'SelectExperiment' && refusal.at >= asked ? refusal.text : 'Check the experiment switcher at the top left.'
+    notify.warning('The server didn’t confirm the switch', why)
+  }
 }

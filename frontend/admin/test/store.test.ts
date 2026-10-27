@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { admin, graph, actions, experiments, engineInUse, connection, NOT_CONNECTED, __receive } from '../src/store/admin'
+import { admin, graph, actions, experiments, engineInUse, engineElsewhere, connection, NOT_CONNECTED, __receive } from '../src/store/admin'
 
 const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
 
@@ -19,6 +19,18 @@ describe('admin store', () => {
     expect(admin.experiment).toBe(null)
     expect(experiments.value.length).toBe(1)
     expect(admin.ready).toBe(true)
+  })
+
+  it('says what each frame answers, or where it came from', () => {
+    actions.clearOutput()
+    __receive({ error: 'The game has started already.', request: 'RunGame' })
+    __receive({ error: '', output: 'a = 1\n\n==>1', request: 'SendScript' })
+    __receive({ error: 'Caught error: boom', source: 'OnJoinStep' })
+    __receive({ output: 'hello', source: 'OnLeaveStep', request: 'SendStep' })
+    __receive({ output: 'plain' })
+    expect(admin.output.map(o => o.source)).toEqual(['RunGame', 'SendScript', 'OnJoinStep', 'OnLeaveStep', undefined])
+    // only an error naming its request is that request's refusal
+    expect(admin.requestError).toMatchObject({ request: 'RunGame', text: 'The game has started already.' })
   })
 
   it('keeps every output and error, and counts errors not yet seen', () => {
@@ -63,19 +75,20 @@ describe('admin store', () => {
     const ev = (extra: Record<string, any> = {}) => ({ event: { id: 1, name: 'clientLogIn', datetime: '2026-10-27T10:00:00.000Z', data: { clientId: 'p1' }, ...extra } })
     // nothing selected: nothing is ours
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
-    __receive(ev({ instanceId: 5 }))
+    __receive(ev({ experimentInstanceId: 5 }))
     __receive(ev())
     expect(admin.events.length).toBe(0)
     // a stopped session is selected: another researcher's live events stay out of its feed
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: inst(5, 'STOPPED') })
-    __receive(ev({ instanceId: 9 }))
+    __receive(ev({ experimentInstanceId: 9 }))
     __receive(ev())
     expect(admin.events.length).toBe(0)
     // the server says the event is this session's
-    __receive(ev({ instanceId: 5 }))
-    expect(admin.events.length).toBe(1)
     __receive(ev({ experimentInstanceId: 5 }))
-    __receive(ev({ instanceId: null }))
+    expect(admin.events.length).toBe(1)
+    __receive(ev({ experimentInstanceId: '5' }))
+    // recorded while the engine ran no session
+    __receive(ev({ experimentInstanceId: null }))
     expect(admin.events.length).toBe(2)
     // an older server sends no session id: taken as ours only while ours is the running one
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: inst(5, 'RUNNING') })
@@ -124,6 +137,44 @@ describe('the engine\'s reload', () => {
     __receive({ notify: { ScriptEngineReloadFailed: 2 } })
     expect(admin.engine).toBe('stale')
     __receive({ notify: { ScriptEngineReloaded: 3 } })
+  })
+
+  it('says why the rebuild failed, also on a console that did not ask for it', () => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloadFailed: 'the step "init" has an error: unexpected token' } })
+    expect(admin.engine).toBe('stale')
+    expect(admin.engineProblem).toBe('The engine did not finish reloading: the step "init" has an error: unexpected token. Fix the problem, then reload it.')
+
+    // the console that asked hears its error first; the reason replaces the general words
+    __receive({ notify: { ScriptEngineReloading: 2 } })
+    __receive({ error: 'Something went wrong: the core script did not load', request: 'ReloadEngine' })
+    expect(admin.engineProblem).toMatch(/output panel says why/)
+    __receive({ notify: { ScriptEngineReloadFailed: 'The core script did not load.' } })
+    expect(admin.engineProblem).toBe('The engine did not finish reloading: The core script did not load. Fix the problem, then reload it.')
+    // a reason that is not words keeps what is already said
+    __receive({ notify: { ScriptEngineReloadFailed: 4 } })
+    expect(admin.engineProblem).toMatch(/core script did not load/)
+    __receive({ notify: { ScriptEngineReloading: 5 } })
+    __receive({ notify: { ScriptEngineReloaded: 6 } })
+  })
+
+  it('is marked current again once the steps run, unless a reload did not finish', () => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    actions.markEngineStale()
+    expect(admin.engine).toBe('stale')
+    actions.markEngineCurrent()
+    expect(admin.engine).toBe('ready')
+
+    __receive({ notify: { ScriptEngineReloading: 3 } })
+    // not while it reloads
+    actions.markEngineCurrent()
+    expect(admin.engine).toBe('loading')
+    __receive({ error: 'Something went wrong', request: 'ReloadEngine' })
+    actions.markEngineCurrent()
+    expect(admin.engine).toBe('stale')
+    __receive({ notify: { ScriptEngineReloading: 4 } })
+    __receive({ notify: { ScriptEngineReloaded: 5 } })
   })
 
   it('gives up waiting after a while, and after reconnecting mid-reload', () => {
@@ -183,5 +234,178 @@ describe('while the connection is down', () => {
     expect(await reply).not.toBe(null)
     expect(actions.runScript('a = 1')).toBe(true)
     expect(admin.output[admin.output.length - 1]).toMatchObject({ kind: 'input', text: 'a = 1' })
+  })
+})
+
+describe('waiting for the answer to a request', () => {
+  // The server also sends the User JSON to every tab of the account after another tab's action,
+  // unasked: an action must not take one of those for its answer.
+  const inst = (id: number, status: string) => ({ id, name: 's' + id, status, creationTime: '', hitId: '', hits: [], data: [] })
+  const withSessions = (e: ReturnType<typeof exp>, ...list: any[]) => ({ ...e, instances: list })
+  const push = (extra: Record<string, any> = {}, list = [exp(1, 'A'), exp(2, 'B')]) =>
+    __receive({ user: { email: 'r', experiments: list, currentScript: '' }, experimentInstance: '', ...extra })
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  function track (p: Promise<any>) {
+    const t = { done: false, value: undefined as any }
+    void p.then(v => { t.done = true; t.value = v })
+    return t
+  }
+
+  beforeEach(() => { vi.spyOn(connection, 'send').mockReturnValue(true) })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('selecting an experiment waits for the one that shows it selected', async () => {
+    const t = track(actions.selectExperiment(2))
+    push({ experiment: exp(1, 'A') })
+    await flush()
+    expect(t.done).toBe(false)
+    push({ experiment: exp(2, 'B') })
+    await flush()
+    expect(t.value.experiment.id).toBe(2)
+    // a refusal is still the answer (null; the reason is in admin.requestError)
+    const refused = track(actions.selectExperiment(3))
+    __receive({ error: 'There is no experiment with id 3.', request: 'SelectExperiment' })
+    await flush()
+    expect(refused).toEqual({ done: true, value: null })
+  })
+
+  it('selecting a session waits for the one that shows it current', async () => {
+    const t = track(actions.selectInstance(5))
+    push({ experimentInstance: inst(4, 'RUNNING') })
+    await flush()
+    expect(t.done).toBe(false)
+    push({ experimentInstance: inst(5, 'RUNNING') })
+    await flush()
+    expect(t.value.experimentInstance.id).toBe(5)
+  })
+
+  it('stopping a session waits until it no longer runs', async () => {
+    const t = track(actions.stopInstance(5))
+    push({ experiment: withSessions(exp(1, 'A'), inst(5, 'RUNNING')) })
+    push({ experiment: withSessions(exp(1, 'A')), experimentInstance: inst(5, 'TESTING') })
+    await flush()
+    expect(t.done).toBe(false)
+    push({ experiment: withSessions(exp(1, 'A'), inst(5, 'STOPPED')) })
+    await flush()
+    expect(t.done).toBe(true)
+    expect(t.value).not.toBe(null)
+    // gone altogether (e.g. another experiment's) counts too
+    const gone = track(actions.stopInstance(8))
+    push({ experiment: withSessions(exp(1, 'A'), inst(5, 'STOPPED')) })
+    await flush()
+    expect(gone.done).toBe(true)
+  })
+
+  it('deleting a session waits until it is gone, and takes a refusal as the answer', async () => {
+    const t = track(actions.deleteInstance(5))
+    push({ experiment: withSessions(exp(1, 'A'), inst(5, 'STOPPED')) })
+    await flush()
+    expect(t.done).toBe(false)
+    push({ experiment: withSessions(exp(1, 'A'), inst(4, 'STOPPED')) })
+    await flush()
+    expect(t.value.experiment.instances.map((i: any) => i.id)).toEqual([4])
+
+    const refused = track(actions.deleteInstance(6))
+    __receive({ error: 'Only finished or stopped sessions can be deleted; stop it first.', request: 'DeleteInstance' })
+    await flush()
+    expect(refused.value).toMatchObject({ request: 'DeleteInstance' })
+  })
+
+  it('deleting an experiment waits until it is gone from the list', async () => {
+    const t = track(actions.deleteExperiment(exp(2, 'B') as any))
+    push({ experiment: exp(1, 'A') })
+    await flush()
+    expect(t.done).toBe(false)
+    push({ experiment: exp(1, 'A') }, [exp(1, 'A')])
+    await flush()
+    expect(t.value.user.experiments.length).toBe(1)
+  })
+
+  it('switching file mode waits until the selected experiment\'s mode changed', async () => {
+    push({ experiment: exp(1, 'A') })
+    const t = track(actions.toggleFileMode())
+    push({ experiment: exp(1, 'A') })
+    // another tab selected another experiment, which is in file mode
+    push({ experiment: { ...exp(2, 'B'), fileMode: true } })
+    await flush()
+    expect(t.done).toBe(false)
+    push({ experiment: { ...exp(1, 'A'), fileMode: true } })
+    await flush()
+    expect(t.value.experiment).toMatchObject({ id: 1, fileMode: true })
+  })
+
+  it('launching waits for the session it named', async () => {
+    const t = track(actions.launch('Pilot 2', {}))
+    push({ experiment: exp(1, 'A'), experimentInstance: inst(4, 'RUNNING') })
+    await flush()
+    expect(t.done).toBe(false)
+    push({ experiment: exp(1, 'A'), experimentInstance: { ...inst(9, 'RUNNING'), name: 'Pilot 2' } })
+    await flush()
+    expect(t.value.experimentInstance.id).toBe(9)
+  })
+})
+
+describe('what the engine runs', () => {
+  const engine = (experimentId: number | null, sessionId: number | null = null) => ({
+    experimentId, experimentName: experimentId === null ? null : 'E' + experimentId, sessionId, sessionName: sessionId === null ? null : 'S' + sessionId, owner: 'other@lab',
+  })
+  const push = (selected: number, eng: any) =>
+    __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(selected, selected === 1 ? 'A' : 'B'), experimentInstance: '', engine: eng })
+  /** A rebuild ends, and the console asks again what the engine runs. */
+  function rebuildEnds () {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+  }
+
+  beforeEach(() => {
+    rebuildEnds()
+    push(1, engine(1))
+  })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('reads it beside the user, and says when it is another experiment', () => {
+    push(1, engine(2, 7))
+    expect(admin.user!.engine).toEqual({ experimentId: 2, experimentName: 'E2', sessionId: 7, sessionName: 'S7', owner: 'other@lab' })
+    expect(engineElsewhere.value).toMatchObject({ experimentId: 2, sessionName: 'S7' })
+    push(2, engine(2, 7))
+    expect(engineElsewhere.value).toBe(null)
+    // nothing loaded, or an older server that does not say
+    push(1, engine(null))
+    expect(engineElsewhere.value).toBe(null)
+    push(1, undefined)
+    expect(admin.user!.engine).toBe(null)
+    expect(engineElsewhere.value).toBe(null)
+  })
+
+  it('does not trust what the reply to a rebuild says, and asks again once the rebuild is done', () => {
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    void actions.selectExperiment(2)
+    // the reply is made before the rebuild: it still names what the engine ran before
+    push(2, engine(1))
+    expect(engineElsewhere.value).toBe(null)
+    expect(admin.engineInfoCurrent).toBe(false)
+    __receive({ notify: { ScriptEngineReloading: 3 } })
+    __receive({ notify: { ScriptEngineReloaded: 4 } })
+    expect(send).toHaveBeenLastCalledWith('Update')
+    push(2, engine(2))
+    expect(admin.engineInfoCurrent).toBe(true)
+    expect(engineElsewhere.value).toBe(null)
+
+    // another account rebuilds it for its own experiment
+    __receive({ notify: { ScriptEngineReloading: 5 } })
+    expect(admin.engineInfoCurrent).toBe(false)
+    __receive({ notify: { ScriptEngineReloaded: 6 } })
+    push(2, engine(1, 9))
+    expect(engineElsewhere.value).toMatchObject({ experimentId: 1, sessionId: 9 })
+  })
+
+  it('asks again at once when a rebuild is refused', () => {
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    void actions.selectInstance(5)
+    expect(admin.engineInfoCurrent).toBe(false)
+    __receive({ error: 'There is no session with id 5.', request: 'SelectInstance' })
+    expect(send).toHaveBeenLastCalledWith('Update')
+    push(1, engine(2))
+    expect(engineElsewhere.value).toMatchObject({ experimentId: 2 })
   })
 })

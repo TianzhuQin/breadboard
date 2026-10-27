@@ -13,20 +13,44 @@ import {
   classifyStartReply, cleanError, detectGameStarted, formatDuration, isLocalOrigin, isStartReply, joinLinks,
   networkStats, safeFileName, waitingRoom,
 } from '../src/pages/session/live'
+import { busy, resumeSession, startGame } from '../src/pages/session/controls'
+import { confirmState, settleConfirm } from '../src/ui/confirm'
+import { toasts } from '../src/ui/toast'
 import type { Parameter } from '../src/store/types'
 
-const store = vi.hoisted(() => ({ launch: vi.fn() }))
+const store = vi.hoisted(() => ({
+  launch: vi.fn(),
+  startGame: vi.fn(() => true),
+  selectInstance: vi.fn(async () => null),
+  ensureConnected: vi.fn(() => true),
+  nextMessage: vi.fn((_match: (m: any) => boolean, _ms?: number): Promise<any> => new Promise(() => {})),
+  confirmEngineRebuild: vi.fn(async () => true),
+  engineUsers: vi.fn(async () => ''),
+}))
 vi.mock('@/store/admin', async () => {
-  const { reactive, computed } = await import('vue')
-  const admin = reactive<any>({ experiment: null, instance: null, output: [], events: [], engineReloadedAt: 0 })
+  const { reactive, computed, ref } = await import('vue')
+  const admin = reactive<any>({ experiment: null, instance: null, output: [], events: [], engineReloadedAt: 0, engine: 'ready', email: 'me@lab.org' })
   return {
     admin,
-    actions: { launch: store.launch },
+    actions: { launch: store.launch, startGame: store.startGame, selectInstance: store.selectInstance },
     instances: computed(() => (admin.experiment?.instances || [])),
-    nextMessage: vi.fn(),
+    nextMessage: store.nextMessage,
+    ensureConnected: store.ensureConnected,
+    engineElsewhere: ref(null),
+    NOT_CONNECTED: 'Not connected to the server',
     graph: { nodes: new Map(), links: new Map(), version: { value: 0 } },
   }
 })
+vi.mock('@/store/engineGuard', () => ({ confirmEngineRebuild: store.confirmEngineRebuild, engineUsers: store.engineUsers }))
+vi.mock('../src/pages/session/autopilot', async () => {
+  const { ref } = await import('vue')
+  return { useAutopilotStatus: () => ref(null), autopilotRuns: () => false }
+})
+vi.mock('vue-router', async (orig) => ({
+  ...(await orig<any>()),
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ replace: vi.fn() }),
+}))
 
 function param (p: Partial<Parameter> & { name: string, type: any }): Parameter {
   return { id: 1, minVal: '', maxVal: '', defaultVal: '', description: '', ...p }
@@ -313,8 +337,8 @@ describe('live session state', () => {
     const out = (kind: any, text: string, at: number) => ({ id: at, kind, text, at })
     const base = { events: [], output: [], since: 0 }
     expect(detectGameStarted(base).started).toBe(false)
-    expect(detectGameStarted({ ...base, hasStarted: true }).source).toBe('server')
-    expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)] })).toEqual({ started: true, source: 'output', at: 50 })
+    expect(detectGameStarted({ ...base, hasStarted: true })).toMatchObject({ started: true, source: 'server', sure: true })
+    expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)] })).toEqual({ started: true, source: 'output', at: 50, sure: true })
     expect(detectGameStarted({ ...base, output: [out('error', 'Caught error: initStep started already', 60)] }).started).toBe(true)
     // a start before the engine reloaded no longer counts
     expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)], since: 100 }).started).toBe(false)
@@ -325,6 +349,21 @@ describe('live session state', () => {
     expect(detectGameStarted({ ...base, events: ev, since: 900000 }).started).toBe(false)
     const auto = mergeEvents([], [{ id: 1, name: 'autopilotStart', datetime: new Date(200000).toISOString(), data: {} }])
     expect(detectGameStarted({ ...base, events: auto }).started).toBe(true)
+  })
+
+  it('takes a start event as certain, unless it can\'t be placed against the last reload', () => {
+    const ev = (name: string, at: number | null, id = 1) => mergeEvents([], [{ id, name, datetime: at === null ? '' : new Date(at).toISOString(), data: {} }])
+    const base = { output: [], since: 0 }
+    // seen live after the autopilot started the game: no reload since, or the start came after it
+    expect(detectGameStarted({ ...base, events: ev('autopilotStart', 200000) })).toMatchObject({ started: true, source: 'events', sure: true })
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', 200000), since: 150000 })).toMatchObject({ started: true, sure: true })
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', null) })).toMatchObject({ started: true, sure: true })
+    // a few seconds before the reload (the clocks may disagree), or at an unknown time after one: unsure
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', 198000), since: 200000 })).toMatchObject({ started: true, sure: false, at: 198000 })
+    expect(detectGameStarted({ ...base, events: ev('InitStepStart', null), since: 200000 })).toMatchObject({ started: true, sure: false })
+    // a sure sign wins over an unsure one
+    const both = mergeFeed(ev('InitStepStart', 198000, 1), ev('autopilotStart', 230000, 2))
+    expect(detectGameStarted({ ...base, events: both, since: 200000 })).toMatchObject({ sure: true, at: 230000 })
   })
 
   it('recognises the engine\'s answer to a start', () => {
@@ -339,6 +378,13 @@ describe('live session state', () => {
     // a reply the server tags as the start's own is, error or not
     expect(isStartReply({ request: 'RunGame', error: 'Caught error: Boom\n' })).toBe(true)
     expect(isStartReply({ request: 'RunGame', error: '', output: 'x' })).toBe(true)
+    // a tag decides: another request's answer or OnJoinStep's frame is never the start's, whatever it says
+    expect(isStartReply({ request: 'SendScript', error: '', output: 'initStep.start()\n\n==>null' })).toBe(false)
+    expect(isStartReply({ source: 'OnJoinStep', error: 'Caught error: initStep started already\n' })).toBe(false)
+    expect(isStartReply({ request: 'RunGame', error: 'Caught error: initStep started already\n' })).toBe(true)
+    expect(classifyStartReply({ request: 'RunGame', error: 'Caught error: initStep started already\n' })).toEqual({ kind: 'already' })
+    expect(classifyStartReply({ request: 'RunGame', error: 'The engine is running another experiment.', output: 'initStep.start()' }))
+      .toEqual({ kind: 'error', message: 'The engine is running another experiment.' })
     expect(classifyStartReply({ request: 'RunGame', error: 'Caught error: Boom\n' })).toEqual({ kind: 'error', message: 'Boom' })
     expect(classifyStartReply({ request: 'RunGame', error: '', output: 'initStep.start()' })).toEqual({ kind: 'started' })
     expect(classifyStartReply({ request: 'RunGame', error: '' })).toEqual({ kind: 'started' })
@@ -372,6 +418,149 @@ describe('live session state', () => {
   })
 })
 
+// ---- the session controls -------------------------------------------------------------------
+
+describe('session controls', () => {
+  let store2: any
+  const ctx = { connected: 2, people: 3, waitingRoom: false }
+  const inst = { id: 5, name: 'Pilot', status: 'STOPPED' } as any
+
+  beforeEach(async () => {
+    store2 = await import('@/store/admin')
+    store2.engineElsewhere.value = null
+    store2.admin.instance = null
+    for (const f of Object.values(store) as any[]) f.mockClear()
+    toasts.splice(0, toasts.length)
+    if (confirmState.open) settleConfirm(false)
+  })
+
+  it('does not ask or send while offline, and says so at once when the connection drops meanwhile', async () => {
+    store.ensureConnected.mockReturnValueOnce(false)
+    await startGame(ctx)
+    expect(confirmState.open).toBe(false)
+    expect(store.startGame).not.toHaveBeenCalled()
+
+    const done = startGame(ctx)
+    expect(confirmState.open).toBe(true)
+    store.startGame.mockReturnValueOnce(false)
+    settleConfirm(true)
+    await done
+    // no 20 s wait for an answer to a request that was never sent
+    expect(busy.start).toBe(false)
+    expect(toasts.some(t => t.title === 'Not connected to the server' && /not started/.test(t.detail || ''))).toBe(true)
+    expect(toasts.some(t => /No answer/.test(t.title))).toBe(false)
+  })
+
+  it('takes the server\'s tagged answer to the start', async () => {
+    store.nextMessage.mockImplementationOnce(async (match: any) => {
+      const m = { request: 'RunGame', error: '', output: 'initStep.start()\n\n==>null' }
+      return match(m) ? m : null
+    })
+    const done = startGame(ctx)
+    settleConfirm(true)
+    await done
+    expect(store.startGame).toHaveBeenCalledTimes(1)
+    expect(toasts.some(t => t.title === 'The game has started')).toBe(true)
+  })
+
+  it('refuses to start while the engine runs another experiment', async () => {
+    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@lab.org' }
+    await startGame(ctx)
+    expect(confirmState.open).toBe(false)
+    expect(store.startGame).not.toHaveBeenCalled()
+    expect(toasts[toasts.length - 1].detail).toMatch(/running “Other study” right now, not this session/)
+  })
+
+  it('names whoever the restart disconnects before resuming', async () => {
+    store.engineUsers.mockResolvedValueOnce('The autopilot has session “Auto 3” open. 4 players are in the network right now.')
+    const done = resumeSession(inst)
+    await flushPromises()
+    expect(confirmState.req!.title).toBe('Resume “Pilot”?')
+    expect(confirmState.req!.message).toMatch(/^The autopilot has session “Auto 3” open/)
+    expect(confirmState.req!.message).toMatch(/every researcher on this server shares/)
+    expect(confirmState.req!.danger).toBe(true)
+    settleConfirm(false)
+    await done
+    expect(store.selectInstance).not.toHaveBeenCalled()
+
+    // nobody using the engine: the plain question
+    const again = resumeSession(inst)
+    await flushPromises()
+    expect(confirmState.req!.danger).toBe(false)
+    expect(confirmState.req!.message).toMatch(/^The experiment's scripts restart/)
+    settleConfirm(false)
+    await again
+  })
+
+  it('does not ask to resume while offline, nor send when the connection drops meanwhile', async () => {
+    store.ensureConnected.mockReturnValueOnce(false)
+    await resumeSession(inst)
+    expect(store.engineUsers).not.toHaveBeenCalled()
+    expect(confirmState.open).toBe(false)
+
+    const done = resumeSession(inst)
+    await flushPromises()
+    store.ensureConnected.mockReturnValueOnce(false)
+    settleConfirm(true)
+    await done
+    expect(store.selectInstance).not.toHaveBeenCalled()
+    expect(busy.resume).toBe(null)
+  })
+})
+
+// ---- the live session page ---------------------------------------------------------------------
+
+describe('SessionPage', () => {
+  let store2: any
+  const stubs = { NewSessionDialog: true, NoSession: true, EventFeed: true, JoinLinks: true, NetworkPreview: true, SessionParams: true, RouterLink: true }
+  const startEvent = (name: string, at: number) => ({ id: at, name, datetime: new Date(at).toISOString(), data: {} })
+
+  beforeEach(async () => {
+    store2 = await import('@/store/admin')
+    store2.engineElsewhere.value = null
+    store2.admin.experiment = { id: 12, name: 'Exp', instances: [], parameters: [] }
+    store2.admin.instance = { id: 9, name: 'Live one', status: 'RUNNING', creationTime: '', data: [], events: [] }
+    store2.admin.events = []
+    store2.admin.output = []
+    store2.admin.engineReloadedAt = 0
+  })
+
+  async function mountPage () {
+    const SessionPage = (await import('../src/pages/session/SessionPage.vue')).default
+    return mount(SessionPage, { global: { stubs } })
+  }
+  const startButton = (w: VueWrapper) => w.findAll('button').find(b => b.text().includes('Start the game'))
+
+  it('shows no "start anyway" once the autopilot\'s start is in the feed', async () => {
+    store2.admin.engineReloadedAt = Date.now() - 60000
+    store2.admin.events = [startEvent('InitStepStart', Date.now() - 1000), startEvent('autopilotStart', Date.now() - 1000)]
+    const w = await mountPage()
+    expect(w.text()).toContain('Game started')
+    expect(w.text()).not.toContain('Start it anyway')
+    w.unmount()
+  })
+
+  it('keeps "start anyway" when the start may be from before the engine reloaded', async () => {
+    store2.admin.engineReloadedAt = Date.now()
+    store2.admin.events = [startEvent('InitStepStart', Date.now() - 2000)]
+    const w = await mountPage()
+    expect(w.text()).toContain('Start it anyway')
+    expect(w.text()).toContain('may not be running now')
+    w.unmount()
+  })
+
+  it('disables Start the game while the engine runs another experiment, and says why', async () => {
+    const w = await mountPage()
+    expect(startButton(w)!.attributes('disabled')).toBeUndefined()
+    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@lab.org' }
+    await nextTick()
+    expect(startButton(w)!.attributes('disabled')).toBeDefined()
+    expect(startButton(w)!.attributes('title')).toMatch(/running “Other study” right now/)
+    expect(w.find('.live-hero__explain').text()).toMatch(/running “Other study” right now, not this session/)
+    w.unmount()
+  })
+})
+
 // ---- the new-session dialog ------------------------------------------------------------------
 
 describe('NewSessionDialog', () => {
@@ -390,6 +579,8 @@ describe('NewSessionDialog', () => {
   beforeEach(async () => {
     admin = (await import('@/store/admin')).admin
     store.launch.mockReset()
+    store.ensureConnected.mockClear()
+    store.confirmEngineRebuild.mockClear()
     admin.instance = null
     admin.experiment = {
       id: 12,
@@ -472,6 +663,28 @@ describe('NewSessionDialog', () => {
     await open()
     expect(text()).toContain('“Live one” is running.')
     expect(text()).toContain('Stop it and create')
+  })
+
+  it('asks before rebuilding the shared engine, and creates nothing when declined', async () => {
+    admin.instance = { id: 9, name: 'Live one', status: 'RUNNING' }
+    await open()
+    await numberInput().setValue('3')
+    store.confirmEngineRebuild.mockResolvedValueOnce(false)
+    await submit()
+    expect(store.confirmEngineRebuild).toHaveBeenCalledWith({ title: 'Create “Session 2” now?', action: 'Creating a session', confirmLabel: 'Stop it and create' })
+    expect(store.launch).not.toHaveBeenCalled()
+    store.launch.mockResolvedValue({ user: {} })
+    await submit()
+    expect(store.launch).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends nothing while offline', async () => {
+    await open()
+    await numberInput().setValue('3')
+    store.ensureConnected.mockReturnValueOnce(false)
+    await submit()
+    expect(store.confirmEngineRebuild).not.toHaveBeenCalled()
+    expect(store.launch).not.toHaveBeenCalled()
   })
 
   it('rejects a name another session already has', async () => {

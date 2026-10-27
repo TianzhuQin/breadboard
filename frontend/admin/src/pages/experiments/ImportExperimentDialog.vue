@@ -96,6 +96,7 @@ import {
   checkExperimentZip, describeError, importNameFromFile, importUrl, manifestName, plural, readBytes, validateExperimentName,
   type ZipCheck,
 } from './experiments'
+import { switchToNew } from './switchTo'
 
 const props = defineProps<{ open: boolean, initialFile?: File | null }>()
 const emit = defineEmits<{ 'update:open': [v: boolean], imported: [exp: Experiment] }>()
@@ -221,8 +222,8 @@ async function submit () {
     const imported = await http.post<Experiment>(importUrl(finalName), body)
     const id = imported && typeof imported.id === 'number' ? imported.id : null
     if (switchTo.value && !running.value && id != null) {
-      await actions.selectExperiment(id)
-      notify.success(`Imported “${finalName}”`, 'You are now working on it.')
+      // (switching sends the new list too)
+      if (!await switchToNew(id, finalName, `Imported “${finalName}”`)) await actions.refresh()
     } else {
       // nothing else pushes the new list (the old console showed it only after a reload)
       await actions.refresh()

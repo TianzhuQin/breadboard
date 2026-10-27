@@ -1,10 +1,11 @@
 import { reactive, ref } from 'vue'
-import { admin, actions, nextMessage } from '@/store/admin'
+import { admin, actions, engineElsewhere, ensureConnected, nextMessage, NOT_CONNECTED } from '@/store/admin'
+import { engineUsers } from '@/store/engineGuard'
 import { http, saveText } from '@/lib/http'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Instance } from '@/store/types'
-import { classifyStartReply, isStartReply, safeFileName } from './live'
+import { classifyStartReply, engineElsewhereText, isStartReply, safeFileName } from './live'
 
 /**
  * The session controls with their confirmations and outcomes, shared by the page's parts.
@@ -28,6 +29,13 @@ export const busy = reactive({
 /** RunGame = initStep.start(): everyone waiting is let in and newcomers are turned away. */
 export async function startGame (ctx: { connected: number, people: number, waitingRoom: boolean }) {
   if (busy.start) return
+  // the server refuses to start a session the engine isn't running (the page disables the button too)
+  const elsewhere = engineElsewhere.value
+  if (elsewhere) {
+    notify.info('The game can\'t be started here', engineElsewhereText(elsewhere))
+    return
+  }
+  if (!ensureConnected()) return
   const who = ctx.people === 0
     ? 'Nobody has joined yet, so the game would start with no one in it.'
     : `${ctx.connected} of ${ctx.people} ${ctx.people === 1 ? 'person is' : 'people are'} connected right now.`
@@ -46,7 +54,11 @@ export async function startGame (ctx: { connected: number, people: number, waiti
   try {
     // listen before sending so the answer can't slip past
     const reply = nextMessage(isStartReply, 20000)
-    actions.startGame()
+    if (!actions.startGame()) {
+      // the connection dropped while the confirmation was open: nothing was sent
+      notify.error(NOT_CONNECTED, 'The game was not started. Try again once the connection is back.')
+      return
+    }
     const out = classifyStartReply(await reply)
     if (out.kind === 'started') {
       notify.success('The game has started', 'Everyone who was waiting is in. New arrivals are turned away.')
@@ -93,20 +105,26 @@ export async function stopSession (inst: Instance) {
 
 /** SelectInstance: make a stopped session current again and restart it (rebuilds the engine). */
 export async function resumeSession (inst: Instance) {
-  if (busy.resume != null) return
+  if (busy.resume != null || !ensureConnected()) return
   const cur = admin.instance
   const other = cur && cur.id !== inst.id && (cur.status === 'RUNNING' || cur.status === 'TESTING') ? cur : null
+  // The engine is shared by every account and the autopilot: say whose session and players the
+  // restart disconnects ('' when nobody is using it). It names your running session too.
+  const users = await engineUsers()
   const ok = await confirm({
     title: `Resume “${inst.name}”?`,
     message: [
-      'The experiment\'s scripts restart from its steps: the network is emptied and anyone still connected is disconnected. People can then join again with the session\'s links.',
+      users && other ? `${users} “${other.name}” will be stopped.` : users || (other ? `“${other.name}” is running now and will be stopped.` : ''),
+      users
+        ? 'Resuming restarts the script engine, which every researcher on this server shares: the network is emptied and everyone in it is disconnected, whoever\'s session they are in. People can then join again with this session\'s links.'
+        : 'The experiment\'s scripts restart from its steps: the network is emptied and anyone still connected is disconnected. People can then join again with the session\'s links.',
       'Data recorded so far is kept.',
-      other ? `“${other.name}” is running now and will be stopped.` : '',
     ].filter(Boolean).join('\n\n'),
     confirmLabel: 'Resume session',
-    danger: !!other,
+    danger: !!users || !!other,
   })
-  if (!ok) return
+  // (the connection may have dropped while the confirmation was open)
+  if (!ok || !ensureConnected()) return
   busy.resume = inst.id
   try {
     const running = nextMessage(m => !!m && ((m.request === 'SelectInstance' && typeof m.error === 'string') ||

@@ -64,7 +64,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref } from 'vu
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { ArrowRight, Check, CircleAlert, FileLock2, Info, RotateCw, Save } from 'lucide-vue-next'
 import { BButton, confirm, notify } from '@/ui'
-import { actions, running } from '@/store/admin'
+import { actions, admin, ensureConnected } from '@/store/admin'
+import { confirmEngineRebuild } from '@/store/engineGuard'
 import { CONTENT, dropKeptDrafts, useContent } from './useContent'
 import LanguageBar from './LanguageBar.vue'
 import ContentList from './ContentList.vue'
@@ -116,20 +117,20 @@ function onCreated () {
   setTimeout(() => editor.value?.focus(), 350)
 }
 
+/** Switching rebuilds the shared engine, so ask first while anyone is using it. */
 async function switchTo (id: number, name: string) {
-  if (running.value) {
-    const ok = await confirm({
-      title: `Switch to “${name}”?`,
-      message: 'Switching experiments reloads the script engine: everyone in the running session is disconnected.',
-      confirmLabel: 'Switch experiment',
-      danger: true,
-    })
-    if (!ok) return
-  }
+  if (switching.value !== null || !ensureConnected()) return
+  if (!await confirmEngineRebuild({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
   switching.value = id
+  const asked = Date.now()
   try {
     const res = await actions.selectExperiment(id)
-    if (!res) notify.warning('The server didn’t confirm the switch', 'Check the experiment switcher at the top left.')
+    if (!res) {
+      // the server's reason when it refused (a refusal resolves null at once)
+      const refusal = admin.requestError
+      const why = refusal && refusal.request === 'SelectExperiment' && refusal.at >= asked ? refusal.text : 'Check the experiment switcher at the top left.'
+      notify.warning('The server didn’t confirm the switch', why)
+    }
   } finally {
     switching.value = null
   }

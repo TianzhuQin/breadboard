@@ -5,6 +5,9 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import AppShell from '../src/shell/AppShell.vue'
 import OutputDrawer from '../src/shell/OutputDrawer.vue'
 import ExperimentSwitcher from '../src/shell/ExperimentSwitcher.vue'
+import EngineNotice from '../src/shell/EngineNotice.vue'
+import AccountMenu from '../src/shell/AccountMenu.vue'
+import { registerUnsaved, unsavedTotal, confirmSignOut } from '../src/shell/unsaved'
 import { admin, actions, connection, graph, __receive } from '../src/store/admin'
 import { isStaleBuildError, onStaleBuild } from '../src/router'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
@@ -186,5 +189,144 @@ describe('switching experiments on the shared engine', () => {
     expect(confirmState.open).toBe(false)
     expect(send).not.toHaveBeenCalled()
     expect(toasts.some(t => t.title === 'Not connected to the server')).toBe(true)
+  })
+})
+
+describe('the engine running another experiment', () => {
+  const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
+  const engine = (experimentId: number, experimentName: string, sessionName: string | null, owner = 'other@lab') =>
+    ({ experimentId, experimentName, sessionId: sessionName ? 40 : null, sessionName, owner })
+  /** The account has A and B, with A selected; the engine runs `eng` (as known after a rebuild ended). */
+  function state (eng: any, list = [exp(1, 'A'), exp(2, 'B')]) {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    __receive({ user: { email: 'r@lab', experiments: list, currentScript: '' }, experiment: exp(1, 'A'), experimentInstance: '', engine: eng })
+  }
+  const text = (w: any) => w.text().replace(/\s+/g, ' ').trim()
+
+  afterEach(() => { connection.state.value = 'idle' })
+
+  it('says what the engine runs, and switches to it after asking', async () => {
+    admin.email = 'r@lab'
+    graph.clear()
+    state(engine(2, 'B', 'Pilot 3'))
+    const w = mount(EngineNotice, { attachTo: document.body })
+    await nextTick()
+    expect(text(w)).toContain('The engine is running B’s session Pilot 3 (other@lab). Live controls here act on nothing until you switch.')
+    expect(w.attributes('role')).toBe('status')
+    const btn = w.find('button')
+    expect(btn.text()).toBe('Switch to B')
+
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    await btn.trigger('click')
+    // switching rebuilds the engine, which ends the session it runs
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.title).toBe('Switch to “B”?')
+    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 3” of “B” running.')
+    settleConfirm(true)
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
+    // the switch done: the reply, the rebuild, and what the engine runs now
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine: engine(2, 'B', 'Pilot 3') })
+    __receive({ notify: { ScriptEngineReloading: 3 } })
+    __receive({ notify: { ScriptEngineReloaded: 4 } })
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine: engine(2, 'B', null, 'r@lab') })
+    await nextTick()
+    expect(w.find('.engine-notice').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('switches without asking when nobody uses the engine', async () => {
+    graph.clear()
+    state(engine(2, 'B', null, 'r@lab'))
+    const w = mount(EngineNotice, { attachTo: document.body })
+    await nextTick()
+    expect(text(w)).toContain('The engine has B loaded, with no session running (your account).')
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    await w.find('button').trigger('click')
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
+    expect(confirmState.open).toBe(false)
+    w.unmount()
+  })
+
+  it('offers no switch to another account\'s experiment', async () => {
+    state(engine(9, 'Their study', 'Wave 2'))
+    const w = mount(EngineNotice, { attachTo: document.body })
+    await nextTick()
+    expect(text(w)).toContain('The engine is running Their study’s session Wave 2 (other@lab). Live controls here act on nothing for now.')
+    expect(w.find('button').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('stays out of the way when the engine runs the selected experiment, or is reloading', async () => {
+    state(engine(1, 'A', 'Pilot'))
+    const w = mount(EngineNotice, { attachTo: document.body })
+    await nextTick()
+    expect(w.find('.engine-notice').exists()).toBe(false)
+    state(engine(2, 'B', 'Pilot'))
+    await nextTick()
+    expect(w.find('.engine-notice').exists()).toBe(true)
+    __receive({ notify: { ScriptEngineReloading: 5 } })
+    await nextTick()
+    expect(w.find('.engine-notice').exists()).toBe(false)
+    __receive({ notify: { ScriptEngineReloaded: 6 } })
+    w.unmount()
+  })
+})
+
+describe('signing out with unsaved work', () => {
+  it('asks only while there is unsaved work, and says what it is', async () => {
+    let drafts = 2
+    const offSteps = registerUnsaved('steps', () => drafts, 'Steps')
+    const offContent = registerUnsaved('content', () => 0, 'Content')
+    const offBroken = registerUnsaved('broken', () => { throw new Error('boom') })
+    expect(unsavedTotal()).toBe(2)
+
+    const answer = confirmSignOut()
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.req).toMatchObject({ title: 'Sign out with 2 unsaved changes?', confirmLabel: 'Sign out anyway', danger: true })
+    expect(confirmState.req!.message).toContain('Not saved yet: Steps (2).')
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+
+    // the same key again replaces it; the old one's unregister then does nothing
+    const offSteps2 = registerUnsaved('steps', () => 1, 'Steps')
+    offSteps()
+    expect(unsavedTotal()).toBe(1)
+    offSteps2()
+    drafts = 5
+    expect(unsavedTotal()).toBe(0)
+    expect(await confirmSignOut()).toBe(true)
+    expect(confirmState.open).toBe(false)
+    offContent()
+    offBroken()
+  })
+
+  it('the account menu signs out only once the researcher agrees', async () => {
+    const off = registerUnsaved('content', () => 1, 'Content')
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const signOut = async () => {
+      const w = mount(AccountMenu, { attachTo: document.body })
+      await w.find('.acct').trigger('click')
+      await nextTick()
+      await w.findAll('[role=menuitem]').find(b => b.text().includes('Sign out'))!.trigger('click')
+      await vi.waitFor(() => expect(confirmState.open).toBe(true))
+      expect(confirmState.req!.title).toBe('Sign out with an unsaved change?')
+      return w
+    }
+    let w = await signOut()
+    settleConfirm(false)
+    await tick()
+    expect(fetch.mock.calls.some(c => String(c[0]).includes('/logout'))).toBe(false)
+    w.unmount()
+
+    w = await signOut()
+    settleConfirm(true)
+    await vi.waitFor(() => expect(fetch.mock.calls.some(c => String(c[0]).includes('/logout'))).toBe(true))
+    w.unmount()
+    off()
   })
 })

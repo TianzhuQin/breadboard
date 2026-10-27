@@ -57,6 +57,12 @@ public class AutopilotSessionTest extends BaseTest {
         m.invoke(null);
     }
 
+    /** Whether the user has the experiment selected (false while the selection is not saved yet). */
+    private static boolean selected(User user, Experiment experiment) {
+        Experiment selection = User.findByEmail(user.email).selectedExperiment;
+        return selection != null && experiment.id.equals(selection.id);
+    }
+
     private static void await(String what, Callable<Boolean> condition) throws Exception {
         long until = System.currentTimeMillis() + 30000;
         while (System.currentTimeMillis() < until) {
@@ -205,7 +211,7 @@ public class AutopilotSessionTest extends BaseTest {
         tab.send("LogIn");
         await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
         tab.send("SelectExperiment", "experimentId", manual.id);
-        await("the selection", () -> manual.id.equals(User.findByEmail(researcher.email).selectedExperiment.id));
+        await("the selection", () -> selected(researcher, manual));
         tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
         await("the manual session", () -> sessions(manual).size() == 1
             && sessions(manual).get(0).status == ExperimentInstance.Status.RUNNING);
@@ -251,7 +257,7 @@ public class AutopilotSessionTest extends BaseTest {
         tab.send("LogIn");
         await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
         tab.send("SelectExperiment", "experimentId", manual.id);
-        await("the selection", () -> manual.id.equals(User.findByEmail(researcher.email).selectedExperiment.id));
+        await("the selection", () -> selected(researcher, manual));
         tab.send("LaunchGame", "name", "live", "parameters", Json.newObject());
         await("the live session", () -> sessions(manual).size() == 1
             && sessions(manual).get(0).status == ExperimentInstance.Status.RUNNING);

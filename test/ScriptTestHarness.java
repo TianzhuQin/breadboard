@@ -79,20 +79,22 @@ public class ScriptTestHarness {
         new ConcurrentHashMap<String, String>();
 
     /**
-     * Shared across all harnesses, cleared in each constructor. events.groovy installs
+     * The JVM's one script bus ({@link EventBus#forScripts}), the same instance the server's engine
+     * binds, cleared in each constructor. events.groovy installs
      * {@code Vertex.metaClass.on/once/off/send} -- JVM-global metaclass mutations whose closures
-     * permanently capture the {@code events} binding of the FIRST harness to evaluate events.groovy
+     * permanently capture the {@code events} binding of the FIRST engine to evaluate events.groovy
      * (re-assigning a global metaclass method from a later engine does NOT replace the closure). With a
-     * per-harness {@code new EventBus()}, every harness after the first desynced: {@code player.on(...)}
-     * routed through the stale metaclass closure registered listeners on the first harness's bus, while
-     * that harness's own CustomEvent handler emitted on its own bus -- so player-scoped events never
-     * delivered and group choices never resolved (in ANY harness after the first, on any thread). A
-     * single shared bus keeps the metaclass closure and every harness pointed at the same instance;
-     * clearing it per harness keeps listeners from leaking between cases. This matches production, which
-     * uses one static EventBus for the life of the engine. Safe because tests run sequentially
-     * (parallelExecution in Test := false).
+     * bus of its own, every engine after the first desynced: {@code player.on(...)} routed through the
+     * stale metaclass closure registered listeners on the first engine's bus, while this engine's own
+     * CustomEvent handler emitted on its own bus -- so player-scoped events never delivered and group
+     * choices never resolved. That first engine may be another harness or, when engine tests such as
+     * AdminSocketsTest ran earlier in the same JVM, the server's own ScriptBoard engine; a bus of the
+     * harness's own (as before) then failed ~20 Groovy event tests depending on test order. One bus for
+     * every engine keeps the metaclass closures and every engine pointed at the same instance; clearing
+     * it per harness keeps listeners from leaking between cases (ScriptBoard clears it on every rebuild
+     * too). Safe because tests run sequentially (parallelExecution in Test := false).
      */
-    private static final EventBus SHARED_EVENTS = new EventBus();
+    private static final EventBus SHARED_EVENTS = EventBus.forScripts();
 
     public final ScriptEngine engine;
     public final EventTracker eventTracker;

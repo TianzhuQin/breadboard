@@ -4,7 +4,7 @@ import { http, HttpError, onUnauthorized } from '@/lib/http'
 import { LiveGraph } from '@/lib/graph'
 import { notify } from '@/ui/toast'
 import type {
-  AuthState, EngineState, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
+  AuthState, EngineInfo, EngineState, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
 } from './types'
 
 /**
@@ -36,6 +36,8 @@ const state = reactive({
   engineReloadedAt: 0,
   /** Why the engine needs a reload when it is not (only) about changed steps; '' otherwise. */
   engineProblem: '',
+  /** Whether user.engine says what the engine runs now (false from a rebuild until it is asked again). */
+  engineInfoCurrent: true,
   /** Everything the engine said, newest last (capped). */
   output: [] as OutputEntry[],
   unseenErrors: 0,
@@ -95,6 +97,7 @@ function handle (m: any) {
       state.engine = 'loading'
       state.engineProblem = ''
       armEngineWatchdog()
+      engineInfoOutdated()
       // the engine empties the network when it rebuilds
       graph.clear()
     }
@@ -104,19 +107,28 @@ function handle (m: any) {
       state.engineProblem = ''
       state.engineReloadedAt = Date.now()
       setTimeout(() => { if (state.engine === 'loaded') state.engine = 'ready' }, 2500)
+      askEngineInfo()
     }
-    // (a newer server tells every console when a rebuild fails)
-    if (m.notify.ScriptEngineReloadFailed && state.engine === 'loading') engineDidNotFinish(ENGINE_FAILED)
+    // every console hears when a rebuild fails, with the reason (it may not be the one that asked)
+    if (m.notify.ScriptEngineReloadFailed) {
+      const why = reloadFailedText(m.notify.ScriptEngineReloadFailed)
+      if (why || !state.engineProblem) engineDidNotFinish(why || ENGINE_FAILED_ELSEWHERE)
+      askEngineInfo()
+    }
   }
+  // what the frame answers (SendScript, SendStep, RunGame …) or where it came from (OnJoinStep, OnLeaveStep)
+  const source = typeof m.source === 'string' ? m.source : typeof m.request === 'string' ? m.request : undefined
   if (typeof m.error === 'string' && m.error.trim()) {
-    pushOutput('error', m.error.trim(), typeof m.request === 'string' ? m.request : undefined)
+    pushOutput('error', m.error.trim(), source)
     if (typeof m.request === 'string') state.requestError = { request: m.request, text: m.error.trim(), at: Date.now() }
     // a rebuild that threw: the server answers only the console that asked, and never says Reloaded
     if (state.engine === 'loading' && REBUILDS.has(m.request)) engineDidNotFinish(ENGINE_FAILED)
+    // a refused rebuild changed nothing, and one that threw may have changed something
+    if (REBUILDS.has(m.request) && engineInfoPhase === 'rebuilding') askEngineInfo()
     if (m.status === 'unauthorized' || /^You are not signed in/.test(m.error)) void refreshSignIn(state.uid)
   }
   if (typeof m.output === 'string' && m.output.trim()) {
-    pushOutput('output', m.output.trim())
+    pushOutput('output', m.output.trim(), source)
   }
   if (m.tieEdit) {
     state.lastTieEdit = { ...m.tieEdit, at: Date.now() }
@@ -135,7 +147,7 @@ function handle (m: any) {
 function isSelectedSessionEvent (ev: any): boolean {
   const inst = state.instance
   if (!inst) return false
-  const id = 'instanceId' in ev ? ev.instanceId : ev.experimentInstanceId
+  const id = ev.experimentInstanceId
   if (id !== undefined) return id !== null && id !== '' && Number(id) === inst.id
   return inst.status === 'RUNNING' || inst.status === 'TESTING'
 }
@@ -145,6 +157,7 @@ function isSelectedSessionEvent (ev: any): boolean {
 /** Requests that rebuild the engine; an error in reply means the rebuild did not finish. */
 const REBUILDS = new Set(['ReloadEngine', 'SelectExperiment', 'SelectInstance', 'LaunchGame'])
 const ENGINE_FAILED = 'The engine did not finish reloading. The output panel says why. Fix the problem, then reload it.'
+const ENGINE_FAILED_ELSEWHERE = 'The engine did not finish reloading. Reload it to try again.'
 const ENGINE_MISSED = 'The connection dropped while the engine was reloading. Reload it if the experiment does not behave as expected.'
 const ENGINE_SILENT = 'The engine has not said that it finished reloading. Reload it if the experiment does not respond.'
 /** A rebuild that never says it finished is taken as failed after this long. */
@@ -168,9 +181,65 @@ function engineDidNotFinish (why: string) {
   state.engine = 'stale'
   state.engineProblem = why
 }
+/** The problem to show for {notify: {ScriptEngineReloadFailed: reason}}; '' when it gives no reason in words. */
+function reloadFailedText (reason: unknown): string {
+  let text = typeof reason === 'string' ? reason.trim() : ''
+  if (!text) return ''
+  if (text.length > 300) text = text.slice(0, 299) + '…'
+  return `The engine did not finish reloading: ${text}${/[.!?…]$/.test(text) ? '' : '.'} Fix the problem, then reload it.`
+}
 // A reload under way when the connection dropped: how it ended went to the old socket. (If it is
 // still going, its "Reloaded" arrives on the new one.)
-watch(conn.state, (s) => { if (s === 'open' && state.engine === 'loading') engineDidNotFinish(ENGINE_MISSED) }, { flush: 'sync' })
+watch(conn.state, (s) => {
+  if (s !== 'open') return
+  if (state.engine === 'loading') engineDidNotFinish(ENGINE_MISSED)
+  // the server answers every (re)connect's LogIn with a fresh User JSON
+  if (engineInfoPhase !== 'current') engineInfoPhase = 'asked'
+}, { flush: 'sync' })
+
+// ---- what the engine runs ---------------------------------------------------------------------
+
+/**
+ * The User JSON says what the shared engine runs (`engine`), as it is when the JSON is made. The
+ * reply to a request that rebuilds the engine is made before the rebuild (Breadboard.java hands the
+ * rebuild to the engine's actor and answers at once), so it still names what ran before, and
+ * nothing is sent when the rebuild has changed it. So from the moment a rebuild is asked for or
+ * announced, the engine info is out of date (admin.engineInfoCurrent); once the rebuild has ended,
+ * ask for the User JSON again, and the next one is current.
+ */
+let engineInfoPhase: 'current' | 'rebuilding' | 'asked' = 'current'
+let engineInfoTimer: ReturnType<typeof setTimeout> | null = null
+/** A rebuild this console asked for that is never announced (nor refused) is taken as not happening after this long. */
+const ENGINE_INFO_WAIT_MS = 15000
+
+function engineInfoOutdated () {
+  engineInfoPhase = 'rebuilding'
+  state.engineInfoCurrent = false
+  if (engineInfoTimer) clearTimeout(engineInfoTimer)
+  engineInfoTimer = setTimeout(() => {
+    engineInfoTimer = null
+    if (engineInfoPhase === 'rebuilding' && state.engine !== 'loading') askEngineInfo()
+  }, ENGINE_INFO_WAIT_MS)
+}
+function askEngineInfo () {
+  if (engineInfoTimer) clearTimeout(engineInfoTimer)
+  engineInfoTimer = null
+  engineInfoPhase = 'asked'
+  // (when the connection is down, the LogIn after it comes back is answered with a User JSON too)
+  conn.send('Update')
+}
+function engineInfoOf (v: any): EngineInfo | null {
+  if (!v || typeof v !== 'object') return null
+  const num = (x: any) => (typeof x === 'number' ? x : null)
+  const str = (x: any) => (typeof x === 'string' && x ? x : null)
+  return {
+    experimentId: num(v.experimentId),
+    experimentName: str(v.experimentName),
+    sessionId: num(v.sessionId),
+    sessionName: str(v.sessionName),
+    owner: str(v.owner),
+  }
+}
 
 /**
  * The server sends times as local wall-clock text ("2026-10-27 14:03:05,123") and, newer, the same
@@ -190,6 +259,12 @@ function preferUtcTimes (v: any, depth = 0) {
 
 function applyUserJson (m: any) {
   preferUtcTimes(m)
+  // the server sends it beside the user (User.toJson)
+  m.user.engine = engineInfoOf('engine' in m ? m.engine : m.user.engine)
+  if (engineInfoPhase === 'asked') {
+    engineInfoPhase = 'current'
+    state.engineInfoCurrent = true
+  }
   state.user = m.user
   // missing key = nothing selected (User.java omits it)
   state.experiment = m.experiment && typeof m.experiment === 'object' ? m.experiment : null
@@ -223,6 +298,10 @@ function resetState () {
   state.engine = 'ready'
   state.engineProblem = ''
   state.engineReloadedAt = 0
+  state.engineInfoCurrent = true
+  engineInfoPhase = 'current'
+  if (engineInfoTimer) clearTimeout(engineInfoTimer)
+  engineInfoTimer = null
   clearEngineWatchdog()
   graph.clear()
   const pending = waiters
@@ -240,6 +319,8 @@ function signedOut (body?: any) {
 onUnauthorized((body) => signedOut(body))
 
 type StateReply = { uid: string, email: string, connectSocket: string }
+/** The socket address /state gave (see connection.socketUrl), to reconnect with. */
+let socketSetting: string | undefined
 
 async function boot () {
   state.auth = 'checking'
@@ -252,6 +333,7 @@ async function boot () {
     state.email = cfg.email
     state.auth = 'signedIn'
     state.ready = false
+    socketSetting = cfg.connectSocket
     graph.clear()
     conn.start(cfg.uid, cfg.connectSocket)
   } catch (e: any) {
@@ -283,6 +365,7 @@ async function refreshSignIn (refusedUid: string | null) {
     }
     if (cfg.email !== state.email) { await boot(); return }
     state.uid = cfg.uid
+    socketSetting = cfg.connectSocket
     conn.start(cfg.uid, cfg.connectSocket)
     if (refusedUid) notify.info('Reconnected', 'You signed in again in another tab, so this tab reconnected. Try your last action again.')
   } catch (e: any) {
@@ -306,6 +389,19 @@ if (typeof window !== 'undefined') {
     if (state.auth === 'signedIn') void (signedInThere ? refreshSignIn(null) : boot())
     else if (signedInThere) void boot()
   })
+}
+
+/**
+ * Changing the password gives the account a new uid (the server answers /saveUserSettings with it),
+ * and the server refuses every request that carries the old one: use the new one from now on and
+ * reconnect with it. The account's other tabs are told to follow.
+ */
+function adoptUid (uid: string) {
+  if (!uid || uid === state.uid) return
+  state.uid = uid
+  if (state.auth !== 'signedIn') return
+  conn.start(uid, socketSetting)
+  tellOtherTabs('in')
 }
 
 async function login (email: string, password: string) {
@@ -346,25 +442,35 @@ function ensureConnected (): boolean {
 
 /** Send a request; false (with admin.requestError saying so) when the connection is down. */
 function send (action: string, payload: Record<string, any> = {}): boolean {
-  if (conn.send(action, payload)) return true
-  state.requestError = { request: action, text: NOT_CONNECTED, at: Date.now() }
-  return false
+  if (!conn.send(action, payload)) {
+    state.requestError = { request: action, text: NOT_CONNECTED, at: Date.now() }
+    return false
+  }
+  if (REBUILDS.has(action)) engineInfoOutdated()
+  return true
 }
 
 const isUserJson = (m: any) => 'user' in m && m.user && typeof m.user === 'object'
 const isErrorFor = (request: string) => (m: any) => typeof m.error === 'string' && m.request === request
+/** The sessions of the experiment a User JSON shows selected ([] when none is). */
+const instancesIn = (m: any): any[] => (m.experiment && Array.isArray(m.experiment.instances) ? m.experiment.instances : [])
+const isLive = (i: any) => !!i && (i.status === 'RUNNING' || i.status === 'TESTING')
 
 /** Wait for the server's next User JSON (most actions end with one). */
 function nextUserJson (ms = 20000) {
   return nextMessage(isUserJson, ms)
 }
 /**
- * Wait for the User JSON that follows `request`, or the error the server sends instead.
+ * Wait for the User JSON that shows `request` done (`done`), or the error the server sends instead.
  * Resolves with the User JSON, the error message when `errorsCount` (it is an answer too), or null.
+ *
+ * The server also sends the User JSON to every tab of the account after another tab's action,
+ * unasked, so any User JSON is not necessarily the answer: each action waits for the one that
+ * shows what it asked for.
  */
-async function replyTo (request: string, ms: number, errorsCount = false, match: (m: any) => boolean = isUserJson) {
+async function replyTo (request: string, ms: number, done: (m: any) => boolean, errorsCount = false) {
   const isError = isErrorFor(request)
-  const m = await nextMessage(x => match(x) || isError(x), ms)
+  const m = await nextMessage(x => (isUserJson(x) && done(x)) || isError(x), ms)
   if (m && isError(m) && !errorsCount) return null
   return m
 }
@@ -372,29 +478,32 @@ async function replyTo (request: string, ms: number, errorsCount = false, match:
 // While the connection is down nothing is sent: the actions that wait for an answer resolve null at
 // once (admin.requestError says why), the others return false.
 const actions = {
+  /** Resolves with the User JSON that shows it selected; null when refused or no answer. */
   selectExperiment (id: number) {
     if (!send('SelectExperiment', { experimentId: id })) return Promise.resolve(null)
-    return replyTo('SelectExperiment', 20000)
+    return replyTo('SelectExperiment', 20000, m => !!m.experiment && m.experiment.id === id)
   },
   /** Create and start a session of the selected experiment. */
   launch (name: string, parameters: Record<string, string | number | boolean>) {
     if (!send('LaunchGame', { experimentId: state.experiment?.id, name, parameters })) return Promise.resolve(null)
     // a refused launch ({"error", "request": "LaunchGame"}) resolves null at once; the reason is in admin.requestError
-    return replyTo('LaunchGame', 60000, false, m => isUserJson(m) && m.experimentInstance && m.experimentInstance.name === name)
+    return replyTo('LaunchGame', 60000, m => !!m.experimentInstance && m.experimentInstance.name === name)
   },
   /** Make a session the current one and (re)start it; rebuilds the engine. */
   selectInstance (id: number) {
     if (!send('SelectInstance', { id })) return Promise.resolve(null)
-    return replyTo('SelectInstance', 60000)
+    return replyTo('SelectInstance', 60000, m => !!m.experimentInstance && m.experimentInstance.id === id)
   },
+  /** Resolves with the User JSON in which the session no longer runs (or is gone); null when refused or no answer. */
   stopInstance (id: number) {
     if (!send('StopGame', { id })) return Promise.resolve(null)
-    return replyTo('StopGame', 20000)
+    return replyTo('StopGame', 20000, m => !instancesIn(m).some(i => i.id === id && isLive(i)) &&
+      !(m.experimentInstance && m.experimentInstance.id === id && isLive(m.experimentInstance)))
   },
-  /** Resolves with the User JSON, or with the server's refusal ({error, request}); null when no answer. */
+  /** Resolves with the User JSON without the session, or with the server's refusal ({error, request}); null when no answer. */
   deleteInstance (id: number) {
     if (!send('DeleteInstance', { id })) return Promise.resolve(null)
-    return replyTo('DeleteInstance', 20000, true)
+    return replyTo('DeleteInstance', 20000, m => !instancesIn(m).some(i => i.id === id), true)
   },
   /** Run initStep.start(): the game begins and closes to newcomers. False when not connected. */
   startGame (): boolean {
@@ -425,13 +534,22 @@ const actions = {
     return nextMessage(m => m.tieEdit && m.tieEdit.op === op && m.tieEdit.a === a && m.tieEdit.b === b, 15000)
       .then(m => (m ? m.tieEdit : { ok: false, op, a, b, reason: 'The server did not answer.' }) as TieEditResult)
   },
+  /** Resolves with the User JSON without the experiment, or with the server's refusal ({error, request}); null when no answer. */
   deleteExperiment (exp: Experiment) {
     if (!send('DeleteExperiment', { selectedExperiment: exp.name, experimentId: exp.id })) return Promise.resolve(null)
-    return replyTo('DeleteExperiment', 20000, true)
+    return replyTo('DeleteExperiment', 20000, m => !(Array.isArray(m.user.experiments) && m.user.experiments.some((e: any) => e && e.id === exp.id)), true)
   },
+  /**
+   * Resolves with the User JSON that shows the selected experiment's file mode switched; null when
+   * refused or no answer. (A server that cannot read or write the folder only logs it, so a failed
+   * switch ends with null after the wait.)
+   */
   toggleFileMode () {
+    const before = state.experiment
+    const id = before?.id
+    const was = !!before?.fileMode
     if (!send('ToggleFileMode')) return Promise.resolve(null)
-    return replyTo('ToggleFileMode', 20000)
+    return replyTo('ToggleFileMode', 20000, m => !!m.experiment && (id === undefined || m.experiment.id === id) && !!m.experiment.fileMode !== was)
   },
   /** Ask the server for the newest User JSON. */
   refresh () {
@@ -455,6 +573,13 @@ const actions = {
   /** Steps changed since the engine last loaded them (e.g. one was deleted). */
   markEngineStale () {
     if (state.engine !== 'loading') state.engine = 'stale'
+  },
+  /**
+   * The engine runs the saved steps again (each change was loaded with Run): undo markEngineStale.
+   * A reload that did not finish (admin.engineProblem) stays: only a reload clears that.
+   */
+  markEngineCurrent () {
+    if (state.engine === 'stale' && !state.engineProblem) state.engine = 'ready'
   },
   note (text: string) {
     pushOutput('info', text)
@@ -481,10 +606,23 @@ const engineInUse = computed(() => {
   void graph.version.value
   return !!running.value || graph.nodes.size > 0
 })
+/**
+ * What the engine runs when that is another experiment than the selected one, so live controls
+ * here act on nothing (the server refuses them); null otherwise, and while that is not known.
+ */
+const engineElsewhere = computed<EngineInfo | null>(() => {
+  const e = state.user?.engine
+  const selected = state.experiment
+  if (!e || e.experimentId === null || !selected || !state.engineInfoCurrent || state.engine === 'loading') return null
+  return e.experimentId === selected.id ? null : e
+})
 
 export const admin = state
 export const connection = conn
-export { graph, boot, login, logout, createFirstUser, actions, experiments, instances, running, engineInUse, ensureConnected, nextMessage }
+export {
+  graph, boot, login, logout, createFirstUser, adoptUid, actions, experiments, instances, running, engineInUse,
+  engineElsewhere, ensureConnected, nextMessage,
+}
 
 /** For tests: feed a message as if it came from the server. */
 export function __receive (m: any) { handle(m) }

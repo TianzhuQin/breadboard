@@ -13,7 +13,7 @@
         :aria-checked="mode === m.value ? 'true' : 'false'"
         :tabindex="mode === m.value ? 0 : -1"
         :disabled="m.value !== 'view' && !canEdit"
-        :title="m.value !== 'view' && !canEdit ? 'Start the session to change ties' : `${m.title} (${m.key})`"
+        :title="m.value !== 'view' && !canEdit ? (editHint || 'Ties can\'t be changed right now') : `${m.title} (${m.key})`"
         :aria-keyshortcuts="m.key"
         @click="emit('update:mode', m.value)"
       >
@@ -123,6 +123,8 @@ import type { NetworkMode } from '@/network/AdminNetwork.vue'
 const props = defineProps<{
   mode: NetworkMode
   canEdit: boolean
+  /** Why ties can't be changed (shown on the disabled modes). */
+  editHint?: string
   query: string
   matchCount: number
   matchIndex: number

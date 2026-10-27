@@ -26,8 +26,12 @@ vi.mock('@/store/admin', async () => {
     actions: store.actions,
     experiments: computed(() => admin.user?.experiments || []),
     running: ref(false),
+    ensureConnected: vi.fn(() => true),
   }
 })
+
+const rebuild = vi.hoisted(() => vi.fn(async (_opts: any) => true))
+vi.mock('@/store/engineGuard', () => ({ confirmEngineRebuild: rebuild }))
 
 const confirmMock = vi.hoisted(() => vi.fn(async (_req: any) => true))
 vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: false, req: null, resolve: null }, settleConfirm: () => {} }))
@@ -53,6 +57,7 @@ import {
 } from '../src/pages/content/contentModel'
 import { dropKeptDrafts, explain, unsavedContentCount } from '../src/pages/content/useContent'
 import { HttpError } from '../src/lib/http'
+import { unsavedTotal } from '../src/shell/unsaved'
 import ContentPage from '../src/pages/content/ContentPage.vue'
 import VisualEditor from '../src/pages/content/VisualEditor.vue'
 
@@ -592,6 +597,39 @@ describe('ContentPage', () => {
     await saveButton(wrapper).trigger('click')
     await flushPromises()
     expect(http.post).toHaveBeenCalledWith('/content/11', expect.objectContaining({ translations: [expect.objectContaining({ html: '<p>Kept</p>' })] }))
+    wrapper.unmount()
+  })
+
+  it('counts unsaved texts for the sign-out question, also once the page is gone', async () => {
+    const { wrapper } = await mountPage()
+    expect(unsavedTotal()).toBe(0)
+    await wrapper.find('textarea.code-stub').setValue('<p>Changed</p>')
+    expect(unsavedTotal()).toBe(1)
+    wrapper.unmount()
+    expect(unsavedTotal()).toBe(1)
+    dropKeptDrafts()
+    expect(unsavedTotal()).toBe(0)
+  })
+
+  it('switches to an experiment with unsaved texts, asking first while the engine is in use', async () => {
+    const other = experiment({ id: 8, name: 'Other game' })
+    let { wrapper } = await mountPage(other)
+    await wrapper.find('textarea.code-stub').setValue('<p>Kept</p>')
+    wrapper.unmount()
+    ;({ wrapper } = await mountPage())
+    store.admin.user.experiments = [experiment(), other]
+    await flushPromises()
+    const button = () => wrapper.findAll('.ct-banner button').find(b => b.text() === 'Switch to “Other game”')!
+    expect(button().exists()).toBe(true)
+    // declined: nothing is switched
+    rebuild.mockResolvedValueOnce(false)
+    await button().trigger('click')
+    await flushPromises()
+    expect(rebuild).toHaveBeenCalledWith(expect.objectContaining({ title: 'Switch to “Other game”?', action: 'Switching experiments' }))
+    expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+    await button().trigger('click')
+    await flushPromises()
+    expect(store.actions.selectExperiment).toHaveBeenCalledWith(8)
     wrapper.unmount()
   })
 

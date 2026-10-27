@@ -127,54 +127,82 @@ export interface StartedInfo {
   /** How we know: the server said so, the engine answered a start, or the events show it. */
   source: 'server' | 'output' | 'events' | null
   at: number | null
+  /**
+   * False only when the sign may be from before the engine's last reload, which forgets a start: a
+   * start event whose time is unknown, or within the few seconds the server's and this computer's
+   * clocks may disagree by.
+   */
+  sure: boolean
 }
+
+/** How far the server's clock may be off from this computer's when comparing event times. */
+const CLOCK_SLACK_MS = 5000
 
 /**
  * Whether initStep.start() has run since the engine last loaded. The server keeps that flag only
  * in the engine, so this reads the signs: an explicit `hasStarted` on the session (if the server
  * sends it), the engine's answer to a start (output "initStep.start() ==> …" or the error
- * "initStep started already") after the last reload, or a start event in the session's log.
+ * "initStep started already") after the last reload, or a start event in the session's log
+ * (InitStepStart, or the autopilot's autopilotStart when it started the game itself).
  */
 export function detectGameStarted (opts: { hasStarted?: unknown, events: FeedEvent[], output: OutputEntry[], since: number }): StartedInfo {
-  if (opts.hasStarted === true) return { started: true, source: 'server', at: null }
+  if (opts.hasStarted === true) return { started: true, source: 'server', at: null, sure: true }
   for (let i = opts.output.length - 1; i >= 0; i--) {
     const o = opts.output[i]
     if (o.at < opts.since) break
-    if (o.kind === 'output' && o.text.startsWith(START_OUTPUT)) return { started: true, source: 'output', at: o.at }
-    if (o.kind === 'error' && o.text.includes(ALREADY)) return { started: true, source: 'output', at: o.at }
+    if (o.kind === 'output' && o.text.startsWith(START_OUTPUT)) return { started: true, source: 'output', at: o.at, sure: true }
+    if (o.kind === 'error' && o.text.includes(ALREADY)) return { started: true, source: 'output', at: o.at, sure: true }
   }
-  // the engine forgets a start when it reloads; events from before that don't count
-  const since = opts.since ? opts.since - 5000 : 0
+  // the engine forgets a start when it reloads; events from before that don't count, and one that
+  // can't be placed against the reload leaves it open
+  const since = opts.since
+  let unsure: FeedEvent | null = null
   for (const e of opts.events) {
-    if (since && e.at && e.at < since) continue
-    if (START_EVENTS.has(e.name.toLowerCase())) return { started: true, source: 'events', at: e.at || null }
+    if (!START_EVENTS.has(e.name.toLowerCase())) continue
+    if (!since || (e.at && e.at >= since)) return { started: true, source: 'events', at: e.at || null, sure: true }
+    if (e.at && e.at < since - CLOCK_SLACK_MS) continue
+    unsure = unsure || e
   }
-  return { started: false, source: null, at: null }
+  if (unsure) return { started: true, source: 'events', at: unsure.at || null, sure: false }
+  return { started: false, source: null, at: null, sure: true }
 }
 
 export type StartOutcome = { kind: 'started' } | { kind: 'already' } | { kind: 'error', message: string } | { kind: 'timeout' }
 
 /**
- * Is this server message the engine's answer to RunGame? Its output ("initStep.start() ==> …"),
- * the "started already" error, or a reply tagged {"request": "RunGame"}. Other engine errors are
+ * Is this server message the engine's answer to RunGame? Newer servers tag every frame of that
+ * answer {"request": "RunGame"} (success, "started already" and failures alike), and tag other
+ * requests' answers and OnJoinStep/OnLeaveStep's frames with their own names, so a tag decides.
+ * An untagged frame (an older server) counts only when it is the start's output
+ * ("initStep.start() ==> …") or the "started already" error. Other untagged engine errors are
  * common while people join (a late joiner's OnJoinStep, a timer) and are not taken for the answer:
- * an untagged failed start ends in "no answer yet", which is better than a false failure.
+ * there, a failed start ends in "no answer yet", which is better than a false failure.
  */
 export function isStartReply (m: any): boolean {
   if (!m || typeof m !== 'object' || 'action' in m) return false
-  if (m.request === 'RunGame') return true
+  if (typeof m.request === 'string') return m.request === 'RunGame'
+  if (typeof m.source === 'string') return false
   if (typeof m.output === 'string' && m.output.startsWith(START_OUTPUT)) return true
   return typeof m.error === 'string' && m.error.includes(ALREADY)
 }
 
 export function classifyStartReply (m: any): StartOutcome {
   if (!m) return { kind: 'timeout' }
-  if (typeof m.output === 'string' && m.output.startsWith(START_OUTPUT)) return { kind: 'started' }
   const err = typeof m.error === 'string' ? m.error : ''
   if (err.includes(ALREADY)) return { kind: 'already' }
-  // a tagged answer with no error is a start, whatever the output says
+  // the tagged answer: no error means it started, whatever the output says
   if (m.request === 'RunGame' && !err.trim()) return { kind: 'started' }
+  if (m.request !== 'RunGame' && typeof m.output === 'string' && m.output.startsWith(START_OUTPUT)) return { kind: 'started' }
   return { kind: 'error', message: cleanError(err) || 'The engine reported an error.' }
+}
+
+/**
+ * Why the game can't be started (or changed) here while the shared engine runs another experiment
+ * (admin.engineElsewhere); the server refuses it then. The top bar's notice says whose it is.
+ */
+export function engineElsewhereText (e: { experimentName: string | null }): string {
+  const what = e.experimentName ? `“${e.experimentName}”` : 'another experiment'
+  return `The engine is running ${what} right now, not this session, so its game can't be started or changed from here.`
 }
 
 /** An engine error without its "Caught error:" prefix and stack lines, for one-line display. */
