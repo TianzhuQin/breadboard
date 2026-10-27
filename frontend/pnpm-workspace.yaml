@@ -1,6 +1,7 @@
 packages:
   - client
   - core
+  - admin
   - e2e
 overrides:
   '@babel/core@<=7.29.0': '=7.29.6'

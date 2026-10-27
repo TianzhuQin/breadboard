@@ -130,6 +130,16 @@ public class Breadboard extends UntypedActor {
                 String params = (jsonInput.containsKey("params")) ? jsonInput.get("params").toString() : null;
                 instances.get(user.email).tell(new MakeChoice(user, choiceUID, params, out), null);
               }
+            } else if (action.equals("EditTie")) {
+              // A researcher adding or cutting a tie from the admin network view.
+              if (instances.containsKey(user.email)) {
+                Object op = jsonInput.get("op");
+                Object a = jsonInput.get("a");
+                Object b = jsonInput.get("b");
+                if (op != null && a != null && b != null) {
+                  instances.get(user.email).tell(new EditTie(user, op.toString(), a.toString(), b.toString(), out), null);
+                }
+              }
             } else if (action.equals("SaveStyle")) {
               String style = jsonInput.get("style").toString();
               breadboardController.tell(new SaveStyle(user, style, out), null);
@@ -734,6 +744,19 @@ public class Breadboard extends UntypedActor {
       super(user, out);
       this.uid = uid;
       this.params = params;
+    }
+  }
+
+  public static class EditTie extends BreadboardMessage {
+    final String op;
+    final String a;
+    final String b;
+
+    public EditTie(User user, String op, String a, String b, ThrottledWebSocketOut out) {
+      super(user, out);
+      this.op = op;
+      this.a = a;
+      this.b = b;
     }
   }
 

@@ -100,10 +100,18 @@ public class Application extends Controller {
     return unauthorized();
   }
 
+  /** The researcher's console. */
   public static Result index () {
-      // final File file = play.Play.application().getFile("assets/templates/breadboard.html");
-      String assetsRoot = play.Play.application().configuration().getString("breadboard.assetsRoot", "/assets");
-      return ok(main.render(assetsRoot));
+      return ok(admin.render(assetsRoot()));
+  }
+
+  /** The previous console, kept while researchers move to the new one. */
+  public static Result legacyAdmin () {
+      return ok(main.render(assetsRoot()));
+  }
+
+  private static String assetsRoot () {
+      return play.Play.application().configuration().getString("breadboard.assetsRoot", "/assets");
   }
 
   @Security.Authenticated(Secured.class)

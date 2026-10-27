@@ -4,6 +4,7 @@
 
 # Home page
 GET         /                                                                    controllers.Application.index()
+GET         /legacy-admin                                                        controllers.Application.legacyAdmin()
 GET         /state                                                               controllers.Application.getState()
 GET         /connect                                                             controllers.Application.connect()
 GET         /csv/instances/:experimentId                                         controllers.Application.dataCsv(experimentId: Long)

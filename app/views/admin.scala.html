@@ -1,0 +1,21 @@
+@(assetsRoot: String)
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex">
+    <title>Breadboard</title>
+    <link rel="shortcut icon" type="image/png" href="/assets/img/favicon.ico">
+    <link rel="stylesheet" href="@assetsRoot/admin/admin.css?v=@models.AssetVersion.VALUE">
+    <script>
+      // The researcher's light/dark choice, applied before the first paint so the page doesn't flash.
+      try { var t = localStorage.getItem('bb-admin-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t) } catch (e) {}
+    </script>
+</head>
+<body>
+    <div id="admin"></div>
+    <noscript>The Breadboard console needs JavaScript.</noscript>
+    <script type="module" src="@assetsRoot/admin/admin.js?v=@models.AssetVersion.VALUE"></script>
+</body>
+</html>

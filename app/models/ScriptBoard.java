@@ -535,6 +535,9 @@ public class ScriptBoard extends UntypedActor {
         } else if (message instanceof Breadboard.MakeChoice) {
           Breadboard.MakeChoice makeChoice = (Breadboard.MakeChoice) message;
           makeChoice(null, makeChoice.uid, makeChoice.params, breadboardMessage.out); // admin acting for a player
+        } else if (message instanceof Breadboard.EditTie) {
+          Breadboard.EditTie editTie = (Breadboard.EditTie) message;
+          editTie(editTie.op, editTie.a, editTie.b, breadboardMessage.out);
         } else if (message instanceof Breadboard.SendStep) {
           Breadboard.SendStep sendStep = (Breadboard.SendStep) message;
 
@@ -976,6 +979,43 @@ public class ScriptBoard extends UntypedActor {
       if (out != null) {
         out.write(jsonOutput);
       }
+    }
+  }
+
+  /**
+   * A researcher adding or cutting a tie from the admin network view, through
+   * edgeEdits.adminEdit (groovy/edge_edits.groovy), which logs it. The admin is told the outcome as
+   * {"tieEdit": {ok, op, a, b, reason}}; the tie itself reaches it with the next graph update.
+   */
+  static void editTie(String op, String a, String b, ThrottledWebSocketOut out) {
+    ObjectNode result = Json.newObject();
+    result.put("op", op);
+    result.put("a", a);
+    result.put("b", b);
+    String reason = null;
+    if (!"add".equals(op) && !"remove".equals(op)) {
+      reason = "Unknown edit \"" + op + "\"";
+    } else if (engine == null || !(engine.get("edgeEdits") instanceof groovy.lang.GroovyObject)) {
+      reason = "The experiment's engine isn't loaded yet.";
+    } else {
+      try {
+        ((groovy.lang.GroovyObject) engine.get("edgeEdits")).invokeMethod("adminEdit", new Object[]{op, a, b});
+      } catch (Exception e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+          root = root.getCause();
+        }
+        reason = root.getMessage() != null ? root.getMessage() : root.toString();
+      }
+    }
+    result.put("ok", reason == null);
+    if (reason != null) {
+      result.put("reason", reason);
+    }
+    ObjectNode message = Json.newObject();
+    message.put("tieEdit", result);
+    if (out != null) {
+      out.write(message);
     }
   }
 

@@ -1,0 +1,162 @@
+/*
+ * Design tokens for the researcher's console. Light by default; dark follows the system setting
+ * unless the researcher picked one (html[data-theme]). Shares its accent and type with the
+ * participant page (frontend/client/src/theme/bb-theme.css).
+ */
+:root {
+  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --sidebar-width: 248px;
+  --topbar-height: 56px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration: 160ms;
+
+  /* light */
+  --bg: #f6f7fb;
+  --bg-subtle: #eef0f6;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f8f9fc;
+  --surface-hover: #f2f4f9;
+  --border: #e5e8f0;
+  --border-strong: #d3d8e4;
+  --text: #0f172a;
+  --text-soft: #334155;
+  --muted: #5b6678;
+  --faint: #8a94a6;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-soft-text: #4338ca;
+  --accent-ring: rgba(79, 70, 229, 0.35);
+  --on-accent: #ffffff;
+  --danger: #e11d48;
+  --danger-hover: #be123c;
+  --danger-soft: #fff1f2;
+  --danger-soft-text: #be123c;
+  --success: #059669;
+  --success-soft: #ecfdf5;
+  --success-soft-text: #047857;
+  --warning: #d97706;
+  --warning-soft: #fffbeb;
+  --warning-soft-text: #b45309;
+  --info: #0284c7;
+  --info-soft: #f0f9ff;
+  --info-soft-text: #0369a1;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 6px 20px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 10px 40px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.06);
+  --overlay: rgba(15, 23, 42, 0.42);
+  --code-bg: #fbfbfe;
+  --graph-bg: #fbfcfe;
+  --graph-grid: rgba(15, 23, 42, 0.05);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0b0d14;
+    --bg-subtle: #111521;
+    --surface: #131722;
+    --surface-raised: #181d2a;
+    --surface-sunken: #0f121b;
+    --surface-hover: #1c2232;
+    --border: #232a3a;
+    --border-strong: #2f3850;
+    --text: #e8ebf4;
+    --text-soft: #c7cede;
+    --muted: #949db2;
+    --faint: #6b7489;
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+    --accent-soft: rgba(129, 140, 248, 0.14);
+    --accent-soft-text: #a5b4fc;
+    --accent-ring: rgba(129, 140, 248, 0.45);
+    --on-accent: #0b0d14;
+    --danger: #fb7185;
+    --danger-hover: #fda4af;
+    --danger-soft: rgba(251, 113, 133, 0.12);
+    --danger-soft-text: #fda4af;
+    --success: #34d399;
+    --success-soft: rgba(52, 211, 153, 0.12);
+    --success-soft-text: #6ee7b7;
+    --warning: #fbbf24;
+    --warning-soft: rgba(251, 191, 36, 0.12);
+    --warning-soft-text: #fcd34d;
+    --info: #38bdf8;
+    --info-soft: rgba(56, 189, 248, 0.12);
+    --info-soft-text: #7dd3fc;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+    --overlay: rgba(3, 5, 10, 0.66);
+    --code-bg: #0f121b;
+    --graph-bg: #0f121b;
+    --graph-grid: rgba(255, 255, 255, 0.04);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #0b0d14;
+  --bg-subtle: #111521;
+  --surface: #131722;
+  --surface-raised: #181d2a;
+  --surface-sunken: #0f121b;
+  --surface-hover: #1c2232;
+  --border: #232a3a;
+  --border-strong: #2f3850;
+  --text: #e8ebf4;
+  --text-soft: #c7cede;
+  --muted: #949db2;
+  --faint: #6b7489;
+  --accent: #818cf8;
+  --accent-hover: #a5b4fc;
+  --accent-soft: rgba(129, 140, 248, 0.14);
+  --accent-soft-text: #a5b4fc;
+  --accent-ring: rgba(129, 140, 248, 0.45);
+  --on-accent: #0b0d14;
+  --danger: #fb7185;
+  --danger-hover: #fda4af;
+  --danger-soft: rgba(251, 113, 133, 0.12);
+  --danger-soft-text: #fda4af;
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.12);
+  --success-soft-text: #6ee7b7;
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.12);
+  --warning-soft-text: #fcd34d;
+  --info: #38bdf8;
+  --info-soft: rgba(56, 189, 248, 0.12);
+  --info-soft-text: #7dd3fc;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --overlay: rgba(3, 5, 10, 0.66);
+  --code-bg: #0f121b;
+  --graph-bg: #0f121b;
+  --graph-grid: rgba(255, 255, 255, 0.04);
+  color-scheme: dark;
+}
