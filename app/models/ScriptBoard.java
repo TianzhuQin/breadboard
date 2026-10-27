@@ -323,7 +323,6 @@ public class ScriptBoard extends UntypedActor {
         }
       }
       thisClient = client;
-      setConnected(clientId, true);
 
       in.onClose(new Callback0() {
         public void invoke() {
@@ -386,6 +385,8 @@ public class ScriptBoard extends UntypedActor {
         Graph wholeGraph = (Graph) engine.get("g");
         Vertex clientVertex = wholeGraph.getVertex(clientId);
         Recruitment.applyTo(clientVertex);
+        // After addPlayer, so a new participant's vertex exists to record it on.
+        setConnected(clientId, true);
         if (clientVertex != null) {
           if (graphChangedListener instanceof EventGraphChangedListener) {
             client.updateGraph(clientVertex);
@@ -792,6 +793,11 @@ public class ScriptBoard extends UntypedActor {
         data.put("clientId", clientId);
         eventTracker.track(connected ? "clientConnected" : "clientDisconnected", data);
       }
+      // Scripts can react, e.g. groovy/autopilot.groovy hands a departed player to the AI.
+      Map<String, Object> info = new HashMap<String, Object>();
+      info.put("clientId", clientId);
+      info.put("connected", connected);
+      eventBus.emit("bb:connection", info);
     } catch (Exception e) {
       Logger.error("Could not record connection state for " + clientId, e);
     }

@@ -169,6 +169,12 @@ public class Global extends GlobalSettings {
         version2Point4Upgrade();
       } // Otherwise, no upgrade needed
     }
+
+    // Interpolated Groovy strings must reach browsers as text.
+    models.JsonSetup.install();
+
+    // Open a session of the configured experiment so participants can join without an admin.
+    models.Autopilot.start();
   }
 
   private void version2Point4Upgrade() {

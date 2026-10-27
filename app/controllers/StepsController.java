@@ -64,7 +64,9 @@ public class StepsController extends Controller {
     } else {
       name = json.findPath("name").textValue();
       source = json.findPath("stepSource").textValue();
-      experimentId = json.findValue("experimentId").asLong();
+      // Only new steps need it; editing an existing step without it used to throw.
+      JsonNode experimentIdNode = json.findValue("experimentId");
+      experimentId = experimentIdNode == null ? null : experimentIdNode.asLong();
     }
 
     if (source == null) {

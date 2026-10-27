@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Run the staged build locally against a throwaway data directory.
 #
-#   JAVA8_HOME=/path/to/jdk8 bin/run-local [port]      (default port 9000)
+#   JAVA8_HOME=/path/to/jdk8 bin/run-local [port] [-Dsetting=value ...]   (default port 9000)
+#
+# Extra -D settings are passed to the server, e.g. -Dbreadboard.autopilot.experiment="My experiment".
 #
 # Build first with:  (cd frontend && pnpm install && pnpm run build:all) && bin/sbt8 stage
 # Data (H2 database, generated secret) lives in .local-run/ unless BREADBOARD_RUN_DIR is set.
@@ -9,6 +11,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${1:-9000}"
+shift || true
 JDK="${JAVA8_HOME:-${JAVA_HOME:-}}"
 STAGE="$ROOT/target/universal/stage"
 RUN="${BREADBOARD_RUN_DIR:-$ROOT/.local-run}"
@@ -39,4 +42,5 @@ exec "$STAGE/bin/breadboard" -J-Duser.timezone=UTC \
   -Dhttp.port="$PORT" \
   -Dbreadboard.rootUrl="http://localhost:$PORT" \
   -Dpidfile.path=/dev/null \
-  -Dapplication.secret="$(cat "$RUN/secret")"
+  -Dapplication.secret="$(cat "$RUN/secret")" \
+  "$@"

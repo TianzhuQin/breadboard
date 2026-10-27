@@ -37,8 +37,9 @@ public class GameListener {
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.finish();
       this.experimentInstance.save();
+      Autopilot.sessionFinished(this.experimentInstance);
     }
-    if (user != null && engine != null) {
+    if (user != null && engine != null && this.out != null) {
       this.out.write(user.toJson());
     }
   }

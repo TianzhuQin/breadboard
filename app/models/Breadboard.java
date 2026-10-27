@@ -29,7 +29,8 @@ public class Breadboard extends UntypedActor {
   public static final long WEBSOCKET_RATE = 100L;
 
   // One script environment instance per user at this time, map the user's email address to the instance
-  static Map<String, ActorRef> instances = new HashMap<String, ActorRef>();
+  // Written by the Breadboard actor and the autopilot thread.
+  static Map<String, ActorRef> instances = new java.util.concurrent.ConcurrentHashMap<String, ActorRef>();
 
   static ActorRef breadboardController = Akka.system().actorOf(new Props(Breadboard.class));
 

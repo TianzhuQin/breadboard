@@ -241,6 +241,33 @@ public class ClientLogin extends Controller {
   }
 
   /**
+   * Stable entry links that always lead to the session currently accepting participants, so a
+   * study can publish one link (e.g. on Prolific) while sessions come and go:
+   *   /play/{experimentId}/login
+   *   /play/{experimentId}/prolific?PROLIFIC_PID=...&STUDY_ID=...&SESSION_ID=...
+   */
+  public static Result playLogin(String experimentId) {
+    return toOpenSession(experimentId, "login");
+  }
+
+  public static Result playProlific(String experimentId) {
+    return toOpenSession(experimentId, "prolific");
+  }
+
+  private static Result toOpenSession(String experimentId, String entry) {
+    ExperimentInstance open = null;
+    try {
+      open = Autopilot.openInstance(Long.valueOf(experimentId));
+    } catch (NumberFormatException ignored) {}
+    if (open == null) {
+      return ok(participantMessage.render("No session is open right now",
+          "There is no session accepting participants at the moment. Please try again in a few minutes."));
+    }
+    String query = request().uri().contains("?") ? request().uri().substring(request().uri().indexOf('?')) : "";
+    return redirect("/game/" + experimentId + "/" + open.id + "/" + entry + query);
+  }
+
+  /**
    * True when the instance has started and this id doesn't already hold a seat in it, so a new
    * participant would get a page that can never join the game.
    */
