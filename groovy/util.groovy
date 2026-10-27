@@ -5,6 +5,7 @@ import com.tinkerpop.blueprints.util.wrappers.event.EventVertex
 import com.tinkerpop.gremlin.groovy.Gremlin
 import com.tinkerpop.pipes.Pipe
 import java.text.DecimalFormat
+import groovy.transform.ToString
 import static java.math.RoundingMode.UP
 
 // This defines a 'neighbors' property of a vertex that returns the collection of connected vertices
@@ -103,4 +104,53 @@ BreadboardBase.metaClass.fetchContent = { Map opts ->
  */
 BreadboardBase.metaClass.addEvent = { String name, Map data -> 
   a.addEvent(name, data)
+}
+
+_ensureSystem = { Vertex v, String key ->
+  // Use the real property/key accessors: hasProperty() on a vertex or a Map checks for a *bean
+  // property*, not a graph property or a map key, so it always reported "missing" and clobbered
+  // any existing _system[key] (e.g. wiping the source that register* set before complete* runs).
+  if (v.getProperty('_system') == null) {
+    v._system = [:] as ObservableMap
+  }
+  if (!v._system.containsKey(key)) {
+    v._system[key] = [:] as ObservableMap
+  }
+}
+
+// This tracks lots of information about the screen and sends it to the backend
+def trackPlayerScreen = { Vertex v ->
+  player.on("system-screen-tracker", { ev, data ->
+    data.groupCondition = ev.private.condition
+    data.groupId = ev.private.groupId
+    data.playerId = ev.id
+    a.addEvent("screen-tracker", data)
+  })
+}
+
+
+@ToString(includeNames = true)
+class FrontendConfigOpts {
+  Boolean trackScreen
+  Boolean prolific
+}
+
+configureFrontend = { Vertex v, Map opts ->
+  FrontendConfigOpts config = opts as FrontendConfigOpts
+  _ensureSystem(v, 'frontend')
+  v._system.frontend.trackScreen = config.trackScreen
+  v._system.frontend.prolific = config.prolific
+  if (config.trackScreen) {
+    trackPlayerScreen(v)
+  }
+}
+
+// Send the kick event to the specified players
+kickPlayers = { ...playerIds ->
+  playerIds.each { playerId ->
+    def vertex = g.getVertex(playerId)
+    vertex.send("kick")
+    _ensureSystem(vertex, 'frontend')
+    vertex._system.frontend.kicked = true
+  }
 }

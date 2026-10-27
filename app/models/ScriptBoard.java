@@ -10,7 +10,6 @@ import com.tinkerpop.blueprints.Vertex;
 import com.tinkerpop.gremlin.groovy.GremlinGroovyPipeline;
 import groovy.util.ObservableMap;
 import groovy.lang.Closure;
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.output.ByteArrayOutputStream;
 import org.apache.commons.lang3.StringUtils;
 import org.codehaus.groovy.control.CompilationFailedException;
@@ -26,6 +25,7 @@ import java.beans.PropertyChangeListener;
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ScriptBoard extends UntypedActor {
   private static ObjectMapper mapper = new ObjectMapper();
@@ -43,6 +43,11 @@ public class ScriptBoard extends UntypedActor {
 
   private static Random rand = new Random();
   private static HashMap<String, Client> clients = new HashMap<>();
+
+  // AMT lifecycle timers scheduled by the HitCreated handler. Tracked so they can be
+  // cancelled on reload / on re-submit instead of being orphaned (MEMORY_LEAKS.md L6).
+  // CopyOnWriteArrayList because the static state is shared across ScriptBoard actors.
+  static final List<Timer> amtTimers = new CopyOnWriteArrayList<Timer>();
 
   // A list of admins currently watching the game.
   private static ArrayList<Admin> admins = new ArrayList<>();
@@ -78,8 +83,58 @@ public class ScriptBoard extends UntypedActor {
     // Disconnect all connected clients
     for (Client client : clients.values()) {
       client.disconnect();
+      // Also drop the client from the graph-change dispatch registry. Otherwise the
+      // listener keeps a reference to every client that ever connected (a leak) and
+      // keeps dispatching graph updates to its now-closed socket until a same-id
+      // client happens to reconnect and overwrite the entry.
+      if (graphChangedListener != null) {
+        graphChangedListener.removeClientListener(client);
+      }
     }
     clients.clear();
+  }
+
+  /** Cancel and forget every tracked AMT lifecycle timer. Safe to call when none exist. */
+  static void cancelAmtTimers() {
+    for (Timer t : amtTimers) {
+      t.cancel();
+    }
+    amtTimers.clear();
+  }
+
+  /**
+   * Schedule the two AMT lifecycle timers, first cancelling any still pending from an
+   * earlier HIT submission so they are never orphaned. Extracted from the HitCreated
+   * handler so the scheduling/cancellation contract is unit-testable without the actor
+   * or a live script engine (MEMORY_LEAKS.md L6).
+   *
+   * @param noNewConnectionsDelayMs delay after which no new client connections are allowed
+   * @param startInitStepDelayMs    delay after which {@code initStep.start()} is sent
+   * @param onNoNewConnections      action run by the first timer
+   * @param onStartInitStep         action run by the second timer
+   */
+  static void scheduleAmtTimers(long noNewConnectionsDelayMs, long startInitStepDelayMs,
+                                final Runnable onNoNewConnections, final Runnable onStartInitStep) {
+    // Replace any timers still pending from an earlier submission.
+    cancelAmtTimers();
+
+    Timer noNewConnectionsTimer = new Timer();
+    noNewConnectionsTimer.schedule(new TimerTask() {
+      @Override
+      public void run() {
+        onNoNewConnections.run();
+      }
+    }, noNewConnectionsDelayMs);
+    amtTimers.add(noNewConnectionsTimer);
+
+    Timer startInitStepTimer = new Timer();
+    startInitStepTimer.schedule(new TimerTask() {
+      @Override
+      public void run() {
+        onStartInitStep.run();
+      }
+    }, startInitStepDelayMs);
+    amtTimers.add(startInitStepTimer);
   }
 
   private void resetEngine(Experiment experiment) throws IOException, ScriptException {
@@ -99,6 +154,9 @@ public class ScriptBoard extends UntypedActor {
       processScript("g.empty()", null, null);
       // Reset the timers
       processScript("timers.cancel()", null, null);
+      // Cancel any pending AMT lifecycle timers from a previous session so they don't
+      // fire against the rebuilt engine or outlive it (MEMORY_LEAKS.md L6).
+      cancelAmtTimers();
     }
 
     // Global events used to communicate via the groovy scripting
@@ -135,28 +193,16 @@ public class ScriptBoard extends UntypedActor {
       engine.getBindings(ScriptContext.ENGINE_SCOPE).put("c", experiment.contentFetcher);
     }
 
-    String[] scriptFiles = {
-      "/util.groovy", 
-      "/timer.groovy",
-      "/graph.groovy", 
-      "/actions.groovy", 
-      "/step.groovy", 
-      "/test.groovy",
-      "/events.groovy",
-      "/chat.groovy",
-      "/form.groovy",
-      "/ready.groovy"
-    };
-
-    // Load Groovy scripts
-    for (String file : scriptFiles) {
-      File utilFile = new File(Play.application().path().toString() + "/groovy" + file);
-      // Add a null terminator for each file so the script engine can always reload even after errors
-      String utilString = FileUtils.readFileToString(utilFile, "UTF-8") + ";null;";
-      Logger.debug("loading " + file);
-      engine.eval(utilString);
-      Logger.debug(file + " load done");
-    }
+    // Load the Groovy DSL scripts. ScriptLoader is the single source of truth for which
+    // files load and in what order: the core scripts first, in dependency order, then every
+    // other *.groovy file alphabetically, skipping *_test.groovy. Dropping a new script into
+    // the groovy directory is enough to have it loaded -- no edit here required. A failure in
+    // a non-core script is logged (naming the file) and skipped rather than aborting the boot.
+    // Experimental scripts (ScriptLoader.EXPERIMENTAL_SCRIPTS) load only when the
+    // breadboard.experimental flag is on, defaulting to off.
+    boolean experimental = Play.application().configuration().getBoolean("breadboard.experimental", false);
+    File groovyDir = new File(Play.application().path().toString(), "groovy");
+    ScriptLoader.loadAll(engine, groovyDir, experimental);
 
     // get script object on which we want to implement the interface with
     Object a = engine.get("a");
@@ -213,7 +259,7 @@ public class ScriptBoard extends UntypedActor {
   }
 
   private String makeUniqueClientId (String clientId) {
-    return this.experimentId + "-" + this.instanceId + "-" + clientId;
+    return ScriptBoardSupport.makeUniqueClientId(this.experimentId, this.instanceId, clientId);
   }
 
   private void rebuildScriptBoard(Experiment experiment) throws IOException, ScriptException {
@@ -311,7 +357,8 @@ public class ScriptBoard extends UntypedActor {
           } catch (java.io.IOException ignored) {
             Logger.debug("java.io.IOException");
           } catch (Exception e) {
-            Logger.error(e.getMessage());
+            ScriptLoader.humanizeStackTrace(e);
+            Logger.error("Error handling client message", e);
           }
         }
       });
@@ -371,22 +418,24 @@ public class ScriptBoard extends UntypedActor {
             processScript("startAt = " + timerTime, breadboardMessage.out, null);
 
             final ThrottledWebSocketOut breadboardOut = breadboardMessage.out;
-            // Set timer for lifetimeInSeconds time after which no longer allow new client connections
-            new Timer().schedule(new TimerTask() {
-              @Override
-              public void run() {
-                gameListener.hasStarted();
-              }
-            }, lifetimeInMs);
-
-            // Set timer for lifetimeInMs + tutorialTimeInMs time after which send an initStep.start() message
-            new Timer().schedule(new TimerTask() {
-              @Override
-              public void run() {
-                processScript("initStep.start()", breadboardOut, null);
-                Logger.debug("initStep.start()");
-              }
-            }, (lifetimeInMs + tutorialTimeInMs));
+            // Schedule the two AMT lifecycle timers via the tracked registry so they are
+            // cancelled on reload / superseded on re-submit instead of leaking. Same delays
+            // and actions as before: at lifetimeInMs no new connections are allowed; at
+            // lifetimeInMs + tutorialTimeInMs initStep.start() is sent (MEMORY_LEAKS.md L6).
+            scheduleAmtTimers(lifetimeInMs, lifetimeInMs + tutorialTimeInMs,
+              new Runnable() {
+                @Override
+                public void run() {
+                  gameListener.hasStarted();
+                }
+              },
+              new Runnable() {
+                @Override
+                public void run() {
+                  processScript("initStep.start()", breadboardOut, null);
+                  Logger.debug("initStep.start()");
+                }
+              });
           }
         } else if (message instanceof Breadboard.SendScript) {
           Breadboard.SendScript sendScript = (Breadboard.SendScript) message;
@@ -633,7 +682,8 @@ public class ScriptBoard extends UntypedActor {
         }
       }
     } catch (Exception e) {
-      e.printStackTrace();
+      ScriptLoader.humanizeStackTrace(e);
+      Logger.error("Unhandled error in ScriptBoard.onReceive", e);
     }
   }
 
@@ -682,41 +732,29 @@ public class ScriptBoard extends UntypedActor {
     String key = param.name;
     Logger.debug("initParam: " + key);
     Parameter parameter = experiment == null ? null : experiment.getParameterByName(key);
-    if (parameter == null) {
-      //default string value
-      engine.getBindings(ScriptContext.ENGINE_SCOPE).put(key, param.value);
-      return;
-    }
-    // TODO: Perhaps put this code elsewhere?
-    // Bind the initial variables to the script engine
-    if (parameter != null) {
-      if (parameter.type.equals("Integer")) {
-        try {
-          Integer intParameter = Integer.parseInt(param.value);
-          engine.getBindings(ScriptContext.ENGINE_SCOPE).put(key, intParameter);
-        } catch (NumberFormatException npe) {
-          Logger.error("Breadboard.LaunchGame: Caught NumberFormatException parsing string as Integer: " + param.value);
-        }
-      } else if (parameter.type.equals("Decimal")) {
-        try {
-          Double doubleParameter = Double.parseDouble(param.value);
-          engine.getBindings(ScriptContext.ENGINE_SCOPE).put(key, doubleParameter);
-        } catch (NumberFormatException npe) {
-          Logger.error("Breadboard.LaunchGame: Caught NumberFormatException parsing string as Double: " + param.value);
-        }
+    String type = parameter == null ? null : parameter.type;
 
-      } else if (parameter.type.equals("Text")) {
-        engine.getBindings(ScriptContext.ENGINE_SCOPE).put(key, param.value);
-      } else if (parameter.type.equals("Boolean")) {
-        Boolean booleanParameter = Boolean.parseBoolean(param.value);
-        engine.getBindings(ScriptContext.ENGINE_SCOPE).put(key, booleanParameter);
-      }
-    } //END if (parameter != null)
+    // Coercion logic lives in ScriptBoardSupport.coerceParam so it can be unit-tested
+    // without the engine/DB. A null result means "leave the binding unset" -- which for
+    // Integer/Decimal indicates a parse failure worth logging (as the original did).
+    Object coerced = ScriptBoardSupport.coerceParam(type, param.value);
+    if (coerced != null) {
+      engine.getBindings(ScriptContext.ENGINE_SCOPE).put(key, coerced);
+    } else if ("Integer".equals(type) || "Decimal".equals(type)) {
+      Logger.error("Breadboard.LaunchGame: Caught NumberFormatException parsing string as "
+          + type + ": " + param.value);
+    }
   }
 
   private static void makeChoice(String uid, String params, ThrottledWebSocketOut out) {
     ObjectNode jsonOutput = Json.newObject();
-    playerActions.choose(uid, params);
+    try {
+      playerActions.choose(uid, params);
+    } catch (Exception e) {
+      ScriptLoader.humanizeStackTrace(e);
+      Logger.error("Failed to make choice " + uid, e);
+      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
+    }
     out.write(jsonOutput);
   }
 
@@ -762,20 +800,25 @@ public class ScriptBoard extends UntypedActor {
 
       jsonOutput.put("output", outputString.trim());
     } catch (CompilationFailedException cfe) {
+      // Translate Groovy's opaque "Script<N>.groovy" names back to real file names in both the
+      // logged stack trace and the error sent to the browser (see ScriptLoader.humanize*).
+      ScriptLoader.humanizeStackTrace(cfe);
       Logger.error("Unable to compile the script. " + scriptName, cfe);
-      jsonOutput.put("error", "Caught error: ".concat(cfe.getMessage()).concat("\n"));
+      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(cfe) + "\n");
       if (initStep) {
         engine.put("initStep.start()", null);
       }
     } catch (ScriptException se) {
+      ScriptLoader.humanizeStackTrace(se);
       Logger.error("Script Error. " + scriptName, se);
-      jsonOutput.put("error", "Caught error: ".concat(se.getMessage()).concat("\n"));
+      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(se) + "\n");
       if (initStep) {
         engine.put("initStep.start()", null);
       }
     } catch (Exception e) {
+      ScriptLoader.humanizeStackTrace(e);
       Logger.error("Failed to process the script. " + scriptName, e);
-      jsonOutput.put("error", "Caught error: ".concat(e.getMessage()).concat("\n"));
+      jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
       if (initStep) {
         engine.put("initStep.start()", null);
       }

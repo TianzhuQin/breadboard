@@ -55,7 +55,8 @@ public class IteratedBreadboardGraphChangedListener implements BreadboardGraphCh
           try {
             c.updateGraph(graph.getVertex(c.id));
           } catch (Exception e) {
-            Logger.debug("Caught exception in ClientUpdateTask: " + e.getLocalizedMessage());
+            ScriptLoader.humanizeStackTrace(e);
+            Logger.error("Failed to push client graph update for " + c.id, e);
           }
         }
       }
@@ -92,6 +93,13 @@ public class IteratedBreadboardGraphChangedListener implements BreadboardGraphCh
 
   public void addClientListener(Client clientListener) {
     clientListeners.put(clientListener.id, clientListener);
+  }
+
+  @Override
+  public void removeClientListener(Client clientListener) {
+    if (clientListener != null) {
+      clientListeners.remove(clientListener.id);
+    }
   }
 
   @Override

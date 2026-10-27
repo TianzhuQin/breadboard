@@ -36,3 +36,7 @@ csv
 
 .vscode
 generated
+.env*
+.zed
+run-dev.sh
+native

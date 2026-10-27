@@ -5,10 +5,13 @@ and examples.
 ## Development
 
 ### Environment setup
-Breadboard works with Java 7+. Make sure the Java SDK is installed before beginning development.
+Breadboard requires **Java 8** specifically (the Play 2.2 / Scala 2.10 / sbt 0.13.18 stack does
+not build under Java 9 or newer — it hangs silently during compilation). Install a Java 8 JDK and
+point sbt at it, e.g. `sbt -java-home /path/to/jdk8 test`. See `CLAUDE.md` for the full build/test
+commands.
 
 - `cd frontend`
-- `npm install`
+- `pnpm install`
 
 ### Running
 #### Backend development
@@ -17,7 +20,7 @@ If modifications will be made to files in the **frontend** directory, use the fr
 
 #### Frontend development
 This uses a slightly different configuration to allow hot module replacement via webpack on frontend files.
-- Start the webpack server using `cd frontend && npm start`
+- Start the webpack server using `cd frontend && pnpm start`
 - Start the play framework server using `sbt "run -Dconfig.file=conf/application-dev.conf"`
 
 
@@ -28,6 +31,6 @@ automatically rebuild the frontend files whenever a file changes.
 ## Production
 
 ### Compile jars
-- `cd frontend && npm run build` to build frontend assets if this code has changed
+- `cd frontend && pnpm run build:all` to build frontend assets (incl. the client/core packages) if this code has changed
 - `sh create_prod_dist.sh` to compile distributable files
 - In many cases, only copying the compiled **breadboard.jar** file is enough to update existing Breadboard applications.
