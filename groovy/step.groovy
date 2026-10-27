@@ -21,6 +21,23 @@ class Step {
   def eventTracker
   private def emptyListener
 
+  // Optional time limit in seconds. With a duration the step ends when every pending choice has
+  // been made or when time runs out, whichever comes first, and a step that offered no choices
+  // waits for the whole duration. Without one, behaviour is unchanged: the step ends as soon as no
+  // choice is pending anywhere, which is immediately if run() offered none.
+  Number duration = null
+  // With a duration: keep waiting for the full time even after every choice has been made.
+  boolean waitForDuration = false
+  // With a duration: what to do when time runs out, called with the step's player argument before
+  // done(). By default the choices still on screen are withdrawn.
+  @JsonIgnore
+  Closure onTimeout = null
+  boolean clearChoicesOnTimeout = true
+  @JsonIgnore
+  private BBTimer durationTimer
+  @JsonIgnore
+  private java.util.concurrent.atomic.AtomicBoolean ended
+
   def propertyMissing(String name, value) {
     params[name] = value
   }
@@ -36,9 +53,15 @@ class Step {
       eventTracker.track(name + "Start", ["startStep": name])
     }
 
+    ended = new java.util.concurrent.atomic.AtomicBoolean(false)
     run(player)
 
     boolean hasUserActions = !playerActions.actions.isEmpty()
+
+    if (duration != null && duration > 0) {
+      startTimed(player, hasUserActions)
+      return
+    }
 
     if (hasUserActions) {
       //println("playerActions.actions.size() = " + playerActions.actions.size())
@@ -62,6 +85,50 @@ class Step {
     } else {
       done(player)
     }
+  }
+
+  private void startTimed(String player, boolean hasUserActions) {
+    if (hasUserActions && !ignoreUserAction && !waitForDuration) {
+      emptyListener = { event ->
+        if (event instanceof ObservableMap.PropertyRemovedEvent && playerActions.actions.isEmpty()) {
+          endOnce(player, false)
+        }
+      } as PropertyChangeListener
+      playerActions.addActionPropertyChangeListener(emptyListener)
+    }
+    durationTimer = new BBTimer()
+    durationTimer.runAfter((int) Math.round(duration * 1000)) {
+      endOnce(player, true)
+    }
+  }
+
+  // Ends a timed step exactly once, whichever of "all chosen" and "time is up" happens first.
+  private void endOnce(String player, boolean timedOut) {
+    if (!ended.compareAndSet(false, true)) {
+      return
+    }
+    if (emptyListener != null) {
+      playerActions.removeActionPropertyChangeListener(emptyListener)
+      emptyListener = null
+    }
+    if (durationTimer != null) {
+      durationTimer.cancel()
+      durationTimer = null
+    }
+    if (timedOut) {
+      if (name != null) {
+        eventTracker.track(name + "Timeout", ["step": name])
+      }
+      if (onTimeout != null) {
+        onTimeout(player)
+      }
+      if (clearChoicesOnTimeout) {
+        playerActions.pendingActions().collect { it.player?.getId()?.toString() }.findAll { it != null }.unique().each {
+          playerActions.remove(it)
+        }
+      }
+    }
+    done(player)
   }
 
   def finish() {

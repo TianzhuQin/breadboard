@@ -47,7 +47,12 @@ class PlayerActions {
 
       def time1 = (warnTime != null) ? warnTime : idleTime
       def time2 = (dropTime != null) ? dropTime : idleTime
-      idleTimer1.timer.runAfter(time1 * 1000) {
+      idleTimer1.cancelled = false
+      // Whole milliseconds, so fractional second settings (e.g. 0.5) work too.
+      idleTimer1.timer.runAfter((int) Math.round(time1 * 1000)) {
+        if (idleTimer1.cancelled) {
+          return
+        }
 
         idleTimer1.fired = true
 
@@ -57,7 +62,7 @@ class PlayerActions {
             name          : timerName,
             type          : "time",
             elapsed       : 0,
-            duration      : time2 * 1000,
+            duration      : Math.round(time2 * 1000),
             timerText     : "You will be dropped in: ",
             direction     : "down",
             currencyAmount: "0",
@@ -73,21 +78,29 @@ class PlayerActions {
         // TODO: Find out why modifying the timers map doesn't trigger a client update without the next line
         playerAction.player.lastupdated = System.currentTimeMillis()
 
-        idleTimer2.timer.runAfter(time2 * 1000) {
-          idleTimer2.timer.cancel()
+        try {
+          idleTimer2.timer.runAfter((int) Math.round(time2 * 1000)) {
+            idleTimer2.timer.cancel()
+            if (idleTimer1.cancelled) {
+              return
+            }
 
-          if (dropPlayerClosure) {
-            dropPlayerClosure(playerAction.player)
+            if (dropPlayerClosure) {
+              dropPlayerClosure(playerAction.player)
+            }
+            playerAction.player.timers.remove(timerName)
           }
-          playerAction.player.timers.remove(timerName)
+
+          def timerUpdateRate = 1000
+          idleTimer2.timer.scheduleAtFixedRate({
+            if (timerName in playerAction.player.timers) {
+              playerAction.player.timers[timerName].elapsed += timerUpdateRate
+            }
+          } as GroovyTimerTask, timerUpdateRate, timerUpdateRate)
+        } catch (IllegalStateException ignored) {
+          // The action was answered or removed while the warning fired: the drop timer is already
+          // cancelled, so there is nothing to schedule.
         }
-
-        def timerUpdateRate = 1000
-        idleTimer2.timer.scheduleAtFixedRate({
-          if (timerName in playerAction.player.timers) {
-            playerAction.player.timers[timerName].elapsed += timerUpdateRate
-          }
-        } as GroovyTimerTask, timerUpdateRate, timerUpdateRate)
 
       }
 
@@ -98,16 +111,31 @@ class PlayerActions {
 
   def setDropPlayers(dropPlayers) {
     this.dropPlayers = dropPlayers
+    // actions holds one entry per choice uid, all pointing at the same PlayerAction. Timing each
+    // entry gave a player with N options N countdowns, of which answering cancelled only one.
+    def pending = pendingActions()
     if (dropPlayers) {
       // Now dropping players, set timers for any players with active choices
-      actions.each {
-        if (it.value.player) {
-          if (it.value.player.getProperty("choices")) {
-            setIdleTimer(it.value)
-          }
+      pending.each { action ->
+        if (action.player && action.player.getProperty("choices") && action.idleTimer1 == null) {
+          setIdleTimer(action)
         }
       }
-    } // TODO: if setting dropPlayers to false we should disable the timers for all players.
+    } else {
+      pending.each { it.cancelIdleTimers() }
+    }
+  }
+
+  // The distinct PlayerAction objects behind the per-uid entries of actions.
+  def pendingActions() {
+    def seen = [] as Set
+    def result = []
+    actions.values().each { action ->
+      if (action != null && seen.add(System.identityHashCode(action))) {
+        result << action
+      }
+    }
+    return result
   }
 
   def setDropPlayerClosure(Closure dropPlayerClosure) {
@@ -119,6 +147,7 @@ class PlayerActions {
   }
 
   def empty() {
+    pendingActions().each { it.cancelIdleTimers() }
     actions.each {
       if (it.value.player)
         it.value.player.removeProperty("choices")
@@ -144,6 +173,7 @@ class PlayerActions {
     def removedChoices = false
     def pActions = getActions(pid)
     def pActionsKeys = pActions.keySet()
+    new ArrayList(pActions.values()).unique { System.identityHashCode(it) }.each { it?.cancelIdleTimers() }
     pActionsKeys.each {
       def action = actions.get(it)
       if (! removedChoices && action.hasProperty("player")) {
@@ -365,11 +395,19 @@ class PlayerActions {
       }
       */
 
+      cancelIdleTimers()
+    }
+
+    // Stop this action's warn/drop countdown and take the "You will be dropped" timer off the
+    // player's screen. Called when the action is answered, removed or cleared; without it a removed
+    // action's countdown kept running and dropped a player who had answered everything since.
+    def cancelIdleTimers() {
       if (idleTimer1) {
+        idleTimer1.cancelled = true
         if (idleTimer1.timer) {
           idleTimer1.timer.cancel()
         }
-        if (idleTimer1.player) {
+        if (idleTimer1.player && idleTimer1.fired) {
           if (idleTimer1.player.timers) {
             idleTimer1.player.timers.remove("dropTimer")
             // TODO: Find out why modifying the timers map doesn't trigger a client update without the next line
@@ -378,9 +416,11 @@ class PlayerActions {
         }
       }
 
-      if (idleTimer2) {
+      if (idleTimer2 && idleTimer2.timer) {
         idleTimer2.timer.cancel()
       }
+      idleTimer1 = null
+      idleTimer2 = null
     }
 
     def getNameByUid(String uid) {
