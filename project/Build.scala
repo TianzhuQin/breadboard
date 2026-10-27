@@ -29,6 +29,10 @@ object ApplicationBuild extends Build {
     )
 
     val main = play.Project(appName, appVersion, appDependencies).settings(
+      javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
+      // play-docs (the in-app /@documentation page in dev mode) is no longer published
+      // in any public repository, so it can't be resolved; nothing else depends on it.
+      libraryDependencies ~= { deps => deps.filterNot(_.name == "play-docs") }
     )
 
 }
