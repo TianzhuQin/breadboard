@@ -26,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap
 //   edgeEdits.disallow(player)
 //   edgeEdits.adminEdit("add" | "remove", id1, id2)   // a researcher's edit from the admin graph
 //
-// Ties among neighbors are only visible to participants with g.setVisibility("egoTies").
+// Ties among neighbors are only visible to participants with g.setVisibility("egoTies"), which
+// the "amongNeighbors" and "visible" scopes need (a warning is logged without it).
 //
 // The client reads what it may do from player.edgeEdits (private, never sent to neighbors) and
 // sends {op, a, b} using the ids it received (aliases are translated here). Every edit, accepted
@@ -42,6 +43,7 @@ class EdgeEdits {
   String editEvent
   String resultEvent
   Map<String, Map> rules = new ConcurrentHashMap<String, Map>()
+  boolean warnedTiesHidden = false
 
   def allow(Vertex player, Map opts = [:]) {
     def rule = [
@@ -58,10 +60,22 @@ class EdgeEdits {
     if (!(rule.scope in ["amongNeighbors", "own", "visible"])) {
       throw new IllegalArgumentException("edgeEdits scope must be amongNeighbors, own or visible, not ${rule.scope}")
     }
+    warnIfTiesHidden(rule.scope)
     rules[player.id.toString()] = rule
     player.off(editEvent)
     player.on(editEvent, { Vertex p, data -> handle(p, data) })
     publish(player)
+  }
+
+  // With the default visibility a participant sees only their own ties, not those among their
+  // neighbors. Editing those then confuses them, and a refusal like "They are already connected."
+  // gives away a tie they cannot see. Logged once, as a hint to the experiment's author.
+  private void warnIfTiesHidden(String scope) {
+    if (warnedTiesHidden || !(scope in ["amongNeighbors", "visible"])) return
+    if (models.ClientView.getVisibility() != models.ClientView.Visibility.EGO) return
+    warnedTiesHidden = true
+    play.Logger.warn("edgeEdits: scope \"${scope}\" edits ties among a participant's neighbors, which they " +
+        "cannot see with the default visibility. Call g.setVisibility(\"egoTies\") so they can.")
   }
 
   def disallow(Vertex player) {
@@ -112,13 +126,21 @@ class EdgeEdits {
       remainingAdds   : rule.remainingAdds,
       remainingRemoves: rule.remainingRemoves,
       confirm         : rule.confirm,
+      // The participant can't see the ties among their neighbors, so the page doesn't offer to
+      // connect two of them (it can't tell who is tied already, and refusals would give it away).
+      tiesHidden      : models.ClientView.getVisibility() == models.ClientView.Visibility.EGO,
     ]
     if (rule.candidates != null) {
       state.candidates = currentCandidates(player, rule).collect { c ->
-        [op: c.op, a: g.clientIdOf(c.a), b: g.clientIdOf(c.b), available: c.available != false, reason: c.reason]
+        [op: c.op, a: idSeenBy(player, c.a), b: idSeenBy(player, c.b), available: c.available != false, reason: c.reason]
       }
     }
     player.private.edgeEdits = state
+  }
+
+  // A player's own vertex keeps its real id in their browser; everyone else appears under an alias.
+  def idSeenBy(Vertex viewer, Vertex v) {
+    return v.id == viewer.id ? v.id.toString() : g.clientIdOf(v)
   }
 
   def refreshAll() {
@@ -132,9 +154,9 @@ class EdgeEdits {
     String op = data?.op
     def v1 = data?.a == null ? null : g.fromClientId(data.a.toString())
     def v2 = data?.b == null ? null : g.fromClientId(data.b.toString())
+    def rule = rules[player.id.toString()]
     def reason = check(player, op, v1, v2)
     if (reason == null) {
-      def rule = rules[player.id.toString()]
       if (rule.onEdit != null) {
         rule.onEdit(player, op, v1, v2)
       } else {
@@ -146,7 +168,10 @@ class EdgeEdits {
       }
     }
     log(player.id.toString(), op, v1, v2, reason == null, reason)
-    player.send(resultEvent, [ok: reason == null, op: op, a: data?.a, b: data?.b, reason: reason])
+    // applied: the network changed now. False when onEdit took the edit instead (e.g. to apply
+    // proposals later), so the client can say "sent" rather than "done".
+    player.send(resultEvent, [ok: reason == null, applied: reason == null && rule?.onEdit == null,
+                              op: op, a: data?.a, b: data?.b, reason: reason])
     refreshAll()
   }
 

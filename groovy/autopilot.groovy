@@ -12,9 +12,12 @@ import com.tinkerpop.blueprints.Vertex
 //     maxWaitSeconds: 900,   // give up if minPlayers haven't arrived this long after the first person
 //     countdownSeconds: 10,  // "Starting in ..." before the game begins
 //     waitingText: { here, min, max -> "..." },   // what waiting participants see; null keeps the
-//                                                 // experiment's own text
+//                                                 // experiment's own text. The new participant page
+//                                                 // (BBGame) shows its own waiting screen, with this
+//                                                 // text under it when the experiment sets one.
 //     onStart: { players -> },   // just before InitStep starts, with the players who are in
 //     onCancel: { players -> },  // not enough people came: e.g. recruitment.completeProlific(p, ...)
+//                                // Whoever was away then is passed to it when they come back.
 //   ])
 //
 //   autopilot.replaceDisconnected([
@@ -37,12 +40,16 @@ class Autopilot {
 
   Map room = null
   Map replace = null
-  boolean starting = false
-  boolean finished = false
+  boolean starting = false   // the countdown has begun
+  boolean launched = false   // the game has started, through launch() or otherwise
+  boolean finished = false   // given up: not enough people came
   Long firstArrivalAt = null
+  Long countdownEndsAt = null
   BBTimer startTimer = null
   BBTimer giveUpTimer = null
+  BBTimer countdownTimer = null
   Map<String, BBTimer> takeoverTimers = [:]
+  Set<String> cancelHandled = [] as Set   // players already passed to onCancel
 
   synchronized def waitingRoom(Map opts) {
     room = [
@@ -57,6 +64,7 @@ class Autopilot {
       },
       onStart         : opts.onStart,
       onCancel        : opts.onCancel,
+      customText      : opts.containsKey("waitingText"),
     ]
     evaluate()
   }
@@ -74,12 +82,19 @@ class Autopilot {
     replace = null
     cancelTimer("start")
     cancelTimer("giveUp")
+    cancelTimer("countdown")
     takeoverTimers.values().each { it.cancel() }
     takeoverTimers.clear()
+    clearStatus()
   }
 
   boolean gameStarted() {
-    return starting || gameListener?.experimentInstance?.hasStarted == true
+    return starting || launched || gameListener?.experimentInstance?.hasStarted == true
+  }
+
+  // Every participant vertex, connected or not.
+  List<Vertex> participants() {
+    g.getVertices().findAll { v -> isParticipant(v) }.toList()
   }
 
   // Players (not AI vertices, whose ids start with "_") whose browser is connected right now.
@@ -90,11 +105,25 @@ class Autopilot {
   }
 
   synchronized def onConnection(String clientId, boolean connected) {
-    if (gameStarted()) {
+    if (finished && !launched) {
+      if (connected) cancelLate(clientId)
+    } else if (gameStarted()) {
+      if (connected && starting && !launched) showCountdown(clientId)
       handleDeparture(clientId, connected)
     } else {
       evaluate()
     }
+  }
+
+  // ScriptBoard sends "bb:game-start" however the game starts: launch() below, the admin's Run
+  // button, the AMT timer or a script calling initStep.start(). From then on the waiting room is
+  // done, and nobody's page may keep showing it. Safe to call more than once.
+  synchronized def onGameStart() {
+    launched = true
+    cancelTimer("start")
+    cancelTimer("giveUp")
+    cancelTimer("countdown")
+    clearStatus()
   }
 
   // Before the game: decide whether to start, wait or give up, and keep the waiting text current.
@@ -108,6 +137,8 @@ class Autopilot {
         giveUpTimer = schedule(room.maxWaitSeconds) { giveUp() }
       }
     }
+    players.each { status(it, [state: "waiting", here: here, min: room.minPlayers, max: room.maxPlayers,
+                               customText: room.customText]) }
     if (room.waitingText != null) {
       String text = room.waitingText(here, room.minPlayers, room.maxPlayers)?.toString()
       players.each { it.text = text }
@@ -131,20 +162,39 @@ class Autopilot {
     cancelTimer("giveUp")
     int seconds = room.countdownSeconds
     if (seconds > 0) {
-      String text = "<h3>Starting in ${seconds} seconds…</h3>".toString()
-      connectedPlayers().each { it.text = text }
-      schedule(seconds) { launch() }
+      countdownEndsAt = System.currentTimeMillis() + seconds * 1000L
+      def players = connectedPlayers()
+      players.each { countdown(it, seconds, players.size()) }
+      countdownTimer = schedule(seconds) { launch() }
     } else {
       launch()
     }
   }
 
+  // Someone who (re)connects during the countdown sees the seconds that are left.
+  private void showCountdown(String clientId) {
+    def v = g.getVertex(clientId)
+    if (v == null || !isParticipant(v) || room == null || countdownEndsAt == null) return
+    int seconds = Math.max(1, (int) Math.ceil((countdownEndsAt - System.currentTimeMillis()) / 1000d))
+    countdown(v, seconds, connectedPlayers().size())
+  }
+
+  private void countdown(Vertex v, int seconds, int here) {
+    status(v, [state: "starting", seconds: seconds, here: here, min: room.minPlayers, max: room.maxPlayers])
+    v.text = "<h3>Starting in ${seconds} seconds…</h3>".toString()
+  }
+
   synchronized def launch() {
+    // startGame() comes back here through onGameStart(); this keeps a late countdown from
+    // starting a game that already began some other way.
+    if (launched) return
+    launched = true
     // Whoever left before the start doesn't get a seat in the network.
     g.getVertices().findAll { v ->
       isParticipant(v) && v.getProperty("_system")?.connected != true
     }.toList().each { v -> g.removePlayer(v.id) }
     def players = connectedPlayers()
+    clearStatus()
     track("autopilotStart", [[name: "players", value: players.size().toString()]])
     if (room?.onStart != null) room.onStart(players)
     startGame()
@@ -157,12 +207,39 @@ class Autopilot {
     finished = true
     cancelTimer("start")
     track("autopilotCancelled", [[name: "players", value: players.size().toString()]])
-    if (room.onCancel != null) {
-      room.onCancel(players)
-    } else {
+    players.each { cancelHandled << it.id.toString() }
+    try {
+      runCancel(players)
+    } finally {
+      // Everyone's page says so, also of those who are away right now and see it when they
+      // return, even if onCancel failed.
+      participants().each { status(it, [state: "cancelled"]) }
+      gameListener?.finish()
+    }
+  }
+
+  // Someone who was away when the session was given up, or arrives after, is told too, and
+  // passed to onCancel once.
+  private void cancelLate(String clientId) {
+    if (room == null || cancelHandled.contains(clientId)) return
+    def v = g.getVertex(clientId)
+    if (v == null || !isParticipant(v)) return
+    cancelHandled << clientId
+    try {
+      runCancel([v])
+    } finally {
+      status(v, [state: "cancelled"])
+    }
+  }
+
+  // The default notice replaces the autopilot's own waiting text first, so a page that onCancel
+  // doesn't give new text ("Please keep this page open") doesn't keep telling people to wait. With
+  // waitingText: null the text is the experiment's, and left to onCancel.
+  private void runCancel(List<Vertex> players) {
+    if (room.onCancel == null || room.waitingText != null) {
       players.each { it.text = "<h3>Not enough participants joined</h3><p>Thank you for waiting. This session could not start.</p>" }
     }
-    gameListener?.finish()
+    if (room.onCancel != null) room.onCancel(players)
   }
 
   // During the game: hand a departed player's seat to the computer after a grace period.
@@ -195,6 +272,24 @@ class Autopilot {
     }
   }
 
+  private void clearStatus() {
+    participants().each { status(it, null) }
+  }
+
+  // What the participant's page shows while waiting: player._system.autopilot (only they see it).
+  // Reassigning _system sends the change to the browser at once.
+  private void status(Vertex v, Map state) {
+    def sys = v.getProperty("_system")
+    sys = sys instanceof Map ? sys : [:]
+    if (state == null) {
+      if (!sys.containsKey("autopilot")) return
+      sys.remove("autopilot")
+    } else {
+      sys.autopilot = state
+    }
+    v.setProperty("_system", sys)
+  }
+
   private BBTimer schedule(Number seconds, Closure action) {
     BBTimer timer = new BBTimer()
     timer.runAfter((int) Math.round(seconds * 1000)) {
@@ -216,6 +311,10 @@ class Autopilot {
       giveUpTimer.cancel()
       giveUpTimer = null
     }
+    if (which == "countdown" && countdownTimer != null) {
+      countdownTimer.cancel()
+      countdownTimer = null
+    }
   }
 
   private void track(String name, List data) {
@@ -232,5 +331,14 @@ events.on("bb:connection", { Map info ->
   } catch (Exception e) {
     models.ScriptLoader.humanizeStackTrace(e)
     play.Logger.error("autopilot: error handling a connection change", e)
+  }
+})
+
+events.on("bb:game-start", { Map info ->
+  try {
+    autopilot.onGameStart()
+  } catch (Exception e) {
+    models.ScriptLoader.humanizeStackTrace(e)
+    play.Logger.error("autopilot: error handling the game start", e)
   }
 })

@@ -82,6 +82,17 @@ test("candidates limit edits to the listed moves and are published with aliases"
   edgeEdits.disallow(n.me)
 }
 
+test("in candidates the player's own vertex keeps the id their browser knows it by") {
+  def n = triangle('ee-own')
+  edgeEdits.allow(n.me, [remove: true, scope: "own", candidates: { p ->
+    [[op: "remove", a: n.me, b: n.x]]
+  }])
+  def published = n.me.private.edgeEdits.candidates
+  assert published[0].a == n.me.id
+  assert published[0].b == g.clientIdOf(n.x)
+  edgeEdits.disallow(n.me)
+}
+
 test("onEdit replaces applying the edit") {
   def n = triangle('ee-prop')
   def proposals = []
@@ -90,6 +101,60 @@ test("onEdit replaces applying the edit") {
   assert g.hasEdge(n.x, n.y)
   assert proposals == [["remove", n.x.id, n.y.id]]
   edgeEdits.disallow(n.me)
+}
+
+// The results sent to the player's browser with player.send (ScriptBoard delivers "__send-event").
+def sentResults(Closure body) {
+  def sent = []
+  def listener = { id, name, args -> if (name == "bb:edge-edit-result") sent << args[0] }
+  events.on("__send-event", listener)
+  try {
+    body()
+  } finally {
+    events.off("__send-event", listener)
+  }
+  return sent
+}
+
+test("the result says whether the edit was applied or only handed to onEdit") {
+  def n = triangle('ee-res')
+  def m = triangle('ee-res2')
+  edgeEdits.allow(n.me, [remove: true])
+  edgeEdits.allow(m.me, [remove: true, onEdit: { p, op, a, b -> }])
+  def sent = sentResults {
+    edit(n.me, "remove", n.x, n.y)
+    edit(m.me, "remove", m.x, m.y)
+    edit(n.me, "remove", n.me, n.x)   // refused: own tie
+  }
+  assert sent.size() == 3
+  assert sent[0].ok == true && sent[0].applied == true
+  assert sent[1].ok == true && sent[1].applied == false
+  assert sent[2].ok == false && sent[2].applied == false
+  edgeEdits.disallow(n.me)
+  edgeEdits.disallow(m.me)
+}
+
+test("ties hidden by the default visibility only bring a warning, nothing else changes") {
+  def n = triangle('ee-ego')
+  g.setVisibility("ego")
+  edgeEdits.allow(n.me, [scope: "amongNeighbors", remove: true])
+  edgeEdits.allow(n.x, [scope: "visible", remove: true])
+  assert edgeEdits.warnedTiesHidden
+  assert n.me.private.edgeEdits.enabled == true
+  edit(n.me, "remove", n.x, n.y)
+  assert !g.hasEdge(n.x, n.y)
+  edgeEdits.disallow(n.me)
+  edgeEdits.disallow(n.x)
+
+  def other = new EdgeEdits(g: g, editEvent: "bb:edge-edit", resultEvent: "bb:edge-edit-result")
+  g.setVisibility("egoTies")
+  try {
+    other.allow(n.y, [scope: "amongNeighbors", remove: true])
+    assert !other.warnedTiesHidden
+  } finally {
+    g.setVisibility("ego")
+    other.disallow(n.y)
+  }
 }
 
 test("edits arrive through the client event path, and only from the player themselves") {
@@ -130,4 +195,20 @@ test("a researcher can add and remove ties from the admin") {
   assert g.hasEdge(n.x, n.z)
   edgeEdits.adminEdit("remove", n.x.id, n.z.id)
   assert !g.hasEdge(n.x, n.z)
+}
+
+test("the page is told when it cannot see the ties among neighbors") {
+  def n = triangle('ee-hidden')
+  def before = models.ClientView.getVisibility()
+  try {
+    g.setVisibility("ego")
+    edgeEdits.allow(n.me, [add: true, scope: "own"])
+    assert n.me.private.edgeEdits.tiesHidden == true
+    g.setVisibility("egoTies")
+    edgeEdits.publish(n.me)
+    assert n.me.private.edgeEdits.tiesHidden == false
+  } finally {
+    g.setVisibility(before == models.ClientView.Visibility.EGO_TIES ? "egoTies" : "ego")
+    edgeEdits.disallow(n.me)
+  }
 }
