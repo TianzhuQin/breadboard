@@ -159,7 +159,9 @@ public class ExperimentInstance extends Model {
 
     experimentInstance.put("id", id);
     experimentInstance.put("creationTime", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss,S").format(creationDate));
+    experimentInstance.put("creationTimeUtc", Timestamps.iso(creationDate));
     experimentInstance.put("status", status.toString());
+    experimentInstance.put("hasStarted", Boolean.TRUE.equals(hasStarted));
     experimentInstance.put("name", name);
     experimentInstance.put("hitId", (amtHits.size() > 0) ? amtHits.get(0).id.toString() : "");
 

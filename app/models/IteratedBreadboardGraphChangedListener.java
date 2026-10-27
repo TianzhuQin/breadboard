@@ -20,7 +20,7 @@ import scala.concurrent.duration.Duration;
 public class IteratedBreadboardGraphChangedListener implements BreadboardGraphChangedListener {
   private Graph graph;
   private Long updateIteration = 0L;
-  private final List<ClientListener> adminListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+  private final java.util.concurrent.CopyOnWriteArrayList<ClientListener> adminListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
   private final Map<String, Client> clientListeners = new java.util.concurrent.ConcurrentHashMap<>();
 
   static ActorRef clientUpdateActor;
@@ -85,7 +85,12 @@ public class IteratedBreadboardGraphChangedListener implements BreadboardGraphCh
   }
 
   public void addAdminListener(ClientListener adminListener) {
-    adminListeners.add(adminListener);
+    adminListeners.addIfAbsent(adminListener);
+  }
+
+  @Override
+  public void removeAdminListener(ClientListener adminListener) {
+    adminListeners.remove(adminListener);
   }
 
   public List<ClientListener> getAdminListeners() {

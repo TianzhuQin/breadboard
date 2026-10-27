@@ -87,6 +87,24 @@ public class User extends Model {
     }
   }
 
+  /** Whether {@code raw} is this account's password. False for a malformed stored hash, not an exception. */
+  public boolean passwordMatches(String raw) {
+    if (raw == null || password == null) {
+      return false;
+    }
+    try {
+      return BCrypt.checkpw(raw, password);
+    } catch (IllegalArgumentException notAHash) {
+      // e.g. a password the old websocket SaveUserSettings stored in plain text
+      return false;
+    }
+  }
+
+  /** Store a new password, hashed (the caller saves the user). */
+  public void changePassword(String raw) {
+    this.password = BCrypt.hashpw(raw, BCrypt.gensalt());
+  }
+
   public void setExperimentInstanceId(Long experimentInstanceId) {
     this.experimentInstanceId = experimentInstanceId;
   }
@@ -138,7 +156,7 @@ public class User extends Model {
       breadboard.put("experiment", selectedExperiment.toJson());
     }
 
-    if (experimentInstanceId.equals(Experiment.TEST_INSTANCE_ID)) {
+    if (Experiment.TEST_INSTANCE_ID.equals(experimentInstanceId) && selectedExperiment != null) {
       breadboard.put("experimentInstance", selectedExperiment.getTestInstance().toJson());
     } else if (experimentInstanceId != null && experimentInstanceId != -1L) {
       ExperimentInstance ei = ExperimentInstance.findById(experimentInstanceId);

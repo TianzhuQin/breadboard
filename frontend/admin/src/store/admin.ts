@@ -40,6 +40,8 @@ const state = reactive({
   events: [] as LiveEvent[],
   /** The last tie edit's outcome, for the network page. */
   lastTieEdit: null as TieEditResult | null,
+  /** The newest error the server sent in reply to a request ({"error", "request"}). */
+  requestError: null as { request: string, text: string, at: number } | null,
 })
 
 const OUTPUT_CAP = 500
@@ -75,6 +77,9 @@ function handle (m: any) {
       w.resolve(m)
     }
   }
+  // the server announces a full replay of the network (after LogIn); drop what we had, which
+  // also forgets people who left while the connection was down
+  if (m.graphReplay) { graph.clear(); return }
   if (graph.apply(m)) return
 
   if ('user' in m && m.user && typeof m.user === 'object') {
@@ -93,7 +98,8 @@ function handle (m: any) {
     }
   }
   if (typeof m.error === 'string' && m.error.trim()) {
-    pushOutput('error', m.error.trim())
+    pushOutput('error', m.error.trim(), typeof m.request === 'string' ? m.request : undefined)
+    if (typeof m.request === 'string') state.requestError = { request: m.request, text: m.error.trim(), at: Date.now() }
   }
   if (typeof m.output === 'string' && m.output.trim()) {
     pushOutput('output', m.output.trim())
@@ -107,7 +113,24 @@ function handle (m: any) {
   }
 }
 
+/**
+ * The server sends times as local wall-clock text ("2026-10-27 14:03:05,123") and, newer, the same
+ * moment as ISO-8601 UTC in a *Utc twin. Use the UTC one wherever it is present, so every page reads
+ * the right moment whatever the server's and the browser's time zones.
+ */
+function preferUtcTimes (v: any, depth = 0) {
+  if (!v || typeof v !== 'object' || depth > 6) return
+  if (Array.isArray(v)) { for (const x of v) preferUtcTimes(x, depth + 1); return }
+  if (typeof v.creationTimeUtc === 'string') v.creationTime = v.creationTimeUtc
+  if (typeof v.datetimeUtc === 'string') v.datetime = v.datetimeUtc
+  for (const k in v) {
+    const x = v[k]
+    if (x && typeof x === 'object') preferUtcTimes(x, depth + 1)
+  }
+}
+
 function applyUserJson (m: any) {
+  preferUtcTimes(m)
   state.user = m.user
   // missing key = nothing selected (User.java omits it)
   state.experiment = m.experiment && typeof m.experiment === 'object' ? m.experiment : null
@@ -179,33 +202,48 @@ function send (action: string, payload: Record<string, any> = {}) {
   conn.send(action, payload)
 }
 
+const isUserJson = (m: any) => 'user' in m && m.user && typeof m.user === 'object'
+const isErrorFor = (request: string) => (m: any) => typeof m.error === 'string' && m.request === request
+
 /** Wait for the server's next User JSON (most actions end with one). */
 function nextUserJson (ms = 20000) {
-  return nextMessage(m => 'user' in m && m.user && typeof m.user === 'object', ms)
+  return nextMessage(isUserJson, ms)
+}
+/**
+ * Wait for the User JSON that follows `request`, or the error the server sends instead.
+ * Resolves with the User JSON, the error message when `errorsCount` (it is an answer too), or null.
+ */
+async function replyTo (request: string, ms: number, errorsCount = false, match: (m: any) => boolean = isUserJson) {
+  const isError = isErrorFor(request)
+  const m = await nextMessage(x => match(x) || isError(x), ms)
+  if (m && isError(m) && !errorsCount) return null
+  return m
 }
 
 const actions = {
   selectExperiment (id: number) {
     send('SelectExperiment', { experimentId: id })
-    return nextUserJson()
+    return replyTo('SelectExperiment', 20000)
   },
   /** Create and start a session of the selected experiment. */
   launch (name: string, parameters: Record<string, string | number | boolean>) {
     send('LaunchGame', { experimentId: state.experiment?.id, name, parameters })
-    return nextMessage(m => 'user' in m && m.experimentInstance && m.experimentInstance.name === name, 60000)
+    // a refused launch ({"error", "request": "LaunchGame"}) resolves null at once; the reason is in admin.requestError
+    return replyTo('LaunchGame', 60000, false, m => isUserJson(m) && m.experimentInstance && m.experimentInstance.name === name)
   },
   /** Make a session the current one and (re)start it; rebuilds the engine. */
   selectInstance (id: number) {
     send('SelectInstance', { id })
-    return nextUserJson(60000)
+    return replyTo('SelectInstance', 60000)
   },
   stopInstance (id: number) {
     send('StopGame', { id })
-    return nextUserJson()
+    return replyTo('StopGame', 20000)
   },
+  /** Resolves with the User JSON, or with the server's refusal ({error, request}); null when no answer. */
   deleteInstance (id: number) {
     send('DeleteInstance', { id })
-    return nextUserJson()
+    return replyTo('DeleteInstance', 20000, true)
   },
   /** Run initStep.start(): the game begins and closes to newcomers. */
   startGame () {
@@ -231,11 +269,11 @@ const actions = {
   },
   deleteExperiment (exp: Experiment) {
     send('DeleteExperiment', { selectedExperiment: exp.name, experimentId: exp.id })
-    return nextUserJson()
+    return replyTo('DeleteExperiment', 20000, true)
   },
   toggleFileMode () {
     send('ToggleFileMode')
-    return nextUserJson()
+    return replyTo('ToggleFileMode', 20000)
   },
   /** Ask the server for the newest User JSON. */
   refresh () {
@@ -246,6 +284,7 @@ const actions = {
   async instanceEvents (id: number): Promise<{ name: string, events: any[] } | null> {
     send('ShowEvent', { id })
     const m = await nextMessage(x => 'events' in x && 'eventExperimentInstance' in x, 30000)
+    if (m) preferUtcTimes(m.events)
     return m ? { name: m.eventExperimentInstance, events: m.events } : null
   },
   clearOutput () {

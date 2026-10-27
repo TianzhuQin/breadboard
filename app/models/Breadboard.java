@@ -8,22 +8,26 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tinkerpop.blueprints.Vertex;
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.text.WordUtils;
-import org.imgscalr.Scalr;
 import play.Logger;
-import play.Play;
 import play.libs.*;
 import play.libs.F.Callback;
+import play.libs.F.Callback0;
 import play.mvc.WebSocket;
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
+/**
+ * The admin console's websocket ({@code /connect}) and the actor that handles its account-level
+ * actions. Engine actions go on to the account's {@link ScriptBoard} actor.
+ *
+ * <p>Every frame is a JSON object with {@code action} and {@code uid}. Replies go to the socket the
+ * frame came from. A frame that can't be carried out (a missing key, an unknown id, an engine action
+ * before LogIn) is answered with {@code {"error": "<what went wrong>", "request": "<action>"}} and
+ * changes nothing.
+ */
 public class Breadboard extends UntypedActor {
   // How often to send websocket messages in ms
   public static final long WEBSOCKET_RATE = 100L;
@@ -34,201 +38,344 @@ public class Breadboard extends UntypedActor {
 
   static ActorRef breadboardController = Akka.system().actorOf(new Props(Breadboard.class));
 
-  static ThrottledWebSocketOut out;
+  private static final ObjectMapper mapper = new ObjectMapper();
 
+  /**
+   * A console socket opened. Everything read from it is answered on it: the reply socket used to be
+   * one static field, replaced by every new connection, so replies went to whichever tab connected
+   * last. Its Admin (registered on LogIn) is dropped when it closes.
+   */
   public static void connect(final WebSocket.In<JsonNode> in, final WebSocket.Out<JsonNode> wsout) {
-    out = new ThrottledWebSocketOut(wsout, WEBSOCKET_RATE);
+    final ThrottledWebSocketOut out = new ThrottledWebSocketOut(wsout, WEBSOCKET_RATE);
     in.onMessage(new Callback<JsonNode>() {
       public void invoke(JsonNode event) {
-        try {
-          Logger.debug(event.toString());
-          ObjectMapper mapper = new ObjectMapper();
-          // TODO: check if there is a better way to do this with new version of Jackson
-          Map<String, Object> jsonInput = mapper.readValue(event.toString(), Map.class);
-          String action = jsonInput.get("action").toString();
-          String uid = jsonInput.get("uid").toString();
-          User user = User.findByUID(uid);
-          ObjectNode result = Json.newObject();
-
-          if (user != null) {
-            if (action.equals("LogIn")) {
-              breadboardController.tell(new LogIn(user, out), null);
-            } else if (action.equals("SaveUserSettings")) {
-              String currentPassword = jsonInput.get("currentPassword").toString().trim();
-              String newPassword = jsonInput.get("newPassword").toString().trim();
-              String confirmPassword = jsonInput.get("confirmPassword").toString().trim();
-
-              breadboardController.tell(new SaveUserSettings(user, currentPassword, newPassword, confirmPassword, out), null);
-
-            } else if (action.equals("SelectExperiment")) {
-              Long experimentId = Long.parseLong(jsonInput.get("experimentId").toString());
-              Experiment experiment = Experiment.findById(experimentId);
-
-              if (experiment != null)
-                breadboardController.tell(new SelectExperiment(user, experiment, out), null);
-            } else if (action.equals("CreateExperiment")) {
-              String name = jsonInput.get("name").toString();
-              String copyExperimentName = jsonInput.containsKey("copyExperimentName") ? jsonInput.get("copyExperimentName").toString() : null;
-              breadboardController.tell(new CreateExperiment(user, name, copyExperimentName, out), null);
-              Logger.debug("CreateExperiment");
-            } else if (action.equals("ImportExperiment")) {
-              String importFrom = jsonInput.get("importFrom").toString();
-              String importTo = jsonInput.get("importTo").toString();
-              breadboardController.tell(new ImportExperiment(user, importFrom, importTo, out), null);
-              Logger.debug("ImportExperiment");
-            } else if (action.equals("DeleteExperiment")) {
-              String selectedExperimentName = jsonInput.get("selectedExperiment").toString();
-              instances.get(user.email).tell(new DeleteExperiment(user, selectedExperimentName, out), null);
-            } else if (action.equals("ExportExperiment")) {
-              String selectedExperimentName = jsonInput.get("selectedExperiment").toString();
-              Experiment experiment = user.getExperimentByName(selectedExperimentName);
-              if (experiment != null) {
-                ObjectNode jsonOutput = Json.newObject();
-                try {
-                  experiment.export();
-                  jsonOutput.put("output", "Experiment exported.");
-                } catch (IOException ioe) {
-                  jsonOutput.put("output", "Export failed.");
-                  Logger.error(ioe.getMessage());
-                }
-                out.write(jsonOutput);
-              }
-            } else if (action.equals("SubmitAMTTask")) {
-              Logger.debug("action.equals(\"SubmitAMTTask\")");
-              // The submission to AMT is handled by the AMTAdmin createHIT route
-              // This action handles setting the startAt global variable
-              // and setting the timer to start initStep
-              try {
-                Integer lifetimeInSeconds = new Integer(jsonInput.get("lifetimeInSeconds").toString());
-                Integer tutorialTime = new Integer(jsonInput.get("tutorialTime").toString());
-
-                breadboardController.tell(new SubmitAMTTask(user, lifetimeInSeconds, tutorialTime,  out), null);
-              } catch (NumberFormatException nfe) {
-                Logger.error("Invalid number provided for lifetimeInSeconds, or tutorialTime parameter.");
-              } catch (Exception e) {
-                Logger.debug("Some other exception: " + e.getMessage());
-                e.printStackTrace();
-              }
-            } else if (action.equals("RunGame")) {
-              if (instances.containsKey(user.email)) {
-                instances.get(user.email).tell(new RunGame(user, out), null);
-              }
-            } else if (action.equals("SendScript")) {
-              if (instances.containsKey(user.email)) {
-                String script = jsonInput.get("script").toString();
-                instances.get(user.email).tell(new SendScript(user, script, out), null);
-              }
-            } else if (action.equals("AddLanguage")) {
-              Long experimentId = Long.parseLong(jsonInput.get("experimentId").toString());
-              String languageCode = jsonInput.get("code").toString();
-              breadboardController.tell(new AddLanguage(user, experimentId, languageCode, out), null);
-            } else if (action.equals("MakeChoice")) {
-              // TODO: Player client will not be logged in with email and will
-              // need a different way to identify the correct game
-              if (instances.containsKey(user.email)) {
-                String choiceUID = jsonInput.get("choiceUID").toString();
-                String params = (jsonInput.containsKey("params")) ? jsonInput.get("params").toString() : null;
-                instances.get(user.email).tell(new MakeChoice(user, choiceUID, params, out), null);
-              }
-            } else if (action.equals("EditTie")) {
-              // A researcher adding or cutting a tie from the admin network view.
-              if (instances.containsKey(user.email)) {
-                Object op = jsonInput.get("op");
-                Object a = jsonInput.get("a");
-                Object b = jsonInput.get("b");
-                if (op != null && a != null && b != null) {
-                  instances.get(user.email).tell(new EditTie(user, op.toString(), a.toString(), b.toString(), out), null);
-                }
-              }
-            } else if (action.equals("SaveStyle")) {
-              String style = jsonInput.get("style").toString();
-              breadboardController.tell(new SaveStyle(user, style, out), null);
-            } else if (action.equals("SaveClientHtml")) {
-              String clientHtml = jsonInput.get("clientHtml").toString();
-              breadboardController.tell(new SaveClientHtml(user, clientHtml, out), null);
-            } else if (action.equals("SaveClientGraph")) {
-              String clientGraph = jsonInput.get("clientGraph").toString();
-              breadboardController.tell(new SaveClientGraph(user, clientGraph, out), null);
-            } else if (action.equals("CreateStep")) {
-              String name = jsonInput.get("name").toString();
-              breadboardController.tell(new CreateStep(user, name, out), null);
-            } else if (action.equals("DeleteStep")) {
-              Long id = Long.valueOf(jsonInput.get("id").toString());
-              breadboardController.tell(new DeleteStep(user, id, out), null);
-            } else if (action.equals("SendStep")) {
-              if (instances.containsKey(user.email)) {
-                try {
-                  Long id = Long.parseLong(jsonInput.get("id").toString());
-                  String name = jsonInput.get("name").toString();
-                  String source = jsonInput.get("source").toString();
-                  // TODO: is providing the name necessary?
-                  instances.get(user.email).tell(new SendStep(user, id, name, source, out), null);
-                } catch (NumberFormatException nfe) {
-                  Logger.debug("Long.parseLong threw NumberFormatException, input: " + jsonInput.get("id").toString());
-                }
-              }
-            } else if (action.equals("LaunchGame")) {
-              if (instances.containsKey(user.email)) {
-                String name = jsonInput.get("name").toString();
-                Object parameters = jsonInput.get("parameters");
-                Logger.debug("parameters.getClass().toString() = " + parameters.getClass().toString());
-                if (parameters instanceof LinkedHashMap) {
-                  LinkedHashMap params = (LinkedHashMap) parameters;
-                  instances.get(user.email).tell(new LaunchGame(user, name, params, out), null);
-                }
-              }
-            } else if (action.equals("StopGame")) {
-              if (instances.containsKey(user.email)) {
-                try {
-                  Long id = Long.parseLong(jsonInput.get("id").toString());
-                  instances.get(user.email).tell(new StopGame(user, id, out), null);
-                } catch (NumberFormatException nfe) {
-                  Logger.debug("Error parsing Long from String: " + jsonInput.get("id").toString());
-                }
-              }
-            } else if (action.equals("NewParameter")) {
-              String name = jsonInput.get("name").toString();
-              String type = jsonInput.get("type").toString();
-              String minVal = (jsonInput.get("minVal") == null) ? "" : jsonInput.get("minVal").toString();
-              String maxVal = (jsonInput.get("maxVal") == null) ? "" : jsonInput.get("maxVal").toString();
-              String defaultVal = jsonInput.get("defaultVal").toString();
-              String description = jsonInput.get("description").toString();
-
-              breadboardController.tell(new NewParameter(user, name, type, minVal, maxVal, defaultVal, description, out), null);
-            } else if (action.equals("RemoveParameter")) {
-              String id = jsonInput.get("id").toString();
-
-              breadboardController.tell(new RemoveParameter(user, id, out), null);
-            } else if (action.equals("SelectInstance")) {
-              Long id = Long.parseLong(jsonInput.get("id").toString());
-
-              breadboardController.tell(new SelectInstance(user, id, out), null);
-            } else if (action.equals("Update")) {
-              breadboardController.tell(new Update(user, out), null);
-            } else if (action.equals("ShowEvent")) {
-              Long experimentInstanceId = Long.parseLong(jsonInput.get("id").toString());
-              breadboardController.tell(new ShowEvent(user, experimentInstanceId, out), null);
-            } else if (action.equals("DeleteInstance")) {
-              Long experimentInstanceId = Long.parseLong(jsonInput.get("id").toString());
-              breadboardController.tell(new DeleteInstance(user, experimentInstanceId, out), null);
-            } else if (action.equals("ReloadEngine")) {
-              instances.get(user.email).tell(new ReloadEngine(user, out), null);
-            } else if (action.equals("DeleteImage")) {
-              Long imageId = Long.parseLong(jsonInput.get("imageId").toString());
-              breadboardController.tell(new DeleteImage(user, imageId, out), null);
-            } else if (action.equals("ToggleFileMode")) {
-              breadboardController.tell(new ToggleFileMode(user, out), null);
-            }
-          } else { // END if (user != null)
-            // user is null here; reading user.uid threw a NullPointerException on every message
-            // from a stale or forged admin session.
-            Logger.error("user not found with UID: " + uid);
-          }
-        } catch (java.io.IOException ioe) {
-          Logger.error(ioe.getMessage());
-        }
+        receive(event, out);
       }
     });
+    in.onClose(new Callback0() {
+      public void invoke() {
+        ScriptBoard.removeAdmin(out);
+      }
+    });
+  }
+
+  /** A request that can't be carried out; its message is sent back as {"error": ...}. */
+  static final class BadRequest extends RuntimeException {
+    BadRequest(String message) {
+      super(message);
+    }
+  }
+
+  /** {@code {"error": message, "request": action}} to one socket. */
+  static void replyError(ThrottledWebSocketOut out, String request, String message) {
+    if (out == null) {
+      return;
+    }
+    ObjectNode error = Json.newObject();
+    error.put("error", message);
+    if (request != null) {
+      error.put("request", request);
+    }
+    try {
+      out.write(error);
+    } catch (Exception e) {
+      Logger.debug("Could not send an error to a console: " + e);
+    }
+  }
+
+  /** The action name a message stands for, for error replies. */
+  static String requestName(BreadboardMessage message) {
+    if (message instanceof ChangeExperiment) return "SelectExperiment";
+    if (message instanceof AddAdmin || message instanceof Refresh) return "LogIn";
+    if (message instanceof RunStep) return "SendStep";
+    return message.getClass().getSimpleName();
+  }
+
+  /** Read one frame from a console socket and act on it; never throws. */
+  static void receive(JsonNode event, ThrottledWebSocketOut out) {
+    String action = null;
+    try {
+      Logger.debug(event.toString());
+      // TODO: check if there is a better way to do this with new version of Jackson
+      Map<String, Object> jsonInput;
+      try {
+        jsonInput = mapper.readValue(event.toString(), Map.class);
+      } catch (IOException notAnObject) {
+        replyError(out, null, "The message could not be read: it must be a JSON object.");
+        return;
+      }
+      action = text(jsonInput, "action");
+      if (action == null) {
+        replyError(out, null, "The message has no \"action\".");
+        return;
+      }
+      String uid = text(jsonInput, "uid");
+      User user = uid == null ? null : User.findByUID(uid);
+      if (user == null) {
+        // A stale or forged admin session (reading user.uid here used to throw on every message).
+        Logger.error("user not found with UID: " + uid);
+        replyError(out, action, "You are not signed in (or your sign-in has expired). Sign in again.");
+        return;
+      }
+      dispatch(action, jsonInput, user, out);
+    } catch (BadRequest bad) {
+      replyError(out, action, bad.getMessage());
+    } catch (Exception e) {
+      Logger.error("Could not handle admin action " + action, e);
+      replyError(out, action, "Something went wrong: " + ScriptBoardSupport.describeError(e));
+    }
+  }
+
+  // ---- reading a frame ------------------------------------------------------------------------
+
+  /** The value as text (a number arrives as "5", an object as Map.toString()), or null when absent. */
+  static String text(Map<String, Object> json, String key) {
+    Object value = json.get(key);
+    return value == null ? null : value.toString();
+  }
+
+  static String required(Map<String, Object> json, String key) {
+    String value = text(json, key);
+    if (value == null) {
+      throw new BadRequest("\"" + key + "\" is missing.");
+    }
+    return value;
+  }
+
+  static Long requiredLong(Map<String, Object> json, String key) {
+    Object value = json.get(key);
+    if (value == null) {
+      throw new BadRequest("\"" + key + "\" is missing.");
+    }
+    if (value instanceof Number) {
+      return ((Number) value).longValue();
+    }
+    try {
+      return Long.parseLong(value.toString().trim());
+    } catch (NumberFormatException nfe) {
+      throw new BadRequest("\"" + key + "\" must be a number, not \"" + value + "\".");
+    }
+  }
+
+  static Integer requiredInt(Map<String, Object> json, String key) {
+    Long value = requiredLong(json, key);
+    if (value > Integer.MAX_VALUE || value < Integer.MIN_VALUE) {
+      throw new BadRequest("\"" + key + "\" is too large.");
+    }
+    return value.intValue();
+  }
+
+  /** The account's engine actor; engine actions need LogIn to have opened it. */
+  static ActorRef scriptBoard(User user) {
+    ActorRef scriptBoard = instances.get(user.email);
+    if (scriptBoard == null) {
+      throw new BadRequest("This console hasn't logged in yet: send LogIn first.");
+    }
+    return scriptBoard;
+  }
+
+  private static void dispatch(String action, Map<String, Object> jsonInput, User user, ThrottledWebSocketOut out) throws IOException {
+    if (action.equals("LogIn")) {
+      breadboardController.tell(new LogIn(user, out), null);
+    } else if (action.equals("SaveUserSettings")) {
+      // Missing fields are reported by the validation, as empty ones.
+      String currentPassword = StringUtils.defaultString(text(jsonInput, "currentPassword")).trim();
+      String newPassword = StringUtils.defaultString(text(jsonInput, "newPassword")).trim();
+      String confirmPassword = StringUtils.defaultString(text(jsonInput, "confirmPassword")).trim();
+
+      breadboardController.tell(new SaveUserSettings(user, currentPassword, newPassword, confirmPassword, out), null);
+
+    } else if (action.equals("SelectExperiment")) {
+      Long experimentId = requiredLong(jsonInput, "experimentId");
+      Experiment experiment = Experiment.findById(experimentId);
+      if (experiment == null) {
+        throw new BadRequest("There is no experiment with id " + experimentId + ".");
+      }
+      breadboardController.tell(new SelectExperiment(user, experiment, out), null);
+    } else if (action.equals("CreateExperiment")) {
+      String name = text(jsonInput, "name");
+      String copyExperimentName = text(jsonInput, "copyExperimentName");
+      breadboardController.tell(new CreateExperiment(user, name, copyExperimentName, out), null);
+      Logger.debug("CreateExperiment");
+    } else if (action.equals("ImportExperiment")) {
+      String importFrom = text(jsonInput, "importFrom");
+      String importTo = text(jsonInput, "importTo");
+      breadboardController.tell(new ImportExperiment(user, importFrom, importTo, out), null);
+      Logger.debug("ImportExperiment");
+    } else if (action.equals("DeleteExperiment")) {
+      // By id (the new console); by name for the old one.
+      Long experimentId = jsonInput.get("experimentId") == null ? null : requiredLong(jsonInput, "experimentId");
+      String selectedExperimentName = text(jsonInput, "selectedExperiment");
+      if (experimentId == null && selectedExperimentName == null) {
+        throw new BadRequest("\"experimentId\" is missing.");
+      }
+      scriptBoard(user).tell(new DeleteExperiment(user, experimentId, selectedExperimentName, out), null);
+    } else if (action.equals("ExportExperiment")) {
+      Experiment experiment = null;
+      if (jsonInput.get("experimentId") != null) {
+        Long experimentId = requiredLong(jsonInput, "experimentId");
+        for (Experiment e : user.ownedExperiments) {
+          if (experimentId.equals(e.id)) {
+            experiment = e;
+          }
+        }
+      } else {
+        experiment = user.getExperimentByName(required(jsonInput, "selectedExperiment"));
+      }
+      if (experiment == null) {
+        throw new BadRequest("None of your experiments matches.");
+      }
+      ObjectNode jsonOutput = Json.newObject();
+      try {
+        experiment.export();
+        jsonOutput.put("output", "Experiment exported.");
+      } catch (IOException ioe) {
+        jsonOutput.put("output", "Export failed.");
+        Logger.error(ioe.getMessage());
+      }
+      out.write(jsonOutput);
+    } else if (action.equals("SubmitAMTTask")) {
+      Logger.debug("action.equals(\"SubmitAMTTask\")");
+      // The submission to AMT is handled by the AMTAdmin createHIT route
+      // This action handles setting the startAt global variable
+      // and setting the timer to start initStep
+      Integer lifetimeInSeconds = requiredInt(jsonInput, "lifetimeInSeconds");
+      Integer tutorialTime = requiredInt(jsonInput, "tutorialTime");
+      scriptBoard(user);
+      breadboardController.tell(new SubmitAMTTask(user, lifetimeInSeconds, tutorialTime, out), null);
+    } else if (action.equals("RunGame")) {
+      scriptBoard(user).tell(new RunGame(user, out), null);
+    } else if (action.equals("SendScript")) {
+      String script = required(jsonInput, "script");
+      scriptBoard(user).tell(new SendScript(user, script, out), null);
+    } else if (action.equals("AddLanguage")) {
+      Long experimentId = requiredLong(jsonInput, "experimentId");
+      String languageCode = required(jsonInput, "code");
+      breadboardController.tell(new AddLanguage(user, experimentId, languageCode, out), null);
+    } else if (action.equals("MakeChoice")) {
+      // TODO: Player client will not be logged in with email and will
+      // need a different way to identify the correct game
+      String choiceUID = required(jsonInput, "choiceUID");
+      String params = text(jsonInput, "params");
+      scriptBoard(user).tell(new MakeChoice(user, choiceUID, params, out), null);
+    } else if (action.equals("EditTie")) {
+      // A researcher adding or cutting a tie from the admin network view. Refusals come back in the
+      // same {"tieEdit": ...} shape as the outcome, so the console's wait for it ends either way.
+      String op = text(jsonInput, "op");
+      String a = text(jsonInput, "a");
+      String b = text(jsonInput, "b");
+      ActorRef scriptBoard = instances.get(user.email);
+      if (op == null || a == null || b == null) {
+        tieEditRefused(out, op, a, b, "An edit needs \"op\", \"a\" and \"b\".");
+      } else if (scriptBoard == null) {
+        tieEditRefused(out, op, a, b, "This console hasn't logged in yet.");
+      } else {
+        scriptBoard.tell(new EditTie(user, op, a, b, out), null);
+      }
+    } else if (action.equals("SaveStyle")) {
+      String style = required(jsonInput, "style");
+      breadboardController.tell(new SaveStyle(user, style, out), null);
+    } else if (action.equals("SaveClientHtml")) {
+      String clientHtml = required(jsonInput, "clientHtml");
+      breadboardController.tell(new SaveClientHtml(user, clientHtml, out), null);
+    } else if (action.equals("SaveClientGraph")) {
+      String clientGraph = required(jsonInput, "clientGraph");
+      breadboardController.tell(new SaveClientGraph(user, clientGraph, out), null);
+    } else if (action.equals("CreateStep")) {
+      String name = required(jsonInput, "name");
+      breadboardController.tell(new CreateStep(user, name, out), null);
+    } else if (action.equals("DeleteStep")) {
+      Long id = requiredLong(jsonInput, "id");
+      breadboardController.tell(new DeleteStep(user, id, out), null);
+    } else if (action.equals("SendStep")) {
+      // The id isn't used (a step not saved yet has none); name and source are.
+      Long id = -1L;
+      try {
+        id = jsonInput.get("id") == null ? -1L : requiredLong(jsonInput, "id");
+      } catch (BadRequest ignored) {
+        Logger.debug("SendStep with a non-numeric id: " + jsonInput.get("id"));
+      }
+      String name = StringUtils.defaultString(text(jsonInput, "name"));
+      String source = required(jsonInput, "source");
+      // TODO: is providing the name necessary?
+      scriptBoard(user).tell(new SendStep(user, id, name, source, out), null);
+    } else if (action.equals("LaunchGame")) {
+      String name = required(jsonInput, "name");
+      Object parameters = jsonInput.get("parameters");
+      if (parameters != null && !(parameters instanceof Map)) {
+        throw new BadRequest("\"parameters\" must be an object of name: value.");
+      }
+      LinkedHashMap params = parameters == null ? new LinkedHashMap() : new LinkedHashMap((Map) parameters);
+      scriptBoard(user).tell(new LaunchGame(user, name, params, out), null);
+    } else if (action.equals("StopGame")) {
+      Long id = requiredLong(jsonInput, "id");
+      scriptBoard(user).tell(new StopGame(user, id, out), null);
+    } else if (action.equals("NewParameter")) {
+      String name = required(jsonInput, "name");
+      String type = required(jsonInput, "type");
+      String minVal = StringUtils.defaultString(text(jsonInput, "minVal"));
+      String maxVal = StringUtils.defaultString(text(jsonInput, "maxVal"));
+      String defaultVal = StringUtils.defaultString(text(jsonInput, "defaultVal"));
+      String description = StringUtils.defaultString(text(jsonInput, "description"));
+
+      breadboardController.tell(new NewParameter(user, name, type, minVal, maxVal, defaultVal, description, out), null);
+    } else if (action.equals("RemoveParameter")) {
+      String id = required(jsonInput, "id");
+
+      breadboardController.tell(new RemoveParameter(user, id, out), null);
+    } else if (action.equals("SelectInstance")) {
+      Long id = requiredLong(jsonInput, "id");
+      scriptBoard(user);
+      breadboardController.tell(new SelectInstance(user, id, out), null);
+    } else if (action.equals("Update")) {
+      breadboardController.tell(new Update(user, out), null);
+    } else if (action.equals("ShowEvent")) {
+      Long experimentInstanceId = requiredLong(jsonInput, "id");
+      breadboardController.tell(new ShowEvent(user, experimentInstanceId, out), null);
+    } else if (action.equals("DeleteInstance")) {
+      Long experimentInstanceId = requiredLong(jsonInput, "id");
+      breadboardController.tell(new DeleteInstance(user, experimentInstanceId, out), null);
+    } else if (action.equals("ReloadEngine")) {
+      scriptBoard(user).tell(new ReloadEngine(user, out), null);
+    } else if (action.equals("DeleteImage")) {
+      Long imageId = requiredLong(jsonInput, "imageId");
+      breadboardController.tell(new DeleteImage(user, imageId, out), null);
+    } else if (action.equals("ToggleFileMode")) {
+      breadboardController.tell(new ToggleFileMode(user, out), null);
+    } else {
+      throw new BadRequest("Unknown action \"" + action + "\".");
+    }
+  }
+
+  static void tieEditRefused(ThrottledWebSocketOut out, String op, String a, String b, String reason) {
+    ObjectNode result = Json.newObject();
+    result.put("op", op);
+    result.put("a", a);
+    result.put("b", b);
+    result.put("ok", false);
+    result.put("reason", reason);
+    ObjectNode message = Json.newObject();
+    message.put("tieEdit", result);
+    out.write(message);
+  }
+
+  /**
+   * What is wrong with a password change, in the order the checks run; empty when it may go ahead.
+   * The current password must be the account's (checked against its hash).
+   */
+  static List<String> passwordChangeErrors(User user, String currentPassword, String newPassword, String confirmPassword) {
+    List<String> errors = new ArrayList<String>();
+    if (StringUtils.isEmpty(currentPassword)) {
+      errors.add("'Current Password' is required");
+    } else if (!user.passwordMatches(currentPassword)) {
+      errors.add("'Current Password' doesn't match the current password");
+    }
+    if (StringUtils.isEmpty(newPassword)) {
+      errors.add("'New Password' is required");
+    } else if (!newPassword.equals(confirmPassword)) {
+      errors.add("'Confirm Password' doesn't match the new password");
+    }
+    return errors;
   }
 
   public void onReceive(Object message) throws Exception {
@@ -236,6 +383,11 @@ public class Breadboard extends UntypedActor {
       handleMessage(message);
     } catch (Exception e) {
       Logger.error("Unhandled error in Breadboard.onReceive", e);
+      if (message instanceof BreadboardMessage) {
+        BreadboardMessage request = (BreadboardMessage) message;
+        replyError(request.out, requestName(request), e instanceof BadRequest
+            ? e.getMessage() : "Something went wrong: " + ScriptBoardSupport.describeError(e));
+      }
     }
   }
 
@@ -245,75 +397,27 @@ public class Breadboard extends UntypedActor {
       Logger.debug("breadboardMessage.getClass().getName() = " + breadboardMessage.getClass().getName());
 
       if (message instanceof LogIn) {
-        if (!instances.containsKey(breadboardMessage.user.email)) {
-          Logger.debug("! instances.containsKey(breadboardMessage.user.email)");
-          // No running instance, start one
-          // TODO: Allow multiple instances per user?
-          // TODO: Allow starting and stopping of individual instances
-          ActorRef scriptBoardController = Akka.system().actorOf(new Props(ScriptBoard.class));
-          Logger.debug("scriptBoardController = " + scriptBoardController);
-                    /*  Another way to declare the scriptBoardController if we need a non-default constructor
-                    ActorRef scriptBoardController = Akka.system().actorOf(new Props(new UntypedActorFactory() {
-                        public UntypedActor create() {
-                            return new ScriptBoard();
-                        }
-                    }), "scriptBoardController");
-                    */
-          Logger.debug("breadboardMessage.user.email PUT: " + breadboardMessage.user.email);
-          instances.put(breadboardMessage.user.email, scriptBoardController);
-
-          // Add an Admin to the scriptBoardController
-          scriptBoardController.tell(new AddAdmin(breadboardMessage.user, scriptBoardController, breadboardMessage.out), null);
-
-          // Rebuild the script engine at most once on first login. SelectInstance already
-          // rebuilds the engine for the user's selected experiment and reloads its steps (and
-          // additionally re-inits params / starts the game), so when an instance will be
-          // selected the preceding SelectExperiment is pure duplication -- it would reload every
-          // Groovy DSL script a second time and flash a second ScriptEngineReloading/Reloaded
-          // cycle at the admin UI. Pick exactly one.
-          if (breadboardMessage.user.experimentInstanceId != -1) {
-            breadboardController.tell(new SelectInstance(breadboardMessage.user, breadboardMessage.user.experimentInstanceId, breadboardMessage.out), null);
-          } else if (breadboardMessage.user.selectedExperiment != null) {
-            Logger.debug("breadboardMessage.user.selectedExperiment = " + breadboardMessage.user.selectedExperiment);
-            breadboardController.tell(new SelectExperiment(breadboardMessage.user, breadboardMessage.user.selectedExperiment, breadboardMessage.out), null);
-          }
-        } else {
-          //this is reconnect/refresh
-          Logger.debug("Reconnecting...");
-          ObjectNode userJson = breadboardMessage.user.toJson();
-          //Logger.debug("breadboardMessage.out.write(breadboardMessage.user.toJson()); " + userJson);
-          breadboardMessage.out.write(userJson);
-
-          Logger.debug("breadboardMessage.user.email GET: " + breadboardMessage.user.email);
-          instances.get(breadboardMessage.user.email).tell(new Refresh(breadboardMessage.user, breadboardMessage.out), null);
-          return;
-        }
-        Logger.debug("LogIn: " + breadboardMessage.user.email);
+        logIn(breadboardMessage.user, breadboardMessage.out);
+        return;
       } else if (message instanceof SaveUserSettings) {
         SaveUserSettings saveUserSettings = (SaveUserSettings) message;
 
         //TODO: better validation like regex?
-        List<String> errors = new ArrayList<String>();
-        if (StringUtils.isEmpty(saveUserSettings.currentPassword)) {
-          errors.add("'Current Password' is required");
+        List<String> errors = passwordChangeErrors(saveUserSettings.user, saveUserSettings.currentPassword,
+            saveUserSettings.newPassword, saveUserSettings.confirmPassword);
+        if (!errors.isEmpty()) {
+          // (These checks used to be made and then ignored, and the new password stored as typed.)
+          replyError(saveUserSettings.out, "SaveUserSettings", StringUtils.join(errors, ". ") + ".");
+          return;
         }
-        if (!saveUserSettings.currentPassword.equals(saveUserSettings.user.password)) {
-          errors.add("'Current Password' doesn't match the current password");
-        }
-        if (StringUtils.isEmpty(saveUserSettings.newPassword)) {
-          errors.add("'New Password' is required");
-        }
-        if (!saveUserSettings.confirmPassword.equals(saveUserSettings.newPassword)) {
-          errors.add("'Confirm Password' doesn't match the new password");
-        }
-
-        saveUserSettings.user.password = saveUserSettings.newPassword;
+        saveUserSettings.user.changePassword(saveUserSettings.newPassword);
         saveUserSettings.user.update();
 
       } else if (message instanceof SelectExperiment) {
         // TODO: Clear the working memory of the ScriptEngine
         SelectExperiment selectExperiment = (SelectExperiment) message;
         Logger.debug("SelectExperiment: " + selectExperiment.experiment.toString());
+        ActorRef scriptBoard = scriptBoard(breadboardMessage.user);
 
         breadboardMessage.user.setSelectedExperiment(selectExperiment.experiment);
         breadboardMessage.user.update();
@@ -323,7 +427,7 @@ public class Breadboard extends UntypedActor {
         if (selectedExperiment != null) {
           // TODO: Create "ChangeExperiment" action and handle it in ScriptBoard
           // Find Content based on currently selected Experiment
-          instances.get(breadboardMessage.user.email).tell(new ChangeExperiment(breadboardMessage.user, selectedExperiment, breadboardMessage.out), null);
+          scriptBoard.tell(new ChangeExperiment(breadboardMessage.user, selectedExperiment, breadboardMessage.out), null);
           //move the load steps into scriptboard
 //                    for (Step step : selectedExperiment.steps)
 //                        instances.get(breadboardMessage.user.email).tell(new RunStep(breadboardMessage.user, step.source, breadboardMessage.out));
@@ -337,7 +441,7 @@ public class Breadboard extends UntypedActor {
         Integer lifetimeInSeconds = submitAMTTask.lifetimeInSeconds;
         Integer tutorialTime = submitAMTTask.tutorialTime;
 
-        instances.get(breadboardMessage.user.email).tell(new HitCreated(breadboardMessage.user, lifetimeInSeconds, tutorialTime, breadboardMessage.out), null);
+        scriptBoard(breadboardMessage.user).tell(new HitCreated(breadboardMessage.user, lifetimeInSeconds, tutorialTime, breadboardMessage.out), null);
 
         // Send 'initStep will automatically start' message to Output
         ObjectNode jsonOutput = Json.newObject();
@@ -349,6 +453,11 @@ public class Breadboard extends UntypedActor {
 
       } else if (message instanceof AddLanguage) {
         AddLanguage addLanguage = (AddLanguage) message;
+        // Add the language to the experiment, if it doesn't already exist
+        Experiment selectedExperiment = Experiment.findById(addLanguage.experimentId);
+        if (selectedExperiment == null) {
+          throw new BadRequest("There is no experiment with id " + addLanguage.experimentId + ".");
+        }
         Language language = Language.find.where().eq("code", addLanguage.languageCode).findUnique();
         if (language == null) {
           // New language, create it
@@ -356,8 +465,6 @@ public class Breadboard extends UntypedActor {
           language.code = addLanguage.languageCode;
           language.name = new Locale(addLanguage.languageCode).getDisplayLanguage();
         }
-        // Add the language to the currently selected Experiment, if it doesn't already exist
-        Experiment selectedExperiment = Experiment.findById(addLanguage.experimentId);
         boolean hasLanguage = false;
         for (Language l : selectedExperiment.languages) {
           if (l.id.equals(language.id)) {
@@ -368,7 +475,7 @@ public class Breadboard extends UntypedActor {
           selectedExperiment.languages.add(language);
           selectedExperiment.save();
         }
-        instances.get(breadboardMessage.user.email).tell(message, null);
+        // (It used to be passed on to the ScriptBoard too, which has nothing to do with it.)
       } else if (message instanceof CreateStep) {
         CreateStep createStep = (CreateStep) message;
         Logger.debug("CreateStep: " + createStep.name);
@@ -391,6 +498,9 @@ public class Breadboard extends UntypedActor {
       } else if (message instanceof DeleteStep) {
         DeleteStep deleteStep = (DeleteStep) message;
         Step step = Step.find.byId(deleteStep.id);
+        if (step == null) {
+          throw new BadRequest("There is no step with id " + deleteStep.id + ".");
+        }
         step.delete();
       } else if (message instanceof SaveStyle) {
         SaveStyle saveStyle = (SaveStyle) message;
@@ -459,13 +569,16 @@ public class Breadboard extends UntypedActor {
           }
         }
       } else if (message instanceof SelectInstance) {
-        instances.get(breadboardMessage.user.email).tell(message, null);
+        scriptBoard(breadboardMessage.user).tell(message, null);
       } else if (message instanceof Update) {
         //Do nothing, just update the user JSON object
       } else if (message instanceof ShowEvent) {
         ShowEvent showEvent = (ShowEvent) message;
         Long experimentInstanceId = showEvent.experimentInstanceId;
         ExperimentInstance experimentInstance = ExperimentInstance.findById(experimentInstanceId);
+        if (experimentInstance == null) {
+          throw new BadRequest("There is no session with id " + experimentInstanceId + ".");
+        }
         List<Event> events = experimentInstance.events;
         Collections.sort(events, new Comparator<Event>() {
           @Override
@@ -501,14 +614,23 @@ public class Breadboard extends UntypedActor {
         DeleteInstance deleteInstance = (DeleteInstance) message;
         Long experimentInstanceId = deleteInstance.experimentInstanceId;
         ExperimentInstance experimentInstance = ExperimentInstance.findById(experimentInstanceId);
+        if (experimentInstance == null) {
+          throw new BadRequest("There is no session with id " + experimentInstanceId + ".");
+        }
         //only finished and stopped instance can be deleted
         if (experimentInstance.status == ExperimentInstance.Status.FINISHED || experimentInstance.status == ExperimentInstance.Status.STOPPED) {
           experimentInstance.delete();
+        } else {
+          throw new BadRequest("Only finished or stopped sessions can be deleted; stop it first.");
         }
       } else if (message instanceof DeleteImage) {
         DeleteImage deleteImage = (DeleteImage) message;
         Long imageId = deleteImage.imageId;
-        Image.findById(imageId).delete();
+        Image image = Image.findById(imageId);
+        if (image == null) {
+          throw new BadRequest("There is no image with id " + imageId + ".");
+        }
+        image.delete();
       } else if (message instanceof ToggleFileMode) {
         Experiment selectedExperiment = breadboardMessage.user.getExperiment();
         if (selectedExperiment != null) {
@@ -519,6 +641,52 @@ public class Breadboard extends UntypedActor {
       breadboardMessage.out.write(breadboardMessage.user.toJson());
 
     } // END if(message instanceof BreadboardMessage)
+  }
+
+  /**
+   * A console socket logged in (it does on every open, reconnects included). It gets the account's
+   * User JSON, then, from the ScriptBoard actor, its own Admin and its own copy of the live network.
+   *
+   * <p>The engine is shared by every account. Only the first account in after the server starts
+   * (before the autopilot or anyone else has opened an engine) has its saved work loaded, as before;
+   * any other first login used to rebuild the engine too, which ended a session another account was
+   * running.
+   */
+  private void logIn(User user, ThrottledWebSocketOut out) {
+    ActorRef scriptBoard = instances.get(user.email);
+    boolean firstIntoEngine = false;
+    if (scriptBoard == null) {
+      // instances is filled synchronously (here and by the autopilot) before any engine is built.
+      firstIntoEngine = instances.isEmpty() && !ScriptBoard.hasEngine();
+      // TODO: Allow multiple instances per user?
+      scriptBoard = Akka.system().actorOf(new Props(ScriptBoard.class));
+      Logger.debug("breadboardMessage.user.email PUT: " + user.email);
+      instances.put(user.email, scriptBoard);
+    }
+
+    // User JSON first, then the network (the ScriptBoard actor writes it after this).
+    out.write(user.toJson());
+    scriptBoard.tell(new AddAdmin(user, scriptBoard, out), null);
+
+    if (firstIntoEngine) {
+      // Load the account's saved work, rebuilding the engine once: its running session if it has
+      // one (SelectInstance rebuilds for its experiment and reloads its steps), else its experiment,
+      // else an empty engine (what creating the ScriptBoard used to build). A stopped or finished
+      // session is no longer restarted by logging in; it stays selected.
+      ExperimentInstance saved = (user.experimentInstanceId == null || user.experimentInstanceId == -1)
+          ? null : ExperimentInstance.findById(user.experimentInstanceId);
+      boolean running = saved != null && (saved.status == ExperimentInstance.Status.RUNNING
+          || saved.status == ExperimentInstance.Status.TESTING);
+      if (running) {
+        getSelf().tell(new SelectInstance(user, saved.id, out), null);
+      } else if (user.selectedExperiment != null) {
+        Logger.debug("user.selectedExperiment = " + user.selectedExperiment);
+        getSelf().tell(new SelectExperiment(user, user.selectedExperiment, out), null);
+      } else {
+        scriptBoard.tell(new ReloadEngine(user, out), null);
+      }
+    }
+    Logger.debug("LogIn: " + user.email);
   }
 
   public static abstract class BreadboardMessage {
@@ -573,10 +741,17 @@ public class Breadboard extends UntypedActor {
   }
 
   public static class DeleteExperiment extends BreadboardMessage {
+    // The id when given (preferred); otherwise the name, as the old console sends it.
+    final Long experimentId;
     final String experimentName;
 
     public DeleteExperiment(User user, String experimentName, ThrottledWebSocketOut out) {
+      this(user, null, experimentName, out);
+    }
+
+    public DeleteExperiment(User user, Long experimentId, String experimentName, ThrottledWebSocketOut out) {
       super(user, out);
+      this.experimentId = experimentId;
       this.experimentName = experimentName;
     }
   }
@@ -724,6 +899,16 @@ public class Breadboard extends UntypedActor {
       this.id = id;
       this.name = name;
       this.source = source;
+    }
+  }
+
+  /** Sent by a ScriptBoard to itself after the steps it queued have run (see AutopilotHooks). */
+  public static class StepsLoaded extends BreadboardMessage {
+    final Experiment experiment;
+
+    public StepsLoaded(User user, Experiment experiment, ThrottledWebSocketOut out) {
+      super(user, out);
+      this.experiment = experiment;
     }
   }
 

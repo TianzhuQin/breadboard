@@ -12,7 +12,7 @@ import java.util.Map;
 
 public class EventGraphChangedListener implements BreadboardGraphChangedListener {
   private Graph graph;
-  private final List<ClientListener> adminListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+  private final java.util.concurrent.CopyOnWriteArrayList<ClientListener> adminListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
   // Instance-scoped (was `static`): a static map was shared by every listener / every
   // ScriptBoard, so clients from one game/user leaked into another's dispatch and the
   // map could never be safely cleared. Per-instance state is cleared on reload via
@@ -24,7 +24,12 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
   }
 
   public void addAdminListener(ClientListener adminListener) {
-    adminListeners.add(adminListener);
+    adminListeners.addIfAbsent(adminListener);
+  }
+
+  @Override
+  public void removeAdminListener(ClientListener adminListener) {
+    adminListeners.remove(adminListener);
   }
 
   public List<ClientListener> getAdminListeners() {
@@ -98,8 +103,7 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
     for (ClientListener al : adminListeners)
       al.vertexPropertyChanged(vertex, key, oldValue, setValue);
 
-    boolean pvt = (key.equals("private") || key.equals("choices") || key.equals("text"));
-    clientVertexChanged(vertex, pvt);
+    clientVertexChanged(vertex, onlyPlayerSees(key));
   }
 
   @Override
@@ -107,8 +111,7 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
     for (ClientListener al : adminListeners)
       al.vertexPropertyRemoved(vertex, key);
 
-    boolean pvt = (key.equals("private") || key.equals("choices") || key.equals("text"));
-    clientVertexChanged(vertex, pvt);
+    clientVertexChanged(vertex, onlyPlayerSees(key));
   }
 
   @Override
@@ -117,6 +120,13 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
       al.vertexRemoved(vertex);
 
     clientVertexChanged(vertex, false);
+  }
+
+  // A property neighbors never receive (private, text, choices, and what ClientView hides, such as
+  // _system) changes only the player's own page, so the neighbors aren't sent a new frame for it.
+  // _system.connected changes on every connect and disconnect.
+  static boolean onlyPlayerSees(String key) {
+    return !ClientView.neighborMaySee(key);
   }
 
   private void clientEdgePropertyChanged(Edge edge, String key, Object value) {

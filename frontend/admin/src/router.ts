@@ -32,7 +32,8 @@ export const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 })
 
-router.afterEach((to) => {
+router.afterEach((to, _from, failure) => {
+  if (failure) return
   const t = to.meta.title as string | undefined
   document.title = t ? `${t} · Breadboard` : 'Breadboard'
 })

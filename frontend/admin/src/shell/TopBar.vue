@@ -110,10 +110,10 @@ const engineItems = computed<MenuItem[]>(() => [
 .topbar__menu { display: none; border: 0; background: transparent; color: var(--text-soft); padding: 6px; border-radius: var(--radius-xs); cursor: pointer; }
 .topbar__menu:hover { background: var(--surface-hover); }
 .topbar__titles { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
-.topbar__title { font-size: 17px; font-weight: 650; white-space: nowrap; }
+.topbar__title { min-width: 0; font-size: 17px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar__sub { font-size: var(--text-sm); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar__file { color: var(--warning-soft-text); }
-.topbar__right { display: flex; align-items: center; gap: 8px; }
+.topbar__right { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .topbar__session {
   display: inline-flex;
   align-items: center;
@@ -193,5 +193,10 @@ const engineItems = computed<MenuItem[]>(() => [
   .topbar { padding: 0 12px; }
   .topbar__menu { display: block; }
   .topbar__session { max-width: 150px; }
+}
+@media (max-width: 480px) {
+  .topbar { gap: 8px; }
+  .topbar__session { max-width: 108px; padding: 0 9px; }
+  .topbar__right { gap: 2px; }
 }
 </style>

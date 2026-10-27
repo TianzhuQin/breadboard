@@ -65,6 +65,8 @@ public class Event extends Model {
     event.put("id", id);
     event.put("name", name);
     event.put("datetime", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss,S").format(datetime));
+    // the same moment as ISO-8601 UTC, which a browser in any time zone reads correctly
+    event.put("datetimeUtc", Timestamps.iso(datetime));
 
     ArrayNode jsonEventData = event.putArray("eventData");
     for (EventData ed : eventData) {

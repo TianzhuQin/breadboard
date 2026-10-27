@@ -3,7 +3,6 @@ package models;
 import com.fasterxml.jackson.databind.JsonNode;
 import play.mvc.WebSocket;
 
-import java.util.Timer;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class ThrottledWebSocketOut {
@@ -11,7 +10,6 @@ public class ThrottledWebSocketOut {
   private LinkedBlockingQueue<JsonNode> queue = new LinkedBlockingQueue<JsonNode>();
   private long lastSent = Long.MAX_VALUE;
   private long wait;
-  private Timer timer = new Timer();
   private boolean scheduled = false;
 
   public ThrottledWebSocketOut(WebSocket.Out<JsonNode> out, long wait) {
@@ -24,7 +22,7 @@ public class ThrottledWebSocketOut {
     if(System.currentTimeMillis() - lastSent < wait || scheduled) {
       queue.offer(message);
       if (! scheduled) {
-        timer.schedule(new TimerTask() {
+        new java.util.Timer().schedule(new TimerTask() {
           @Override
           public void run() {
             //System.out.println("TimerTask.run()");

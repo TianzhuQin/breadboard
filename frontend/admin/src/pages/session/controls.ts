@@ -1,0 +1,144 @@
+import { reactive, ref } from 'vue'
+import { admin, actions, nextMessage } from '@/store/admin'
+import { http, saveText } from '@/lib/http'
+import { confirm, notify, toast } from '@/ui'
+import { openOutput } from '@/shell/output'
+import type { Instance } from '@/store/types'
+import { classifyStartReply, isStartReply, safeFileName } from './live'
+
+/**
+ * The session controls with their confirmations and outcomes, shared by the page's parts.
+ * Every action says what it is about to do, shows progress, and reports how it went in words.
+ */
+
+const showOutput = { label: 'Open output', run: () => { openOutput.value = true } }
+
+/** The newest engine error the researcher dismissed on this page (kept while switching pages). */
+export const dismissedErrorId = ref(0)
+
+export const busy = reactive({
+  start: false,
+  stop: false,
+  /** id of the session being resumed */
+  resume: null as number | null,
+  /** id of the session whose data is downloading */
+  download: null as number | null,
+})
+
+/** RunGame = initStep.start(): everyone waiting is let in and newcomers are turned away. */
+export async function startGame (ctx: { connected: number, people: number, waitingRoom: boolean }) {
+  if (busy.start) return
+  const who = ctx.people === 0
+    ? 'Nobody has joined yet, so the game would start with no one in it.'
+    : `${ctx.connected} of ${ctx.people} ${ctx.people === 1 ? 'person is' : 'people are'} connected right now.`
+  const ok = await confirm({
+    title: 'Start the game?',
+    message: [
+      who,
+      'Everyone who is waiting is let in and the experiment begins (it runs initStep.start()). People who arrive after this are turned away.',
+      ctx.waitingRoom ? 'This skips the rest of the waiting room.' : '',
+      'A game can start only once per session.',
+    ].filter(Boolean).join('\n\n'),
+    confirmLabel: 'Start the game',
+  })
+  if (!ok) return
+  busy.start = true
+  try {
+    // listen before sending so the answer can't slip past
+    const reply = nextMessage(isStartReply, 20000)
+    actions.startGame()
+    const out = classifyStartReply(await reply)
+    if (out.kind === 'started') {
+      notify.success('The game has started', 'Everyone who was waiting is in. New arrivals are turned away.')
+    } else if (out.kind === 'already') {
+      notify.info('The game had already started', 'It can start only once per session, so nothing changed.')
+    } else if (out.kind === 'error') {
+      toast('error', 'The game could not start', out.message, { action: showOutput })
+    } else {
+      toast('warning', 'No answer from the engine yet', 'The game may still be starting. The output panel shows what the engine says.', { action: showOutput })
+    }
+  } finally {
+    busy.start = false
+  }
+}
+
+/** StopGame: the session stops taking people in; it can be resumed later. */
+export async function stopSession (inst: Instance) {
+  if (busy.stop) return
+  const ok = await confirm({
+    title: `Stop “${inst.name}”?`,
+    message: [
+      'Nobody new can join with its links, and it no longer counts as running.',
+      'People who are on the page now are not sent away, but the experiment\'s launch parameters are unset, so the game may stop working for them.',
+      'You can resume it later. Resuming restarts the experiment\'s scripts and disconnects everyone.',
+    ].join('\n\n'),
+    confirmLabel: 'Stop session',
+    danger: true,
+  })
+  if (!ok) return
+  busy.stop = true
+  try {
+    const m = await actions.stopInstance(inst.id)
+    if (!m) {
+      notify.error('The server did not confirm the stop', 'Check your connection, then look at Sessions & data to see the session\'s status.')
+      return
+    }
+    toast('success', `Stopped “${inst.name}”`, 'Resume it from this page or from Sessions & data.', {
+      action: { label: 'Resume', run: () => { void resumeSession(inst) } },
+    })
+  } finally {
+    busy.stop = false
+  }
+}
+
+/** SelectInstance: make a stopped session current again and restart it (rebuilds the engine). */
+export async function resumeSession (inst: Instance) {
+  if (busy.resume != null) return
+  const cur = admin.instance
+  const other = cur && cur.id !== inst.id && (cur.status === 'RUNNING' || cur.status === 'TESTING') ? cur : null
+  const ok = await confirm({
+    title: `Resume “${inst.name}”?`,
+    message: [
+      'The experiment\'s scripts restart from its steps: the network is emptied and anyone still connected is disconnected. People can then join again with the session\'s links.',
+      'Data recorded so far is kept.',
+      other ? `“${other.name}” is running now and will be stopped.` : '',
+    ].filter(Boolean).join('\n\n'),
+    confirmLabel: 'Resume session',
+    danger: !!other,
+  })
+  if (!ok) return
+  busy.resume = inst.id
+  try {
+    const running = nextMessage(m => !!m && ((m.request === 'SelectInstance' && typeof m.error === 'string') ||
+      ('user' in m && m.experimentInstance && m.experimentInstance.id === inst.id &&
+      (m.experimentInstance.status === 'RUNNING' || m.experimentInstance.status === 'TESTING'))), 60000)
+    void actions.selectInstance(inst.id)
+    const m = await running
+    if (m && typeof m.error === 'string') {
+      toast('error', `“${inst.name}” did not resume`, m.error, { action: showOutput })
+    } else if (m || (admin.instance?.id === inst.id && admin.instance.status === 'RUNNING')) {
+      notify.success(`“${inst.name}” is running again`, 'People can join with its links.')
+    } else {
+      toast('error', `“${inst.name}” did not resume`,
+        'The server did not confirm it in time. A finished session can\'t be resumed; start a new one instead. The output panel may say more.',
+        { action: showOutput })
+    }
+  } finally {
+    busy.resume = null
+  }
+}
+
+/** The session's recorded events as CSV (GET /csv/data/:id), saved as "<name>_<id>.csv". */
+export async function downloadData (inst: Instance) {
+  if (busy.download != null) return
+  busy.download = inst.id
+  try {
+    const text = await http.get<string>(`/csv/data/${inst.id}`, { raw: true })
+    saveText(`${safeFileName(inst.name)}_${inst.id}.csv`, text || '')
+    notify.success('Downloaded the session\'s data', `${safeFileName(inst.name)}_${inst.id}.csv`)
+  } catch (e: any) {
+    notify.error('Could not download the data', e?.message || 'The server did not answer.')
+  } finally {
+    busy.download = null
+  }
+}

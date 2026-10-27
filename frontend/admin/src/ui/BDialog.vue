@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="b-dialog">
-      <div v-if="open" class="b-dialog" :class="`b-dialog--${placement}`" @mousedown.self="onBackdrop">
+      <div v-if="open" class="b-dialog" :class="`b-dialog--${placement}`" :style="{ zIndex: layer }" @mousedown.self="onBackdrop">
         <div
           ref="panel"
           class="b-dialog__panel"
@@ -55,6 +55,10 @@ const titleId = uid('dialog-title')
 const panel = ref<HTMLElement>()
 let opener: HTMLElement | null = null
 
+// Each dialog opened sits above the ones already open (e.g. a confirm asked from inside a dialog).
+const layer = ref(100)
+let isOpen = false
+
 function close () {
   emit('update:open', false)
   emit('close')
@@ -81,18 +85,28 @@ function onKeydown (e: KeyboardEvent) {
 
 watch(() => props.open, async (open) => {
   if (open) {
+    if (!isOpen) { isOpen = true; openCount++ }
+    layer.value = 100 + openCount
     opener = document.activeElement as HTMLElement | null
     document.body.classList.add('b-no-scroll')
     await nextTick()
     const target = panel.value?.querySelector<HTMLElement>('[autofocus], [data-autofocus]') || panel.value
     target?.focus()
   } else {
-    document.body.classList.remove('b-no-scroll')
+    release()
     if (opener && document.contains(opener)) opener.focus()
     opener = null
   }
 }, { immediate: true })
-onBeforeUnmount(() => document.body.classList.remove('b-no-scroll'))
+function release () {
+  if (isOpen) { isOpen = false; openCount = Math.max(0, openCount - 1) }
+  if (!openCount) document.body.classList.remove('b-no-scroll')
+}
+onBeforeUnmount(release)
+</script>
+
+<script lang="ts">
+let openCount = 0
 </script>
 
 <style>

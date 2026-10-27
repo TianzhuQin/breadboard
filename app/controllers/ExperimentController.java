@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -81,8 +82,23 @@ public class ExperimentController extends Controller {
     return ok(experiment.toJson());
   }
 
+  /**
+   * Import an exported experiment (multipart {@code file}, a zip) under the name in the path. The zip
+   * is unpacked and checked before the experiment is created: a file that isn't a zip, or has neither
+   * a Steps nor a Content folder, is refused without leaving an empty experiment behind (it used to
+   * create the experiment first).
+   */
   @Security.Authenticated(Secured.class)
   public static Result importExperiment(String experimentName) throws IOException{
+    User user = User.findByUID(session().get("uid"));
+    if (user == null) {
+      return badRequest("Unable to determine the user who made this request.");
+    }
+    // The router has already decoded the path segment ("My%20study" arrives as "My study").
+    String name = experimentName == null ? "" : experimentName.trim();
+    if (name.isEmpty()) {
+      return badRequest("Please provide a name for the imported experiment.");
+    }
 
     Http.MultipartFormData body = request().body().asMultipartFormData();
     Long maxUploadSize = play.Play.application().configuration().getLong("maxUploadSize", 50L * 1024L * 1024L);
@@ -97,98 +113,114 @@ public class ExperimentController extends Controller {
       return badRequest("Upload was malformed");
     }
 
-    // Validate the size of the file
-    Http.MultipartFormData.FilePart filePart = body.getFile("file");
-    File zippedFile = filePart.getFile();
-
-    // Validate the other data
-    if(experimentName == null || zippedFile == null){
+    Http.MultipartFormData.FilePart filePart = body == null ? null : body.getFile("file");
+    File zippedFile = filePart == null ? null : filePart.getFile();
+    if (zippedFile == null) {
       return badRequest("Must include zipFile and experiment name");
     }
-
     if(zippedFile.length() > maxUploadSize){
       return badRequest("Uploaded file is too large");
     }
+    return importZip(user, name, zippedFile);
+  }
 
-    String uid = session().get("uid");
-    User user = User.findByUID(uid);
-    Experiment experiment = newExperiment(user, false);
-    experiment.name = experimentName;
-    experiment.save();
-
-    String timeString = new Date().getTime() + "";
-    String rootOutputFolder = "experiments/" + experiment.name + "_" + experiment.id + "_" + timeString;
-    String outputFolder = rootOutputFolder;
-
+  /**
+   * Import the experiment in {@code zippedFile} as a new experiment of {@code user} named {@code name}:
+   * 200 with its Experiment JSON, or 400 with what is wrong (nothing is created then).
+   */
+  public static Result importZip(User user, String name, File zippedFile) throws IOException {
+    // Unpacked into a temporary folder of its own (it used to be experiments/ in the working directory).
+    File rootOutputFolder = Files.createTempDirectory("breadboard-import").toFile();
     try {
-      ZipFile zipFile = new ZipFile(zippedFile);
-      zipFile.extractAll(outputFolder);
+      try {
+        new ZipFile(zippedFile).extractAll(rootOutputFolder.getPath());
+      } catch (ZipException e) {
+        Logger.debug("Import: not a zip file: " + e.getMessage());
+        return badRequest("The file is not a zip file. Please upload an experiment exported from Breadboard.");
+      }
+      File experimentFolder = experimentFolder(rootOutputFolder);
+      if (experimentFolder == null) {
+        String msg = "No Steps or Content directories found. Please upload a valid experiment";
+        Logger.debug(msg);
+        return badRequest(msg);
+      }
+      String outputFolder = experimentFolder.getPath();
 
-      //Delete the __MAC_OSX directory if it exists
-      File[] outputFiles = (new File(outputFolder)).listFiles();
-      for(File outputFile: outputFiles){
-        if(outputFile.getName().equals("__MACOSX") || outputFile.getName().equals("__MAC_OSX")){
-          deleteDirectory(outputFile);
-        }
+      String eVersion = null;
+      try {
+        String dotBreadboard = readFile(outputFolder + File.separator + ".breadboard", StandardCharsets.UTF_8);
+        JsonNode dotBreadboardJson = new ObjectMapper().readTree(dotBreadboard);
+        eVersion = dotBreadboardJson.findPath("version").textValue();
+        // TODO: offer the option to import the Experiment UID and/or Name from the .breadboard file
+        Logger.debug("Read .breadboard file: experimentVersion = " + eVersion
+            + " experimentUid = " + dotBreadboardJson.findPath("experimentUid").textValue()
+            + " experimentName = " + dotBreadboardJson.findPath("experimentName").textValue());
+      } catch (IOException | RuntimeException e) {
+        Logger.debug("No readable .breadboard file present");
       }
 
-      outputFiles = (new File(outputFolder)).listFiles();
-      if(outputFiles.length == 1){
-        // Pull out the contents of this sub-directory into the main directory
-        File subDirectory = outputFiles[0];
-        Logger.debug("Single subdirectory found: " + outputFiles);
-        File stepsDirectory = new File(subDirectory, "Steps");
-        File contentDirectory = new File(subDirectory, "Content");
-        if(stepsDirectory.exists() || contentDirectory.exists()) {
-          outputFolder = subDirectory.getAbsolutePath();
-          Logger.debug("Using subdirectory, " + outputFolder + " for import instead.");
+      // Only now, with a valid upload, is the experiment created.
+      Experiment experiment = newExperiment(user, false);
+      experiment.name = name;
+      experiment.save();
+      try {
+        if (eVersion != null && (eVersion.startsWith("v2.3") || eVersion.startsWith("v2.4"))) {
+          try {
+            import23To23(experiment, user, outputFolder);
+          } catch (IOException e) {
+            // e.g. no client-html.html: import it the older way, as before
+            Logger.debug("Importing as v2.2: " + e.getMessage());
+            import22To23(experiment, user, outputFolder);
+          }
         } else {
-          String msg = "No Steps or Content directories found. Please upload a valid experiment";
-          Logger.debug(msg);
-          deleteDirectory(new File(rootOutputFolder));
-          return badRequest(msg);
+          // v2.2, unknown versions and zips without a .breadboard file
+          import22To23(experiment, user, outputFolder);
         }
-      } else {
-        File stepsDirectory = new File(outputFolder, "Steps");
-        File contentDirectory = new File(outputFolder, "Content");
-        if(!stepsDirectory.exists() || !contentDirectory.exists()){
-          String msg = "No Steps or Content directories found. Please upload a valid experiment";
-          Logger.debug(msg);
-          deleteDirectory(new File(rootOutputFolder));
-          return badRequest(msg);
+      } catch (Exception e) {
+        Logger.error("Could not import experiment " + name, e);
+        try {
+          experiment.delete();
+        } catch (Exception cleanup) {
+          Logger.error("Could not remove the half-imported experiment " + experiment.id, cleanup);
         }
+        return badRequest("The experiment could not be imported: " + e.getMessage());
       }
-    } catch (ZipException e){
-      e.printStackTrace();
+      return ok(experiment.toJson());
+    } finally {
+      FileUtils.deleteQuietly(rootOutputFolder);
     }
+  }
 
-    try{
-      String dotBreadboard = readFile(outputFolder + File.separator + ".breadboard", StandardCharsets.UTF_8);
-      ObjectMapper mapper = new ObjectMapper();
-      JsonNode dotBreadboardJson = mapper.readTree(dotBreadboard);
-      String eVersion = dotBreadboardJson.findPath("version").textValue();
-      String eUid = dotBreadboardJson.findPath("experimentUid").textValue();
-      String eName = dotBreadboardJson.findPath("experimentName").textValue();
-      // TODO: offer the option to import the Experiment UID and/or Name from the .breadboard file
-
-      Logger.debug("Read .breadboard file: experimentVersion = " + eVersion + " experimentUid = " + eUid + " experimentName = " + eName);
-
-      if(eVersion.startsWith("v2.3") || eVersion.startsWith("v2.4")){
-        import23To23(experiment, user, outputFolder);
-      } else if (eVersion.startsWith("v2.2")) {
-        import22To23(experiment, user, outputFolder);
+  /**
+   * Where the unpacked experiment is: the folder itself, or the one folder it holds (zips made by
+   * compressing a folder), whichever has a Steps or Content folder; null when neither does. macOS's
+   * __MACOSX metadata folder is removed first.
+   */
+  static File experimentFolder(File unpacked) throws IOException {
+    File[] files = unpacked.listFiles();
+    if (files == null) {
+      return null;
+    }
+    List<File> entries = new ArrayList<File>();
+    for (File file : files) {
+      if (file.isDirectory() && (file.getName().equals("__MACOSX") || file.getName().equals("__MAC_OSX"))) {
+        deleteDirectory(file);
       } else {
-        // Default to v2.2 import for now
-        import22To23(experiment, user, outputFolder);
+        entries.add(file);
       }
-    } catch(IOException e){
-      Logger.debug("No .breadboard file present");
-      import22To23(experiment, user, outputFolder);
-    } finally{
-      deleteDirectory(new File(rootOutputFolder));
     }
+    if (hasExperimentFolders(unpacked)) {
+      return unpacked;
+    }
+    if (entries.size() == 1 && entries.get(0).isDirectory() && hasExperimentFolders(entries.get(0))) {
+      Logger.debug("Using subdirectory " + entries.get(0) + " for import instead.");
+      return entries.get(0);
+    }
+    return null;
+  }
 
-    return ok(experiment.toJson());
+  private static boolean hasExperimentFolders(File folder) {
+    return new File(folder, "Steps").isDirectory() || new File(folder, "Content").isDirectory();
   }
 
   @Security.Authenticated(Secured.class)
@@ -395,7 +427,8 @@ public class ExperimentController extends Controller {
 
     // Import content
     File contentDir = new File(directory, "/Content");
-    for (File langFileOrDir : contentDir.listFiles()){
+    File[] contentFiles = contentDir.listFiles();
+    for (File langFileOrDir : contentFiles == null ? new File[0] : contentFiles){
       if(!langFileOrDir.isDirectory()){
         Logger.debug("Content is in root of Content directory. Attempting to import as default language.");
         try {

@@ -1,0 +1,466 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+
+// ---- mocks: the store and the HTTP layer --------------------------------------------------------
+
+const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }))
+vi.mock('@/lib/http', async (orig) => {
+  const real = await orig<typeof import('../src/lib/http')>()
+  return { ...real, http }
+})
+
+const store = vi.hoisted(() => {
+  const exps: any[] = []
+  return {
+    exps,
+    running: { value: false },
+    actions: {
+      selectExperiment: vi.fn(async () => null),
+      refresh: vi.fn(async () => null),
+      deleteExperiment: vi.fn(async () => null),
+      toggleFileMode: vi.fn(async () => null),
+    },
+  }
+})
+vi.mock('@/store/admin', async () => {
+  const { computed, reactive, ref } = await import('vue')
+  const list = reactive(store.exps)
+  const running = ref(false)
+  Object.defineProperty(store.running, 'value', { get: () => running.value, set: (v) => { running.value = v } })
+  const admin = reactive({ experiment: null as any, instance: null as any, email: 'r@lab.org', events: [] })
+  ;(store as any).admin = admin
+  return {
+    admin,
+    actions: store.actions,
+    experiments: computed(() => list),
+    running,
+  }
+})
+
+const confirmMock = vi.hoisted(() => vi.fn(async (_req: any) => true))
+vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: false, req: null, resolve: null }, settleConfirm: () => {} }))
+
+import { createRouter, createMemoryHistory } from 'vue-router'
+import ExperimentsPage from '../src/pages/experiments/ExperimentsPage.vue'
+import {
+  checkExperimentZip, describeError, devDirName, formatWhen, importNameFromFile, importUrl, lastSession, manifestName,
+  parseServerTime, readZipEntries, runningSession, validateExperimentName, zipFileName,
+} from '../src/pages/experiments/experiments'
+import { HttpError } from '../src/lib/http'
+import ImportExperimentDialog from '../src/pages/experiments/ImportExperimentDialog.vue'
+import NewExperimentDialog from '../src/pages/experiments/NewExperimentDialog.vue'
+
+// ---- a tiny zip writer (stored entries only) for the inspection tests ------------------------------
+
+function makeZip (files: { name: string, data?: string }[]): Uint8Array {
+  const enc = new TextEncoder()
+  const locals: Uint8Array[] = []
+  const centrals: Uint8Array[] = []
+  let offset = 0
+  for (const f of files) {
+    const name = enc.encode(f.name)
+    const data = enc.encode(f.data ?? '')
+    const local = new Uint8Array(30 + name.length + data.length)
+    const lv = new DataView(local.buffer)
+    lv.setUint32(0, 0x04034b50, true)
+    lv.setUint16(8, 0, true) // stored
+    lv.setUint32(18, data.length, true)
+    lv.setUint32(22, data.length, true)
+    lv.setUint16(26, name.length, true)
+    local.set(name, 30)
+    local.set(data, 30 + name.length)
+    const central = new Uint8Array(46 + name.length)
+    const cv = new DataView(central.buffer)
+    cv.setUint32(0, 0x02014b50, true)
+    cv.setUint16(10, 0, true)
+    cv.setUint32(20, data.length, true)
+    cv.setUint32(24, data.length, true)
+    cv.setUint16(28, name.length, true)
+    cv.setUint32(42, offset, true)
+    central.set(name, 46)
+    locals.push(local)
+    centrals.push(central)
+    offset += local.length
+  }
+  const cdSize = centrals.reduce((n, c) => n + c.length, 0)
+  const eocd = new Uint8Array(22)
+  const ev = new DataView(eocd.buffer)
+  ev.setUint32(0, 0x06054b50, true)
+  ev.setUint16(8, files.length, true)
+  ev.setUint16(10, files.length, true)
+  ev.setUint32(12, cdSize, true)
+  ev.setUint32(16, offset, true)
+  const out = new Uint8Array(offset + cdSize + 22)
+  let p = 0
+  for (const part of [...locals, ...centrals, eocd]) { out.set(part, p); p += part.length }
+  return out
+}
+
+const EXPORTED = [
+  { name: '.breadboard', data: JSON.stringify({ version: 'v2.4.0', experimentName: 'Public goods', experimentUid: 'u' }) },
+  { name: 'style.css' },
+  { name: 'client-html.html' },
+  { name: 'client-graph.js' },
+  { name: 'Steps/InitStep.groovy' },
+  { name: 'Steps/OnJoinStep.groovy' },
+  { name: 'Content/eng/Welcome.html' },
+  { name: 'parameters.csv' },
+  { name: 'Images/logo.png' },
+]
+
+// ---- names --------------------------------------------------------------------------------------
+
+describe('experiment names', () => {
+  it('asks for a name', () => {
+    expect(validateExperimentName('')).toMatch(/name/)
+    expect(validateExperimentName('   ')).toMatch(/name/)
+  })
+  it('refuses slashes, control characters, dots only and very long names', () => {
+    expect(validateExperimentName('a/b')).toMatch(/\//)
+    expect(validateExperimentName('a\\b')).toMatch(/\\/)
+    expect(validateExperimentName('a\nb')).toMatch(/line breaks/)
+    expect(validateExperimentName('..')).toMatch(/letters/)
+    expect(validateExperimentName('x'.repeat(101))).toMatch(/100/)
+  })
+  it('refuses a name already in use, whatever the case and spaces', () => {
+    expect(validateExperimentName(' public Goods ', ['Public goods'])).toMatch(/already/)
+    expect(validateExperimentName('Public goods 2', ['Public goods'])).toBeNull()
+  })
+  it('accepts ordinary names, including symbols that are encoded in the URL', () => {
+    expect(validateExperimentName('Trust game #3 (pilot) 50% & more?')).toBeNull()
+  })
+})
+
+describe('import name handling', () => {
+  it('suggests the file name without folder and .zip', () => {
+    expect(importNameFromFile('Public-goods_12.zip')).toBe('Public-goods_12')
+    expect(importNameFromFile('C:\\Users\\me\\Trust game.ZIP')).toBe('Trust game')
+    expect(importNameFromFile('archive.zip.zip')).toBe('archive.zip')
+    expect(importNameFromFile('no-extension')).toBe('no-extension')
+    expect(importNameFromFile('')).toBe('')
+  })
+  it('encodes the name in the import URL (the old console sent it raw)', () => {
+    expect(importUrl('Trust game #3?')).toBe('/experiment/import/Trust%20game%20%233%3F')
+    expect(importUrl(' 50% done ')).toBe('/experiment/import/50%25%20done')
+    expect(importUrl('a/b')).toBe('/experiment/import/a%2Fb')
+  })
+})
+
+describe('file names', () => {
+  it('names an export <Name-with-dashes>_<id>.zip', () => {
+    expect(zipFileName({ id: 12, name: 'Public goods  game' })).toBe('Public-goods-game_12.zip')
+    expect(zipFileName({ id: 3, name: 'What? A/B: "test"' })).toBe('What-AB-test_3.zip')
+    expect(zipFileName({ id: 4, name: '   ' })).toBe('experiment_4.zip')
+  })
+  it('names the file-mode folder like the server does', () => {
+    expect(devDirName({ id: 7, name: 'My study' })).toBe('My-study_7')
+  })
+})
+
+describe('sessions and dates', () => {
+  const exp: any = { instances: [
+    { id: 4, name: 'b', status: 'FINISHED', creationTime: '2026-10-20 09:00:00,1' },
+    { id: 9, name: 'c', status: 'RUNNING', creationTime: '2026-10-27 14:03:11,25' },
+    { id: 2, name: 'a', status: 'STOPPED', creationTime: '2026-01-02 08:00:00,0' },
+  ] }
+  it('finds the newest and the running session', () => {
+    expect(lastSession(exp)!.id).toBe(9)
+    expect(runningSession(exp)!.id).toBe(9)
+    expect(runningSession({ instances: [] } as any)).toBeNull()
+  })
+  it('reads the server\'s time format as the server\'s clock time', () => {
+    const d = parseServerTime('2026-10-27 14:03:11,25')!
+    expect([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()]).toEqual([2026, 9, 27, 14, 3])
+    expect(parseServerTime('garbage')).toBeNull()
+  })
+  it('says today and yesterday in words', () => {
+    const now = new Date(2026, 9, 27, 18, 0)
+    expect(formatWhen(new Date(2026, 9, 27, 14, 3), now)).toMatch(/^Today/)
+    expect(formatWhen(new Date(2026, 9, 26, 9, 0), now)).toMatch(/^Yesterday/)
+    expect(formatWhen(new Date(2025, 0, 2), now)).toMatch(/2025/)
+    expect(formatWhen(null)).toBe('—')
+  })
+})
+
+describe('errors in words', () => {
+  it('turns HTML error pages into a sentence', () => {
+    expect(describeError(new HttpError(500, '<!DOCTYPE html><html><body>NullPointerException</body></html>'))).toMatch(/server ran into an error \(500\)/)
+    expect(describeError(new HttpError(413, 'Entity too large'))).toMatch(/too large/)
+  })
+  it('keeps the server\'s own text', () => {
+    expect(describeError(new HttpError(400, 'No Steps or Content directories found. Please upload a valid experiment'))).toMatch(/No Steps or Content/)
+  })
+  it('explains a network failure', () => {
+    expect(describeError(new TypeError('Failed to fetch'))).toMatch(/reach the server/)
+  })
+})
+
+// ---- zip inspection -----------------------------------------------------------------------------
+
+describe('checking a zip before it is uploaded', () => {
+  it('accepts an export and counts what is inside', async () => {
+    const bytes = makeZip(EXPORTED)
+    expect(readZipEntries(bytes)!.length).toBe(EXPORTED.length)
+    const c = checkExperimentZip(bytes)
+    expect(c.ok).toBe(true)
+    expect(c.root).toBe('')
+    expect([c.steps, c.content, c.images]).toEqual([2, 1, 1])
+    expect(await manifestName(bytes, c)).toBe('Public goods')
+  })
+
+  it('accepts a zip of one folder (as Finder makes), ignoring __MACOSX', () => {
+    const c = checkExperimentZip(makeZip([
+      ...EXPORTED.map(f => ({ ...f, name: `Public goods/${f.name}` })),
+      { name: '__MACOSX/Public goods/._style.css' },
+    ]))
+    expect(c.ok).toBe(true)
+    expect(c.root).toBe('Public goods/')
+    expect(c.steps).toBe(2)
+  })
+
+  it('refuses an export without a Content folder, and says how to fix it', () => {
+    const c = checkExperimentZip(makeZip(EXPORTED.filter(f => !f.name.startsWith('Content/'))))
+    expect(c.ok).toBe(false)
+    expect(c.problem).toMatch(/no Content folder/)
+  })
+
+  it('refuses files that are not experiments', () => {
+    expect(checkExperimentZip(new TextEncoder().encode('hello, not a zip')).problem).toMatch(/isn't a zip/)
+    expect(checkExperimentZip(makeZip([])).problem).toMatch(/empty/)
+    expect(checkExperimentZip(makeZip([{ name: 'photos/a.jpg' }, { name: 'notes.txt' }])).problem).toMatch(/Steps folder and a Content folder/)
+    expect(checkExperimentZip(makeZip([{ name: 'only/readme.txt' }])).ok).toBe(false)
+  })
+
+  it('lets folders in the wrong case through with a warning', () => {
+    const c = checkExperimentZip(makeZip([{ name: 'steps/A.groovy' }, { name: 'content/eng/x.html' }]))
+    expect(c.ok).toBe(true)
+    expect(c.warning).toMatch(/exactly/)
+  })
+})
+
+// ---- the dialogs ---------------------------------------------------------------------------------
+
+describe('Import dialog', () => {
+  beforeEach(() => {
+    store.exps.splice(0, store.exps.length, { id: 1, name: 'Existing', instances: [], steps: [], languages: [] })
+    http.post.mockReset()
+    store.actions.selectExperiment.mockClear()
+    store.actions.refresh.mockClear()
+    store.running.value = false
+    document.body.innerHTML = ''
+  })
+
+  async function openWith (file: File) {
+    const w = mount(ImportExperimentDialog, { props: { open: false, initialFile: file }, attachTo: document.body })
+    await w.setProps({ open: true })
+    // FileReader in jsdom is asynchronous
+    for (let i = 0; i < 5; i++) { await flushPromises(); await new Promise(r => setTimeout(r, 0)) }
+    return w
+  }
+  const input = () => document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!
+  const submit = () => document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!
+
+  it('fills the name from the file and posts it encoded, with the zip as "file"', async () => {
+    http.post.mockResolvedValue({ id: 42, name: 'Trust game #3' })
+    const file = new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Trust game #3.zip')
+    const w = await openWith(file)
+    expect(input().value).toBe('Trust game #3')
+    submit().click()
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(1)
+    const [url, body] = http.post.mock.calls[0]
+    expect(url).toBe('/experiment/import/Trust%20game%20%233')
+    expect(body).toBeInstanceOf(FormData)
+    expect((body.get('file') as File).name).toBe('Trust game #3.zip')
+    // "work on it" is ticked by default
+    expect(store.actions.selectExperiment).toHaveBeenCalledWith(42)
+    const opened = w.emitted('update:open') || []
+    expect(opened[opened.length - 1]).toEqual([false])
+    w.unmount()
+  })
+
+  it('uses the name recorded in the zip when there is one', async () => {
+    const w = await openWith(new File([makeZip(EXPORTED) as BlobPart], 'Public-goods_12.zip'))
+    expect(input().value).toBe('Public goods')
+    w.unmount()
+  })
+
+  it('does not upload a zip the server would reject (it would leave an empty experiment behind)', async () => {
+    const w = await openWith(new File([new TextEncoder().encode('nope') as BlobPart], 'notes.zip'))
+    expect(document.body.textContent).toMatch(/isn't a zip archive/)
+    submit().click()
+    await flushPromises()
+    expect(http.post).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('refuses a duplicate name before uploading', async () => {
+    const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'existing.zip'))
+    submit().click()
+    await flushPromises()
+    expect(http.post).not.toHaveBeenCalled()
+    expect(document.body.textContent).toMatch(/already have an experiment called/)
+    w.unmount()
+  })
+
+  it('shows the server\'s refusal in words and keeps the file for a retry', async () => {
+    http.post.mockRejectedValue(new HttpError(400, 'Uploaded file is too large'))
+    const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Big study.zip'))
+    submit().click()
+    await flushPromises()
+    expect(document.querySelector('.ximp__error')!.textContent).toMatch(/Uploaded file is too large/)
+    expect(document.body.textContent).toMatch(/Big study\.zip/)
+    expect(w.emitted('update:open')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('only refreshes the list when a session is running (switching would disconnect people)', async () => {
+    store.running.value = true
+    http.post.mockResolvedValue({ id: 43, name: 'Later' })
+    const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Later.zip'))
+    submit().click()
+    await flushPromises()
+    expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+    expect(store.actions.refresh).toHaveBeenCalled()
+    w.unmount()
+  })
+})
+
+describe('New experiment dialog', () => {
+  beforeEach(() => {
+    store.exps.splice(0, store.exps.length, { id: 5, name: 'Base', instances: [], steps: [], languages: [] })
+    http.put.mockReset()
+    store.actions.refresh.mockClear()
+    store.actions.selectExperiment.mockClear()
+    store.running.value = false
+    document.body.innerHTML = ''
+  })
+
+  it('creates from the template with copyExperimentId -1 and asks for the new list', async () => {
+    http.put.mockResolvedValue({ id: 6, name: 'Fresh' })
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    await w.setProps({ open: true })
+    const name = document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!
+    name.value = 'Fresh'
+    name.dispatchEvent(new Event('input'))
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    expect(http.put).toHaveBeenCalledWith('/experiment', { newExperimentName: 'Fresh', copyExperimentId: -1 })
+    expect(store.actions.refresh).toHaveBeenCalled()
+    expect(store.actions.selectExperiment).toHaveBeenCalledWith(6)
+    w.unmount()
+  })
+
+  it('starts as a copy with a free name when asked to duplicate', async () => {
+    store.exps.push({ id: 7, name: 'Base copy', instances: [], steps: [], languages: [] })
+    http.put.mockResolvedValue({ id: 8, name: 'Base copy 2' })
+    const w = mount(NewExperimentDialog, { props: { open: false, copyFrom: 5 }, attachTo: document.body })
+    await w.setProps({ open: true })
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Base copy 2')
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    expect(http.put).toHaveBeenCalledWith('/experiment', { newExperimentName: 'Base copy 2', copyExperimentId: 5 })
+    w.unmount()
+  })
+
+  it('does not send an empty name', async () => {
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    await w.setProps({ open: true })
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    expect(http.put).not.toHaveBeenCalled()
+    expect(document.body.textContent).toMatch(/Give the experiment a name/)
+    w.unmount()
+  })
+})
+
+
+describe('Experiments page', () => {
+  const A: any = { id: 300, name: 'Alpha', fileMode: false, instances: [{ id: 1, name: 's1', status: 'FINISHED', creationTime: '2026-10-01 10:00:00,0' }], steps: [{}], content: [], parameters: [], languages: [{ code: 'eng', name: 'English' }] }
+  const B: any = { id: 301, name: 'Beta', fileMode: true, instances: [], steps: [], content: [], parameters: [], languages: [] }
+
+  function makeRouter () {
+    const r = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/experiments', component: ExperimentsPage },
+        { path: '/session', component: { template: '<div />' } },
+      ],
+    })
+    return r
+  }
+  async function mountAt (path: string) {
+    const router = makeRouter()
+    router.push(path)
+    await router.isReady()
+    const w = mount({ template: '<RouterView />' }, { global: { plugins: [router] }, attachTo: document.body })
+    await flushPromises()
+    return { w, router }
+  }
+
+  beforeEach(() => {
+    store.exps.splice(0, store.exps.length, A, B)
+    ;(store as any).admin.experiment = A
+    store.running.value = false
+    store.actions.deleteExperiment.mockClear()
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValue(true)
+    document.body.innerHTML = ''
+  })
+
+  it('lists every experiment with the current one marked and file mode shown', async () => {
+    const { w } = await mountAt('/experiments')
+    const cards = w.findAll('.xcard')
+    expect(cards.map(c => c.find('.xcard__name').text())).toEqual(['Alpha', 'Beta'])
+    expect(cards[0].classes()).toContain('is-current')
+    expect(cards[1].text()).toMatch(/File mode/)
+    expect(w.find('.xcur__name').text()).toBe('Alpha')
+    w.unmount()
+  })
+
+  it('opens the New dialog from ?action=new and clears the query', async () => {
+    const { w, router } = await mountAt('/experiments?action=new')
+    expect(document.querySelector('.b-dialog__title')!.textContent).toBe('New experiment')
+    expect(router.currentRoute.value.query.action).toBeUndefined()
+    w.unmount()
+  })
+
+  it('opens the Import dialog from ?action=import', async () => {
+    const { w } = await mountAt('/experiments?action=import')
+    expect(document.querySelector('.b-dialog__title')!.textContent).toBe('Import an experiment')
+    w.unmount()
+  })
+
+  async function deleteFromMenu (w: any, index: number) {
+    await w.findAll('.xcard')[index].find('.xcard__more').trigger('click')
+    const item = w.findAll('.xcard')[index].findAll('.b-menu__item').find((b: any) => /Delete/.test(b.text()))
+    await item.trigger('click')
+    await flushPromises()
+  }
+
+  it('deletes by id after typing the name to confirm', async () => {
+    const { w } = await mountAt('/experiments')
+    await deleteFromMenu(w, 1)
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(confirmMock.mock.calls[0][0]).toMatchObject({ typeToConfirm: 'Beta', danger: true })
+    expect(store.actions.deleteExperiment).toHaveBeenCalledWith(B)
+    w.unmount()
+  })
+
+  it('does not delete while a session is running', async () => {
+    store.running.value = true
+    const { w } = await mountAt('/experiments')
+    await deleteFromMenu(w, 1)
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(store.actions.deleteExperiment).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('does nothing when the researcher cancels', async () => {
+    confirmMock.mockResolvedValue(false)
+    const { w } = await mountAt('/experiments')
+    await deleteFromMenu(w, 0)
+    expect(store.actions.deleteExperiment).not.toHaveBeenCalled()
+    w.unmount()
+  })
+})

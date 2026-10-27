@@ -1,0 +1,310 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { defineComponent, h, nextTick } from 'vue'
+import { mount, flushPromises } from '@vue/test-utils'
+import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
+
+vi.mock('@/store/admin', async () => {
+  const { reactive, ref, computed } = await import('vue')
+  const admin = reactive({
+    email: 'r@lab.org',
+    user: { email: 'r@lab.org', currentScript: '', experiments: [{ id: 7, name: 'Trust game' }], defaultLanguage: null } as any,
+    experiment: null as any,
+    instance: null as any,
+    engine: 'ready',
+    output: [] as any[],
+  })
+  const actions = {
+    runScript: vi.fn(),
+    runStep: vi.fn(),
+    refresh: vi.fn(() => Promise.resolve(null)),
+    markEngineStale: vi.fn(),
+    reloadEngine: vi.fn(),
+    selectExperiment: vi.fn(),
+  }
+  return { admin, actions, running: computed(() => false), connectionState: ref('open'), graph: { nodes: new Map(), version: ref(0) } }
+})
+
+vi.mock('@/lib/http', () => {
+  class HttpError extends Error {
+    status: number
+    body: any
+    constructor (status: number, message: string, body?: any) { super(message); this.status = status; this.body = body }
+  }
+  return { HttpError, http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }, saveText: vi.fn(), onUnauthorized: vi.fn() }
+})
+
+import * as store from '@/store/admin'
+import { http, HttpError } from '@/lib/http'
+import {
+  BUILTINS, builtinOf, copyName, draftFromStep, formatName, isDirty, isNew, mergeServerSteps, newDraft, renameDraft,
+  sortDrafts, templateSource, uniqueName, validateName, type StepDraft,
+} from '../src/pages/steps/stepsModel'
+import { buckets, errorText, saveDraft, ensureBucket, unsavedDrafts } from '../src/pages/steps/stepsStore'
+import StepsPage from '../src/pages/steps/StepsPage.vue'
+
+const admin = store.admin as any
+const actions = store.actions as any
+const get = http.get as any
+const post = http.post as any
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  buckets.clear()
+})
+
+describe('templates (as the old console made them)', () => {
+  it('turns a step name into the variable its code defines', () => {
+    expect(formatName('My-new_step')).toBe('myNewStep')
+    expect(formatName('InitStep')).toBe('initStep')
+    expect(formatName('NewStep')).toBe('newStep')
+    expect(formatName('round 2 payoff')).toBe('round2Payoff')
+    expect(formatName('Trust & reward!')).toBe('trustReward')
+  })
+
+  it('writes a synchronous step', () => {
+    expect(templateSource('Payoff', 'sync')).toBe(
+      'payoff = stepFactory.createStep("Payoff")\n' +
+      '\n' +
+      'payoff.run = {\n' +
+      '  println "payoff.run"\n' +
+      '}\n' +
+      '\n' +
+      'payoff.done = {\n' +
+      '  println "payoff.done"\n' +
+      '}',
+    )
+  })
+
+  it('writes an asynchronous step and an empty one', () => {
+    expect(templateSource('Round-two', 'async')).toBe(
+      'roundTwo = stepFactory.createNoUserActionStep("Round-two")\n\nroundTwo.run = {\n  println "roundTwo.run"\n}\n\nroundTwo.done = {\n  println "roundTwo.done"\n}',
+    )
+    expect(templateSource('Anything', 'empty')).toBe('')
+  })
+
+  it('regenerates a new step\'s code from its name until the code is edited', () => {
+    const d = newDraft('NewStep', 'sync')
+    renameDraft(d, 'Vote')
+    expect(d.source).toBe(templateSource('Vote', 'sync'))
+    d.source += '\n// mine'
+    renameDraft(d, 'Ballot')
+    expect(d.name).toBe('Ballot')
+    expect(d.source).toContain('vote = stepFactory.createStep("Vote")')
+    expect(d.source).toContain('// mine')
+  })
+
+  it('knows the built-in steps by name, in any case', () => {
+    expect(builtinOf('onjoinstep')?.name).toBe('OnJoinStep')
+    expect(builtinOf('Payoff')).toBeNull()
+    expect(BUILTINS.map(b => b.name)).toEqual(['InitStep', 'OnJoinStep', 'OnLeaveStep'])
+  })
+})
+
+describe('unsaved changes', () => {
+  const step = (over: Partial<StepDraft> = {}) => ({ ...draftFromStep({ id: 1, name: 'Payoff', source: 'a()' }), ...over })
+
+  it('tracks code and name against the server copy', () => {
+    const d = step()
+    expect(isDirty(d)).toBe(false)
+    d.source = 'b()'
+    expect(isDirty(d)).toBe(true)
+    d.source = 'a()'
+    expect(isDirty(d)).toBe(false)
+    d.name = 'Payout'
+    expect(isDirty(d)).toBe(true)
+  })
+
+  it('counts a step never saved as unsaved, whatever it holds', () => {
+    const d = newDraft('X', 'empty')
+    expect(isNew(d)).toBe(true)
+    expect(isDirty(d)).toBe(true)
+  })
+
+  it('sorts the built-in steps first, then by name', () => {
+    const names = ['Round 10', 'onleavestep', 'Round 2', 'InitStep', 'apple', 'OnJoinStep'].map(name => ({ name }))
+    expect(sortDrafts(names).map(d => d.name)).toEqual(['InitStep', 'OnJoinStep', 'onleavestep', 'apple', 'Round 2', 'Round 10'])
+  })
+
+  it('checks names', () => {
+    const a = step()
+    const b = { ...step({ uid: 'b', id: 2, name: 'Vote', savedName: 'Vote' }) }
+    const all = [a, b]
+    expect(validateName('', all, a)).toMatch(/name/)
+    expect(validateName('vote', all, a)).toMatch(/already called “Vote”/)
+    expect(validateName('2nd round', all, a)).toMatch(/letter/)
+    expect(validateName('Pay/off', all, a)).toMatch(/only letters/)
+    expect(validateName(' Pay', all, a)).toMatch(/space/)
+    expect(validateName('Payoff round', all, a)).toBeNull()
+    // an old name that breaks today's rules can still be saved unchanged
+    const legacy = step({ name: 'old.step', savedName: 'old.step' })
+    expect(validateName('old.step', [legacy], legacy)).toBeNull()
+  })
+
+  it('finds a free name', () => {
+    const all = [{ name: 'NewStep' }, { name: 'newstep2' }]
+    expect(uniqueName('NewStep', all)).toBe('NewStep3')
+    expect(uniqueName('Other', all)).toBe('Other')
+    expect(copyName('Vote', [{ name: 'Vote copy' }])).toBe('Vote copy2')
+  })
+})
+
+describe('merging the server\'s steps', () => {
+  const s = (id: number | null, name: string, source = name + '()') => ({ id, name, source })
+
+  it('adds, follows, keeps edits and drops what is gone', () => {
+    const clean = draftFromStep(s(1, 'A'))
+    const edited = draftFromStep(s(2, 'B'))
+    edited.source = 'mine()'
+    const goneClean = draftFromStep(s(3, 'C'))
+    const goneEdited = draftFromStep(s(4, 'D'))
+    goneEdited.source = 'kept()'
+    const fresh = newDraft('E', 'empty')
+    const out = mergeServerSteps([clean, edited, goneClean, goneEdited, fresh], [s(1, 'A', 'new()'), s(2, 'B', 'theirs()'), s(5, 'F')], false, 1e12)
+    expect(out.map(d => d.name)).toEqual(['A', 'B', 'F', 'D', 'E'])
+    expect(clean.source).toBe('new()')
+    expect(edited.source).toBe('mine()')
+    expect(goneEdited).toMatchObject({ id: null, savedSource: null, orphaned: true, source: 'kept()' })
+    expect(out).not.toContain(goneClean)
+  })
+
+  it('ignores a server copy older than a save made here moments ago', () => {
+    const d = draftFromStep(s(1, 'A', 'saved()'))
+    d.savedAt = 1000
+    const out = mergeServerSteps([d], [s(1, 'A', 'older()')], false, 3000)
+    expect(out[0].source).toBe('saved()')
+    // and a just-created step that the server's list doesn't have yet stays
+    const n = draftFromStep(s(9, 'New'))
+    n.savedAt = 1000
+    expect(mergeServerSteps([n], [], false, 2000)).toEqual([n])
+  })
+
+  it('matches file-mode steps by name', () => {
+    const d = draftFromStep(s(null, 'Round'))
+    const out = mergeServerSteps([d], [s(null, 'Round', 'changed()'), s(null, 'Extra')], true, 1e12)
+    expect(out[0]).toBe(d)
+    expect(d.source).toBe('changed()')
+    expect(out.map(x => x.name)).toEqual(['Round', 'Extra'])
+  })
+})
+
+describe('saving', () => {
+  it('posts a new step as -1 and remembers its id', async () => {
+    const b = ensureBucket(7, false)
+    const d = newDraft('Vote', 'sync')
+    b.drafts.push(d)
+    post.mockResolvedValueOnce({ id: 41, name: 'Vote', source: d.source })
+    expect(await saveDraft(b, b.drafts[0])).toBe(true)
+    expect(post).toHaveBeenCalledWith('/steps/-1', { experimentId: 7, stepSource: templateSource('Vote', 'sync'), name: 'Vote' })
+    expect(b.drafts[0]).toMatchObject({ id: 41, savedName: 'Vote', status: 'saved', engineBehind: true, template: null })
+    expect(isDirty(b.drafts[0])).toBe(false)
+  })
+
+  it('keeps the server\'s message when a save fails', async () => {
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 3, name: 'A', source: 'a()' }))
+    b.drafts[0].source = 'b()'
+    post.mockRejectedValueOnce(new (HttpError as any)(400, 'Invalid Step ID'))
+    expect(await saveDraft(b, b.drafts[0])).toBe(false)
+    expect(b.drafts[0]).toMatchObject({ status: 'error', error: 'Invalid Step ID' })
+    expect(unsavedDrafts.value).toHaveLength(1)
+  })
+
+  it('says what went wrong in words', () => {
+    expect(errorText(new (HttpError as any)(500, ''))).toMatch(/server had a problem/)
+    expect(errorText(new TypeError('Failed to fetch'))).toMatch(/Could not reach the server/)
+  })
+})
+
+describe('StepsPage', () => {
+  const CodeStub = defineComponent({
+    name: 'BCodeEditor',
+    props: ['modelValue', 'onRun', 'onSave', 'language', 'fill', 'ariaLabel', 'placeholder', 'readonly'],
+    emits: ['update:modelValue'],
+    setup (props, { emit, expose }) {
+      expose({ focus: () => {}, selection: () => '', insert: () => {} })
+      return () => h('textarea', { class: 'code-stub', value: props.modelValue, readonly: props.readonly, onInput: (e: any) => emit('update:modelValue', e.target.value) })
+    },
+  })
+  const steps = [
+    { id: 3, name: 'Round', source: 'round = 1' },
+    { id: 1, name: 'InitStep', source: 'initStep = 1' },
+    { id: 2, name: 'OnJoinStep', source: 'onJoinStep = 1' },
+    { id: 4, name: 'Apple', source: 'apple = 1' },
+  ]
+
+  async function open (fileMode = false) {
+    admin.experiment = { id: 7, name: 'Trust game', fileMode, steps: fileMode ? steps.map(s => ({ ...s, id: null })) : steps }
+    get.mockResolvedValue({ steps: fileMode ? steps.map(s => ({ ...s, id: null })) : steps })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }, { path: '/other', component: { render: () => h('div') } }] })
+    router.push('/steps')
+    await router.isReady()
+    const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs: { BCodeEditor: CodeStub } } })
+    await flushPromises()
+    return { w, router }
+  }
+
+  it('lists the built-in steps first and opens InitStep', async () => {
+    const { w } = await open()
+    expect(get).toHaveBeenCalledWith('/steps/7')
+    const names = w.findAll('.sitem__name').map(n => n.text())
+    expect(names).toEqual(['InitStep', 'OnJoinStep', 'Apple', 'Round'])
+    expect(w.find('.steps__title').text()).toBe('InitStep')
+    expect(w.text()).toContain('OnLeaveStep') // offered, since this experiment lacks it
+    expect((w.find('textarea.code-stub').element as HTMLTextAreaElement).value).toBe('initStep = 1')
+    w.unmount()
+  })
+
+  it('creates a step from a template, names it and saves it', async () => {
+    const { w } = await open()
+    await w.findAll('button').find(b => b.text() === 'New')!.trigger('click')
+    await w.findAll('.b-menu__item').find(b => b.text().startsWith('Synchronous'))!.trigger('click')
+    await nextTick()
+    const name = w.find('.steps__name-field input')
+    expect(name.exists()).toBe(true)
+    await name.setValue('Payoff')
+    expect((w.find('textarea.code-stub').element as HTMLTextAreaElement).value).toBe(templateSource('Payoff', 'sync'))
+    await name.trigger('keydown', { key: 'Enter' })
+    expect(w.find('.sitem.is-active .sitem__new').exists()).toBe(true)
+
+    post.mockResolvedValueOnce({ id: 50, name: 'Payoff', source: templateSource('Payoff', 'sync') })
+    await w.findAll('button').find(b => b.text() === 'Save')!.trigger('click')
+    await flushPromises()
+    expect(post).toHaveBeenCalledWith('/steps/-1', { experimentId: 7, stepSource: templateSource('Payoff', 'sync'), name: 'Payoff' })
+    expect(actions.refresh).toHaveBeenCalled()
+    expect(actions.markEngineStale).toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('saves and runs with Cmd/Ctrl+Enter', async () => {
+    const { w } = await open()
+    await w.find('textarea.code-stub').setValue('initStep = 2')
+    expect(w.find('.sitem.is-active .sitem__dot').exists()).toBe(true)
+    post.mockResolvedValueOnce({ id: 1, name: 'InitStep', source: 'initStep = 2' })
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }))
+    await flushPromises()
+    expect(post).toHaveBeenCalledWith('/steps/1', { experimentId: 7, stepSource: 'initStep = 2', name: 'InitStep' })
+    expect(actions.runStep).toHaveBeenCalledWith({ id: 1, name: 'InitStep', source: 'initStep = 2' })
+    w.unmount()
+  })
+
+  it('asks before leaving with unsaved changes, and can stay', async () => {
+    const { w, router } = await open()
+    await w.find('textarea.code-stub').setValue('changed')
+    const nav = router.push('/other')
+    await flushPromises()
+    expect(document.body.textContent).toContain('Save your changes before leaving?')
+    const stay = Array.from(document.body.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Stay')!
+    stay.click()
+    await nav
+    expect(router.currentRoute.value.path).toBe('/steps')
+    w.unmount()
+  })
+
+  it('is read only in file mode and says why', async () => {
+    const { w } = await open(true)
+    expect(w.text()).toContain('Read from files')
+    expect(w.findAll('button').some(b => b.text() === 'Save')).toBe(false)
+    expect(w.find('textarea.code-stub').attributes('readonly')).toBeDefined()
+    w.unmount()
+  })
+})

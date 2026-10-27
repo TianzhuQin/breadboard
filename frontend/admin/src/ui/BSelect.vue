@@ -15,7 +15,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, toRaw } from 'vue'
 import { ChevronDown } from 'lucide-vue-next'
 
 export interface SelectOption { value: any, label: string, disabled?: boolean }
@@ -36,7 +36,8 @@ const normalized = computed(() => props.options.map((o, i) => {
   return { ...opt, key: String(i) }
 }))
 const valueKey = computed(() => {
-  const hit = normalized.value.find(o => o.value === props.modelValue)
+  const current = toRaw(props.modelValue)
+  const hit = normalized.value.find(o => toRaw(o.value) === current)
   return hit ? hit.key : ''
 })
 function onChange (e: Event) {

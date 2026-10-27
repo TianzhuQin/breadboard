@@ -60,8 +60,29 @@ public class ScriptBoard extends UntypedActor {
   // CopyOnWriteArrayList because the static state is shared across ScriptBoard actors.
   static final List<Timer> amtTimers = new CopyOnWriteArrayList<Timer>();
 
-  // A list of admins currently watching the game.
-  private static ArrayList<Admin> admins = new ArrayList<>();
+  // Every open admin console socket, one Admin each (registered on LogIn, removed when the socket
+  // closes). Sockets open and close on Play's threads while the engine's threads send changes, hence
+  // the copy-on-write list; ADMIN_LOCK keeps it and the graph listener's copy in step.
+  private static final List<Admin> admins = new CopyOnWriteArrayList<>();
+  private static final Object ADMIN_LOCK = new Object();
+  // The open admin sockets as one output: engine reloads, OnJoinStep / OnLeaveStep output and live
+  // events go to everyone watching.
+  static final ThrottledWebSocketOut allAdmins = new ThrottledWebSocketOut(new AllAdminsOut(), 0L);
+  // Runs OnJoinStep / OnLeaveStep once per player added or removed, however many consoles are open
+  // (none, when the autopilot runs alone). It used to be each Admin's job, so it ran once per tab.
+  private static final StepTrigger stepTrigger = new StepTrigger(new java.util.function.BiConsumer<Boolean, Vertex>() {
+    public void accept(Boolean joined, Vertex player) {
+      runJoinOrLeaveStep(joined, player);
+    }
+  });
+  // Who built the engine that is running now: that actor runs OnJoinStep / OnLeaveStep (after the
+  // steps it is still loading), and the experiment whose steps it loaded.
+  private static volatile ActorRef engineOwner;
+  private static volatile Long engineExperimentId;
+  private static volatile GameListener engineGameListener;
+  // True while resetEngine empties the old graph: those removals are the old session ending, not
+  // players leaving, so OnLeaveStep doesn't run for them against the new engine.
+  private static volatile boolean resetting = false;
   private static UserDataInterface instanceData;
   private GameListener gameListener = new GameListener();
 
@@ -93,14 +114,21 @@ public class ScriptBoard extends UntypedActor {
     return password;
   }
 
-  public ScriptBoard() throws IOException, ScriptException {
-    rebuildScriptBoard(null);
+  public ScriptBoard() {
+    // The engine is shared by every account. Creating an account's actor (its first login, or the
+    // autopilot's) used to rebuild it, which ended the session another account was running. It is
+    // built when someone selects an experiment or a session, launches, or reloads; Breadboard's
+    // LogIn still loads the saved experiment for the first account in after a start.
+  }
+
+  /** Whether a script engine has been built since the server started. */
+  public static boolean hasEngine() {
+    return engine != null;
   }
 
   private void init() {
     results = new HashMap();
     mapper = new ObjectMapper();
-    admins = new ArrayList<>();
     rememberLastScreens(clients.values());
     clients.clear();
     eventTracker = new EventTracker();
@@ -199,24 +227,25 @@ public class ScriptBoard extends UntypedActor {
   }
 
   private void resetEngine(Experiment experiment) throws IOException, ScriptException {
-    // When started, send a message to each Admin
-    for (Admin admin : admins) {
-      ObjectNode jsonOutput = Json.newObject();
-      ObjectNode notify = Json.newObject();
-      notify.put("ScriptEngineReloading", new Date().getTime());
-      jsonOutput.put("notify", notify);
-      admin.getOut().write(jsonOutput);
-    }
+    // When started, tell every open console
+    ObjectNode reloading = Json.newObject();
+    reloading.putObject("notify").put("ScriptEngineReloading", new Date().getTime());
+    toAllAdmins(reloading);
     Logger.debug("ScriptEngine reload start");
     ClientView.reset();
     Recruitment.reset();
     if (engine != null) {
-      // just in case
-      playerActions.turnAIOff();
-      // clean up the graph
-      processScript("g.empty()", null, null);
-      // Reset the timers
-      processScript("timers.cancel()", null, null);
+      resetting = true;
+      try {
+        // just in case
+        playerActions.turnAIOff();
+        // clean up the graph
+        processScript("g.empty()", null, null);
+        // Reset the timers
+        processScript("timers.cancel()", null, null);
+      } finally {
+        resetting = false;
+      }
       // Cancel any pending AMT lifecycle timers from a previous session so they don't
       // fire against the rebuilt engine or outlive it (MEMORY_LEAKS.md L6).
       cancelAmtTimers();
@@ -281,13 +310,22 @@ public class ScriptBoard extends UntypedActor {
     if (graphChangedListener == null) {
       Logger.debug("graphChangedListener == null");
       Long clientUpdateRate = play.Play.application().configuration().getMilliseconds("breadboard.clientUpdateRate");
+      BreadboardGraphChangedListener listener;
       if (clientUpdateRate == null || clientUpdateRate == 0) {
         Logger.debug("clientUpdateRate not found or 0, using event based updating");
-        graphChangedListener = new EventGraphChangedListener((Graph) g);
+        listener = new EventGraphChangedListener((Graph) g);
 
       } else {
         Logger.debug("clientUpdateRate found, using polling");
-        graphChangedListener = new IteratedBreadboardGraphChangedListener((Graph) g);
+        listener = new IteratedBreadboardGraphChangedListener((Graph) g);
+      }
+      synchronized (ADMIN_LOCK) {
+        // Consoles may have logged in before there was an engine.
+        listener.addAdminListener(stepTrigger);
+        for (Admin admin : admins) {
+          listener.addAdminListener(admin);
+        }
+        graphChangedListener = listener;
       }
     } else {
       Logger.debug("graphChangedListener != null");
@@ -296,29 +334,71 @@ public class ScriptBoard extends UntypedActor {
 
     graphInterface.addListener(graphChangedListener);
 
-    if (fileWatcher == null) {
+    // Watches dev/ for file-mode experiments. Not in tests, where it would create dev/ in the checkout.
+    if (fileWatcher == null && !Play.isTest()) {
       fileWatcher = new FileWatcher(admins);
     }
 
     gameListener.engine = engine;
+    engineOwner = getSelf();
+    engineExperimentId = experiment == null ? null : experiment.id;
+    engineGameListener = gameListener;
 
-    // When done, send a message to each Admin
-    for (Admin admin : admins) {
-      ObjectNode jsonOutput = Json.newObject();
-      ObjectNode notify = Json.newObject();
-      notify.put("ScriptEngineReloaded", new Date().getTime());
-      jsonOutput.put("notify", notify);
-      admin.getOut().write(jsonOutput);
-    }
+    // When done, tell every open console
+    ObjectNode reloaded = Json.newObject();
+    reloaded.putObject("notify").put("ScriptEngineReloaded", new Date().getTime());
+    toAllAdmins(reloaded);
     this.disconnectClients();
     Logger.debug("ScriptEngine reload complete");
   }
 
   private void loadSteps(Experiment experiment, ThrottledWebSocketOut out) {
+    if (experiment == null) {
+      return;
+    }
     for (Step step : experiment.getSteps()) {
       //should call RunStep?
       processScript(step.source + ";null;", out, step.name);
     }
+    afterStepsLoaded(experiment);
+  }
+
+  /**
+   * Run {@link AutopilotHooks#afterStepsLoaded} on the current engine, logging (never throwing) if it
+   * fails. Called after every load of an experiment's steps into the engine.
+   */
+  static void afterStepsLoaded(Experiment experiment) {
+    ScriptEngine current = engine;
+    if (current == null) {
+      return;
+    }
+    try {
+      afterStepsLoadedHook.accept(experiment, current);
+    } catch (Exception | AssertionError e) {
+      ScriptLoader.humanizeStackTrace(e);
+      Logger.error("Could not apply the autopilot settings after loading the steps of "
+          + (experiment == null ? "the engine" : "\"" + experiment.name + "\""), e);
+    }
+  }
+
+  // AutopilotHooks.afterStepsLoaded; a field only so tests can watch when it runs.
+  static volatile java.util.function.BiConsumer<Experiment, ScriptEngine> afterStepsLoadedHook =
+      new java.util.function.BiConsumer<Experiment, ScriptEngine>() {
+        public void accept(Experiment experiment, ScriptEngine engine) {
+          AutopilotHooks.afterStepsLoaded(experiment, engine);
+        }
+      };
+
+  /** The experiment whose steps the running engine loaded, or null. */
+  static Experiment engineExperiment() {
+    Long id = engineExperimentId;
+    return id == null ? null : Experiment.findById(id);
+  }
+
+  /** The session the running engine was last given (as the engine's copy; it may have ended), or null. */
+  static ExperimentInstance engineSession() {
+    GameListener listener = engineGameListener;
+    return listener == null ? null : listener.experimentInstance;
   }
 
   private String makeUniqueClientId (String clientId) {
@@ -330,9 +410,195 @@ public class ScriptBoard extends UntypedActor {
     resetEngine(experiment);
   }
 
+  /** Start sending graph changes to this console socket. */
   public static void addAdmin(Admin admin) {
-    admins.add(admin);
-    graphChangedListener.addAdminListener(admin);
+    synchronized (ADMIN_LOCK) {
+      if (!admins.contains(admin)) {
+        admins.add(admin);
+      }
+      if (graphChangedListener != null) {
+        graphChangedListener.addAdminListener(admin);
+      }
+    }
+  }
+
+  /**
+   * The Admin for this socket, registered if it is new. A socket logs in again after every reconnect
+   * of the console (and may send LogIn twice); it keeps one Admin, with the account refreshed.
+   */
+  static Admin registerAdmin(User user, ActorRef scriptBoardController, ThrottledWebSocketOut out) {
+    synchronized (ADMIN_LOCK) {
+      for (Admin admin : admins) {
+        if (admin.getOut() == out) {
+          admin.setUser(user);
+          return admin;
+        }
+      }
+      Admin admin = new Admin(user, scriptBoardController, out);
+      addAdmin(admin);
+      return admin;
+    }
+  }
+
+  /** A console socket closed: stop sending it anything. */
+  public static void removeAdmin(ThrottledWebSocketOut out) {
+    synchronized (ADMIN_LOCK) {
+      for (Admin admin : admins) {
+        if (admin.getOut() == out) {
+          admins.remove(admin);
+          if (graphChangedListener != null) {
+            graphChangedListener.removeAdminListener(admin);
+          }
+        }
+      }
+    }
+  }
+
+  /** How many console sockets are open. */
+  public static int adminCount() {
+    return admins.size();
+  }
+
+  static boolean hasAdmins() {
+    return !admins.isEmpty();
+  }
+
+  /** Write a frame to every open console socket. */
+  static void toAllAdmins(JsonNode frame) {
+    for (Admin admin : admins) {
+      admin.write(frame);
+    }
+  }
+
+  /** Write a frame to every open console socket of one account; false if it has none open. */
+  static boolean toAccount(String email, JsonNode frame) {
+    boolean any = false;
+    for (Admin admin : admins) {
+      User user = admin.getUser();
+      if (user != null && user.email != null && user.email.equalsIgnoreCase(email)) {
+        admin.write(frame);
+        any = true;
+      }
+    }
+    return any;
+  }
+
+  /**
+   * Send this socket the live network: {@code {"graphReplay": {"nodes": n, "links": m}}}, then
+   * {@code addNode} + {@code nodePropertyChanged} per property for every player and {@code addLink} +
+   * {@code linkPropertyChanged} for every tie. Only to this socket: a console that connects or
+   * reconnects no longer makes every other console receive the graph again.
+   */
+  static void replayGraph(Admin admin) {
+    ScriptEngine current = engine;
+    if (current == null) {
+      return;
+    }
+    try {
+      Object g = current.get("g");
+      if (!(g instanceof Graph)) {
+        return;
+      }
+      Graph wholeGraph = (Graph) g;
+      List<Vertex> vertices = new ArrayList<Vertex>();
+      for (Vertex v : wholeGraph.getVertices()) {
+        vertices.add(v);
+      }
+      List<Edge> edges = new ArrayList<Edge>();
+      for (Edge e : wholeGraph.getEdges()) {
+        edges.add(e);
+      }
+      // Lets the console drop what it had (e.g. players that left while it was disconnected).
+      ObjectNode start = Json.newObject();
+      ObjectNode counts = start.putObject("graphReplay");
+      counts.put("nodes", vertices.size());
+      counts.put("links", edges.size());
+      admin.write(start);
+      for (Vertex v : vertices) {
+        admin.replayVertex(v);
+      }
+      for (Edge e : edges) {
+        admin.edgeAdded(e);
+      }
+    } catch (Exception e) {
+      // The engine may be rebuilding right now; its ScriptEngineReloaded and the new graph follow.
+      Logger.warn("Could not send the network to a console: " + e);
+    }
+  }
+
+  /** Every open console socket as one WebSocket.Out (see allAdmins). */
+  private static final class AllAdminsOut implements WebSocket.Out<JsonNode> {
+    public void write(JsonNode frame) {
+      toAllAdmins(frame);
+    }
+
+    public void close() {}
+  }
+
+  /**
+   * Graph listener that runs OnJoinStep when a player is added and OnLeaveStep when one is removed,
+   * once each. Registered once on the engine's graph listener, alongside the console sockets.
+   */
+  static final class StepTrigger implements ClientListener {
+    private final java.util.function.BiConsumer<Boolean, Vertex> run;
+
+    StepTrigger(java.util.function.BiConsumer<Boolean, Vertex> run) {
+      this.run = run;
+    }
+
+    public void vertexAdded(Vertex vertex) {
+      fire(true, vertex);
+    }
+
+    public void vertexRemoved(Vertex vertex) {
+      fire(false, vertex);
+    }
+
+    private void fire(boolean joined, Vertex vertex) {
+      try {
+        run.accept(joined, vertex);
+      } catch (Exception e) {
+        Logger.error("Could not run the " + (joined ? "OnJoinStep" : "OnLeaveStep") + " for " + vertex.getId(), e);
+      }
+    }
+
+    public void graphChanged(Graph wholeGraph) {}
+    public void vertexPropertyChanged(Vertex vertex, String key, Object oldValue, Object setValue) {}
+    public void vertexPropertyRemoved(Vertex vertex, String key) {}
+    public void edgeAdded(Edge edge) {}
+    public void edgeRemoved(Edge edge) {}
+    public void edgePropertyChanged(Edge edge, String key, Object setValue) {}
+    public void edgePropertyRemoved(Edge edge, String key) {}
+  }
+
+  /**
+   * Queue OnJoinStep / OnLeaveStep for a player on the actor that built the engine, so it runs after
+   * any steps that actor is still loading, with its output going to every open console.
+   */
+  private static void runJoinOrLeaveStep(boolean joined, Vertex player) {
+    ActorRef owner = engineOwner;
+    if (owner == null || resetting) {
+      return;
+    }
+    Breadboard.BreadboardMessage message = joined
+        ? new Breadboard.RunOnJoinStep(null, player, allAdmins)
+        : new Breadboard.RunOnLeaveStep(null, player, allAdmins);
+    owner.tell(message, null);
+  }
+
+  /** A Groovy single-quoted string literal (no ${} interpolation) holding {@code value}. */
+  static String groovyString(String value) {
+    StringBuilder sb = new StringBuilder("'");
+    for (char c : value.toCharArray()) {
+      switch (c) {
+        case '\\': sb.append("\\\\"); break;
+        case '\'': sb.append("\\'"); break;
+        case '\n': sb.append("\\n"); break;
+        case '\r': sb.append("\\r"); break;
+        default: sb.append(c);
+      }
+    }
+    return sb.append("'").toString();
   }
 
   public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId, final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out) throws Exception {
@@ -474,305 +740,528 @@ public class ScriptBoard extends UntypedActor {
   }
 
   public void onReceive(Object message) throws Exception {
+    Breadboard.BreadboardMessage request = message instanceof Breadboard.BreadboardMessage
+        ? (Breadboard.BreadboardMessage) message : null;
     try {
-      if (message instanceof Breadboard.BreadboardMessage) {
-        Breadboard.BreadboardMessage breadboardMessage = (Breadboard.BreadboardMessage) message;
-        if (breadboardMessage.user != null) {
-          gameListener.user = breadboardMessage.user;
-          gameListener.out = breadboardMessage.out;
-        }
-        if (message instanceof Breadboard.AddAdmin) {
-          Breadboard.AddAdmin addAdmin = (Breadboard.AddAdmin) message;
-
-          addAdmin(new Admin(addAdmin.user, addAdmin.scriptBoardController, addAdmin.out));
-        } else if (message instanceof Breadboard.RunGame) {
-          if (breadboardMessage.user != null) {
-            // Run Game
-            processScript("initStep.start()", breadboardMessage.out, null);
-          }
-
-        } else if (message instanceof Breadboard.HitCreated) {
-          Breadboard.HitCreated hitCreated = (Breadboard.HitCreated) message;
-          if (breadboardMessage.user != null) {
-            Integer lifetimeInMs = hitCreated.lifetimeInSeconds * 1000;
-            Integer tutorialTimeInMs = hitCreated.tutorialTime * 1000;
-            Long timerTime = System.currentTimeMillis() + (lifetimeInMs + tutorialTimeInMs);
-            // startAt will be used to add timer to clients for start of game
-            processScript("startAt = " + timerTime, breadboardMessage.out, null);
-
-            final ThrottledWebSocketOut breadboardOut = breadboardMessage.out;
-            // Schedule the two AMT lifecycle timers via the tracked registry so they are
-            // cancelled on reload / superseded on re-submit instead of leaking. Same delays
-            // and actions as before: at lifetimeInMs no new connections are allowed; at
-            // lifetimeInMs + tutorialTimeInMs initStep.start() is sent (MEMORY_LEAKS.md L6).
-            scheduleAmtTimers(lifetimeInMs, lifetimeInMs + tutorialTimeInMs,
-              new Runnable() {
-                @Override
-                public void run() {
-                  gameListener.hasStarted();
-                }
-              },
-              new Runnable() {
-                @Override
-                public void run() {
-                  processScript("initStep.start()", breadboardOut, null);
-                  Logger.debug("initStep.start()");
-                }
-              });
-          }
-        } else if (message instanceof Breadboard.SendScript) {
-          Breadboard.SendScript sendScript = (Breadboard.SendScript) message;
-
-          if (breadboardMessage.user != null) {
-            // Save script in database
-            breadboardMessage.user.currentScript = sendScript.script;
-            breadboardMessage.user.update();
-
-            // Process script
-            processScript(sendScript.script, breadboardMessage.out, null);
-          }
-
-        } else if (message instanceof Breadboard.MakeChoice) {
-          Breadboard.MakeChoice makeChoice = (Breadboard.MakeChoice) message;
-          makeChoice(null, makeChoice.uid, makeChoice.params, breadboardMessage.out); // admin acting for a player
-        } else if (message instanceof Breadboard.EditTie) {
-          Breadboard.EditTie editTie = (Breadboard.EditTie) message;
-          editTie(editTie.op, editTie.a, editTie.b, breadboardMessage.out);
-        } else if (message instanceof Breadboard.SendStep) {
-          Breadboard.SendStep sendStep = (Breadboard.SendStep) message;
-
-          if (breadboardMessage.user != null && breadboardMessage.user.selectedExperiment != null) {
-            Logger.debug("SendStep: " + sendStep.id + ", " + sendStep.name + ", " + sendStep.source);
-            // Now we only run the step
-            Breadboard.instances.get(breadboardMessage.user.email).tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out), null);
-          }
-        } else if (message instanceof Breadboard.RunStep) {
-          // TODO: Compile step here and make available to scripting engine
-          Breadboard.RunStep runStep = (Breadboard.RunStep) message;
-          processScript(runStep.source, breadboardMessage.out, null);
-        } else if (message instanceof Breadboard.ChangeExperiment) {
-          if (breadboardMessage.user != null) {
-            rebuildScriptBoard(breadboardMessage.user.selectedExperiment);
-            loadSteps(breadboardMessage.user.selectedExperiment, breadboardMessage.out);
-            Breadboard.ChangeExperiment changeExperiment = (Breadboard.ChangeExperiment) message;
-
-            //reset the instance
-            if (breadboardMessage.user.experimentInstanceId != -1) {
-              ExperimentInstance runningInstance = ExperimentInstance.findById(breadboardMessage.user.experimentInstanceId);
-              if (runningInstance != null) {
-                if (runningInstance.status == ExperimentInstance.Status.RUNNING && runningInstance.experiment.id.equals(changeExperiment.experiment.id)) {
-                  eventTracker.setExperimentInstance(runningInstance);
-                  gameListener.experimentInstance = runningInstance;
-                  for (Data param : runningInstance.data) {
-                    initParam(param, changeExperiment.experiment);
-                  }
-                }
-              } else {
-                Logger.error("runningInstance == null");
-              }
-            }
-          }
-        } else if (message instanceof Breadboard.DeleteExperiment) {
-          Breadboard.DeleteExperiment deleteExperiment = (Breadboard.DeleteExperiment) message;
-
-          Experiment toBeDeleteExperiment = deleteExperiment.user.getExperimentByName(deleteExperiment.experimentName);
-          Logger.debug("DeleteExperiment: " + toBeDeleteExperiment.name);
-
-          //also stops the game
-          for (Parameter p : breadboardMessage.user.getExperiment().getParameters()) {
-            Logger.debug("Key: " + p.name);
-            if (engine.getBindings(ScriptContext.ENGINE_SCOPE).containsKey(p.name))
-              engine.getBindings(ScriptContext.ENGINE_SCOPE).remove(p.name);
-          }
-
-          breadboardMessage.user.currentScript = "";
-          processScript("g.empty()", breadboardMessage.out, null);
-
-          if (toBeDeleteExperiment != null) {
-            //needs to remove all the selectedExperiment and ownedExperiments which is this toBeDeleteExperiment
-            List<User> users = User.find.all();
-
-            boolean update;
-            boolean updateManyToMany;
-            for (User user : users) {
-              if (user.email.equalsIgnoreCase(breadboardMessage.user.email)) {
-                user = breadboardMessage.user;
-                user.setExperimentInstanceId(-1L);
-              }
-              update = false;
-              updateManyToMany = false;
-              if (user.selectedExperiment != null && user.selectedExperiment.id == toBeDeleteExperiment.id) {
-                update = true;
-                user.setSelectedExperiment(null);
-              }
-              if (user.ownedExperiments.contains(toBeDeleteExperiment)) {
-                updateManyToMany = true;
-                user.ownedExperiments.remove(toBeDeleteExperiment);
-              }
-              if (update) {
-                user.update();
-              }
-              if (updateManyToMany) {
-                user.saveManyToManyAssociations("ownedExperiments");
-              }
-            }
-
-            toBeDeleteExperiment.delete();
-          }
-
-          Breadboard.breadboardController.tell(new Breadboard.Update(breadboardMessage.user, breadboardMessage.out), null);
-        } else if (message instanceof Breadboard.LaunchGame) {
-          Breadboard.LaunchGame launchGame = (Breadboard.LaunchGame) message;
-
-          if (breadboardMessage.user.selectedExperiment != null) {
-            rebuildScriptBoard(breadboardMessage.user.selectedExperiment);
-            ExperimentInstance instance = startGame(launchGame.name, breadboardMessage.user.experimentInstanceId, launchGame.parameters,
-                breadboardMessage.user.selectedExperiment, breadboardMessage.user);
-
-            instanceData.addPropertyChangeListener(new UserDataChangeListener(instance));
-
-            eventTracker.enable();
-            eventTracker.setExperimentInstance(instance);
-            gameListener.experimentInstance = instance;
-            gameListener.start();
-
-            // Re-run the Steps
-            for (Step step : instance.experiment.getSteps())
-              Breadboard.instances.get(breadboardMessage.user.email).tell(new Breadboard.RunStep(breadboardMessage.user, step.source, breadboardMessage.out), null);
-
-          } // END if (breadboardMessage.user.selectedExperiment != null)
-          // Update User JSON
-          Breadboard.breadboardController.tell(new Breadboard.Update(breadboardMessage.user, breadboardMessage.out), null);
-
-        } // END else if(message instanceof Breadboard.LaunchGame)
-        else if (message instanceof Breadboard.SelectInstance) {
-          Breadboard.SelectInstance selectInstance = (Breadboard.SelectInstance) message;
-          rebuildScriptBoard(breadboardMessage.user.selectedExperiment);
-          loadSteps(breadboardMessage.user.selectedExperiment, selectInstance.out);
-          breadboardMessage.user.setExperimentInstanceId(selectInstance.id);
-          breadboardMessage.user.update();
-
-          gameListener.stop();
-          ExperimentInstance instance = ExperimentInstance.findById(selectInstance.id);
-          if (instance.status.isRunnable()) {
-            List<Data> parameters = instance.data;
-            for (Data param : parameters) {
-              initParam(param, breadboardMessage.user.selectedExperiment);
-            } // END for (Data param : parameters)
-
-            eventTracker.enable();
-            eventTracker.setExperimentInstance(instance);
-            gameListener.experimentInstance = instance;
-            gameListener.start();
-
-            instanceData.addPropertyChangeListener(new UserDataChangeListener(instance));
-
-            //don't know why... ebean bug? if don't do this, the instances in the selectedExperiment doesn't get updated
-            //which is causing the launch button still shows up (because the status isn't updated) instead of the stop button for the instance
-            breadboardMessage.user.selectedExperiment = Experiment.findById(breadboardMessage.user.selectedExperiment.id);
-          }
-          Breadboard.breadboardController.tell(new Breadboard.Update(breadboardMessage.user, breadboardMessage.out), null);
-        } // END else if(message instanceof Breadboard.SelectInstance)
-        else if (message instanceof Breadboard.StopGame) {
-          Breadboard.StopGame stopGame = (Breadboard.StopGame) message;
-
-          ExperimentInstance instance = ExperimentInstance.findById(stopGame.id);
-          if (gameListener.experimentInstance != null && gameListener.experimentInstance.equals(instance)) {
-            for (Parameter p : breadboardMessage.user.getExperiment().getParameters()) {
-              //Logger.debug("Key: " + p.name);
-              if (engine.getBindings(ScriptContext.ENGINE_SCOPE).containsKey(p.name))
-                engine.getBindings(ScriptContext.ENGINE_SCOPE).remove(p.name);
-            }
-
-            if (gameListener.experimentInstance == null) {
-              Logger.debug("gameListener.experimentInstance == null");
-              gameListener.experimentInstance = ExperimentInstance.findById(breadboardMessage.user.experimentInstanceId);
-            }
-
-            if (gameListener.experimentInstance.status.isRunnable()) {
-              Logger.debug("gameListener.experimentInstance.status.isRunnable()");
-              gameListener.stop();
-            }
-
-          } else {
-            if (instance.status.isRunnable()) {
-              instance.stop();
-            }
-          }
-          breadboardMessage.user.setExperimentInstanceId(-1L);
-          breadboardMessage.user.update();
-          // Update User JSON
-          Breadboard.breadboardController.tell(new Breadboard.Update(breadboardMessage.user, breadboardMessage.out), null);
-        } // END else if(message instanceof Breadboard.StopGame)
-        else if (message instanceof Breadboard.RunOnJoinStep) {
-          Breadboard.RunOnJoinStep runOnJoinStep = (Breadboard.RunOnJoinStep) message;
-          runOnJoinStep.user.refresh();
-          //the script engine was throwing exception for ArbesmanRand because of missing onJoinStep
-          if (runOnJoinStep.user.selectedExperiment != null && runOnJoinStep.user.selectedExperiment.hasOnJoinStep()) {
-            Vertex player = runOnJoinStep.vertex;
-            String script = "onJoinStep.start(\"" + player.getId().toString() + "\")";
-            processScript(script, runOnJoinStep.out, null);
-          }
-
-        } // END else if(message instanceof Breadboard.RunOnJoinStep)
-        else if (message instanceof Breadboard.RunOnLeaveStep) {
-          Breadboard.RunOnLeaveStep runOnLeaveStep = (Breadboard.RunOnLeaveStep) message;
-          runOnLeaveStep.user.refresh();
-          //the script engine was throwing exception for ArbesmanRand because of missing runOnLeaveStep
-          if (runOnLeaveStep.user.selectedExperiment != null && runOnLeaveStep.user.selectedExperiment.hasOnLeaveStep()) {
-            Vertex player = runOnLeaveStep.vertex;
-            // This used to test the binding "onLeaveStep.start()", which nothing ever sets, so the
-            // OnLeaveStep never ran. The step itself is bound as "onLeaveStep".
-            if (engine.get("onLeaveStep") != null) {
-              processScript("onLeaveStep.start(\"" + player.getId().toString() + "\")", runOnLeaveStep.out, null);
-            }
-          }
-
-        } // END else if(message instanceof Breadboard.RunOnLeaveStep)
-        else if (message instanceof Breadboard.Refresh) {
-          Logger.debug("Breadboard.Refresh");
-
-          //need to refresh the listeners
-          for (Admin admin : admins) {
-            admin.setOut(breadboardMessage.out);
-          }
-
-          //ObjectNode jsonOutput = Json.newObject();
-          Graph wholeGraph = (Graph) engine.get("g");
-
-          for (Admin admin : admins) {
-            for (Vertex v : wholeGraph.getVertices()) {
-              admin.vertexAdded(v, false);
-            }
-            for (Edge e : wholeGraph.getEdges()) {
-              admin.edgeAdded(e);
-            }
-          }
-          //breadboardMessage.out.write(jsonOutput);
-        } else if (message instanceof Breadboard.GameFinish) {
-          Breadboard.instances.get(breadboardMessage.user.email).tell(new Breadboard.ReloadEngine(breadboardMessage.user, breadboardMessage.out), null);
-          Breadboard.breadboardController.tell(new Breadboard.Update(breadboardMessage.user, breadboardMessage.out), null);
-        } else if (message instanceof Breadboard.ReloadEngine) {
-          Experiment selectedExperiment = breadboardMessage.user.getExperiment();
-          rebuildScriptBoard(selectedExperiment);
-          loadSteps(selectedExperiment, breadboardMessage.out);
-          Breadboard.ReloadEngine reloadEngine = (Breadboard.ReloadEngine) message;
-          if (reloadEngine.user.experimentInstanceId != -1) {
-            ExperimentInstance ei = ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
-            if (ei != null) {
-              eventTracker.enable();
-              eventTracker.setExperimentInstance(ei);
-              for (Data d : ei.data) {
-                initParam(d, selectedExperiment);
-              }
-            }
-          }
-        }
+      if (request != null) {
+        handle(request);
       }
     } catch (Exception e) {
       ScriptLoader.humanizeStackTrace(e);
       Logger.error("Unhandled error in ScriptBoard.onReceive", e);
+      // Tell the console that asked, instead of failing silently.
+      if (request != null && request.user != null && request.out != null) {
+        Breadboard.replyError(request.out, Breadboard.requestName(request),
+            "Something went wrong: " + ScriptBoardSupport.describeError(e));
+      }
     }
+  }
+
+  private void handle(Breadboard.BreadboardMessage breadboardMessage) throws Exception {
+    Object message = breadboardMessage;
+    // Internal messages (OnJoinStep / OnLeaveStep) carry no account and must not redirect the
+    // game's "finished" notice to everyone's consoles.
+    if (breadboardMessage.user != null) {
+      gameListener.user = breadboardMessage.user;
+      gameListener.out = breadboardMessage.out;
+    }
+    if (message instanceof Breadboard.AddAdmin) {
+      Breadboard.AddAdmin addAdmin = (Breadboard.AddAdmin) message;
+      // This socket's own Admin (one per socket), then this socket's own copy of the live network.
+      Admin admin = registerAdmin(addAdmin.user, addAdmin.scriptBoardController, addAdmin.out);
+      replayGraph(admin);
+    } else if (message instanceof Breadboard.RunGame) {
+      if (breadboardMessage.user != null) {
+        // Run Game
+        processScript("initStep.start()", breadboardMessage.out, null);
+      }
+
+    } else if (message instanceof Breadboard.HitCreated) {
+      Breadboard.HitCreated hitCreated = (Breadboard.HitCreated) message;
+      if (breadboardMessage.user != null) {
+        Integer lifetimeInMs = hitCreated.lifetimeInSeconds * 1000;
+        Integer tutorialTimeInMs = hitCreated.tutorialTime * 1000;
+        Long timerTime = System.currentTimeMillis() + (lifetimeInMs + tutorialTimeInMs);
+        // startAt will be used to add timer to clients for start of game
+        processScript("startAt = " + timerTime, breadboardMessage.out, null);
+
+        final ThrottledWebSocketOut breadboardOut = breadboardMessage.out;
+        // Schedule the two AMT lifecycle timers via the tracked registry so they are
+        // cancelled on reload / superseded on re-submit instead of leaking. Same delays
+        // and actions as before: at lifetimeInMs no new connections are allowed; at
+        // lifetimeInMs + tutorialTimeInMs initStep.start() is sent (MEMORY_LEAKS.md L6).
+        scheduleAmtTimers(lifetimeInMs, lifetimeInMs + tutorialTimeInMs,
+          new Runnable() {
+            @Override
+            public void run() {
+              gameListener.hasStarted();
+            }
+          },
+          new Runnable() {
+            @Override
+            public void run() {
+              processScript("initStep.start()", breadboardOut, null);
+              Logger.debug("initStep.start()");
+            }
+          });
+      }
+    } else if (message instanceof Breadboard.SendScript) {
+      Breadboard.SendScript sendScript = (Breadboard.SendScript) message;
+
+      if (breadboardMessage.user != null) {
+        // Save script in database
+        breadboardMessage.user.currentScript = sendScript.script;
+        breadboardMessage.user.update();
+
+        // Process script
+        processScript(sendScript.script, breadboardMessage.out, null);
+      }
+
+    } else if (message instanceof Breadboard.MakeChoice) {
+      Breadboard.MakeChoice makeChoice = (Breadboard.MakeChoice) message;
+      makeChoice(null, makeChoice.uid, makeChoice.params, breadboardMessage.out); // admin acting for a player
+    } else if (message instanceof Breadboard.EditTie) {
+      Breadboard.EditTie editTie = (Breadboard.EditTie) message;
+      editTie(editTie.op, editTie.a, editTie.b, breadboardMessage.out);
+    } else if (message instanceof Breadboard.SendStep) {
+      Breadboard.SendStep sendStep = (Breadboard.SendStep) message;
+
+      if (breadboardMessage.user != null && breadboardMessage.user.selectedExperiment != null) {
+        Logger.debug("SendStep: " + sendStep.id + ", " + sendStep.name + ", " + sendStep.source);
+        // Now we only run the step
+        getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out), null);
+        // A re-run step may set the autopilot up itself; the console's settings apply again after it.
+        getSelf().tell(new Breadboard.StepsLoaded(breadboardMessage.user, engineExperiment(), breadboardMessage.out), null);
+      } else {
+        Breadboard.replyError(breadboardMessage.out, "SendStep", "Select an experiment first.");
+      }
+    } else if (message instanceof Breadboard.RunStep) {
+      // TODO: Compile step here and make available to scripting engine
+      Breadboard.RunStep runStep = (Breadboard.RunStep) message;
+      processScript(runStep.source, breadboardMessage.out, null);
+    } else if (message instanceof Breadboard.StepsLoaded) {
+      afterStepsLoaded(((Breadboard.StepsLoaded) message).experiment);
+    } else if (message instanceof Breadboard.ChangeExperiment) {
+      if (breadboardMessage.user != null) {
+        Breadboard.ChangeExperiment changeExperiment = (Breadboard.ChangeExperiment) message;
+        Experiment experiment = breadboardMessage.user.selectedExperiment != null
+            ? breadboardMessage.user.selectedExperiment : changeExperiment.experiment;
+        rebuildScriptBoard(experiment);
+        loadSteps(experiment, breadboardMessage.out);
+
+        //reset the instance
+        if (breadboardMessage.user.experimentInstanceId != -1) {
+          ExperimentInstance runningInstance = ExperimentInstance.findById(breadboardMessage.user.experimentInstanceId);
+          if (runningInstance != null) {
+            if (runningInstance.status == ExperimentInstance.Status.RUNNING && runningInstance.experiment.id.equals(changeExperiment.experiment.id)) {
+              eventTracker.setExperimentInstance(runningInstance);
+              gameListener.experimentInstance = runningInstance;
+              for (Data param : runningInstance.data) {
+                initParam(param, changeExperiment.experiment);
+              }
+            }
+          } else {
+            Logger.error("runningInstance == null");
+          }
+        }
+      }
+    } else if (message instanceof Breadboard.DeleteExperiment) {
+      deleteExperiment((Breadboard.DeleteExperiment) message);
+    } else if (message instanceof Breadboard.LaunchGame) {
+      launchGame((Breadboard.LaunchGame) message);
+    } // END else if(message instanceof Breadboard.LaunchGame)
+    else if (message instanceof Breadboard.SelectInstance) {
+      selectInstance((Breadboard.SelectInstance) message);
+    } // END else if(message instanceof Breadboard.SelectInstance)
+    else if (message instanceof Breadboard.StopGame) {
+      Breadboard.StopGame stopGame = (Breadboard.StopGame) message;
+
+      ExperimentInstance instance = ExperimentInstance.findById(stopGame.id);
+      if (instance == null) {
+        Breadboard.replyError(breadboardMessage.out, "StopGame", "There is no session with id " + stopGame.id + ".");
+        return;
+      }
+      // The session the engine is running, whichever account started it.
+      GameListener running = engineGameListener != null ? engineGameListener : gameListener;
+      if (instance.id.equals(instanceIdOf(running))) {
+        Experiment experiment = engineExperiment();
+        if (experiment == null) {
+          experiment = breadboardMessage.user.getExperiment();
+        }
+        if (experiment != null && engine != null) {
+          for (Parameter p : experiment.getParameters()) {
+            if (engine.getBindings(ScriptContext.ENGINE_SCOPE).containsKey(p.name))
+              engine.getBindings(ScriptContext.ENGINE_SCOPE).remove(p.name);
+          }
+        }
+        stopSession(running);
+      } else {
+        // (This used to change the status in memory only.)
+        stopQuietly(instance.id);
+      }
+      // Stopping an older session leaves the researcher's current one selected.
+      if (instance.id.equals(breadboardMessage.user.experimentInstanceId)) {
+        breadboardMessage.user.setExperimentInstanceId(-1L);
+        breadboardMessage.user.update();
+      }
+      // Update User JSON
+      Breadboard.breadboardController.tell(new Breadboard.Update(breadboardMessage.user, breadboardMessage.out), null);
+    } // END else if(message instanceof Breadboard.StopGame)
+    else if (message instanceof Breadboard.RunOnJoinStep) {
+      Breadboard.RunOnJoinStep runOnJoinStep = (Breadboard.RunOnJoinStep) message;
+      Experiment experiment = joinLeaveExperiment(runOnJoinStep.user);
+      //the script engine was throwing exception for ArbesmanRand because of missing onJoinStep
+      if (experiment != null && experiment.hasOnJoinStep()) {
+        Vertex player = runOnJoinStep.vertex;
+        // A quoted literal, not "..." around the raw id: a client id is typed by the participant,
+        // and "${...}" inside a double-quoted Groovy string would run as code.
+        processScript("onJoinStep.start(" + groovyString(player.getId().toString()) + ")", runOnJoinStep.out, null);
+      }
+
+    } // END else if(message instanceof Breadboard.RunOnJoinStep)
+    else if (message instanceof Breadboard.RunOnLeaveStep) {
+      Breadboard.RunOnLeaveStep runOnLeaveStep = (Breadboard.RunOnLeaveStep) message;
+      Experiment experiment = joinLeaveExperiment(runOnLeaveStep.user);
+      //the script engine was throwing exception for ArbesmanRand because of missing runOnLeaveStep
+      if (experiment != null && experiment.hasOnLeaveStep()) {
+        Vertex player = runOnLeaveStep.vertex;
+        // This used to test the binding "onLeaveStep.start()", which nothing ever sets, so the
+        // OnLeaveStep never ran. The step itself is bound as "onLeaveStep".
+        if (engine != null && engine.get("onLeaveStep") != null) {
+          processScript("onLeaveStep.start(" + groovyString(player.getId().toString()) + ")", runOnLeaveStep.out, null);
+        }
+      }
+
+    } // END else if(message instanceof Breadboard.RunOnLeaveStep)
+    else if (message instanceof Breadboard.Refresh) {
+      // Replay the network to the socket that asked (it used to repoint every console to it).
+      Admin admin = registerAdmin(breadboardMessage.user, getSelf(), breadboardMessage.out);
+      replayGraph(admin);
+    } else if (message instanceof Breadboard.GameFinish) {
+      getSelf().tell(new Breadboard.ReloadEngine(breadboardMessage.user, breadboardMessage.out), null);
+      Breadboard.breadboardController.tell(new Breadboard.Update(breadboardMessage.user, breadboardMessage.out), null);
+    } else if (message instanceof Breadboard.ReloadEngine) {
+      Experiment selectedExperiment = breadboardMessage.user.getExperiment();
+      rebuildScriptBoard(selectedExperiment);
+      loadSteps(selectedExperiment, breadboardMessage.out);
+      Breadboard.ReloadEngine reloadEngine = (Breadboard.ReloadEngine) message;
+      if (reloadEngine.user.experimentInstanceId != -1) {
+        ExperimentInstance ei = ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
+        if (ei != null) {
+          eventTracker.enable();
+          eventTracker.setExperimentInstance(ei);
+          for (Data d : ei.data) {
+            initParam(d, selectedExperiment);
+          }
+        }
+      }
+    }
+  }
+
+  // The experiment OnJoinStep / OnLeaveStep belong to: the one whose steps the engine loaded.
+  // Messages from an older caller that name an account fall back to that account's selection.
+  private static Experiment joinLeaveExperiment(User user) {
+    Experiment experiment = engineExperiment();
+    if (experiment == null && user != null) {
+      user.refresh();
+      experiment = user.selectedExperiment;
+    }
+    return experiment;
+  }
+
+  /**
+   * Mark a session stopped if it still can be, from a freshly loaded copy. Never throws: a session
+   * that finished meanwhile (or was deleted) is simply left as it is. Stopping it through a stale
+   * copy used to throw IllegalStateException half-way through selecting another session.
+   */
+  static void stopQuietly(Long instanceId) {
+    if (instanceId == null || Experiment.TEST_INSTANCE_ID.equals(instanceId)) {
+      return;
+    }
+    try {
+      ExperimentInstance current = ExperimentInstance.findById(instanceId);
+      if (current != null && current.status != null && current.status.isRunnable()) {
+        current.stop();
+        current.save();
+      }
+    } catch (Exception e) {
+      Logger.warn("Could not stop session " + instanceId + ": " + e);
+    }
+  }
+
+  /**
+   * Stop the session a game listener runs, through its own copy as before (the engine's scripts
+   * keep using that copy), if it can still be stopped; never throws. GameListener.stop() threw
+   * IllegalStateException for a finished session, aborting the selection of another one half-way.
+   */
+  static void stopSession(GameListener listener) {
+    if (listener == null || listener.experimentInstance == null || listener.experimentInstance.id == null) {
+      return;
+    }
+    ExperimentInstance instance = listener.experimentInstance;
+    try {
+      if (instance.status != null && instance.status.isRunnable()) {
+        listener.stop();
+      }
+    } catch (Exception e) {
+      // Its copy was out of date (changed meanwhile): stop a fresh one, if it still can be.
+      Logger.warn("Could not stop session " + instance.id + " through the game's copy: " + e);
+      stopQuietly(instance.id);
+    }
+  }
+
+  private static Long instanceIdOf(GameListener listener) {
+    return (listener == null || listener.experimentInstance == null) ? null : listener.experimentInstance.id;
+  }
+
+  private void launchGame(Breadboard.LaunchGame launchGame) throws IOException, ScriptException {
+    User user = launchGame.user;
+    Experiment experiment = user.selectedExperiment;
+    if (experiment == null) {
+      Breadboard.replyError(launchGame.out, "LaunchGame", "Select an experiment first.");
+      return;
+    }
+    // Everything is checked before the engine is reset: a missing value used to throw only after the
+    // running session had been ended.
+    LinkedHashMap<String, String> parameters;
+    try {
+      parameters = launchParameters(launchGame.parameters, experiment.getParameters());
+    } catch (IllegalArgumentException invalid) {
+      Breadboard.replyError(launchGame.out, "LaunchGame", "The session was not started: " + invalid.getMessage());
+      return;
+    }
+
+    // The engine's current session ends (the account that started it may be another one).
+    GameListener previous = engineGameListener;
+    rebuildScriptBoard(experiment);
+    if (previous != gameListener) {
+      stopSession(previous);
+    }
+    ExperimentInstance instance = startGame(launchGame.name, user.experimentInstanceId, parameters, experiment, user);
+
+    instanceData.addPropertyChangeListener(new UserDataChangeListener(instance));
+
+    eventTracker.enable();
+    eventTracker.setExperimentInstance(instance);
+    gameListener.experimentInstance = instance;
+    gameListener.start();
+
+    // Re-run the Steps, then the autopilot settings over them
+    for (Step step : instance.experiment.getSteps())
+      getSelf().tell(new Breadboard.RunStep(user, step.source, launchGame.out), null);
+    getSelf().tell(new Breadboard.StepsLoaded(user, experiment, launchGame.out), null);
+
+    // Update User JSON
+    Breadboard.breadboardController.tell(new Breadboard.Update(user, launchGame.out), null);
+  }
+
+  /**
+   * The values a new session starts with, as text, checked before anything is changed. Every
+   * parameter the experiment defines gets a value: the one sent, or its default when none was sent
+   * (or null was, e.g. a cleared number field). Whole numbers sent as 5.0 count as 5. Values for
+   * names the experiment doesn't define are kept as they are, as before.
+   *
+   * @throws IllegalArgumentException naming the parameter, when a value is missing with no default
+   *     or is not a number where one is needed
+   */
+  static LinkedHashMap<String, String> launchParameters(Map<?, ?> sent, List<Parameter> defined) {
+    Map<?, ?> values = sent == null ? Collections.emptyMap() : sent;
+    LinkedHashMap<String, String> result = new LinkedHashMap<String, String>();
+    Map<String, Parameter> byName = new LinkedHashMap<String, Parameter>();
+    for (Parameter p : defined) {
+      if (p != null && p.name != null) {
+        byName.put(p.name, p);
+      }
+    }
+    for (Map.Entry<?, ?> entry : values.entrySet()) {
+      if (entry.getKey() == null) {
+        continue;
+      }
+      String name = entry.getKey().toString();
+      Parameter parameter = byName.get(name);
+      if (parameter == null) {
+        if (entry.getValue() != null) {
+          result.put(name, entry.getValue().toString());
+        }
+      } else {
+        result.put(name, parameterValue(parameter, entry.getValue()));
+      }
+    }
+    for (Parameter parameter : byName.values()) {
+      if (!result.containsKey(parameter.name)) {
+        result.put(parameter.name, parameterValue(parameter, null));
+      }
+    }
+    return result;
+  }
+
+  private static String parameterValue(Parameter parameter, Object sent) {
+    String type = parameter.type == null ? "" : parameter.type;
+    Object value = sent;
+    if (value == null || (value instanceof String && ((String) value).trim().isEmpty() && !"Text".equals(type))) {
+      value = parameter.defaultVal;
+    }
+    if (value == null || (value instanceof String && ((String) value).trim().isEmpty() && !"Text".equals(type))) {
+      if ("Text".equals(type)) {
+        return "";
+      }
+      if ("Boolean".equals(type)) {
+        return "false";
+      }
+      throw new IllegalArgumentException("\"" + parameter.name + "\" needs a value.");
+    }
+    if ("Integer".equals(type)) {
+      if (value instanceof Number) {
+        double d = ((Number) value).doubleValue();
+        if (d != Math.rint(d) || Double.isInfinite(d)) {
+          throw new IllegalArgumentException("\"" + parameter.name + "\" must be a whole number, not " + value + ".");
+        }
+        return String.valueOf(((Number) value).longValue());
+      }
+      String text = value.toString().trim();
+      try {
+        Integer.parseInt(text);
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("\"" + parameter.name + "\" must be a whole number, not \"" + text + "\".");
+      }
+      return text;
+    }
+    if ("Decimal".equals(type)) {
+      String text = value.toString().trim();
+      try {
+        double d = Double.parseDouble(text);
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+          throw new NumberFormatException();
+        }
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("\"" + parameter.name + "\" must be a number, not \"" + text + "\".");
+      }
+      return text;
+    }
+    return value.toString();
+  }
+
+  private void selectInstance(Breadboard.SelectInstance selectInstance) throws IOException, ScriptException {
+    User user = selectInstance.user;
+    ExperimentInstance target = ExperimentInstance.findById(selectInstance.id);
+    if (target == null) {
+      Breadboard.replyError(selectInstance.out, "SelectInstance", "There is no session with id " + selectInstance.id + ".");
+      return;
+    }
+    // The session's own experiment, so the engine never runs one experiment's steps for another's session.
+    Experiment experiment = target.experiment == null ? null : Experiment.findById(target.experiment.id);
+    if (experiment == null) {
+      experiment = user.selectedExperiment;
+    }
+    if (experiment == null) {
+      Breadboard.replyError(selectInstance.out, "SelectInstance", "Select an experiment first.");
+      return;
+    }
+    if (user.selectedExperiment == null || !experiment.id.equals(user.selectedExperiment.id)) {
+      user.setSelectedExperiment(experiment);
+    }
+
+    // The engine's current session ends (the account that started it may be another one).
+    GameListener previous = engineGameListener;
+    rebuildScriptBoard(experiment);
+    loadSteps(experiment, selectInstance.out);
+    user.setExperimentInstanceId(target.id);
+    user.update();
+
+    stopSession(gameListener);
+    if (previous != null && previous != gameListener) {
+      stopSession(previous);
+    }
+    // Loaded again: stopping may just have saved this same session.
+    ExperimentInstance instance = ExperimentInstance.findById(target.id);
+    if (instance != null && instance.status != null && instance.status.isRunnable()) {
+      List<Data> parameters = instance.data;
+      for (Data param : parameters) {
+        initParam(param, experiment);
+      } // END for (Data param : parameters)
+
+      eventTracker.enable();
+      eventTracker.setExperimentInstance(instance);
+      gameListener.experimentInstance = instance;
+      gameListener.start();
+
+      instanceData.addPropertyChangeListener(new UserDataChangeListener(instance));
+    } else {
+      // A finished session is shown, not restarted: the engine runs no session now.
+      gameListener.experimentInstance = null;
+    }
+    //don't know why... ebean bug? if don't do this, the instances in the selectedExperiment doesn't get updated
+    //which is causing the launch button still shows up (because the status isn't updated) instead of the stop button for the instance
+    user.selectedExperiment = Experiment.findById(experiment.id);
+    Breadboard.breadboardController.tell(new Breadboard.Update(user, selectInstance.out), null);
+  }
+
+  private void deleteExperiment(Breadboard.DeleteExperiment deleteExperiment) {
+    User requester = deleteExperiment.user;
+    // By id when the console sends one; the name is only unique per account, and not even then.
+    Experiment toBeDeleteExperiment = null;
+    if (deleteExperiment.experimentId != null) {
+      for (Experiment e : requester.ownedExperiments) {
+        if (deleteExperiment.experimentId.equals(e.id)) {
+          toBeDeleteExperiment = e;
+        }
+      }
+    } else if (deleteExperiment.experimentName != null) {
+      toBeDeleteExperiment = requester.getExperimentByName(deleteExperiment.experimentName);
+    }
+    if (toBeDeleteExperiment == null) {
+      Breadboard.replyError(deleteExperiment.out, "DeleteExperiment", "None of your experiments is "
+          + (deleteExperiment.experimentId != null ? "number " + deleteExperiment.experimentId : "called \"" + deleteExperiment.experimentName + "\"") + ".");
+      return;
+    }
+    Logger.debug("DeleteExperiment: " + toBeDeleteExperiment.name);
+    Long deletedId = toBeDeleteExperiment.id;
+
+    // Also stops its game, if the engine runs this experiment (and only then: deleting another
+    // experiment used to empty the network of whatever session was running).
+    if (engine != null && deletedId.equals(engineExperimentId)) {
+      for (Parameter p : toBeDeleteExperiment.getParameters()) {
+        Logger.debug("Key: " + p.name);
+        if (engine.getBindings(ScriptContext.ENGINE_SCOPE).containsKey(p.name))
+          engine.getBindings(ScriptContext.ENGINE_SCOPE).remove(p.name);
+      }
+      processScript("g.empty()", deleteExperiment.out, null);
+    }
+
+    requester.currentScript = "";
+    //needs to remove all the selectedExperiment and ownedExperiments which is this toBeDeleteExperiment
+    List<User> users = User.find.all();
+
+    boolean update;
+    boolean updateManyToMany;
+    for (User user : users) {
+      update = false;
+      if (user.email.equalsIgnoreCase(requester.email)) {
+        user = requester;
+        user.setExperimentInstanceId(-1L);
+        update = true;
+      }
+      updateManyToMany = false;
+      // equals, not ==: ids are Long objects, equal only by reference above 127
+      if (user.selectedExperiment != null && deletedId.equals(user.selectedExperiment.id)) {
+        update = true;
+        user.setSelectedExperiment(null);
+      }
+      if (user.ownedExperiments.contains(toBeDeleteExperiment)) {
+        updateManyToMany = true;
+        user.ownedExperiments.remove(toBeDeleteExperiment);
+      }
+      if (update) {
+        user.update();
+      }
+      if (updateManyToMany) {
+        user.saveManyToManyAssociations("ownedExperiments");
+      }
+    }
+
+    toBeDeleteExperiment.delete();
+
+    Breadboard.breadboardController.tell(new Breadboard.Update(requester, deleteExperiment.out), null);
   }
 
   private ExperimentInstance startGame(String gameName, long currentExperimentInstanceId, LinkedHashMap parameters, Experiment selectedExperiment, User user) {
@@ -794,7 +1283,19 @@ public class ScriptBoard extends UntypedActor {
     selectedExperiment.save();
 
     user.setExperimentInstanceId(instance.id);
-    user.update();
+    try {
+      user.update();
+    } catch (javax.persistence.OptimisticLockException changedMeanwhile) {
+      // The account changed since this copy was loaded (a sign-in, another tab, the autopilot
+      // selecting the experiment): Ebean refuses a stale copy, which used to abort the launch after
+      // the session was created. Record it on a fresh copy instead.
+      User fresh = User.findByEmail(user.email);
+      if (fresh == null) {
+        throw changedMeanwhile;
+      }
+      fresh.setExperimentInstanceId(instance.id);
+      fresh.update();
+    }
 
     return instance;
   }
@@ -853,10 +1354,7 @@ public class ScriptBoard extends UntypedActor {
         if (g instanceof Graph) {
           Vertex v = ((Graph) g).getVertex(clientId);
           if (v != null) {
-            Object system = v.getProperty("_system");
-            if (system instanceof Map) {
-              ((Map<String, Object>) system).put("connected", connected);
-            }
+            setSystemValue(v, "connected", connected);
           }
         }
       }
@@ -872,6 +1370,25 @@ public class ScriptBoard extends UntypedActor {
       eventBus.emit("bb:connection", info);
     } catch (Exception e) {
       Logger.error("Could not record connection state for " + clientId, e);
+    }
+  }
+
+  /**
+   * Put a value into {@code player._system} and set the property again, so the change is announced
+   * (to the admin console, live, and to the player's own page). Writing into the map alone told
+   * no one until the next full replay.
+   *
+   * <p>It stays the same map, as groovy/autopilot.groovy's status() does, rather than a copy: the
+   * autopilot's timers write into it from other threads, and swapping in a copy could drop the
+   * write that lands in between (e.g. this very connected flag, which the autopilot counts).
+   */
+  @SuppressWarnings("unchecked")
+  static void setSystemValue(Vertex v, String key, Object value) {
+    Object system = v.getProperty("_system");
+    if (system instanceof Map) {
+      Map<String, Object> systemMap = (Map<String, Object>) system;
+      systemMap.put(key, value);
+      v.setProperty("_system", systemMap);
     }
   }
 
@@ -899,6 +1416,14 @@ public class ScriptBoard extends UntypedActor {
     if (scriptName == null) scriptName = "Unnamed Script";
 
     ObjectNode jsonOutput = Json.newObject();
+    if (engine == null) {
+      // Nothing has built an engine yet (no experiment selected since the server started).
+      jsonOutput.put("error", "Caught error: The script engine isn't running yet. Select an experiment first.\n");
+      if (out != null) {
+        out.write(jsonOutput);
+      }
+      return;
+    }
     //TODO: better way to handle this?
     boolean initStep = false;
     synchronized (ScriptBoard.class) {
@@ -987,7 +1512,7 @@ public class ScriptBoard extends UntypedActor {
    * edgeEdits.adminEdit (groovy/edge_edits.groovy), which logs it. The admin is told the outcome as
    * {"tieEdit": {ok, op, a, b, reason}}; the tie itself reaches it with the next graph update.
    */
-  static void editTie(String op, String a, String b, ThrottledWebSocketOut out) {
+  public static void editTie(String op, String a, String b, ThrottledWebSocketOut out) {
     ObjectNode result = Json.newObject();
     result.put("op", op);
     result.put("a", a);
@@ -1071,11 +1596,12 @@ public class ScriptBoard extends UntypedActor {
         }
         experimentInstance.save();
       } else if (evt instanceof ObservableMap.PropertyUpdatedEvent) {
+        // (This saved and re-bound foundData even when it was null, throwing into the script.)
         if (foundData != null) {
-          foundData.value = evt.getNewValue().toString();
+          foundData.value = String.valueOf(evt.getNewValue());
+          foundData.save();
+          initParam(foundData, null);
         }
-        foundData.save();
-        initParam(foundData, null);
       }
     }
 

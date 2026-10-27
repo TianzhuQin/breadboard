@@ -95,7 +95,21 @@ public class Application extends Controller {
     }
   }
 
+  /**
+   * Sign out. The account's uid (the token every console websocket frame carries, also readable from
+   * /state) is replaced too, so an open console tab, or anyone who copied the token, can't keep
+   * acting as this account. Only when this session's uid is still the account's: an older session
+   * signing out doesn't sign out a newer one.
+   */
   public static Result logout() {
+    String uid = session("uid");
+    if (uid != null) {
+      User user = User.findByUID(uid);
+      if (user != null) {
+        user.uid = UUID.randomUUID().toString();
+        user.update();
+      }
+    }
     session().clear();
     return unauthorized();
   }
@@ -127,106 +141,158 @@ public class Application extends Controller {
     return ok(result);
   }
 
+  /** Shortest password accepted by the password change. */
+  static final int PASSWORD_MIN_LENGTH = 8;
+
+  /**
+   * Change the signed-in account's password: {@code currentPassword}, {@code newPassword},
+   * {@code confirmPassword} (form-encoded or JSON). Always 200: {"success": true}, or
+   * {"success": false, "error": "<what is wrong>"}. A posted {@code email} must be the account's own:
+   * it used to choose whose password was changed.
+   */
   @Security.Authenticated(Secured.class)
   public static Result saveUserSettings() {
-    Form<UserSettings> userSettingsForm = Form.form(UserSettings.class);
-    userSettingsForm = userSettingsForm.bindFromRequest();
-
     ObjectNode result = Json.newObject();
-
     result.put("success", false);
-    if (userSettingsForm.hasErrors()) {
-      result.put("error", userSettingsForm.globalError().message());
+
+    User user = User.findByUID(session("uid"));
+    if (user == null) {
+      result.put("error", "You are not signed in. Sign in again, then retry.");
+      return ok(result);
+    }
+    String email = field("email");
+    String currentPassword = field("currentPassword");
+    String newPassword = field("newPassword");
+    String confirmPassword = field("confirmPassword");
+
+    String error = null;
+    if (email != null && !email.trim().isEmpty() && !email.trim().equalsIgnoreCase(user.email)) {
+      error = "You can only change your own password";
+    } else if (currentPassword == null || currentPassword.isEmpty()) {
+      error = "Current password is missing";
+    } else if (!user.passwordMatches(currentPassword)) {
+      error = "Current password doesn't match your password";
+    } else if (newPassword == null || newPassword.isEmpty()) {
+      error = "New password is missing";
+    } else if (newPassword.length() < PASSWORD_MIN_LENGTH) {
+      error = "New password must be at least " + PASSWORD_MIN_LENGTH + " characters long";
+    } else if (!newPassword.equals(confirmPassword)) {
+      error = "Confirm Password doesn't match the new password";
+    }
+    if (error != null) {
+      result.put("error", error);
       return ok(result);
     }
 
-    UserSettings userSettings = userSettingsForm.get();
-
-    userSettings.user.password = BCrypt.hashpw(userSettings.newPassword, BCrypt.gensalt());
-    userSettings.user.update();
+    user.changePassword(newPassword);
+    user.update();
     result.put("success", true);
-
     return ok(result);
   }
 
+  /** A field of a form-encoded or JSON request body, or null. Passwords are taken as typed (not trimmed). */
+  private static String field(String name) {
+    Map<String, String[]> form = request().body().asFormUrlEncoded();
+    if (form != null) {
+      String[] values = form.get(name);
+      return values == null || values.length == 0 ? null : values[0];
+    }
+    JsonNode json = request().body().asJson();
+    if (json != null) {
+      JsonNode value = json.get(name);
+      return value == null || value.isNull() ? null : value.asText();
+    }
+    return null;
+  }
+
+  /**
+   * The experiment's sessions as CSV: id, name, status, creation time and every parameter value.
+   * Every field is quoted, with quotes inside doubled (names and values used to go in as typed, so
+   * one with a quote or a comma shifted the columns).
+   */
   @Security.Authenticated(Secured.class)
   public static Result dataCsv(Long experimentId) {
-    //TODO: Escape double quotes in ExperimentInstance parameters
     Experiment experiment = Experiment.findById(experimentId);
-    final StringBuilder csv = new StringBuilder();
+    if (experiment == null) {
+      return badRequest("There is no experiment with id " + experimentId + ".");
+    }
     Set<String> parameterNames = new TreeSet<>();
     for (ExperimentInstance instance : experiment.instances) {
       for (Data d : instance.data) {
-        parameterNames.add(d.name);
+        if (d.name != null) {
+          parameterNames.add(d.name);
+        }
       }
     }
 
-    csv.append("\"id\",\"instance\",\"status\",\"created_at\",");
+    final StringBuilder csv = new StringBuilder();
+    List<Object> header = new ArrayList<Object>(Arrays.asList("id", "instance", "status", "created_at"));
+    header.addAll(parameterNames);
+    csvRow(csv, header);
 
-    // Add all parameter names
-    for (String parameterName : parameterNames) {
-      csv.append("\"" + parameterName + "\",");
-    }
-
-    // Delete trailing comma
-    csv.deleteCharAt(csv.length() - 1);
-
-    csv.append("\n");
-
-    List<ExperimentInstance> instances = experiment.instances;
-    for (ExperimentInstance instance : instances) {
-      csv.append("\"").append(instance.id).append("\",");
-      csv.append("\"").append(instance.name).append("\",");
-      csv.append("\"").append(instance.status).append("\",");
-      csv.append("\"").append(Timestamps.csv(instance.creationDate)).append("\",");
-
+    for (ExperimentInstance instance : experiment.instances) {
       HashMap<String, String> dataMap = new HashMap<>();
       for (Data d : instance.data) {
         dataMap.put(d.name, d.value);
       }
-
+      List<Object> row = new ArrayList<Object>();
+      row.add(instance.id);
+      row.add(instance.name);
+      row.add(instance.status);
+      row.add(instance.creationDate == null ? null : Timestamps.csv(instance.creationDate));
       for (String parameterName : parameterNames) {
-        if (dataMap.containsKey(parameterName)) {
-          csv.append("\"").append(dataMap.get(parameterName)).append("\",");
-        } else {
-          csv.append(",");
-        }
+        row.add(dataMap.get(parameterName));
       }
-
-      //Delete trailing comma
-      csv.deleteCharAt(csv.length() - 1);
-      csv.append("\n");
+      csvRow(csv, row);
     }
 
     return ok(csv.toString());
   }
 
+  /** One session's events as CSV: a row per event data item, every field quoted. */
   @Security.Authenticated(Secured.class)
   public static Result eventCsv(Long experimentInstanceId) {
     ExperimentInstance ei = ExperimentInstance.findById(experimentInstanceId);
+    if (ei == null) {
+      return badRequest("There is no session with id " + experimentInstanceId + ".");
+    }
 
     final StringBuilder csv = new StringBuilder();
-    csv.append("\"id\",\"event\",\"event_date\",\"data_name\",\"data_value\"\n");
-    Collections.sort(ei.events, new Comparator<Event>() {
+    csvRow(csv, Arrays.<Object>asList("id", "event", "event_date", "data_name", "data_value"));
+    List<Event> events = new ArrayList<Event>(ei.events);
+    Collections.sort(events, new Comparator<Event>() {
       @Override
       public int compare(Event o1, Event o2) {
-        int byTime = o1.datetime.compareTo(o2.datetime);
+        int byTime = o1.datetime == null || o2.datetime == null
+            ? Boolean.compare(o1.datetime != null, o2.datetime != null) : o1.datetime.compareTo(o2.datetime);
         // Events in the same millisecond keep the order they were recorded in.
         return byTime != 0 ? byTime : Long.compare(o1.id == null ? 0 : o1.id, o2.id == null ? 0 : o2.id);
       }
     });
-    for (Event event : ei.events) {
-      List<EventData> eventDatas = event.eventData;
-      for (EventData eventData : eventDatas) {
-        csv.append("\"").append(event.id).append("\",\"")
-            .append(event.name).append("\",\"")
-            .append(Timestamps.csv(event.datetime))
-            .append("\",\"").append(eventData.name).append("\",")
-            .append(eventData.valueToCSV()).append("\n");
+    for (Event event : events) {
+      for (EventData eventData : event.eventData) {
+        csvRow(csv, Arrays.<Object>asList(event.id, event.name,
+            event.datetime == null ? null : Timestamps.csv(event.datetime), eventData.name, eventData.value));
       }
     }
 
     return ok(csv.toString());
+  }
+
+  /** Append one CSV line: every field quoted, quotes inside doubled, null as an empty field. */
+  static void csvRow(StringBuilder csv, List<?> fields) {
+    for (int i = 0; i < fields.size(); i++) {
+      if (i > 0) {
+        csv.append(',');
+      }
+      csv.append(csvField(fields.get(i)));
+    }
+    csv.append('\n');
+  }
+
+  static String csvField(Object value) {
+    String text = value == null ? "" : value.toString();
+    return "\"" + text.replace("\"", "\"\"") + "\"";
   }
 
   /**

@@ -3,6 +3,7 @@ package actors;
 import actors.FileWatcherActorProtocol.FileWatch;
 import akka.actor.UntypedActor;
 import models.Admin;
+import models.Experiment;
 import models.FileWatcher;
 import org.apache.commons.io.FileUtils;
 import play.Logger;
@@ -59,8 +60,11 @@ public class FileWatcherActor extends UntypedActor {
         Path name = ev.context();
         Path child = dir.resolve(name);
         Logger.debug(child.toString());
-        String selectedExperimentDirectory = (fileWatcher.getAdminListeners().get(0).getUser().selectedExperiment == null) ? "" : fileWatcher.getAdminListeners().get(0).getUser().selectedExperiment.getDirectoryName();
-        boolean selectedExperimentChanged = child.toString().contains(selectedExperimentDirectory);
+        // With no console open (sockets are now removed when they close) nothing is selected, so
+        // no step is reloaded; new directories are still watched.
+        Experiment selected = fileWatcher.getExperiment();
+        String selectedExperimentDirectory = (selected == null) ? "" : selected.getDirectoryName();
+        boolean selectedExperimentChanged = fileWatcher.firstAdmin() != null && child.toString().contains(selectedExperimentDirectory);
 
         if (ev.kind() == ENTRY_CREATE && child.toFile().isDirectory()) {
           // new directory, need to watch it
@@ -77,7 +81,8 @@ public class FileWatcherActor extends UntypedActor {
             // Step was modified or created, send to ScriptEngine
             try {
               String stepContents = FileUtils.readFileToString(child.toFile());
-              fileWatcher.loadStep(stepContents, fileWatcher.getAdminListeners().get(0).getOut(), child.getFileName().toString());
+              Admin first = fileWatcher.firstAdmin();
+              fileWatcher.loadStep(stepContents, first == null ? null : first.getOut(), child.getFileName().toString());
             } catch (IOException ioe) {
               Logger.error("Unable to read contents of Step " + child.getFileName().toString() + " check your permissions.");
             }

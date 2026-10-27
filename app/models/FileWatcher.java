@@ -15,8 +15,8 @@ import scala.concurrent.duration.Duration;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
-import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -26,12 +26,13 @@ import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 
 public class FileWatcher {
   private Long updateIteration = 0L;
-  private ArrayList<Admin> adminListeners = new ArrayList<>();
+  // ScriptBoard's live list of open admin sockets (thread-safe; it shrinks when sockets close).
+  private final List<Admin> adminListeners;
   static ActorRef fileWatcherActor;
   private WatchService watcher;
   private Map<WatchKey, Path> watchKeys;
 
-  public FileWatcher(ArrayList<Admin> adminListeners) {
+  public FileWatcher(List<Admin> adminListeners) {
     this.adminListeners = adminListeners;
 
     // Resolve 'dev' against the Play application root (matching Experiment/ImagesController),
@@ -75,12 +76,22 @@ public class FileWatcher {
     }
   }
 
-  public ArrayList<Admin> getAdminListeners() {
+  public List<Admin> getAdminListeners() {
     return this.adminListeners;
   }
 
+  /** The first open admin socket, or null when no console is open. */
+  public Admin firstAdmin() {
+    for (Admin admin : adminListeners) {
+      return admin;
+    }
+    return null;
+  }
+
+  /** The experiment selected by the first open admin socket, or null. */
   public Experiment getExperiment() {
-    return this.adminListeners.get(0).getUser().selectedExperiment;
+    Admin admin = firstAdmin();
+    return (admin == null || admin.getUser() == null) ? null : admin.getUser().selectedExperiment;
   }
 
   public void incrementUpdateIteration() {
@@ -101,5 +112,7 @@ public class FileWatcher {
 
   public void loadStep(String source, ThrottledWebSocketOut out, String name) {
     ScriptBoard.processScript(source, out, name);
+    // A reloaded step may have set up the autopilot itself; the console's settings win again.
+    ScriptBoard.afterStepsLoaded(ScriptBoard.engineExperiment());
   }
 }

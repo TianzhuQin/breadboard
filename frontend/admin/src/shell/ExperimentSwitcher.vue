@@ -114,7 +114,8 @@ async function pick (e: Experiment) {
   close(true)
   if (admin.experiment && e.id === admin.experiment.id) return
   await actions.selectExperiment(e.id)
-  notify.success(`Switched to ${e.name}`)
+  if (admin.experiment?.id === e.id) notify.success(`Switched to ${e.name}`)
+  else notify.error(`Could not switch to ${e.name}`, admin.requestError?.request === 'SelectExperiment' ? admin.requestError.text : 'The server did not confirm the switch. The output panel may say why.')
 }
 function go (to: string) {
   close()

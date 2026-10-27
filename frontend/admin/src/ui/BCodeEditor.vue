@@ -27,6 +27,8 @@ const props = withDefaults(defineProps<{
   fill?: boolean
   placeholder?: string
   ariaLabel?: string
+  /** Wrap long lines (for prose such as HTML texts) instead of scrolling sideways. */
+  wrap?: boolean
   /** Cmd/Ctrl+Enter */
   onRun?: () => void
   /** Cmd/Ctrl+S */
@@ -38,6 +40,7 @@ const host = ref<HTMLElement>()
 let view: EditorView | null = null
 const langSlot = new Compartment()
 const readSlot = new Compartment()
+const wrapSlot = new Compartment()
 
 function languageExt (lang: CodeLanguage): Extension {
   switch (lang) {
@@ -109,6 +112,7 @@ onMounted(() => {
         keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, indentWithTab]),
         langSlot.of(languageExt(props.language)),
         readSlot.of([EditorState.readOnly.of(!!props.readonly), EditorView.editable.of(!props.readonly)]),
+        wrapSlot.of(props.wrap ? EditorView.lineWrapping : []),
         props.placeholder ? cmPlaceholder(props.placeholder) : [],
         EditorView.contentAttributes.of({ 'aria-label': props.ariaLabel || 'Code editor' }),
         theme,
@@ -128,6 +132,7 @@ watch(() => props.modelValue, (v) => {
   }
 })
 watch(() => props.language, (l) => view?.dispatch({ effects: langSlot.reconfigure(languageExt(l)) }))
+watch(() => props.wrap, (w) => view?.dispatch({ effects: wrapSlot.reconfigure(w ? EditorView.lineWrapping : []) }))
 watch(() => props.readonly, (r) => view?.dispatch({ effects: readSlot.reconfigure([EditorState.readOnly.of(!!r), EditorView.editable.of(!r)]) }))
 
 onBeforeUnmount(() => { view?.destroy(); view = null })

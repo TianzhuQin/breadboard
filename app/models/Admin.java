@@ -1,8 +1,8 @@
 package models;
 
 import akka.actor.ActorRef;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.google.gson.Gson;
 import com.tinkerpop.blueprints.Direction;
 import com.tinkerpop.blueprints.Edge;
 import com.tinkerpop.blueprints.Graph;
@@ -12,16 +12,19 @@ import play.libs.Json;
 import play.Logger;
 
 import java.util.Map;
-import groovy.util.ObservableMap;
 
+/**
+ * One open admin console socket (one browser tab) watching the engine's network.
+ *
+ * <p>Every socket has its own Admin, registered on LogIn and removed when the socket closes
+ * (ScriptBoard.registerAdmin / removeAdmin). It only forwards graph changes to its own socket:
+ * OnJoinStep / OnLeaveStep are run once per player by ScriptBoard's step trigger, not by each Admin,
+ * so they no longer run once per open tab, nor not at all when nobody is watching.
+ */
 public class Admin implements ClientListener {
-  /*
-   * This class represents a logged in administrator
-   */
-  private User user;
-  private ActorRef scriptBoardController;
-  private ThrottledWebSocketOut out;
-  private static final Gson gson = new Gson();
+  private volatile User user;
+  private final ActorRef scriptBoardController;
+  private final ThrottledWebSocketOut out;
 
   public Admin(User user, ActorRef scriptBoardController, ThrottledWebSocketOut out) {
     this.user = user;
@@ -29,8 +32,23 @@ public class Admin implements ClientListener {
     this.out = out;
   }
 
+  /** Send this account's current User JSON to this socket. */
   public void update() {
-    this.out.write(this.user.toJson());
+    User current = user;
+    if (current == null) {
+      return;
+    }
+    User fresh = User.findByEmail(current.email);
+    write((fresh != null ? fresh : current).toJson());
+  }
+
+  /** Write one frame to this socket. A failing socket must not stop the others from being updated. */
+  public void write(JsonNode frame) {
+    try {
+      out.write(frame);
+    } catch (Exception e) {
+      Logger.debug("Could not write to an admin socket: " + e);
+    }
   }
 
   public void graphChanged(Graph wholeGraph) {
@@ -39,89 +57,72 @@ public class Admin implements ClientListener {
     ObjectNode graph = D3Utils.graphToJsonString(wholeGraph);
     jsonOutput.put("graph", graph);
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
+  /** A player was added to the live graph: {@code addNode}; its properties follow as changes. */
   public void vertexAdded(Vertex vertex) {
-    vertexAdded(vertex, true);
-  }
-
-  public void vertexAdded(Vertex vertex, Boolean runOnJoin) {
-    user.refresh();
-
-    if (runOnJoin) {
-      Breadboard.RunOnJoinStep onJoinStep = new Breadboard.RunOnJoinStep(user, vertex, out);
-      scriptBoardController.tell(onJoinStep, null);
-    }
-
     ObjectNode jsonOutput = Json.newObject();
-
     jsonOutput.put("action", "addNode");
     jsonOutput.put("id", vertex.getId().toString());
+    write(jsonOutput);
+  }
 
-    out.write(jsonOutput);
+  /** {@code addNode} followed by one {@code nodePropertyChanged} per property, for a replay. */
+  public void replayVertex(Vertex vertex) {
+    vertexAdded(vertex);
+    for (String key : vertex.getPropertyKeys()) {
+      vertexPropertyChanged(vertex, key, null, vertex.getProperty(key));
+    }
+  }
 
-    if (!runOnJoin) {
-      for (String key : vertex.getPropertyKeys()) {
-        vertexPropertyChanged(vertex, key, null, vertex.getProperty(key));
-      }
+  /**
+   * Kept for callers of the old signature. {@code runOnJoin == false} (a replay) sends the
+   * properties too. The Admin no longer runs OnJoinStep itself either way.
+   */
+  public void vertexAdded(Vertex vertex, Boolean runOnJoin) {
+    if (Boolean.TRUE.equals(runOnJoin)) {
+      vertexAdded(vertex);
+    } else {
+      replayVertex(vertex);
     }
   }
 
   public void vertexRemoved(Vertex vertex) {
-    vertexRemoved(vertex, true);
-  }
-
-  public void vertexRemoved(Vertex vertex, Boolean runOnLeave) {
-    user.refresh();
-
-    if (runOnLeave) {
-      Breadboard.RunOnLeaveStep onLeaveStep = new Breadboard.RunOnLeaveStep(user, vertex, out);
-      scriptBoardController.tell(onLeaveStep, null);
-    }
-
     ObjectNode jsonOutput = Json.newObject();
-
     jsonOutput.put("action", "removeNode");
     jsonOutput.put("id", vertex.getId().toString());
+    write(jsonOutput);
+  }
 
-    out.write(jsonOutput);
+  /** Kept for callers of the old signature; the Admin no longer runs OnLeaveStep itself. */
+  public void vertexRemoved(Vertex vertex, Boolean runOnLeave) {
+    vertexRemoved(vertex);
   }
 
   public void vertexPropertyChanged(Vertex vertex, String key, Object oldValue, Object setValue) {
-    ObjectNode jsonOutput = Json.newObject();
-
     if (key.equals("private")) {
-      if (vertex.getProperty("private") instanceof Map) {
-        Map newMap = (Map) vertex.getProperty("private");
-
-				/*
-         * TODO: oldValue and setValue don't seem to be Maps, is there any way to only send the changed private variables?
-				Map oldMap = new HashMap();
-				if (oldValue instanceof Map) {
-					oldMap = (Map) oldValue;
-				}
-				*/
-
-        // Find the changed Property and write it out
+      Object privateValue = vertex.getProperty("private");
+      if (privateValue instanceof Map) {
+        Map newMap = (Map) privateValue;
+        // Private keys are flattened into the player's own keys (the admin sees everything).
         for (Object k : newMap.keySet()) {
-          jsonOutput = Json.newObject();
+          ObjectNode jsonOutput = Json.newObject();
           jsonOutput.put("action", "nodePropertyChanged");
           jsonOutput.put("id", vertex.getId().toString());
           jsonOutput.put("key", k.toString());
           // Using gson here leads to a StackOverflowError due to a circular reference
-          //jsonOutput.put("value", gson.toJson(newMap.get(k)));
           jsonOutput.put("value", Json.toJson(newMap.get(k)));
-          out.write(jsonOutput);
+          write(jsonOutput);
         }
       }
     } else {
+      ObjectNode jsonOutput = Json.newObject();
       jsonOutput.put("action", "nodePropertyChanged");
       jsonOutput.put("id", vertex.getId().toString());
       jsonOutput.put("key", key);
-      //jsonOutput.put("value", gson.toJson(setValue));
       jsonOutput.put("value", Json.toJson(setValue));
-      out.write(jsonOutput);
+      write(jsonOutput);
     }
   }
 
@@ -132,7 +133,7 @@ public class Admin implements ClientListener {
     jsonOutput.put("id", vertex.getId().toString());
     jsonOutput.put("key", key);
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void edgeAdded(Edge edge) {
@@ -144,7 +145,7 @@ public class Admin implements ClientListener {
     jsonOutput.put("target", edge.getVertex(Direction.IN).getId().toString());
     jsonOutput.put("value", edge.getLabel());
 
-    out.write(jsonOutput);
+    write(jsonOutput);
 
     // If there are properties on the edge, notify the listener
     for (String key : edge.getPropertyKeys()) {
@@ -160,29 +161,34 @@ public class Admin implements ClientListener {
     jsonOutput.put("source", edge.getVertex(Direction.OUT).getId().toString());
     jsonOutput.put("target", edge.getVertex(Direction.IN).getId().toString());
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void edgePropertyChanged(Edge edge, String key, Object setValue) {
-    if ((key == "inProps" || key == "outProps") && edge.getProperty(key) instanceof Map) {
+    // equals, not ==: the key is not always an interned literal. A null value is sent as null; its
+    // toString() used to throw back into the script that set it.
+    if (("inProps".equals(key) || "outProps".equals(key)) && edge.getProperty(key) instanceof Map) {
       Map props = (Map) edge.getProperty(key);
       for (Object propKey : props.keySet()) {
         ObjectNode jsonOutput = Json.newObject();
         jsonOutput.put("action", "linkPropertyChanged");
         jsonOutput.put("id", edge.getId().toString());
         jsonOutput.put("key", propKey.toString());
-        jsonOutput.put("value", props.get(propKey).toString());
-        out.write(jsonOutput);
+        jsonOutput.put("value", asText(props.get(propKey)));
+        write(jsonOutput);
       }
     } else {
       ObjectNode jsonOutput = Json.newObject();
       jsonOutput.put("action", "linkPropertyChanged");
       jsonOutput.put("id", edge.getId().toString());
       jsonOutput.put("key", key);
-      jsonOutput.put("value", setValue.toString());
-      out.write(jsonOutput);
+      jsonOutput.put("value", asText(setValue));
+      write(jsonOutput);
     }
-    
+  }
+
+  private static String asText(Object value) {
+    return value == null ? null : value.toString();
   }
 
   public void edgePropertyRemoved(Edge edge, String key) {
@@ -192,11 +198,7 @@ public class Admin implements ClientListener {
     jsonOutput.put("id", edge.getId().toString());
     jsonOutput.put("key", key);
 
-    out.write(jsonOutput);
-  }
-
-  public void setOut(ThrottledWebSocketOut out) {
-    this.out = out;
+    write(jsonOutput);
   }
 
   public ThrottledWebSocketOut getOut() {
@@ -205,5 +207,14 @@ public class Admin implements ClientListener {
 
   public User getUser() {
     return this.user;
+  }
+
+  /** The account signed in on this socket, refreshed when it logs in again. */
+  void setUser(User user) {
+    this.user = user;
+  }
+
+  public ActorRef getScriptBoardController() {
+    return scriptBoardController;
   }
 }

@@ -26,8 +26,10 @@ export interface Instance {
   id: number
   name: string
   status: InstanceStatus
-  /** server local time, "yyyy-MM-dd HH:mm:ss,S" */
+  /** ISO-8601 UTC when the server sends creationTimeUtc (the store swaps it in), else server local time "yyyy-MM-dd HH:mm:ss,S" */
   creationTime: string
+  /** initStep.start() has run, so the session is closed to newcomers (unless late joining is allowed) */
+  hasStarted?: boolean
   hitId: number | ''
   hits: any[]
   data: DataItem[]

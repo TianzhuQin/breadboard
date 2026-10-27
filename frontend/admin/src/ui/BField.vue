@@ -39,5 +39,7 @@ const describedby = computed(() => props.error ? `${forId.value}-err` : (props.h
 .b-field__opt { font-weight: 400; color: var(--faint); font-size: var(--text-xs); margin-left: 4px; }
 .b-field__hint { font-size: var(--text-xs); color: var(--muted); line-height: 1.45; }
 .b-field__error { font-size: var(--text-xs); color: var(--danger); line-height: 1.45; }
-.b-field.has-error .b-input { border-color: var(--danger); }
+.b-field.has-error .b-input,
+.b-field.has-error .b-select__el,
+.b-field.has-error textarea { border-color: var(--danger); }
 </style>

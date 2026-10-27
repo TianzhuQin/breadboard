@@ -50,7 +50,7 @@ const items = computed<MenuItem[]>(() => [
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #a5b4fc, #6366f1);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 45%, var(--surface)), var(--accent));
   color: #fff;
   font-weight: 700;
   font-size: 13px;

@@ -23,6 +23,8 @@ export interface GraphLink {
   id: string
   source: string
   target: string
+  /** The tie's kind (the edge label); researcher scripts use "connected" for the network itself. */
+  label?: string
   data: Record<string, any>
 }
 
@@ -31,6 +33,7 @@ export const GRAPH_ACTIONS = new Set([
   'addLink', 'removeLink', 'linkPropertyChanged', 'linkPropertyRemoved',
 ])
 
+/** Tie properties arrive as strings (Admin.edgePropertyChanged uses toString). */
 function parseValue (v: any) {
   if (typeof v !== 'string') return v
   try { return JSON.parse(v) } catch (e) { return v }
@@ -79,7 +82,8 @@ export class LiveGraph {
       case 'nodePropertyChanged': {
         let n = this.nodes.get(id)
         if (!n) { n = { id, data: {} }; this.nodes.set(id, n) }
-        n.data = { ...n.data, [m.key]: parseValue(m.value) }
+        // node values arrive typed (models/Admin.java); parsing them again turned "5" into 5
+        n.data = { ...n.data, [m.key]: m.value }
         break
       }
       case 'nodePropertyRemoved': {
@@ -93,7 +97,9 @@ export class LiveGraph {
       case 'addLink': {
         const source = String(m.source)
         const target = String(m.target)
-        this.links.set(id, { id, source, target, data: (m.value && typeof m.value === 'object') ? { ...m.value } : {} })
+        // Admin.java sends the edge label as `value`
+        const label = typeof m.value === 'string' && m.value ? m.value : undefined
+        this.links.set(id, { id, source, target, label, data: (m.value && typeof m.value === 'object') ? { ...m.value } : {} })
         break
       }
       case 'removeLink':

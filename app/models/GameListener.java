@@ -39,8 +39,15 @@ public class GameListener {
       this.experimentInstance.save();
       Autopilot.sessionFinished(this.experimentInstance);
     }
-    if (user != null && engine != null && this.out != null) {
-      this.out.write(user.toJson());
+    if (user != null && engine != null) {
+      // Every console tab of this account learns the session finished. The tab that last sent this
+      // account an action only gets it when no tab is registered (e.g. the autopilot's output, which
+      // then writes it to the log).
+      User fresh = User.findByEmail(user.email);
+      com.fasterxml.jackson.databind.node.ObjectNode json = (fresh != null ? fresh : user).toJson();
+      if (!ScriptBoard.toAccount(user.email, json) && this.out != null) {
+        this.out.write(json);
+      }
     }
   }
 

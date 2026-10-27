@@ -276,7 +276,7 @@ public class Experiment extends Model {
   public List<Step> getSteps() {
     if (this.fileMode) {
       ArrayList<Step> returnSteps = new ArrayList<>();
-      File stepsDirectory = new File(Play.application().path().toString() + "/dev/" + getDirectoryName() + "/steps");
+      File stepsDirectory = fileModeStepsDirectory(new File(Play.application().path().toString() + "/dev/" + getDirectoryName()));
       try {
         returnSteps = ExperimentController.getStepsFromDirectory(stepsDirectory);
       } catch (IOException ioe) {
@@ -287,6 +287,23 @@ public class Experiment extends Model {
     } else {
       return this.steps;
     }
+  }
+
+  /**
+   * A file-mode experiment's steps folder: "Steps", as file mode's export, import and the file
+   * watcher write and read it. This used to read "steps", which is a different folder wherever file
+   * names are case-sensitive (Linux), so file-mode experiments showed no steps there. A lower-case
+   * "steps" folder made by hand still works when there is no "Steps".
+   */
+  public static File fileModeStepsDirectory(File experimentDirectory) {
+    File steps = new File(experimentDirectory, "Steps");
+    if (!steps.isDirectory()) {
+      File lowerCase = new File(experimentDirectory, "steps");
+      if (lowerCase.isDirectory()) {
+        return lowerCase;
+      }
+    }
+    return steps;
   }
 
   public void addStep(Step step) {

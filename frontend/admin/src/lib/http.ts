@@ -33,7 +33,7 @@ async function request<T> (method: string, url: string, body?: any, opts: { raw?
     throw new HttpError(401, (data && data.message) || 'Please sign in', data)
   }
   if (!res.ok) {
-    const msg = (data && (data.message || data.error)) || (typeof data === 'string' && data) || res.statusText
+    const msg = (data && (data.message || data.error)) || (typeof data === 'string' && plainText(data)) || res.statusText
     throw new HttpError(res.status, String(msg).slice(0, 500), data)
   }
   return (opts.raw ? text : data) as T
@@ -57,4 +57,13 @@ export function saveText (fileName: string, text: string, type = 'text/csv') {
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/** A readable sentence from an error body: Play's HTML error pages become their title (or text). */
+function plainText (body: string): string {
+  if (!/<[a-z!/]/i.test(body)) return body.trim()
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(body)
+  const h1 = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(body)
+  const pick = (h1 && h1[1]) || (title && title[1]) || body
+  return pick.replace(/<[^>]*>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
 }

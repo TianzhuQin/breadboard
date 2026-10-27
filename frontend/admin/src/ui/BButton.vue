@@ -8,6 +8,7 @@
     :disabled="href ? undefined : (disabled || loading)"
     :aria-disabled="href && disabled ? 'true' : undefined"
     :aria-busy="loading ? 'true' : undefined"
+    @click="onClick"
   >
     <span v-if="loading" class="b-btn__spinner" aria-hidden="true" />
     <component :is="icon" v-else-if="icon" class="b-btn__icon" :size="size === 'sm' ? 15 : 16" aria-hidden="true" />
@@ -32,6 +33,10 @@ const props = withDefaults(defineProps<{
 }>(), { variant: 'secondary', size: 'md', type: 'button' })
 
 const slots = useSlots()
+// A disabled link still receives clicks; stop them here so they don't reach whatever is underneath.
+function onClick (e: MouseEvent) {
+  if (props.href && (props.disabled || props.loading)) { e.preventDefault(); e.stopImmediatePropagation() }
+}
 const iconOnly = computed(() => !!props.icon && !slots.default)
 </script>
 
@@ -58,7 +63,8 @@ const iconOnly = computed(() => !!props.icon && !slots.default)
 }
 .b-btn:active:not(:disabled) { transform: translateY(1px); }
 .b-btn:disabled,
-.b-btn[aria-disabled='true'] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+.b-btn[aria-disabled='true'] { opacity: 0.5; cursor: not-allowed; }
+.b-btn.is-loading { cursor: progress; }
 .b-btn--sm { --b-btn-h: 28px; padding: 0 10px; font-size: var(--text-sm); gap: 6px; border-radius: var(--radius-xs); }
 .b-btn--lg { --b-btn-h: 42px; padding: 0 18px; font-size: var(--text-lg); }
 .b-btn.is-block { display: flex; width: 100%; }

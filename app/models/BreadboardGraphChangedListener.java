@@ -7,7 +7,10 @@ import java.util.List;
 
 public interface BreadboardGraphChangedListener extends GraphChangedListener {
   void setGraph(Graph g);
+  // Idempotent: an admin already listening is not added twice (it would get every change twice).
   void addAdminListener(ClientListener a);
+  // An admin console socket closed (ScriptBoard.removeAdmin). No-op if it wasn't listening.
+  void removeAdminListener(ClientListener a);
   void addClientListener(Client c);
   // Symmetric with addClientListener so callers (e.g. ScriptBoard.disconnectClients)
   // can drop a client from the dispatch registry when it disconnects / on reload,

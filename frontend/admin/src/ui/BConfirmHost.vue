@@ -3,7 +3,7 @@
     <p v-if="req?.message" class="b-confirm__msg">{{ req.message }}</p>
     <BField v-if="req?.typeToConfirm" :label="`Type “${req.typeToConfirm}” to confirm`" class="b-confirm__type">
       <template #default="{ id }">
-        <BInput :id="id" v-model="typed" autocomplete="off" data-autofocus @keydown.enter="ok" />
+        <BInput :id="id" v-model="typed" autocomplete="off" data-autofocus @keydown.enter.prevent="ok" />
       </template>
     </BField>
     <template #footer>
@@ -24,7 +24,7 @@ import { confirmState, settleConfirm } from './confirm'
 const req = computed(() => confirmState.req)
 const typed = ref('')
 watch(() => confirmState.open, () => { typed.value = '' })
-const canConfirm = computed(() => !req.value?.typeToConfirm || typed.value.trim() === req.value.typeToConfirm)
+const canConfirm = computed(() => !req.value?.typeToConfirm || typed.value.trim() === req.value.typeToConfirm.trim())
 function ok () { if (canConfirm.value) settleConfirm(true) }
 </script>
 

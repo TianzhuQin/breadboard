@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Recruitment details that arrive with the HTTP entry request (e.g. Prolific's PROLIFIC_PID), held
  * until the participant's vertex exists and then stored in {@code player._system.recruitment},
- * which only the player themselves receives. The client uses {@code source == "prolific"} to show
+ * which only the player themselves (and the admin console) receives. The client uses {@code source == "prolific"} to show
  * the Prolific completion screen (groovy/recruitment.groovy, BBMain.vue).
  */
 public final class Recruitment {
@@ -45,6 +45,9 @@ public final class Recruitment {
       Map<String, Object> recruitment = existing instanceof Map ? (Map<String, Object>) existing : new HashMap<String, Object>();
       recruitment.putAll(details);
       systemMap.put("recruitment", recruitment);
+      // Set the property again so the change is announced (the admin console sees it live); writing
+      // into the map alone told no one. See ScriptBoard.setConnected for why it is the same map.
+      v.setProperty("_system", systemMap);
     }
   }
 

@@ -20,4 +20,12 @@ public final class Timestamps {
     format.setTimeZone(TimeZone.getTimeZone("UTC"));
     return format.format(date);
   }
+
+  /** ISO-8601 in UTC with milliseconds ("2026-10-27T14:03:05.123Z"), or null. */
+  public static String iso(Date date) {
+    if (date == null) return null;
+    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
+    format.setTimeZone(TimeZone.getTimeZone("UTC"));
+    return format.format(date);
+  }
 }

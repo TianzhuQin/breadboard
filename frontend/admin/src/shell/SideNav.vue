@@ -66,7 +66,7 @@ const playerCount = computed(() => { void graph.version.value; return graph.node
 .sidenav__brand { display: flex; align-items: center; gap: 10px; padding: 16px 18px 12px; }
 .sidenav__name { font-weight: 700; font-size: 16px; letter-spacing: -0.02em; }
 .sidenav__switcher { margin: 4px 12px 10px; }
-.sidenav__scroll { flex: 1; overflow-y: auto; padding: 4px 10px 12px; }
+.sidenav__scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px 12px; }
 .sidenav__group + .sidenav__group { margin-top: 14px; }
 .sidenav__heading {
   padding: 6px 10px 6px;

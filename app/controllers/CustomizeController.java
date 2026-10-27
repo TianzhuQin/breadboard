@@ -46,6 +46,21 @@ public class CustomizeController extends Controller {
     return ok(returnJson);
   }
 
+  /**
+   * The text sent under {@code key}: "" (and null) clear it, so researchers can remove their custom
+   * page, script or style; only a body without the key is refused (null is returned for it).
+   */
+  static String text(JsonNode json, String key) {
+    JsonNode node = json.get(key);
+    if (node == null) {
+      return null;
+    }
+    if (node.isNull()) {
+      return "";
+    }
+    return node.isValueNode() ? node.asText() : node.toString();
+  }
+
   @Security.Authenticated(Secured.class)
   public static Result updateClientHtml(Long experimentId) {
     Experiment experiment = Experiment.findById(experimentId);
@@ -54,14 +69,11 @@ public class CustomizeController extends Controller {
       return badRequest("Invalid Experiment ID");
     }
 
-    String clientHtml;
     JsonNode json = request().body().asJson();
     if(json == null) {
       return badRequest("Expecting Json data");
-    } else {
-      clientHtml = json.findPath("clientHtml").textValue();
     }
-
+    String clientHtml = text(json, "clientHtml");
     if (clientHtml == null) {
       return badRequest("Please provide client HTML.");
     }
@@ -79,14 +91,11 @@ public class CustomizeController extends Controller {
       return badRequest("Invalid Experiment ID");
     }
 
-    String clientGraph;
     JsonNode json = request().body().asJson();
     if(json == null) {
       return badRequest("Expecting Json data");
-    } else {
-      clientGraph = json.findPath("clientGraph").textValue();
     }
-
+    String clientGraph = text(json, "clientGraph");
     if (clientGraph == null) {
       return badRequest("Please provide client graph.");
     }
@@ -104,14 +113,11 @@ public class CustomizeController extends Controller {
       return badRequest("Invalid Experiment ID");
     }
 
-    String style;
     JsonNode json = request().body().asJson();
     if(json == null) {
       return badRequest("Expecting Json data");
-    } else {
-      style = json.findPath("style").textValue();
     }
-
+    String style = text(json, "style");
     if (style == null) {
       return badRequest("Please provide style.");
     }
