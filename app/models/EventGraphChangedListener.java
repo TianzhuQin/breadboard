@@ -7,16 +7,17 @@ import com.tinkerpop.blueprints.Vertex;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class EventGraphChangedListener implements BreadboardGraphChangedListener {
   private Graph graph;
-  private ArrayList<ClientListener> adminListeners = new ArrayList<>();
+  private final List<ClientListener> adminListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
   // Instance-scoped (was `static`): a static map was shared by every listener / every
   // ScriptBoard, so clients from one game/user leaked into another's dispatch and the
   // map could never be safely cleared. Per-instance state is cleared on reload via
   // ScriptBoard.disconnectClients -> removeClientListener.
-  private final HashMap<String, Client> clientListeners = new HashMap<>();
+  private final Map<String, Client> clientListeners = new java.util.concurrent.ConcurrentHashMap<>();
 
   public EventGraphChangedListener(Graph graph) {
     this.graph = graph;
@@ -26,7 +27,7 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
     adminListeners.add(adminListener);
   }
 
-  public ArrayList<ClientListener> getAdminListeners() {
+  public List<ClientListener> getAdminListeners() {
     return this.adminListeners;
   }
 
@@ -47,7 +48,7 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
   }
 
   // Exposed for tests/diagnostics (mirrors IteratedBreadboardGraphChangedListener).
-  public HashMap<String, Client> getClientListeners() {
+  public Map<String, Client> getClientListeners() {
     return this.clientListeners;
   }
 
@@ -153,6 +154,19 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
     if (clientListeners.containsKey(id2)) {
       Client c2 = clientListeners.get(id2);
       c2.updateGraph(vertices[1]);
+    }
+
+    // With ties among neighbors visible, everyone next to both endpoints sees this edge too.
+    if (ClientView.getVisibility() == ClientView.Visibility.EGO_TIES) {
+      java.util.Set<Object> updated = new java.util.HashSet<Object>(java.util.Arrays.asList(id1, id2));
+      for (Vertex endpoint : vertices) {
+        for (Vertex neighbor : endpoint.getVertices(com.tinkerpop.blueprints.Direction.BOTH, "connected")) {
+          Object id = neighbor.getId();
+          if (updated.add(id) && clientListeners.containsKey(id)) {
+            clientListeners.get(id).updateGraph(neighbor);
+          }
+        }
+      }
     }
   }
 

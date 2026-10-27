@@ -442,7 +442,8 @@ public class WebSocketTest extends BaseTest {
 
         client.updateGraph(p1);
 
-        JsonNode neighbor = findNode(testOut.last().get("graph").get("nodes"), "p2");
+        // Neighbours appear under an alias, not their client id (see ClientViewTest).
+        JsonNode neighbor = findNode(testOut.last().get("graph").get("nodes"), ClientView.publicId("p2"));
         assertNotNull("Neighbour p2 should appear in p1's subgraph", neighbor);
         assertTrue("Public neighbour props are kept", neighbor.has("name"));
         assertTrue("Public neighbour props are kept", neighbor.has("score"));

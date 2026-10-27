@@ -123,6 +123,41 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
     return sharedTimer
   }
 
+  // --- What participants' browsers receive about others (models.ClientView) ---
+
+  // "ego" (default): yourself, your neighbors and your own ties.
+  // "egoTies": also the ties among your neighbors.
+  def setVisibility(String mode) {
+    models.ClientView.setVisibility(mode)
+  }
+
+  // "alias" (default): neighbors appear under a random alias instead of their client id.
+  // "real": send real client ids, as older versions did.
+  def setNeighborIds(String mode) {
+    models.ClientView.setNeighborIds(mode)
+  }
+
+  // Keep these vertex properties from neighbors (they still reach the player themselves).
+  def hideFromNeighbors(String... keys) {
+    models.ClientView.hideFromNeighbors(keys)
+  }
+
+  // Send properties that are hidden by default (_system, timers, ai, lastupdated) to neighbors.
+  def showToNeighbors(String... keys) {
+    models.ClientView.showToNeighbors(keys)
+  }
+
+  // The vertex behind an id that came from a browser (an alias, or a player's own id).
+  def fromClientId(String id) {
+    def real = models.ClientView.realId(id)
+    return real == null ? null : getVertex(real)
+  }
+
+  // The id a browser sees for this player.
+  def clientIdOf(Vertex v) {
+    return models.ClientView.publicId(v.getId())
+  }
+
   def getSubmitForm(player, dollars, reason = "completed", sandbox = false, comments = false) {
     def url = (sandbox) ? "https://workersandbox.mturk.com/mturk/externalSubmit" : "https://www.mturk.com/mturk/externalSubmit"
     def submitForm = "<form action=\"" + url + "\" method=\"get\">"

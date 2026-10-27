@@ -15,6 +15,9 @@ import play.db.ebean.Model;
 import play.libs.Json;
 import play.mvc.WebSocket;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
 
@@ -34,7 +37,9 @@ public class Client extends Model {
 
   public synchronized void updateGraph(Vertex me) {
 
-    // Create an in-memory graph to store the sub-graph in
+    // Create an in-memory graph to store the sub-graph in. The participant keeps their own id;
+    // everyone else is added under ClientView.publicId (a random alias by default), so a browser
+    // never learns another participant's client id, which used to double as their login.
     TinkerGraph inMemoryGraph = new TinkerGraph();
     EventGraph subGraph = new EventGraph(inMemoryGraph);
     Vertex m = subGraph.addVertex(me.getId());
@@ -62,17 +67,20 @@ public class Client extends Model {
       }
     }
 
-    // Get all neighbors and add them
+    // Get all neighbors and add them, with only the properties neighbors may see
+    Map<Object, Vertex> inSubGraph = new HashMap<Object, Vertex>();
+    List<Vertex> neighbors = new ArrayList<Vertex>();
+    inSubGraph.put(me.getId(), m);
     for (Vertex v : me.getVertices(Direction.BOTH)) {
-      // If this vertex hasn't already been added
-      if (subGraph.getVertex(v.getId()) == null) {
-        Vertex neighbor = subGraph.addVertex(v.getId());
-
-        for (String key : v.getPropertyKeys()) {
-          // private, text, and choices are always private
-          if ((!key.equals("private")) && (!key.equals("text")) && (!key.equals("choices"))) {
-            neighbor.setProperty(key.toString(), v.getProperty(key));
-          }
+      if (inSubGraph.containsKey(v.getId())) {
+        continue;
+      }
+      Vertex neighbor = subGraph.addVertex(ClientView.publicId(v.getId()));
+      inSubGraph.put(v.getId(), neighbor);
+      neighbors.add(v);
+      for (String key : v.getPropertyKeys()) {
+        if (ClientView.neighborMaySee(key)) {
+          neighbor.setProperty(key.toString(), v.getProperty(key));
         }
       }
     }
@@ -81,8 +89,8 @@ public class Client extends Model {
     // IN edges, handling inProps
     for (Edge e : me.getEdges(Direction.IN, "connected")) {
 
-      Vertex outVertex = subGraph.getVertex(e.getVertex(Direction.OUT).getId());
-      Vertex inVertex = subGraph.getVertex(e.getVertex(Direction.IN).getId());
+      Vertex outVertex = inSubGraph.get(e.getVertex(Direction.OUT).getId());
+      Vertex inVertex = inSubGraph.get(e.getVertex(Direction.IN).getId());
 
 
       if (outVertex != null && inVertex != null) {
@@ -109,8 +117,8 @@ public class Client extends Model {
     // OUT edges, handling outProps
     for (Edge e : me.getEdges(Direction.OUT, "connected")) {
 
-      Vertex outVertex = subGraph.getVertex(e.getVertex(Direction.OUT).getId());
-      Vertex inVertex = subGraph.getVertex(e.getVertex(Direction.IN).getId());
+      Vertex outVertex = inSubGraph.get(e.getVertex(Direction.OUT).getId());
+      Vertex inVertex = inSubGraph.get(e.getVertex(Direction.IN).getId());
 
 
       if (outVertex != null && inVertex != null) {
@@ -129,6 +137,27 @@ public class Client extends Model {
         for (String key : e.getPropertyKeys()) {
           if ((!key.equals("outProps")) && (!key.equals("inProps")) && (!outPropKeys.contains(key))) {
             outE.setProperty(key.toString(), e.getProperty(key));
+          }
+        }
+      }
+    }
+
+    // Ties among the participant's neighbors, when the experiment shows them. Their per-endpoint
+    // inProps / outProps belong to those two players and are not sent.
+    if (ClientView.getVisibility() == ClientView.Visibility.EGO_TIES) {
+      for (Vertex alter : neighbors) {
+        for (Edge e : alter.getEdges(Direction.BOTH, "connected")) {
+          Vertex outVertex = inSubGraph.get(e.getVertex(Direction.OUT).getId());
+          Vertex inVertex = inSubGraph.get(e.getVertex(Direction.IN).getId());
+          if (outVertex == null || inVertex == null || outVertex == m || inVertex == m
+              || subGraph.getEdge(e.getId()) != null) {
+            continue;
+          }
+          Edge tie = subGraph.addEdge(e.getId(), outVertex, inVertex, "connected");
+          for (String key : e.getPropertyKeys()) {
+            if (!key.equals("outProps") && !key.equals("inProps")) {
+              tie.setProperty(key, e.getProperty(key));
+            }
           }
         }
       }

@@ -148,6 +148,7 @@ public class ScriptBoard extends UntypedActor {
       admin.getOut().write(jsonOutput);
     }
     Logger.debug("ScriptEngine reload start");
+    ClientView.reset();
     if (engine != null) {
       // just in case
       playerActions.turnAIOff();
