@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Run sbt for this project on a Java 8 JDK, resolving only over https.
+#
+#   JAVA8_HOME=/path/to/jdk8 bin/sbt8 compile test stage
+#
+# Play 2.2 / sbt 0.13 only build on Java 8. The sbt launcher is downloaded once into
+# .sbt-launcher/ and checked against its published SHA-1; the repository list in
+# project/sbt-repositories replaces the dead http:// resolvers baked into old sbt/Play.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+JDK="${JAVA8_HOME:-${JAVA_HOME:-}}"
+if [ -z "$JDK" ] || [ ! -x "$JDK/bin/java" ]; then
+  echo "bin/sbt8: set JAVA8_HOME to a Java 8 JDK (e.g. Azul Zulu 8)." >&2
+  exit 1
+fi
+if ! "$JDK/bin/java" -version 2>&1 | grep -q 'version "1\.8\.'; then
+  echo "bin/sbt8: $JDK is not a Java 8 JDK." >&2
+  exit 1
+fi
+
+LAUNCHER_VERSION="1.10.2"
+LAUNCHER_SHA1="3a5d4fe5050b6b35b8153e688c727aaa2e364628"
+LAUNCHER="$ROOT/.sbt-launcher/sbt-launch-$LAUNCHER_VERSION.jar"
+if [ ! -f "$LAUNCHER" ]; then
+  mkdir -p "$ROOT/.sbt-launcher"
+  url="https://repo1.maven.org/maven2/org/scala-sbt/sbt-launch/$LAUNCHER_VERSION/sbt-launch-$LAUNCHER_VERSION.jar"
+  curl -sSfL -o "$LAUNCHER.tmp" "$url"
+  actual="$(shasum -a 1 "$LAUNCHER.tmp" | cut -d' ' -f1)"
+  if [ "$actual" != "$LAUNCHER_SHA1" ]; then
+    rm -f "$LAUNCHER.tmp"
+    echo "bin/sbt8: sbt launcher checksum mismatch ($actual)." >&2
+    exit 1
+  fi
+  mv "$LAUNCHER.tmp" "$LAUNCHER"
+fi
+
+cd "$ROOT"
+export JAVA_HOME="$JDK"
+exec "$JDK/bin/java" -Xms512m -Xmx2g \
+  -Dsbt.override.build.repos=true \
+  -Dsbt.repository.config="$ROOT/project/sbt-repositories" \
+  -Dsbt.log.noformat=true \
+  -jar "$LAUNCHER" "$@"

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run the staged build locally against a throwaway data directory.
+#
+#   JAVA8_HOME=/path/to/jdk8 bin/run-local [port]      (default port 9000)
+#
+# Build first with:  (cd frontend && pnpm install && pnpm run build:all) && bin/sbt8 stage
+# Data (H2 database, generated secret) lives in .local-run/ unless BREADBOARD_RUN_DIR is set.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PORT="${1:-9000}"
+JDK="${JAVA8_HOME:-${JAVA_HOME:-}}"
+STAGE="$ROOT/target/universal/stage"
+RUN="${BREADBOARD_RUN_DIR:-$ROOT/.local-run}"
+
+if [ ! -x "$STAGE/bin/breadboard" ]; then
+  echo "bin/run-local: no staged build; run bin/sbt8 stage first." >&2
+  exit 1
+fi
+if [ -z "$JDK" ] || [ ! -x "$JDK/bin/java" ]; then
+  echo "bin/run-local: set JAVA8_HOME to a Java 8 JDK." >&2
+  exit 1
+fi
+
+mkdir -p "$RUN/db"
+if [ ! -s "$RUN/secret" ]; then
+  (umask 077 && head -c 32 /dev/urandom | base64 | tr -d '/+=' > "$RUN/secret")
+fi
+# The server reads its Groovy engine scripts from <app path>/groovy.
+ln -sfn "$ROOT/groovy" "$STAGE/groovy"
+
+export JAVA_HOME="$JDK"
+export PATH="$JDK/bin:$PATH"
+cd "$RUN"
+exec "$STAGE/bin/breadboard" \
+  -Dconfig.file="$ROOT/conf/application.conf" \
+  -Ddb.default.url="jdbc:h2:$RUN/db/breadboard;MODE=MYSQL" \
+  -DapplyEvolutions.default=true \
+  -Dhttp.port="$PORT" \
+  -Dbreadboard.rootUrl="http://localhost:$PORT" \
+  -Dbreadboard.wsUrl="ws://localhost:$PORT/connect" \
+  -Dpidfile.path=/dev/null \
+  -Dapplication.secret="$(cat "$RUN/secret")"

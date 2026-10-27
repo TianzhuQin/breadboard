@@ -13,6 +13,21 @@ commands.
 - `cd frontend`
 - `pnpm install`
 
+#### Building from a clean machine
+Plain `sbt` no longer resolves this build on its own: the old `http://` resolvers are gone and
+`play-docs` is no longer published. `bin/sbt8` downloads a checksum-verified sbt launcher and
+resolves everything over https (`project/sbt-repositories`):
+
+```bash
+export JAVA8_HOME=/path/to/jdk8
+(cd frontend && pnpm install && pnpm run build:all)
+bin/sbt8 compile test stage
+bin/run-local 9000        # fresh H2 database in .local-run/, evolutions applied
+```
+
+`bin/run-local` creates its own database and a random `application.secret`, so it is safe to
+delete `.local-run/` to start over.
+
 ### Running
 #### Backend development
 If modifications will be made to files in the **frontend** directory, use the frontend development instructions instead

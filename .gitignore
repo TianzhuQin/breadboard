@@ -40,3 +40,5 @@ generated
 .zed
 run-dev.sh
 native
+.sbt-launcher
+.local-run
