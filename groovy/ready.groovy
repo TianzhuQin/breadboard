@@ -27,7 +27,8 @@ public class ReadyUpSequence extends FormBase {
 
   ReadyUpSequence () {}
   ReadyUpSequence (Map opts) {
-    if (opts != null) return
+    // Inverted check: this used to return when options WERE given, so they were always ignored.
+    if (opts == null) return
     def keys = ["pendingContent", "readyContent", "readyButtonContent", "time", "timerContent", "waitingContent"]
     for (def key: keys) {
       if (key in opts) {

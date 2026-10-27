@@ -112,7 +112,10 @@ public class Application extends Controller {
     result.put("uid", session("uid")); // remove this
     result.put("juid", session("juid"));
     result.put("email", session("email"));
-    result.put("connectSocket", play.Play.application().configuration().getString("breadboard.wsUrl"));
+    // "auto" (or unset) lets the admin page connect back to the host and scheme it was loaded from,
+    // instead of a hard-coded ws://localhost:9000 that breaks on any other host or port.
+    String wsUrl = play.Play.application().configuration().getString("breadboard.wsUrl", "auto");
+    result.put("connectSocket", wsUrl.isEmpty() ? "auto" : wsUrl);
     return ok(result);
   }
 

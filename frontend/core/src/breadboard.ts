@@ -19,6 +19,19 @@ const GROUP_CHOICE_EVENT = 'group-action-submit'
 const TOKEN_HEADER = 'X-Breadboard-Token'
 const TOKEN_FRAGMENT_KEY = 'bbt'
 
+// The admin websocket address may be configured as "auto": use the page's own host. A ws://
+// address is upgraded to wss:// on https pages, where browsers refuse insecure sockets.
+export function socketUrl (configured: string | undefined): string {
+  const secure = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  if (!configured || configured === 'auto') {
+    return (secure ? 'wss://' : 'ws://') + window.location.host + '/connect'
+  }
+  if (secure && configured.startsWith('ws://')) {
+    return 'wss://' + configured.slice('ws://'.length)
+  }
+  return configured
+}
+
 export function participantToken (): string | null {
   if (typeof window === 'undefined') return null
   const storageKey = 'breadboard-token:' + window.location.pathname
@@ -85,7 +98,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     }
     try {
       const config = await this.loadConfig()
-      this.socket = new Socket(config.connectSocket)
+      this.socket = new Socket(socketUrl(config.connectSocket))
       // Propagate all socket events out to the Breadboard object
       for (const event of ['connect', 'open', 'close', 'error', 'retry']) {
         this.socket.on(event, (...args: any) => this.emit(event, ...args))

@@ -648,7 +648,9 @@ public class ScriptBoard extends UntypedActor {
           //the script engine was throwing exception for ArbesmanRand because of missing runOnLeaveStep
           if (runOnLeaveStep.user.selectedExperiment != null && runOnLeaveStep.user.selectedExperiment.hasOnLeaveStep()) {
             Vertex player = runOnLeaveStep.vertex;
-            if (engine.get("onLeaveStep.start()") != null) {
+            // This used to test the binding "onLeaveStep.start()", which nothing ever sets, so the
+            // OnLeaveStep never ran. The step itself is bound as "onLeaveStep".
+            if (engine.get("onLeaveStep") != null) {
               processScript("onLeaveStep.start(\"" + player.getId().toString() + "\")", runOnLeaveStep.out, null);
             }
           }

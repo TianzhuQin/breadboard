@@ -209,7 +209,9 @@ public class Breadboard extends UntypedActor {
               breadboardController.tell(new ToggleFileMode(user, out), null);
             }
           } else { // END if (user != null)
-            Logger.error("user not found with UID: " + user.uid);
+            // user is null here; reading user.uid threw a NullPointerException on every message
+            // from a stale or forged admin session.
+            Logger.error("user not found with UID: " + uid);
           }
         } catch (java.io.IOException ioe) {
           Logger.error(ioe.getMessage());

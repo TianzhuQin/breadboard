@@ -38,6 +38,5 @@ exec "$STAGE/bin/breadboard" -J-Duser.timezone=UTC \
   -DapplyEvolutions.default=true \
   -Dhttp.port="$PORT" \
   -Dbreadboard.rootUrl="http://localhost:$PORT" \
-  -Dbreadboard.wsUrl="ws://localhost:$PORT/connect" \
   -Dpidfile.path=/dev/null \
   -Dapplication.secret="$(cat "$RUN/secret")"
