@@ -1,0 +1,186 @@
+/*
+ * The look of the participant page. Everything here is scoped to `.bb-app` (put it on <v-app>),
+ * so experiments with their own client HTML look exactly as before until they opt in.
+ *
+ * The page is deliberately always light: what participants see should not depend on their
+ * system's dark-mode setting.
+ */
+:root {
+  --bb-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --bb-bg: #f5f6fa;
+  --bb-surface: #ffffff;
+  --bb-border: #e7e9f1;
+  --bb-text: #0f172a;
+  --bb-text-soft: #334155;
+  --bb-muted: #64748b;
+  --bb-accent: #4f46e5;
+  --bb-accent-hover: #4338ca;
+  --bb-accent-soft: #eef2ff;
+  --bb-danger: #e11d48;
+  --bb-success: #059669;
+  --bb-radius: 20px;
+  --bb-radius-sm: 12px;
+  --bb-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.v-application.bb-app {
+  font-family: var(--bb-font);
+  color: var(--bb-text);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(99, 102, 241, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 110% 10%, rgba(14, 165, 233, 0.06), transparent 60%),
+    var(--bb-bg) !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.v-application.bb-app [class*='text-'] {
+  font-family: var(--bb-font) !important;
+}
+
+/* cards */
+.bb-app .bb-card {
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  box-shadow: var(--bb-shadow);
+}
+
+/* text the experiment sends (player.text) */
+.bb-app .bb-prose {
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--bb-text-soft);
+}
+.bb-app .bb-prose h1,
+.bb-app .bb-prose h2,
+.bb-app .bb-prose h3,
+.bb-app .bb-prose h4 {
+  color: var(--bb-text);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  margin: 0 0 0.6em;
+}
+.bb-app .bb-prose h1 { font-size: 28px; }
+.bb-app .bb-prose h2 { font-size: 23px; }
+.bb-app .bb-prose h3 { font-size: 19px; }
+.bb-app .bb-prose h4 { font-size: 16px; }
+.bb-app .bb-prose p { margin: 0 0 0.9em; }
+.bb-app .bb-prose p:last-child { margin-bottom: 0; }
+.bb-app .bb-prose ul,
+.bb-app .bb-prose ol { margin: 0 0 0.9em; padding-left: 1.3em; }
+.bb-app .bb-prose li { margin: 0.25em 0; }
+.bb-app .bb-prose strong { color: var(--bb-text); font-weight: 650; }
+.bb-app .bb-prose a { color: var(--bb-accent); }
+.bb-app .bb-prose table { border-collapse: collapse; width: 100%; margin: 0 0 1em; font-size: 15px; }
+.bb-app .bb-prose th,
+.bb-app .bb-prose td { border-bottom: 1px solid var(--bb-border); padding: 8px 10px; text-align: left; }
+.bb-app .bb-prose th { color: var(--bb-muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+.bb-app .bb-prose img { max-width: 100%; border-radius: var(--bb-radius-sm); }
+
+/* choices */
+.bb-app .player-choices {
+  padding: 0;
+}
+.bb-app .player-choices .choices-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+.bb-app .player-choices .choice .v-btn {
+  width: 100%;
+  min-height: 52px;
+  height: auto !important;
+  padding: 12px 18px !important;
+  border-radius: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 15.5px;
+  font-weight: 600;
+  white-space: normal;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(79, 70, 229, 0.18) !important;
+  transition: transform 120ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.bb-app .player-choices .choice .v-btn .v-btn__content {
+  white-space: normal;
+  line-height: 1.3;
+}
+.bb-app .player-choices .choice .theme--light.v-btn.v-btn--has-bg:not(.v-btn--disabled) {
+  background: var(--bb-accent);
+  color: #fff;
+}
+.bb-app .player-choices .choice .theme--light.v-btn.v-btn--has-bg:not(.v-btn--disabled):hover {
+  background: var(--bb-accent-hover);
+}
+.bb-app .player-choices .choice .v-btn:not(.v-btn--disabled):active {
+  transform: translateY(1px) scale(0.99);
+}
+.bb-app .player-choices .choice .v-btn.v-btn--disabled {
+  box-shadow: none !important;
+}
+.bb-app .player-choices .custom-choice {
+  margin-bottom: 8px;
+}
+
+/* timers */
+.bb-app .bb-timers .v-progress-linear {
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 10px;
+  height: 30px !important;
+  font-size: 14px;
+}
+.bb-app .bb-timers .v-progress-linear strong {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* lost connection */
+.bb-app .bb-connection.v-alert {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  width: min(560px, calc(100% - 32px));
+  margin: 0;
+  border-radius: 14px;
+  background: #0f172a !important;
+  color: #f8fafc !important;
+  font-size: 15px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.28);
+}
+
+/* built-in screens: upstream waiting room, finish pages, forms */
+.bb-app .waiting-room,
+.bb-app .form-width {
+  max-width: 720px !important;
+  margin: 48px auto !important;
+  padding: 32px !important;
+  background: var(--bb-surface);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  box-shadow: var(--bb-shadow);
+}
+.bb-app .v-btn {
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+  border-radius: 12px;
+}
+.bb-app .v-text-field--solo .v-input__slot,
+.bb-app .v-textarea.v-text-field--solo .v-input__slot {
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  border: 1px solid var(--bb-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bb-app * {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    /* a 1ms animation that repeats forever would flicker */
+    animation-iteration-count: 1 !important;
+  }
+}

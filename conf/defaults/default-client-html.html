@@ -1,32 +1,18 @@
-<v-app>
-    <ConnectionStatus />
-    <v-layout row>
-        <SVGGraph class="w-1/2 h-screen" :player="player" :graph="graph"
-        @nodeClick="(node, e) => log('node click', node, e)" @edgeClick="(edge, e) => log('edge click', edge, e)"
-        @edgeLabelClick="(edge, e) => log('edge label click', edge, e)"
-        :nodeBorderWidth="node => node.isEgo ? 2 : 1" :nodeFill="node => node.isEgo ? 'blue' : 'lightgrey'"
-        :nodeRadius="node => node.data.score * 2 || 30">
-        <template v-slot:node-content="{ node }">
-            <image v-if="node.isEgo" href="https://i.imgur.com/R8aQfWo.png" width="50" height="50" x="-25"
-            y="-25" /> <!-- external image on ego -->
-            <text v-else text-anchor="middle" fill="black">{{node.id}}</text>
-            <!-- centered label inside the node-content slot -->
-        </template>
-        <template v-slot:edge-label="{ edge }">
-            <text text-anchor="middle"
-            font-size="11px">{{edge.target.id === player.id ? edge.source.id : edge.target.id}}</text>
-            <!-- simple centered edge label -->
-        </template>
-    </SVGGraph>
-    <v-flex class="w-1/2 h-screen">
-        <v-container style="background: #ebebeb" class="h-full">
-            <v-layout column>
-                <PlayerTimers :player="player"></PlayerTimers>
-                <PlayerText :player="player"></PlayerText>
-                <PlayerChoices :player="player"></PlayerChoices>
-                <Form :player="player"></Form>
-            </v-layout>
-        </v-container>
-    </v-flex>
-</v-layout>
+<v-app class="bb-app">
+  <ConnectionStatus />
+  <BBMain :player="player">
+    <!--
+      BBGame lays out the page: the network on the left, the experiment's text, timers, choices
+      and forms on the right, and a waiting screen while an autopilot session fills up.
+
+      Options for the network go in network-props, for example
+        :network-props="{ nodeLabel: node => node.data.name, nodeBadge: node => node.data.score }"
+      layout: 'ring' (you in the middle, the default) or 'force'.
+      With g.setVisibility("egoTies") the ties among your neighbors are drawn too, and with
+      edgeEdits.allow(player, ...) participants cut and add ties by clicking on the network.
+
+      The previous default page (SVGGraph) still works: see conf/defaults/legacy-client-html.html.
+    -->
+    <BBGame :player="player" :graph="graph" />
+  </BBMain>
 </v-app>

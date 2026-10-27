@@ -5,8 +5,15 @@ import {
   VueLoadOpts,
 } from '@human-nature-lab/breadboard-core'
 import DefaultView from './mixins/DefaultView'
+import { vuetifyOptionsFor } from './theme/vuetify'
 import './client.sass'
+export { themeColors } from './theme/vuetify'
 window.Breadboard = Breadboard
+
+// The server adds ?v=<version> to this script's URL (models.AssetVersion); pass it on to the
+// stylesheets loaded below so they are refreshed together with the script after an update.
+const currentScript = typeof document !== 'undefined' ? (document.currentScript as HTMLScriptElement | null) : null
+const versionQuery = currentScript && currentScript.src.indexOf('?v=') >= 0 ? currentScript.src.slice(currentScript.src.indexOf('?v=')) : ''
 
 // Legacy client graphs call `Breadboard.loadVueDependencies(opts)`. Keep it working
 // by wrapping the new `window.loadVue` + `Breadboard.load` flow.
@@ -71,7 +78,7 @@ export function loadVue(opts: VueLoadOpts) {
       // vue-style-loader injects the styles through JS when the modules load — so
       // requesting client.css from the dev server 404s and rejects the whole load.
       if (process.env.NODE_ENV === 'production') {
-        imports.push(core.addStyleFromURL(`${config.assetsRoot}/bundles/client.css`))
+        imports.push(core.addStyleFromURL(`${config.assetsRoot}/bundles/client.css${versionQuery}`))
       }
     }
     imports.push(import(/* webpackChunkName: "vue-components" */ './vue-components') as any)
@@ -113,9 +120,11 @@ export function loadModules(...names: string[]) {
 
 /**
  * Create default Vue instance
- * @param template
+ * @param template the participant theme's colours apply only when it has class="bb-app"
+ * @param mixin
+ * @param vuetifyOptions merged over the defaults, e.g. { theme: { themes: { light: { primary: '#000' } } } }
  */
-export async function createDefaultVue(template: string, mixin?: object) {
+export async function createDefaultVue(template: string, mixin?: object, vuetifyOptions?: any) {
   const Vue = window.Vue
   const Vuetify = window.Vuetify
   const mixins = [DefaultView]
@@ -124,11 +133,7 @@ export async function createDefaultVue(template: string, mixin?: object) {
     mixins.push(mixin)
   }
   return new Vue({
-    vuetify: new Vuetify({
-      icons: {
-        iconfont: 'mdi',
-      },
-    }),
+    vuetify: new Vuetify(vuetifyOptionsFor(template, vuetifyOptions)),
     mixins: mixins,
     template: template,
   }).$mount('#app')
@@ -139,8 +144,8 @@ export async function createDefaultVue(template: string, mixin?: object) {
  */
 export function loadAngularClient() {
   return async function (core: BreadboardClass, config: BreadboardConfig) {
-    core.addStyleFromURL(`${config.assetsRoot}/bundles/client.css`)
-    core.addStyleFromURL(`${config.assetsRoot}/bundles/client-angular.css`)
+    core.addStyleFromURL(`${config.assetsRoot}/bundles/client.css${versionQuery}`)
+    core.addStyleFromURL(`${config.assetsRoot}/bundles/client-angular.css${versionQuery}`)
     core.addStyleFromURL(
       'https://fonts.googleapis.com/css?family=Open+Sans:700,400',
     )
@@ -152,7 +157,7 @@ export function loadAngularClient() {
       core.addScriptFromURL(
         'https://cdnjs.cloudflare.com/ajax/libs/jquery/1.7.2/jquery.min.js',
       ),
-      core.addScriptFromURL(`${config.assetsRoot}/bundles/client-angular.js`),
+      core.addScriptFromURL(`${config.assetsRoot}/bundles/client-angular.js${versionQuery}`),
     ])
     await Promise.all([
       core.addScriptFromURL(
