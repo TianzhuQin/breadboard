@@ -688,12 +688,30 @@ describe('tie edits', () => {
 
 // ---- browser support -----------------------------------------------------------------------------
 
-/** Regex literals in this code that use a lookbehind, (?<= or (?<! (not \(?<=, which starts with an escaped bracket). */
+/** A lookbehind in a pattern's source, (?<= or (?<! (not \(?<=, which starts with an escaped bracket). */
+const LOOKBEHIND = /(^|[^\\])(\\\\)*\(\?<[=!]/
+
+/**
+ * Patterns in this code that use a lookbehind: regex literals, and the text given to RegExp(…) or
+ * new RegExp(…) as a string or template literal (read as the string RegExp gets, so '\\(?<=' is an
+ * escaped bracket there).
+ */
 function lookbehindLiterals (code: string, file = 'x.ts'): string[] {
   const found: string[] = []
   const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
+  /** The pattern text RegExp gets from a literal argument (a template's substitutions as "x"); null for anything else. */
+  const patternOf = (a: ts.Expression | undefined): string | null => {
+    if (!a) return null
+    if (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)) return a.text
+    if (ts.isTemplateExpression(a)) return a.head.text + a.templateSpans.map(t => 'x' + t.literal.text).join('')
+    return null
+  }
   const visit = (n: ts.Node) => {
-    if (n.kind === ts.SyntaxKind.RegularExpressionLiteral && /(^|[^\\])(\\\\)*\(\?<[=!]/.test(n.getText(sf))) found.push(n.getText(sf))
+    if (n.kind === ts.SyntaxKind.RegularExpressionLiteral && LOOKBEHIND.test(n.getText(sf))) found.push(n.getText(sf))
+    if ((ts.isNewExpression(n) || ts.isCallExpression(n)) && ts.isIdentifier(n.expression) && n.expression.text === 'RegExp') {
+      const pattern = patternOf(n.arguments?.[0])
+      if (pattern !== null && LOOKBEHIND.test(pattern)) found.push(n.getText(sf))
+    }
     ts.forEachChild(n, visit)
   }
   visit(sf)
@@ -706,10 +724,20 @@ describe('browser support', () => {
     expect(lookbehindLiterals('const r = /\\(?<=x/; const n = /(?<name>x)/; const s = "(?<!x)"')).toEqual([])
   })
 
+  it('finds lookbehinds in patterns built with RegExp(…)', () => {
+    // a lookbehind in new RegExp(…) throws only when that line runs, so the page breaks later, not at once
+    expect(lookbehindLiterals('const r = new RegExp(`(?<![A-Za-z0-9_$.])${name}(?![A-Za-z0-9_$])`)')).toHaveLength(1)
+    expect(lookbehindLiterals('const r = new RegExp(\'(?<=a)b\', \'g\'); const t = RegExp("x(?<!y)")')).toHaveLength(2)
+    expect(lookbehindLiterals('const r = new RegExp(`${a}(?<=b)`)')).toHaveLength(1)
+    // an escaped bracket, a named group, a lookahead, or a pattern that isn't a literal
+    expect(lookbehindLiterals('const r = new RegExp(\'\\\\(?<=x\'); const n = new RegExp(\'(?<name>x)\'); const a = new RegExp(`${x}(?!y)`); const v = new RegExp(source)')).toEqual([])
+  })
+
   // Safari before 16.4 (all of Safari 15, iOS and iPadOS up to 16.3) can't parse a lookbehind. The
   // build (target es2020) leaves regex literals as written, and a literal is parsed when its module
-  // loads, so one anywhere would stop the whole console from starting there.
-  it('uses no lookbehind in any regex literal of the console', () => {
+  // loads, so one anywhere would stop the whole console from starting there; one built with
+  // new RegExp(…) throws whenever its code runs.
+  it('uses no lookbehind in any regex of the console', () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
     const files: string[] = []
     const walk = (dir: string) => {

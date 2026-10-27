@@ -66,6 +66,12 @@ export interface EngineInfo {
   sessionName: string | null
   /** The email of the account that loaded it */
   owner: string | null
+  /**
+   * Whether initStep.start() has run without error since the engine was last built: false after
+   * every rebuild (a resumed session's game is not running, whatever its hasStarted says) and after a
+   * start that threw. Null when the server does not say (older servers leave it out).
+   */
+  gameStarted?: boolean | null
 }
 
 export interface User {
@@ -83,6 +89,8 @@ export interface OutputEntry {
   kind: 'output' | 'error' | 'info' | 'input'
   text: string
   source?: string
+  /** The id of the request it answers, when the request carried one and the server echoed it (SendScript, SendStep). */
+  requestId?: string
   at: number
 }
 
@@ -99,6 +107,8 @@ export interface LiveEvent {
   /** ISO-8601 UTC */
   datetime: string
   data: Record<string, any>
+  /** When this console received it (this computer's clock); the store sets it, the server does not send it. */
+  receivedAt?: number
 }
 
 export interface TieEditResult {

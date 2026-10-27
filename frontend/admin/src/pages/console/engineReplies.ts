@@ -15,6 +15,10 @@ import type { OutputEntry } from '@/store/types'
  * answer (of its request, when tagged). Older servers tag nothing: an untagged error is taken as an
  * answer there, but not once the server has shown that it tags its answers.
  *
+ * Newest of all, each request carries a "requestId" and the server echoes it on its answer: an
+ * answer with one belongs to that script only, wherever it stands in line. Matching by echo and
+ * place in line stays for servers that don't echo it.
+ *
  * Errors are paired by their place in line, so the line must hold only scripts whose answer can
  * still come: a script that timed out keeps its place (its late answer is not taken for the next
  * script's), and when the connection drops every waiting script gets null at once (their answers
@@ -38,6 +42,14 @@ export interface Waiting {
   afterId: number
   /** What it was sent with; any script request's answer fits when left out. */
   request?: ScriptRequest
+  /** The id it was sent with (actions.runScript / runStep), which newer servers echo on the answer. */
+  requestId?: string
+}
+
+/** How a script was sent: its request, and the id the request carried. */
+export interface Sent {
+  request: ScriptRequest
+  requestId?: string | null
 }
 
 interface Waiter extends Waiting {
@@ -79,12 +91,20 @@ export function showsTags (entry: Pick<OutputEntry, 'kind' | 'text' | 'source'>)
  * loading) is not an answer, so it never settles a run; a tagged answer only settles a script sent
  * with the same request. With `tagged` (the server tags its answers), an untagged frame is no
  * answer either (it comes from the AMT timer starting the game, a deleted experiment …).
+ *
+ * An answer that carries a request id is the answer of the script sent with that id, and of no
+ * other script that was sent with an id.
  */
-export function matchReply (waiters: Waiting[], entry: Pick<OutputEntry, 'id' | 'kind' | 'text' | 'source'>, tagged = false): number {
+export function matchReply (waiters: Waiting[], entry: Pick<OutputEntry, 'id' | 'kind' | 'text' | 'source' | 'requestId'>, tagged = false): number {
   if (entry.kind !== 'output' && entry.kind !== 'error') return -1
+  const id = entry.requestId
+  if (id) {
+    const own = waiters.findIndex(w => w.requestId === id)
+    if (own >= 0) return own
+  }
   const source = entry.source
   if (source ? !SCRIPT_REQUESTS.has(source) : tagged) return -1
-  const fits = (w: Waiting) => entry.id > w.afterId && (!source || !w.request || w.request === source)
+  const fits = (w: Waiting) => entry.id > w.afterId && (!source || !w.request || w.request === source) && !(id && w.requestId)
   if (entry.kind === 'output') return waiters.findIndex(w => fits(w) && splitValues(entry.text, w.script) !== null)
   return waiters.findIndex(fits)
 }
@@ -134,13 +154,14 @@ watch(connectionState, (s) => {
 }, { flush: 'sync' })
 
 /**
- * Wait for the engine's answer to `script`, sent with `request` after output entry `afterId`.
- * Resolves null when nothing came within `timeoutMs` (the engine is busy or stuck), and at once when
- * the connection drops.
+ * Wait for the engine's answer to `script`, sent after output entry `afterId` with `sent` (its
+ * request, or the request and the id it carried). Resolves null when nothing came within
+ * `timeoutMs` (the engine is busy or stuck), and at once when the connection drops.
  */
-export function expectReply (script: string, afterId: number, request?: ScriptRequest, timeoutMs = 90000): Promise<EngineReply | null> {
+export function expectReply (script: string, afterId: number, sent?: ScriptRequest | Sent, timeoutMs = 90000): Promise<EngineReply | null> {
+  const how: Sent | undefined = typeof sent === 'string' ? { request: sent } : sent
   return new Promise(resolve => {
-    const w: Waiter = { script, afterId, request, done: resolve, timer: null }
+    const w: Waiter = { script, afterId, request: how?.request, requestId: how?.requestId || undefined, done: resolve, timer: null }
     w.timer = setTimeout(() => {
       w.timer = null
       if (!waiters.includes(w)) return

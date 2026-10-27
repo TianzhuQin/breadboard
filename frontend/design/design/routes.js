@@ -21,8 +21,16 @@ angular.module('breadboard.routes', ['ui.router', 'breadboard.middleware', 'ngCo
           $cookies.putObject('email', res.data.email);
           $cookies.putObject('juid', res.data.juid);
           $cookies.putObject('uid', res.data.uid);
+          // Load the console again, signed in. Going to 'home' in this page left it without a
+          // connection: the socket opened while signed out is closed for good, and
+          // Breadboard.connect() kept handing back that closed one.
           window.Breadboard.disconnect()
-          $state.go('home');
+          setTimeout(function () {
+            // the console's address without "#!/login", so the reload doesn't open the sign-in page
+            // again (both in one go, so the router never sees the address in between)
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            window.location.reload();
+          });
         };
       }]
     })

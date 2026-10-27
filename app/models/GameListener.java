@@ -19,6 +19,40 @@ public class GameListener {
     }
   }
 
+  /**
+   * As hasStarted(), for a start of the game (initStep.start()): returns the session's hasStarted from
+   * before, which startFailed puts back if the start throws.
+   */
+  public Boolean closeToNewcomers() {
+    Boolean before = this.experimentInstance == null ? null : this.experimentInstance.hasStarted;
+    hasStarted();
+    return before;
+  }
+
+  /**
+   * The start that closed the session to newcomers threw: its hasStarted goes back to {@code before}
+   * and is saved, so a game that never began doesn't turn away the people it is waiting for.
+   */
+  public void startFailed(Boolean before) {
+    if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
+      this.experimentInstance.setHasStarted(before);
+      this.experimentInstance.save();
+    }
+  }
+
+  /**
+   * Called by every step as it starts (groovy/step.groovy); see ScriptBoard.stepStarting. Returns what
+   * it marked (null for nothing), for stepStartFailed.
+   */
+  public Object stepStarting(Object step) {
+    return ScriptBoard.stepStarting(this, step);
+  }
+
+  /** The step whose start stepStarting marked threw before it got going; see ScriptBoard.stepStartFailed. */
+  public void stepStartFailed(Object mark) {
+    ScriptBoard.stepStartFailed(mark);
+  }
+
   public void start() {
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.start();

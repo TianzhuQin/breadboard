@@ -233,7 +233,7 @@ import {
   BBadge, BButton, BCodeEditor, BEmpty, BField, BInput, BMenu, BSpinner, confirm, notify, toast, type MenuItem,
 } from '@/ui'
 import { actions, admin, ensureConnected } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
 import { goToLine, viewIn } from '../console/editorView'
@@ -645,7 +645,7 @@ async function copyCode () {
 async function reloadEngine () {
   if (!ensureConnected()) return
   // the engine is shared by every account and the autopilot: ask while anyone is using it
-  if (!await confirmEngineRebuild({ title: 'Reload the script engine?', action: 'Reloading', confirmLabel: 'Reload anyway' })) return
+  if (!await confirmEngineRebuild({ title: 'Reload the script engine?', action: 'Reloading', confirmLabel: 'Reload anyway', keeping: reloadKeeps() })) return
   // (the connection may have dropped while the question was open)
   if (!actions.reloadEngine()) ensureConnected()
 }

@@ -48,13 +48,24 @@ class Step {
 
   def start(String player = null) {
 
+    // The server learns when the init step starts, however it is started, and takes it back if the
+    // step throws before it gets going (see ScriptBoard.stepStarting).
+    def startMark = (gameListener instanceof models.GameListener) ? gameListener.stepStarting(this) : null
+
     // Record the start time of each step.
     if (name != null) {
       eventTracker.track(name + "Start", ["startStep": name])
     }
 
     ended = new java.util.concurrent.atomic.AtomicBoolean(false)
-    run(player)
+    try {
+      run(player)
+    } catch (Throwable t) {
+      if (startMark != null) {
+        gameListener.stepStartFailed(startMark)
+      }
+      throw t
+    }
 
     boolean hasUserActions = !playerActions.actions.isEmpty()
 

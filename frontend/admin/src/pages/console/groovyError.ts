@@ -99,7 +99,7 @@ function explain (type: string, message: string, compileMessage: string | null):
   if (/initStep started already/i.test(msg)) {
     return {
       title: 'The game has already started',
-      hint: 'initStep.start() runs once per session. To run it again, reload the engine or start a new session.',
+      hint: 'initStep.start() runs once per engine load. To run it again, reload the engine (which forgets the start) or start a new session.',
       cleaned: msg,
     }
   }

@@ -38,6 +38,12 @@ const state = reactive({
   engineProblem: '',
   /** Whether user.engine says what the engine runs now (false from a rebuild until it is asked again). */
   engineInfoCurrent: true,
+  /**
+   * When the User JSON that user.engine came from arrived (this computer's clock), while it is
+   * current; 0 when unknown. What this console hears after it (an answer to a start, a live event)
+   * is newer than what user.engine says.
+   */
+  engineInfoAt: 0,
   /** Everything the engine said, newest last (capped). */
   output: [] as OutputEntry[],
   unseenErrors: 0,
@@ -55,9 +61,11 @@ const EVENTS_CAP = 1000
 export const NOT_CONNECTED = 'Not connected to the server'
 let outputSeq = 0
 
-function pushOutput (kind: OutputEntry['kind'], text: string, source?: string) {
+function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string) {
   if (!text) return
-  state.output.push({ id: ++outputSeq, kind, text, source, at: Date.now() })
+  const entry: OutputEntry = { id: ++outputSeq, kind, text, source, at: Date.now() }
+  if (requestId) entry.requestId = requestId
+  state.output.push(entry)
   if (state.output.length > OUTPUT_CAP) state.output.splice(0, state.output.length - OUTPUT_CAP)
   if (kind === 'error') state.unseenErrors++
 }
@@ -110,6 +118,9 @@ function handle (m: any) {
       askEngineInfo()
       askEngineInfoAgain()
     }
+    // a game started (or a start was taken back) without this console asking: by the autopilot, the
+    // AMT timer or the experiment's own code. Ask what the engine runs, so the session page knows.
+    if (m.notify.GameStarted || m.notify.GameStartFailed) askEngineInfo()
     // every console hears when a rebuild fails, with the reason (it may not be the one that asked)
     if (m.notify.ScriptEngineReloadFailed) {
       const why = reloadFailedText(m.notify.ScriptEngineReloadFailed)
@@ -119,8 +130,10 @@ function handle (m: any) {
   }
   // what the frame answers (SendScript, SendStep, RunGame …) or where it came from (OnJoinStep, OnLeaveStep)
   const source = typeof m.source === 'string' ? m.source : typeof m.request === 'string' ? m.request : undefined
+  // the id of the script request it answers, echoed by newer servers
+  const requestId = typeof m.requestId === 'string' && m.requestId ? m.requestId : undefined
   if (typeof m.error === 'string' && m.error.trim()) {
-    pushOutput('error', m.error.trim(), source)
+    pushOutput('error', m.error.trim(), source, requestId)
     if (typeof m.request === 'string') state.requestError = { request: m.request, text: m.error.trim(), at: Date.now() }
     // a rebuild that threw: the server answers only the console that asked, and never says Reloaded
     if (state.engine === 'loading' && REBUILDS.has(m.request)) engineDidNotFinish(ENGINE_FAILED)
@@ -129,13 +142,13 @@ function handle (m: any) {
     if (m.status === 'unauthorized' || /^You are not signed in/.test(m.error)) void refreshSignIn(state.uid)
   }
   if (typeof m.output === 'string' && m.output.trim()) {
-    pushOutput('output', m.output.trim(), source)
+    pushOutput('output', m.output.trim(), source, requestId)
   }
   if (m.tieEdit) {
     state.lastTieEdit = { ...m.tieEdit, at: Date.now() }
   }
   if (m.event && typeof m.event === 'object' && isSelectedSessionEvent(m.event)) {
-    state.events.push(m.event)
+    state.events.push({ ...m.event, receivedAt: Date.now() })
     if (state.events.length > EVENTS_CAP) state.events.splice(0, state.events.length - EVENTS_CAP)
   }
 }
@@ -223,6 +236,7 @@ export const ENGINE_SETTLE_MS = 2000
 function engineInfoOutdated () {
   engineInfoPhase = 'rebuilding'
   state.engineInfoCurrent = false
+  state.engineInfoAt = 0
   clearEngineSettle()
   if (engineInfoTimer) clearTimeout(engineInfoTimer)
   engineInfoTimer = setTimeout(() => {
@@ -259,6 +273,7 @@ function engineInfoOf (v: any): EngineInfo | null {
     sessionId: num(v.sessionId),
     sessionName: str(v.sessionName),
     owner: str(v.owner),
+    gameStarted: typeof v.gameStarted === 'boolean' ? v.gameStarted : null,
   }
 }
 
@@ -286,6 +301,7 @@ function applyUserJson (m: any) {
     engineInfoPhase = 'current'
     state.engineInfoCurrent = true
   }
+  if (engineInfoPhase === 'current') state.engineInfoAt = Date.now()
   state.user = m.user
   // missing key = nothing selected (User.java omits it)
   state.experiment = m.experiment && typeof m.experiment === 'object' ? m.experiment : null
@@ -320,6 +336,7 @@ function resetState () {
   state.engineProblem = ''
   state.engineReloadedAt = 0
   state.engineInfoCurrent = true
+  state.engineInfoAt = 0
   engineInfoPhase = 'current'
   if (engineInfoTimer) clearTimeout(engineInfoTimer)
   engineInfoTimer = null
@@ -369,11 +386,13 @@ async function boot () {
 
 let refreshingSignIn = false
 /**
- * Signing in (or out) in another tab gives the account a new uid, while this tab keeps the old one
- * and the server refuses its socket; its HTTP calls still work, since the cookie is shared. Read
- * the current sign-in and reconnect with it. `refusedUid` is the uid the server just refused (null
- * when another tab said it signed in): sign out when there is no sign-in, or when it is the very
- * one refused, so this never loops.
+ * Signing in (or out) or changing the password in another tab gives the account a new uid, while
+ * this tab keeps the old one and the server refuses its socket (newer servers also close it, after
+ * saying {"error", "status": "unauthorized"}); its HTTP calls still work, since the cookie is
+ * shared. Read the current sign-in and reconnect with it. `refusedUid` is the uid the server just
+ * refused (null when another tab said it signed in): sign out when there is no sign-in, or when it
+ * is the very one refused, so this never loops. Refusals that arrive while /state is being read
+ * (the closed socket reconnecting with the old uid) are answered by that one read.
  */
 async function refreshSignIn (refusedUid: string | null) {
   if (refreshingSignIn || state.auth !== 'signedIn') return
@@ -389,7 +408,7 @@ async function refreshSignIn (refusedUid: string | null) {
     state.uid = cfg.uid
     socketSetting = cfg.connectSocket
     conn.start(cfg.uid, cfg.connectSocket)
-    if (refusedUid) notify.info('Reconnected', 'You signed in again in another tab, so this tab reconnected. Try your last action again.')
+    if (refusedUid) notify.info('Reconnected', 'Your sign-in changed in another tab (you signed in again or changed your password), so this tab reconnected. Try your last action again.')
   } catch (e: any) {
     if (e instanceof HttpError && e.status === 401) signedOut(e.body)
     // otherwise the server is unreachable right now; the next refusal tries again
@@ -435,7 +454,8 @@ async function login (email: string, password: string) {
 /** Resolves false (and says so) when the server could not be told, so the session is still active. */
 async function logout (): Promise<boolean> {
   try {
-    await http.get('/logout', { quiet401: true })
+    // A POST: a link on another site must not be able to sign the researcher out everywhere.
+    await http.post('/logout', undefined, { quiet401: true })
   } catch (e) {
     // the server answers 401 once it has ended the session; anything else means it may not have
     if (!(e instanceof HttpError && e.status === 401)) {
@@ -470,6 +490,16 @@ function send (action: string, payload: Record<string, any> = {}): boolean {
   }
   if (REBUILDS.has(action)) engineInfoOutdated()
   return true
+}
+
+/**
+ * A fresh id for a script request (at most 64 characters, as the server accepts). The server echoes
+ * it on every frame of its answer, so the answer can't be taken for another script's. Only this
+ * socket gets the answer, so unique within this page is enough.
+ */
+let requestSeq = 0
+function newRequestId (): string {
+  return `${Date.now().toString(36)}-${++requestSeq}`
 }
 
 const isUserJson = (m: any) => 'user' in m && m.user && typeof m.user === 'object'
@@ -542,15 +572,22 @@ const actions = {
   reloadEngine (): boolean {
     return send('ReloadEngine')
   },
-  /** False when not connected (and nothing is logged). */
-  runScript (script: string): boolean {
-    if (!send('SendScript', { script })) return false
+  /**
+   * Run a script in the engine. Returns the request id its answer carries (see
+   * console/engineReplies); null when not connected (and nothing is logged). It names the selected
+   * experiment, so a server whose engine has another one loaded now runs nothing and says so.
+   */
+  runScript (script: string): string | null {
+    const requestId = newRequestId()
+    if (!send('SendScript', { script, requestId, experimentId: state.experiment?.id })) return null
     pushOutput('input', script, 'console')
-    return true
+    return requestId
   },
-  /** False when not connected. */
-  runStep (step: { id: number | null, name: string, source: string }): boolean {
-    return send('SendStep', { id: step.id ?? -1, name: step.name, source: step.source })
+  /** Load a step's code into the engine, as runScript does; null when not connected. */
+  runStep (step: { id: number | null, name: string, source: string }): string | null {
+    const requestId = newRequestId()
+    if (!send('SendStep', { id: step.id ?? -1, name: step.name, source: step.source, requestId, experimentId: state.experiment?.id })) return null
+    return requestId
   },
   /** False when not connected. */
   makeChoice (choiceUID: string): boolean {
@@ -570,10 +607,12 @@ const actions = {
   },
   /**
    * Resolves with the User JSON that shows the selected experiment's file mode switched; null when
-   * refused or no answer. A server that cannot read or write the folder only logs it, and answers
-   * with the mode unchanged: that answer can't be told from another tab's push that came first, so
-   * a User JSON with the mode unchanged counts as the answer once the switched one hasn't followed
-   * within FILE_MODE_GRACE_MS (it resolves with that one; compare its fileMode).
+   * refused or no answer. A newer server that cannot read or write the folder says so ({"error":
+   * "Couldn't switch file mode: …", "request": "ToggleFileMode"}): null at once, with the reason in
+   * admin.requestError. An older one only logs it, and answers with the mode unchanged: that answer
+   * can't be told from another tab's push that came first, so a User JSON with the mode unchanged
+   * counts as the answer once the switched one hasn't followed within FILE_MODE_GRACE_MS (it
+   * resolves with that one; compare its fileMode).
    */
   toggleFileMode () {
     const before = state.experiment

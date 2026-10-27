@@ -284,6 +284,9 @@ export function scriptLiteral (type: ParameterType | '', value: string): string 
  */
 export function findParameterUsage (name: string, steps: { name: string, source: string }[]): string[] {
   if (!name || !IDENTIFIER.test(name)) return []
-  const re = new RegExp(`(?<![A-Za-z0-9_$.])${name}(?![A-Za-z0-9_$])`)
+  // the name on its own: at the start, or after a character that is neither part of a longer name
+  // nor a dot (`x.name` is a property, not the parameter). A group, not a lookbehind: Safari before
+  // 16.4 can't parse one.
+  const re = new RegExp(`(?:^|[^A-Za-z0-9_$.])${name}(?![A-Za-z0-9_$])`)
   return steps.filter(s => typeof s.source === 'string' && re.test(s.source)).map(s => s.name)
 }

@@ -117,17 +117,15 @@ export function parseAnswers (xml: string | null | undefined): ParsedAnswers {
 
 // ---- CSV ----------------------------------------------------------------------------------------
 
-const NUMBER = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i
-
 /**
- * One CSV cell: always quoted, quotes doubled. Text a spreadsheet would run as a formula
- * (starting with = + - @) gets a leading apostrophe, because answers are typed by workers;
- * plain numbers like -0.5 are left alone.
+ * One CSV cell: always quoted, quotes doubled, so commas, quotes and newlines survive. The value
+ * is written exactly as recorded, with no spreadsheet-formula escaping (no ' put before = + - @),
+ * like the server's data file (Application.csvField): researchers analyse these answers, so a
+ * worker's "-" or "@anna" must stay exactly that. The file has no byte-order mark either.
  */
 export function csvCell (value: unknown): string {
   if (value == null) return '""'
-  let s = typeof value === 'string' ? value : String(value)
-  if (/^[=+\-@\t\r]/.test(s) && !NUMBER.test(s)) s = `'${s}`
+  const s = typeof value === 'string' ? value : String(value)
   return `"${s.replace(/"/g, '""')}"`
 }
 

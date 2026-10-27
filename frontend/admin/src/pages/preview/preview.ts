@@ -2,7 +2,8 @@ import { reactive } from 'vue'
 
 /**
  * Helpers for the Preview page: who a player is (test, AI, connected), which players a quick pick
- * chooses, the participant page's address, and how big a scaled preview is.
+ * chooses, the participant page's address, and how big a scaled preview is. Fetching the preview
+ * token that the address carries is in previewLink.ts.
  * Kept free of components so they can be tested on their own (test/preview.test.ts).
  */
 
@@ -61,9 +62,17 @@ export function wouldDisplace<T extends PlayerLike> (adding: readonly T[], alrea
 
 // ---- addresses --------------------------------------------------------------------------------
 
-/** The live participant page of one player; the admin's own sign-in lets it act as anyone. */
-export function playerPageUrl (experimentId: number, instanceId: number, playerId: string, origin = window.location.origin): string {
-  return `${origin}/game/${experimentId}/${instanceId}/${encodeURIComponent(playerId)}/connected`
+/** One player of one session, whose page a researcher previews. */
+export interface PreviewTarget { experimentId: number, instanceId: number, playerId: string }
+
+/**
+ * The live participant page of one player, for a researcher: `preview=1` has the server send it
+ * sandboxed (an opaque origin, even in a tab of its own), and the preview token in the fragment
+ * (see previewLink.ts) lets it act as that player. The fragment never reaches the server or a
+ * Referer; the page reads it and keeps it in memory.
+ */
+export function previewPageUrl (t: PreviewTarget, token: string, origin = window.location.origin): string {
+  return `${origin}/game/${t.experimentId}/${t.instanceId}/${encodeURIComponent(t.playerId)}/connected?preview=1#bbt=${encodeURIComponent(token)}`
 }
 /** The sign-up page a new participant sees. */
 export function joinUrl (experimentId: number, instanceId: number, origin = window.location.origin): string {

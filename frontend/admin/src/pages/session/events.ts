@@ -18,6 +18,8 @@ export interface FeedEvent {
   /** Epoch ms; 0 when the server's time could not be read. */
   at: number
   data: Record<string, unknown>
+  /** When this console received it live (this computer's clock); only on live pushes. */
+  receivedAt?: number
 }
 
 /** How many events the feed keeps at most (newest first). */
@@ -69,7 +71,9 @@ export function fromLive (e: LiveEvent): FeedEvent {
   }
   const id = typeof e.id === 'number' ? e.id : null
   const at = parseServerTime(e.datetime)
-  return { key: id != null ? `e${id}` : `l${signature(String(e.name), at, data)}`, id, name: String(e.name ?? ''), at, data }
+  const f: FeedEvent = { key: id != null ? `e${id}` : `l${signature(String(e.name), at, data)}`, id, name: String(e.name ?? ''), at, data }
+  if (typeof e.receivedAt === 'number') f.receivedAt = e.receivedAt
+  return f
 }
 
 /**

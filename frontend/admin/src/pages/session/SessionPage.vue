@@ -29,7 +29,7 @@
             <div class="live-hero__badges">
               <BBadge :tone="statusTone" dot :pulse="isRunning">{{ statusLabel }}</BBadge>
               <BBadge v-if="isRunning && started.started" tone="accent">Game in progress</BBadge>
-              <BBadge v-else-if="isRunning" tone="neutral">Game not started</BBadge>
+              <BBadge v-else-if="isRunning" tone="neutral">{{ started.forgotten ? 'Game not running' : 'Game not started' }}</BBadge>
               <BBadge v-if="openedByAutopilot" tone="info">Opened by Autopilot</BBadge>
             </div>
             <h2 id="live-hero-name" class="live-hero__name">{{ inst.name }}</h2>
@@ -170,7 +170,9 @@ import JoinLinks from './JoinLinks.vue'
 import NetworkPreview from './NetworkPreview.vue'
 import SessionParams from './SessionParams.vue'
 import { FEED_CAP, fromLive, fromSeed, mergeFeed, parseServerTime, participantsSeen } from './events'
-import { cleanError, detectGameStarted, engineElsewhereText, formatDuration, formatWhen, networkStats, waitingRoom } from './live'
+import {
+  cleanError, detectGameStarted, engineElsewhereText, engineGameFlag, formatDuration, formatWhen, networkStats, waitingRoom,
+} from './live'
 import { busy, dismissedErrorId, downloadData, resumeSession, startGame, stopSession } from './controls'
 import { autopilotRuns, useAutopilotStatus } from './autopilot'
 
@@ -231,6 +233,8 @@ const started = computed(() => detectGameStarted({
   events: allEvents.value,
   output: admin.output,
   since: admin.engineReloadedAt,
+  // what the engine itself says (newer servers), when it is about this session
+  engine: engineGameFlag(admin.user?.engine, admin.engineInfoCurrent, inst.value?.id, admin.engineInfoAt),
 }))
 
 // the shared engine runs another experiment, so the server refuses a start here; '' otherwise
@@ -242,6 +246,7 @@ function onStart () {
     connected: stats.value.connected,
     people: stats.value.people,
     waitingRoom: !!r && r.state !== 'cancelled',
+    again: started.value.forgotten,
   })
 }
 
@@ -302,14 +307,23 @@ const explanation = computed(() => {
     if (startBlocked.value) return startBlocked.value
     if (started.value.started && started.value.nearReload) return 'The session\'s log shows the game starting at about the time the engine last reloaded, and a reload forgets a start, so the game may not be running now.'
     if (started.value.started) return 'The game is on and new arrivals are turned away. Stop the session when you are done, or let the experiment finish it.'
+    // (the server reopens a session it carries into a rebuilt engine, so after a reload this shows
+    // only until the next update; an AMT session's entry also closes before its game starts)
+    if (started.value.forgotten) return 'The session is closed to newcomers, but its game isn\'t running in the engine: the engine was reloaded since it started (a reload forgets a started game; the session takes people again in a moment), or entry closed before the start, as a Mechanical Turk session\'s does when its HIT\'s time is up. Start the game to run it from the beginning with whoever is in the network now.'
     if (room.value && room.value.state !== 'cancelled') return 'People are gathering in the waiting room, which starts the game by itself.'
     return 'People can join with the links below. When everyone you need is here, start the game: everyone waiting is let in and newcomers are turned away.'
   }
   if (i.status === 'STOPPED') return 'This session is stopped, so nobody can join. Resume it to carry on: its scripts restart, which disconnects anyone still on the page. The data recorded so far is kept.'
   const gaveUp = room.value?.state === 'cancelled'
-  const next = autoOn.value && autopilot.value?.continuous
-    ? ` Autopilot opens the next session ${autopilot.value.nextSessionDelaySeconds ? `about ${autopilot.value.nextSessionDelaySeconds} seconds after one finishes` : 'right after one finishes'}.`
-    : ''
+  const ap = autopilot.value
+  // (a paused autopilot opens nothing until Resume, whatever its settings say)
+  const next = !autoOn.value || !ap
+    ? ''
+    : ap.halted === 'paused'
+      ? ' Autopilot is paused: it opens no new session until someone presses Resume on the Autopilot page.'
+      : ap.continuous && !ap.halted
+        ? ` Autopilot opens the next session ${ap.nextSessionDelaySeconds ? `about ${ap.nextSessionDelaySeconds} seconds after one finishes` : 'right after one finishes'}.`
+        : ''
   if (i.status === 'ARCHIVED') return `This session is archived. Its data is kept.${next}`
   return `${gaveUp ? 'The waiting room gave up because not enough people joined. ' : 'This session has finished. '}Its data is saved: download it now, or find it later under Sessions & data.${next}`
 })

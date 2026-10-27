@@ -8,6 +8,7 @@ import play.Logger;
 import play.data.Form;
 import play.libs.Json;
 import play.mvc.*;
+import security.PreviewTokens;
 import views.html.*;
 import java.io.*;
 import java.text.SimpleDateFormat;
@@ -100,8 +101,8 @@ public class Application extends Controller {
   /**
    * Sign out. The account's uid (the token every console websocket frame carries, also readable from
    * /state) is replaced too, so an open console tab, or anyone who copied the token, can't keep
-   * acting as this account. Only when this session's uid is still the account's: an older session
-   * signing out doesn't sign out a newer one.
+   * acting as this account; its participant-page previews stop working as well. Only when this
+   * session's uid is still the account's: an older session signing out doesn't sign out a newer one.
    */
   public static Result logout() {
     String uid = session("uid");
@@ -110,6 +111,7 @@ public class Application extends Controller {
       if (user != null) {
         user.uid = UUID.randomUUID().toString();
         user.update();
+        PreviewTokens.dropAccount(user.email);
         // Its open console sockets stop receiving the live network and participants' data too.
         ScriptBoard.closeAdminsOf(user.email, user.uid, null);
       }
@@ -192,10 +194,11 @@ public class Application extends Controller {
     user.changePassword(newPassword);
     // A new token too: whoever held the old one (another browser, a copied token) is signed out.
     // This session carries on with the new one, which is also returned: the console's websocket
-    // must use it from now on (frames with the old one are refused).
+    // must use it from now on (frames with the old one are refused). Previews ask for new tokens.
     String uid = UUID.randomUUID().toString();
     user.uid = uid;
     user.update();
+    PreviewTokens.dropAccount(user.email);
     session("uid", uid);
     session("juid", uid);
     closeOldConsolesSoon(user.email, uid);

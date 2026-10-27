@@ -59,5 +59,13 @@ and an import of the plain URL would start the app a second time.
   `nodePropertyChanged`, `addLink` and similar messages.
 - Refusals come back as `{"error": "...", "request": "<Action>"}`, live events as
   `{"event": {...}}`, tie edits as `{"tieEdit": {...}}`.
+- `SendScript` and `SendStep` carry a `requestId`, echoed on every frame that answers them, and
+  the `experimentId` the page shows (refused when the engine has another one loaded). Choices made
+  for a player are answered with their `choiceUID`.
+- The User JSON's `engine` says what the shared engine runs, and `gameStarted` whether its game
+  has started since the engine was last built. Every console hears `{"notify": {"GameStarted": …}}`
+  (or `GameStartFailed`) when a game starts without a console asking, and then asks again.
+- Participant pages shown as a researcher (Preview) use a token from `POST /preview-token` in
+  `#bbt=`, with `?preview=1`, inside a sandbox without `allow-same-origin`.
 - Steps, content, parameters, images, the participant page, experiments, data downloads,
   autopilot settings and Mechanical Turk use plain HTTP routes; see `conf/routes`.

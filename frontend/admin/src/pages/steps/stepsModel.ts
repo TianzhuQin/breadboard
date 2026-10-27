@@ -24,7 +24,7 @@ export const BUILTINS: Builtin[] = [
   {
     name: 'InitStep',
     when: 'Starts the game',
-    detail: 'Runs when the game starts: when you press Start game on the Live session page, or when the autopilot starts the session. It runs once per session (initStep.start()).',
+    detail: 'Runs when the game starts: when you press Start game on the Live session page, or when the autopilot starts the session. It runs once per engine load (initStep.start()): reloading the engine or resuming the session forgets the start, so it can run again.',
     source: 'initStep = stepFactory.createStep("InitStep")\n\ninitStep.run = {\n  println "initStep.run"\n}\ninitStep.done = {\n  println "initStep.done"\n}',
   },
   {

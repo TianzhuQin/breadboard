@@ -28,7 +28,7 @@
       <template v-if="!paused">
         <PreviewFrame
           :key="frameKey"
-          :src="src"
+          :target="target"
           :title="`Participant page of ${playerId}`"
           :device="device"
           :width="width"
@@ -65,17 +65,17 @@ import { computed } from 'vue'
 import { Bot, Ellipsis, ExternalLink, FlaskConical, Maximize2, RotateCw, TriangleAlert, X } from 'lucide-vue-next'
 import { BButton, BMenu, type MenuItem } from '@/ui'
 import PreviewFrame from './PreviewFrame.vue'
-import { frameGeometry, type DeviceKind } from './preview'
+import { frameGeometry, type DeviceKind, type PreviewTarget } from './preview'
 
 const props = defineProps<{
   playerId: string
-  src: string
+  target: PreviewTarget | null
   device: DeviceKind
   width: number
   interactive: boolean
   test: boolean
   ai: boolean
-  /** Changing it loads the page again. */
+  /** Changing it loads the page again, with a new preview token. */
   frameKey: string
   /** Why the page isn't shown here right now. */
   paused: 'focus' | 'tab' | null

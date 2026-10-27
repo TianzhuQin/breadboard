@@ -111,7 +111,7 @@ public class ControllerTest extends BaseTest {
 
     @Test
     public void logoutClearsSession() {
-        Result result = route(fakeRequest(GET, "/logout"));
+        Result result = route(fakeRequest(POST, "/logout"));
         assertEquals("Logout should return 401", UNAUTHORIZED, status(result));
     }
 

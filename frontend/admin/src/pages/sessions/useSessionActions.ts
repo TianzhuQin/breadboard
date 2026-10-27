@@ -1,6 +1,6 @@
 import { computed, reactive } from 'vue'
 import { admin, actions, connectionState } from '@/store/admin'
-import { engineUsers } from '@/store/engineGuard'
+import { REBUILD_PAUSES_AUTOPILOT, engineUse } from '@/store/engineGuard'
 import { http, saveText } from '@/lib/http'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
@@ -47,14 +47,17 @@ export function useSessionActions () {
   async function resume (s: Instance): Promise<boolean> {
     if (!canResume(s) || !connected()) return false
     // the engine is shared: who it would disconnect, whoever's session they are in ('' when nobody)
-    const who = await engineUsers()
+    const { who, pausesAutopilot, endsSession } = await engineUse(s.id)
     const verb = s.status === 'STOPPED' ? 'Resume' : 'Make current'
     const lines = [
-      `The script engine restarts with this session's launch parameters, and the network starts empty: people who were in it have to join again (once its game has started, nobody can).`,
+      `The script engine restarts with this session's launch parameters, and the network starts empty: people who were in it join again with its links, and its game has to be started again.`,
     ]
     if (who) {
-      lines.push(`${who} Every researcher on this server and the autopilot share the script engine, so restarting it ends the session it is running, and everyone in the network is disconnected.`)
+      lines.push(endsSession
+        ? `${who} Every researcher on this server and the autopilot share the script engine, so restarting it ends the session it is running, and everyone in the network is disconnected.`
+        : `${who} Restarting the engine disconnects everyone in the network; they can join again with this session's links.`)
     }
+    if (pausesAutopilot) lines.push(REBUILD_PAUSES_AUTOPILOT)
     const ok = await confirm({
       title: `${verb} “${s.name}”?`,
       message: lines.join('\n\n'),

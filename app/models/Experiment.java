@@ -339,24 +339,24 @@ public class Experiment extends Model {
     this.update();
   }
 
-  public void toggleFileMode(User user) {
+  /**
+   * Switch file mode on (the experiment is written to dev/, where it is edited from then on) or off
+   * (it is read back from there). Throws when the files can't be written or read; the mode then
+   * stays as it was, and the caller tells the researcher (it used to be logged only).
+   */
+  public void toggleFileMode(User user) throws IOException {
     File experimentDirectory = new File(Play.application().path().toString() + "/dev/" + getDirectoryName());
-    try {
-      if (this.fileMode) {
-        // Turning fileMode off, let's import the files into the current experiment
-        ExperimentController.importExperimentFromDirectory(this.id, user, experimentDirectory);
-      } else {
-        // Turning fileMode on, let's export the experiment into the appropriate directory
-        ExperimentController.exportExperimentToDirectory(this.id, experimentDirectory);
-      }
-      this.setFileMode(!this.fileMode);
-      this.save();
-    } catch (IOException ioe) {
-      Logger.error("Unable to access " + experimentDirectory + ", check your file permissions.", ioe);
-      // if (Logger.canLog(Logger.DEBUG)) {
-      //   ioe.printStackTrace(Logger);
-      // }
+    // (Null in experiments from before file mode existed: off.)
+    boolean on = Boolean.TRUE.equals(this.fileMode);
+    if (on) {
+      // Turning fileMode off, let's import the files into the current experiment
+      ExperimentController.importExperimentFromDirectory(this.id, user, experimentDirectory);
+    } else {
+      // Turning fileMode on, let's export the experiment into the appropriate directory
+      ExperimentController.exportExperimentToDirectory(this.id, experimentDirectory);
     }
+    this.setFileMode(!on);
+    this.save();
   }
 
   public String parametersToCsv() {

@@ -417,6 +417,24 @@ describe('useSessionActions', () => {
     }
   })
 
+  it('says a resume pauses the autopilot when it ends the autopilot\'s session, and not when it resumes that session', async () => {
+    store.admin.instance = null
+    httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
+      ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: { id: 8, name: 'auto 3', status: 'RUNNING' } } }
+      : null)
+    try {
+      ui.confirm.mockResolvedValueOnce(false)
+      await actionsApi.resume(store.admin.experiment.instances[0])
+      expect(ui.confirm.mock.calls[0][0].message).toContain('This also pauses the autopilot')
+      ui.confirm.mockClear()
+      ui.confirm.mockResolvedValueOnce(false)
+      await actionsApi.resume({ ...store.admin.experiment.instances[0], id: 8, name: 'auto 3' })
+      expect(ui.confirm.mock.calls[0][0].message).not.toContain('pauses the autopilot')
+    } finally {
+      httpMod.http.get.mockReset()
+    }
+  })
+
   it('resumes without a warning when nobody is using the engine', async () => {
     // a row still marked running is no evidence: the server's engine info says what runs
     store.admin.instance = null

@@ -26,7 +26,9 @@ import java.util.*;
  * <p>Every frame is a JSON object with {@code action} and {@code uid}. Replies go to the socket the
  * frame came from. A frame that can't be carried out (a missing key, an unknown id, an engine action
  * before LogIn) is answered with {@code {"error": "<what went wrong>", "request": "<action>"}} and
- * changes nothing.
+ * changes nothing. SendScript and SendStep may carry a {@code "requestId"} (text, at most 64
+ * characters), and MakeChoice carries its {@code "choiceUID"}: every frame answering them carries it
+ * back, so a console can tell its answer from everything else on the socket.
  */
 public class Breadboard extends UntypedActor {
   // How often to send websocket messages in ms
@@ -75,6 +77,16 @@ public class Breadboard extends UntypedActor {
 
   /** As above, with {@code "status": status} too when it is not null (e.g. "unauthorized"). */
   static void replyError(ThrottledWebSocketOut out, String request, String message, String status) {
+    replyError(out, request, message, status, Collections.<String, String>emptyMap());
+  }
+
+  /** The error answering a message: its action as "request", and what it asks to have echoed. */
+  static void replyError(BreadboardMessage answering, String message) {
+    replyError(answering.out, requestName(answering), message, null, answering.echo());
+  }
+
+  /** As above, with the fields to echo (see {@link #echoed}) added. */
+  static void replyError(ThrottledWebSocketOut out, String request, String message, String status, Map<String, String> echo) {
     if (out == null) {
       return;
     }
@@ -85,6 +97,9 @@ public class Breadboard extends UntypedActor {
     }
     if (status != null) {
       error.put("status", status);
+    }
+    for (Map.Entry<String, String> field : echo.entrySet()) {
+      error.put(field.getKey(), field.getValue());
     }
     try {
       out.write(error);
@@ -102,9 +117,42 @@ public class Breadboard extends UntypedActor {
     return message.getClass().getSimpleName();
   }
 
+  /** Longest "requestId" a console may send. */
+  static final int MAX_REQUEST_ID = 64;
+
+  /**
+   * What a frame asks to have copied onto every frame answering it: its "requestId" for SendScript
+   * and SendStep, its "choiceUID" for MakeChoice; nothing for other actions. A "requestId" that isn't
+   * text of at most 64 characters is refused (the request is not carried out).
+   */
+  static Map<String, String> echoed(String action, Map<String, Object> json) {
+    Map<String, String> echo = new LinkedHashMap<String, String>();
+    if ("SendScript".equals(action) || "SendStep".equals(action)) {
+      Object requestId = json.get("requestId");
+      if (requestId != null) {
+        if (!(requestId instanceof String) || ((String) requestId).length() > MAX_REQUEST_ID) {
+          throw new BadRequest("\"requestId\" must be text of at most " + MAX_REQUEST_ID + " characters.");
+        }
+        echo.put("requestId", (String) requestId);
+      }
+    } else if ("MakeChoice".equals(action)) {
+      String choiceUID = text(json, "choiceUID");
+      if (choiceUID != null) {
+        echo.put("choiceUID", choiceUID);
+      }
+    }
+    return echo;
+  }
+
+  /** {"requestId": requestId}, or nothing when it is null. */
+  static Map<String, String> requestIdEcho(String requestId) {
+    return requestId == null ? Collections.<String, String>emptyMap() : Collections.singletonMap("requestId", requestId);
+  }
+
   /** Read one frame from a console socket and act on it; never throws. */
   static void receive(JsonNode event, ThrottledWebSocketOut out) {
     String action = null;
+    Map<String, String> echo = Collections.emptyMap();
     try {
       Logger.debug(event.toString());
       // TODO: check if there is a better way to do this with new version of Jackson
@@ -120,20 +168,21 @@ public class Breadboard extends UntypedActor {
         replyError(out, null, "The message has no \"action\".");
         return;
       }
+      echo = echoed(action, jsonInput);
       String uid = text(jsonInput, "uid");
       User user = uid == null ? null : User.findByUID(uid);
       if (user == null) {
         // A stale or forged admin session (reading user.uid here used to throw on every message).
         Logger.error("user not found with UID: " + uid);
-        replyError(out, action, "You are not signed in (or your sign-in has expired). Sign in again.", "unauthorized");
+        replyError(out, action, "You are not signed in (or your sign-in has expired). Sign in again.", "unauthorized", echo);
         return;
       }
-      dispatch(action, jsonInput, user, out);
+      dispatch(action, jsonInput, user, echo, out);
     } catch (BadRequest bad) {
-      replyError(out, action, bad.getMessage());
+      replyError(out, action, bad.getMessage(), null, echo);
     } catch (Exception e) {
       Logger.error("Could not handle admin action " + action, e);
-      replyError(out, action, "Something went wrong: " + ScriptBoardSupport.describeError(e));
+      replyError(out, action, "Something went wrong: " + ScriptBoardSupport.describeError(e), null, echo);
     }
   }
 
@@ -168,6 +217,11 @@ public class Breadboard extends UntypedActor {
     }
   }
 
+  /** As requiredLong, or null when the key is absent. */
+  static Long optionalLong(Map<String, Object> json, String key) {
+    return json.get(key) == null ? null : requiredLong(json, key);
+  }
+
   static Integer requiredInt(Map<String, Object> json, String key) {
     Long value = requiredLong(json, key);
     if (value > Integer.MAX_VALUE || value < Integer.MIN_VALUE) {
@@ -185,7 +239,8 @@ public class Breadboard extends UntypedActor {
     return scriptBoard;
   }
 
-  private static void dispatch(String action, Map<String, Object> jsonInput, User user, ThrottledWebSocketOut out) throws IOException {
+  private static void dispatch(String action, Map<String, Object> jsonInput, User user, Map<String, String> echo,
+                               ThrottledWebSocketOut out) throws IOException {
     if (action.equals("LogIn")) {
       breadboardController.tell(new LogIn(user, out), null);
     } else if (action.equals("SaveUserSettings")) {
@@ -259,7 +314,9 @@ public class Breadboard extends UntypedActor {
       scriptBoard(user).tell(new RunGame(user, out), null);
     } else if (action.equals("SendScript")) {
       String script = required(jsonInput, "script");
-      scriptBoard(user).tell(new SendScript(user, script, out), null);
+      // The experiment the console's page shows (the new console sends it): checked against the engine's.
+      Long experimentId = optionalLong(jsonInput, "experimentId");
+      scriptBoard(user).tell(new SendScript(user, script, experimentId, echo.get("requestId"), out), null);
     } else if (action.equals("AddLanguage")) {
       Long experimentId = requiredLong(jsonInput, "experimentId");
       String languageCode = required(jsonInput, "code");
@@ -300,7 +357,8 @@ public class Breadboard extends UntypedActor {
       Long id = requiredLong(jsonInput, "id");
       breadboardController.tell(new DeleteStep(user, id, out), null);
     } else if (action.equals("SendStep")) {
-      // The id isn't used (a step not saved yet has none); name and source are.
+      // The source is what runs (a step not saved yet has no id, -1); a saved step's id is only used to
+      // check that the step is of the experiment the engine has loaded.
       Long id = -1L;
       try {
         id = jsonInput.get("id") == null ? -1L : requiredLong(jsonInput, "id");
@@ -309,8 +367,9 @@ public class Breadboard extends UntypedActor {
       }
       String name = StringUtils.defaultString(text(jsonInput, "name"));
       String source = required(jsonInput, "source");
+      Long experimentId = optionalLong(jsonInput, "experimentId");
       // TODO: is providing the name necessary?
-      scriptBoard(user).tell(new SendStep(user, id, name, source, out), null);
+      scriptBoard(user).tell(new SendStep(user, id, name, source, experimentId, echo.get("requestId"), out), null);
     } else if (action.equals("LaunchGame")) {
       String name = required(jsonInput, "name");
       // The experiment the console's page shows (the new console sends it): checked against the selection.
@@ -402,7 +461,7 @@ public class Breadboard extends UntypedActor {
       Logger.error("Unhandled error in Breadboard.onReceive", e);
       if (message instanceof BreadboardMessage) {
         BreadboardMessage request = (BreadboardMessage) message;
-        replyError(request.out, requestName(request), e instanceof BadRequest
+        replyError(request, e instanceof BadRequest
             ? e.getMessage() : "Something went wrong: " + ScriptBoardSupport.describeError(e));
       }
     }
@@ -432,6 +491,7 @@ public class Breadboard extends UntypedActor {
         // includes this socket's later frames; the console signs in again with the new password.
         saveUserSettings.user.uid = UUID.randomUUID().toString();
         saveUserSettings.user.update();
+        security.PreviewTokens.dropAccount(saveUserSettings.user.email);
         // The account's other console sockets stop receiving anything at once (this one is answered).
         ScriptBoard.closeAdminsOf(saveUserSettings.user.email, saveUserSettings.user.uid, saveUserSettings.out);
 
@@ -664,7 +724,16 @@ public class Breadboard extends UntypedActor {
       } else if (message instanceof ToggleFileMode) {
         Experiment selectedExperiment = breadboardMessage.user.getExperiment();
         if (selectedExperiment != null) {
-          selectedExperiment.toggleFileMode(breadboardMessage.user);
+          try {
+            selectedExperiment.toggleFileMode(breadboardMessage.user);
+          } catch (Exception e) {
+            // e.g. the dev/ folder can't be written. The mode stays as it was; this used to be logged
+            // only, and the console was answered as if the switch had worked.
+            Logger.error("Could not switch file mode of " + selectedExperiment, e);
+            String reason = e.getMessage() == null || e.getMessage().isEmpty() ? ScriptBoardSupport.describeError(e) : e.getMessage();
+            replyError(breadboardMessage.out, "ToggleFileMode", "Couldn't switch file mode: " + reason);
+            return;
+          }
         }
       }
 
@@ -752,6 +821,11 @@ public class Breadboard extends UntypedActor {
     public BreadboardMessage(User user, ThrottledWebSocketOut out) {
       this.user = user;
       this.out = out;
+    }
+
+    /** Fields copied onto every frame answering this request (see Breadboard.echoed); none by default. */
+    Map<String, String> echo() {
+      return Collections.emptyMap();
     }
 
     BreadboardMessage atSignIn() {
@@ -951,23 +1025,53 @@ public class Breadboard extends UntypedActor {
 
   public static class SendScript extends BreadboardMessage {
     final String script;
+    // The experiment the console showed when it sent the script, or null when it didn't say: nothing
+    // runs when the engine has another one loaded.
+    final Long experimentId;
+    final String requestId;
 
     public SendScript(User user, String script, ThrottledWebSocketOut out) {
+      this(user, script, null, null, out);
+    }
+
+    public SendScript(User user, String script, Long experimentId, String requestId, ThrottledWebSocketOut out) {
       super(user, out);
       this.script = script;
+      this.experimentId = experimentId;
+      this.requestId = requestId;
+    }
+
+    @Override
+    Map<String, String> echo() {
+      return requestIdEcho(requestId);
     }
   }
 
   public static class SendStep extends BreadboardMessage {
+    // -1 for a step not saved yet
     final Long id;
     final String name;
     final String source;
+    // As SendScript's
+    final Long experimentId;
+    final String requestId;
 
     public SendStep(User user, Long id, String name, String source, ThrottledWebSocketOut out) {
+      this(user, id, name, source, null, null, out);
+    }
+
+    public SendStep(User user, Long id, String name, String source, Long experimentId, String requestId, ThrottledWebSocketOut out) {
       super(user, out);
       this.id = id;
       this.name = name;
       this.source = source;
+      this.experimentId = experimentId;
+      this.requestId = requestId;
+    }
+
+    @Override
+    Map<String, String> echo() {
+      return requestIdEcho(requestId);
     }
   }
 
@@ -996,6 +1100,8 @@ public class Breadboard extends UntypedActor {
     final String request;
     // As StepsLoaded's: the engine it was queued for, or null.
     final Long generation;
+    // The requestId of the SendStep it answers, or null.
+    final String requestId;
 
     public RunStep(User user, String source, ThrottledWebSocketOut out) {
       this(user, source, out, null);
@@ -1006,10 +1112,20 @@ public class Breadboard extends UntypedActor {
     }
 
     public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation) {
+      this(user, source, out, request, generation, null);
+    }
+
+    public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation, String requestId) {
       super(user, out);
       this.source = source;
       this.request = request;
       this.generation = generation;
+      this.requestId = requestId;
+    }
+
+    @Override
+    Map<String, String> echo() {
+      return requestIdEcho(requestId);
     }
   }
 
@@ -1021,6 +1137,11 @@ public class Breadboard extends UntypedActor {
       super(user, out);
       this.uid = uid;
       this.params = params;
+    }
+
+    @Override
+    Map<String, String> echo() {
+      return uid == null ? Collections.<String, String>emptyMap() : Collections.singletonMap("choiceUID", uid);
     }
   }
 

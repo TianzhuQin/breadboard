@@ -575,6 +575,75 @@ public class AutopilotSettingsTest extends BaseTest {
     }
 
     @Test
+    public void nothingIsDueWhilePausedOrDone() throws Exception {
+        User user = user("halted");
+        Experiment experiment = createExperiment("Halted");
+        own(user, experiment);
+        ObjectNode s = settings(experiment.id, true);
+        s.put("continuous", true);
+        s.put("nextSessionDelaySeconds", 60);
+        post(user, s);
+        awaitOpens(opened, 1);
+        Field due = Autopilot.class.getDeclaredField("nextOpenAt");
+        due.setAccessible(true);
+
+        // Paused by a researcher: a session that finishes then schedules nothing, and none is shown as due.
+        ExperimentInstance ours = live("ours", experiment);
+        stoppedBy(ExperimentInstance.findById(ours.id), user);
+        Autopilot.sessionFinished(ExperimentInstance.findById(ours.id));
+        assertEquals(0L, due.get(null));
+        JsonNode status = json(get(user)).get("status");
+        assertTrue(status.get("paused").asBoolean());
+        assertTrue(status.get("nextOpenAt").isNull());
+        // Whatever is counting down, nothing is due while it is paused.
+        due.set(null, System.currentTimeMillis() + 60000);
+        assertTrue(json(get(user)).get("status").get("nextOpenAt").isNull());
+        due.set(null, 0L);
+
+        // A next session counting down when the pause comes: it no longer opens, nor shows as due.
+        post(user, s);
+        awaitOpens(opened, 2);
+        Autopilot.sessionFinished(ExperimentInstance.findById(ours.id));
+        assertFalse(json(get(user)).get("status").get("nextOpenAt").isNull());
+        stoppedBy(ExperimentInstance.findById(ours.id), user);
+        assertEquals(0L, due.get(null));
+        assertTrue(json(get(user)).get("status").get("nextOpenAt").isNull());
+
+        // Done (as after a non-continuous run's one session): the same.
+        post(user, s);
+        awaitOpens(opened, 3);
+        Field done = Autopilot.class.getDeclaredField("doneBecause");
+        done.setAccessible(true);
+        done.set(null, "Its session \"s1\" has finished, and opening the next session (continuous) is off");
+        Autopilot.sessionFinished(ExperimentInstance.findById(ours.id));
+        assertEquals(0L, due.get(null));
+        status = json(get(user)).get("status");
+        assertTrue(status.get("done").asBoolean());
+        assertEquals("done", status.get("problemKind").asText());
+        assertTrue(status.get("nextOpenAt").isNull());
+        assertEquals(3, opened.size());
+    }
+
+    @Test
+    public void withNoExperimentNoSessionIsInItsWay() throws Exception {
+        User user = user("nothing chosen");
+        Experiment other = createExperiment("Someone's");
+        runInEngine(live("theirs", other), user);
+        Autopilot.Effective off = Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(new HashMap<String, Object>())));
+        assertNull(off.settings.experimentId);
+        JsonNode status = statusJson(off);
+        assertTrue(status.get("engineSession").isNull());
+        assertTrue(status.get("problem").isNull());
+        assertTrue(status.get("problemKind").isNull());
+        // With one chosen, another experiment's live session is named.
+        AutopilotSettings mine = new AutopilotSettings();
+        mine.enabled = true;
+        mine.experimentId = createExperiment("Mine").id;
+        JsonNode waiting = statusJson(Autopilot.effective(mine, new Configuration(ConfigFactory.parseMap(new HashMap<String, Object>()))));
+        assertEquals("theirs", waiting.get("engineSession").get("name").asText());
+    }
+
+    @Test
     public void pausedAndDoneAreKeptOverARestartAndResumeEndsThem() throws Exception {
         User user = user("restarted");
         Experiment experiment = createExperiment("Kept paused");
@@ -652,7 +721,8 @@ public class AutopilotSettingsTest extends BaseTest {
         assertEquals("done", status.get("problemKind").asText());
         assertTrue(status.get("done").asBoolean());
         text = status.get("problem").asText();
-        assertTrue(text, text.contains("Resume"));
+        // The page's button for a done autopilot, whoever is in charge.
+        assertTrue(text, text.contains("Open another session"));
         assertFalse(text, text.toLowerCase().contains("save"));
 
         // Resume needs it switched on (here nothing is saved and the server's file names nothing).

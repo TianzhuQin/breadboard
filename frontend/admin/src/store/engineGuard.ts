@@ -16,20 +16,23 @@ type EngineSession = Named & { experimentName: string | null, owner: string | nu
  * What GET /autopilot says the engine runs right now: `auto`, its session of the autopilot's
  * experiment (status.instance), and `other`, its live session of any other experiment
  * (status.engineSession, with the account that runs it). Both null when it can't be asked; never fails.
+ * `autopilotLive`: the autopilot is on, not paused, and `auto` is its session, so a researcher's
+ * rebuild that ends it pauses the autopilot (the server's Autopilot.sessionStopped).
  *
  * The server works these out when it is asked, so they also name a session started since this
  * console last heard what the engine runs (admin.user.engine is asked for once the engine says it
  * rebuilt, which can be before the session that rebuild is for has started).
  */
-async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null }> {
+async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null, autopilotLive: boolean }> {
   try {
     const answer = http.get<any>('/autopilot', { quiet401: true })
     const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))
     const s = await Promise.race([answer, timeout])
     const status = s && s.status && typeof s.status === 'object' ? s.status : null
-    return { auto: autopilotSession(status), other: otherSession(status) }
+    const auto = autopilotSession(status)
+    return { auto, other: otherSession(status), autopilotLive: !!auto && status.on === true && status.paused !== true }
   } catch (e) {
-    return { auto: null, other: null }
+    return { auto: null, other: null, autopilotLive: false }
   }
 }
 
@@ -65,13 +68,31 @@ function runningLine (s: { name: string, experimentName: string | null, owner: s
     : `The engine is running ${session}.`
 }
 
+/** Said when a rebuild would end the autopilot's live session (see engineUse). */
+export const REBUILD_PAUSES_AUTOPILOT = 'This also pauses the autopilot: it opens no new session by itself until someone presses Resume on the Autopilot page, so its participant links only lead somewhere while a session of its experiment is open.'
+
 /** Who a rebuild would disconnect right now, in words; '' when nobody is using the engine. */
 export async function engineUsers (): Promise<string> {
+  return (await engineUse()).who
+}
+
+/**
+ * Who a rebuild would disconnect right now (`who`, in words; '' when nobody is using the engine),
+ * whether it ends a running session (`endsSession`), and whether it pauses the autopilot: the
+ * engine runs the autopilot's session, and the autopilot is on and not paused (say
+ * REBUILD_PAUSES_AUTOPILOT then). A resume or reload that carries a session on passes its id as
+ * `keeping`: that session isn't ended (nor the autopilot paused, when it is the autopilot's), though
+ * the people in it are disconnected too.
+ */
+export async function engineUse (keeping?: number): Promise<{ who: string, pausesAutopilot: boolean, endsSession: boolean }> {
   const lines: string[] = []
   const own = running.value && admin.instance ? admin.instance : null
-  if (own) lines.push(`Your session “${own.name}” is running.`)
-  const { auto, other } = await engineSessions()
-  const named = new Set<number>(own ? [own.id] : [])
+  const named = new Set<number>(keeping != null ? [keeping] : [])
+  if (own && !named.has(own.id)) {
+    lines.push(`Your session “${own.name}” is running.`)
+    named.add(own.id)
+  }
+  const { auto, other, autopilotLive } = await engineSessions()
   if (auto && !named.has(auto.id)) {
     lines.push(`The autopilot has session “${auto.name}” open.`)
     named.add(auto.id)
@@ -85,12 +106,30 @@ export async function engineUsers (): Promise<string> {
   if (e && e.sessionId !== null && !named.has(e.sessionId)) {
     lines.push(runningLine({ name: e.sessionName || String(e.sessionId), experimentName: e.experimentName, owner: e.owner }))
   }
+  const endsSession = lines.length > 0
   const n = graph.nodes.size
   if (n) {
     lines.push(`${n} ${n === 1 ? 'player is' : 'players are'} in the network right now` +
       (own ? '.' : ', perhaps in another researcher\'s session.'))
   }
-  return lines.join(' ')
+  return {
+    who: lines.join(' '),
+    pausesAutopilot: autopilotLive && !(keeping != null && auto?.id === keeping),
+    endsSession,
+  }
+}
+
+/**
+ * The session a reload of the engine carries on (the server's ReloadEngine): this account's own
+ * running session, when the engine runs it for this account and the experiment selected here.
+ */
+export function reloadKeeps (): number | undefined {
+  const i = admin.instance
+  const e = admin.user?.engine
+  if (!i || i.status !== 'RUNNING' || !e || e.sessionId !== i.id) return undefined
+  if (admin.experiment && e.experimentId !== admin.experiment.id) return undefined
+  if (!e.owner || e.owner.toLowerCase() !== admin.email.toLowerCase()) return undefined
+  return i.id
 }
 
 /**
@@ -99,13 +138,14 @@ export async function engineUsers (): Promise<string> {
  * `action` names what is about to happen, as the start of a sentence ("Switching experiments");
  * `detail`, when given, is said after it (e.g. that a named session is stopped).
  */
-export async function confirmEngineRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string }): Promise<boolean> {
-  const who = await engineUsers()
+export async function confirmEngineRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string, keeping?: number }): Promise<boolean> {
+  const { who, pausesAutopilot } = await engineUse(opts.keeping)
   if (!who) return true
   return confirm({
     title: opts.title,
     message: `${who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
-      (opts.detail ? ` ${opts.detail}` : ''),
+      (opts.detail ? ` ${opts.detail}` : '') +
+      (pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : ''),
     confirmLabel: opts.confirmLabel || 'Continue anyway',
     danger: true,
   })

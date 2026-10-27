@@ -123,7 +123,7 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
   };
 
   $scope.logout = function(){
-    $http.get('/logout').then(function(res){
+    $http.post('/logout').then(function(res){
       // $state.go('login');
       // Remove this redirect once the application cleans up after itself correctly
       window.Breadboard.disconnect()
@@ -323,9 +323,10 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
           text: "Save",
           click: function () {
             $('#saveUserSettings, #cancelUserSettings').prop('disabled', true).addClass('ui-state-disabled');
-            var currentPassword = $.trim(currentPasswordField.val());
-            var newPassword = $.trim(newPasswordField.val());
-            var confirmPassword = $.trim(confirmPasswordField.val());
+            // As typed: a password may begin or end with spaces (the server doesn't trim them either)
+            var currentPassword = currentPasswordField.val();
+            var newPassword = newPasswordField.val();
+            var confirmPassword = confirmPasswordField.val();
 
 //TODO: add more js validation such as regex
             if (currentPassword.length == 0) {
@@ -348,6 +349,12 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
               resetFields();
               if (data.success) {
                 $('#userSettingsDialog').dialog("close");
+                // The server gave the account a new uid and closes the sockets that use the old one,
+                // which this page holds: start again with the new one.
+                window.Breadboard.disconnect();
+                setTimeout(function () {
+                  window.location.reload();
+                });
               } else if (data.error) {
                 changePasswordError.append("<li>" + data.error + "</li>").show();
               }

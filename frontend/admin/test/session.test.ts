@@ -10,10 +10,10 @@ import {
   mergeFeed, parseServerTime, participantsSeen, summarizeData,
 } from '../src/pages/session/events'
 import {
-  classifyStartReply, cleanError, detectGameStarted, formatDuration, isLocalOrigin, isStartReply, joinLinks,
+  classifyStartReply, cleanError, detectGameStarted, engineGameFlag, formatDuration, isLocalOrigin, isStartReply, joinLinks,
   networkStats, safeFileName, waitingRoom,
 } from '../src/pages/session/live'
-import { busy, resumeSession, startGame } from '../src/pages/session/controls'
+import { busy, resumeSession, startGame, stopSession } from '../src/pages/session/controls'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
 import type { Parameter } from '../src/store/types'
@@ -22,17 +22,22 @@ const store = vi.hoisted(() => ({
   launch: vi.fn(),
   startGame: vi.fn(() => true),
   selectInstance: vi.fn(async () => null),
+  stopInstance: vi.fn(async (): Promise<any> => ({ user: {} })),
   ensureConnected: vi.fn(() => true),
   nextMessage: vi.fn((_match: (m: any) => boolean, _ms?: number): Promise<any> => new Promise(() => {})),
   confirmEngineRebuild: vi.fn(async () => true),
-  engineUsers: vi.fn(async () => ''),
+  engineUse: vi.fn(async () => ({ who: '', pausesAutopilot: false })),
+  autopilotNow: vi.fn(async (): Promise<any> => null),
 }))
 vi.mock('@/store/admin', async () => {
   const { reactive, computed, ref } = await import('vue')
-  const admin = reactive<any>({ experiment: null, instance: null, output: [], events: [], engineReloadedAt: 0, engine: 'ready', email: 'me@lab.org' })
+  const admin = reactive<any>({
+    experiment: null, instance: null, user: null, output: [], events: [], engineReloadedAt: 0, engine: 'ready', email: 'me@lab.org',
+    engineInfoCurrent: true, engineInfoAt: 0,
+  })
   return {
     admin,
-    actions: { launch: store.launch, startGame: store.startGame, selectInstance: store.selectInstance },
+    actions: { launch: store.launch, startGame: store.startGame, selectInstance: store.selectInstance, stopInstance: store.stopInstance },
     instances: computed(() => (admin.experiment?.instances || [])),
     nextMessage: store.nextMessage,
     ensureConnected: store.ensureConnected,
@@ -41,10 +46,18 @@ vi.mock('@/store/admin', async () => {
     graph: { nodes: new Map(), links: new Map(), version: { value: 0 } },
   }
 })
-vi.mock('@/store/engineGuard', () => ({ confirmEngineRebuild: store.confirmEngineRebuild, engineUsers: store.engineUsers }))
-vi.mock('../src/pages/session/autopilot', async () => {
+vi.mock('@/store/engineGuard', () => ({
+  confirmEngineRebuild: store.confirmEngineRebuild,
+  engineUse: store.engineUse,
+  REBUILD_PAUSES_AUTOPILOT: 'This also pauses the autopilot.',
+}))
+// what GET /autopilot says, for the stop's question (the rest of the module as it is)
+vi.mock('../src/pages/autopilot/autopilot', async (orig) => ({ ...(await orig<any>()), autopilotNow: store.autopilotNow }))
+// what GET /autopilot says, read when a page mounts (null: no autopilot, or an older server)
+const autopilotHint = vi.hoisted(() => ({ status: null as any }))
+vi.mock('../src/pages/session/autopilot', async (orig) => {
   const { ref } = await import('vue')
-  return { useAutopilotStatus: () => ref(null), autopilotRuns: () => false }
+  return { ...(await orig<any>()), useAutopilotStatus: () => ref(autopilotHint.status) }
 })
 vi.mock('vue-router', async (orig) => ({
   ...(await orig<any>()),
@@ -338,7 +351,7 @@ describe('live session state', () => {
     const base = { events: [], output: [], since: 0 }
     expect(detectGameStarted(base).started).toBe(false)
     expect(detectGameStarted({ ...base, hasStarted: true })).toMatchObject({ started: true, source: 'server', sure: true })
-    expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)] })).toEqual({ started: true, source: 'output', at: 50, sure: true, nearReload: false })
+    expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)] })).toEqual({ started: true, source: 'output', at: 50, sure: true, nearReload: false, forgotten: false })
     expect(detectGameStarted({ ...base, output: [out('error', 'Caught error: initStep started already', 60)] }).started).toBe(true)
     // a start before the engine reloaded no longer counts
     expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>', 50)], since: 100 }).started).toBe(false)
@@ -389,6 +402,52 @@ describe('live session state', () => {
     expect(detectGameStarted({ events: ev('InitStepStart', 300000), output: [timer], since: 0 }).started).toBe(true)
     // a failure from before the engine last reloaded is about code that no longer runs
     expect(detectGameStarted({ hasStarted: true, events: [], output: [failed(301000)], since: 400000 })).toMatchObject({ started: true, source: 'server' })
+  })
+
+  it('believes the engine\'s own flag over the session\'s, which outlives a reload', () => {
+    const flagAt = 500000
+    const ev = (name: string, at: number, receivedAt?: number, id = at) => mergeEvents([], [{ id, name, datetime: new Date(at).toISOString(), data: {}, receivedAt }])
+    const out = (kind: any, text: string, at: number) => ({ id: at, kind, text, source: 'RunGame', at })
+    const base = { events: [], output: [], since: 0 }
+    // resumed: the session says it started, the engine (rebuilt since) says it isn't running
+    expect(detectGameStarted({ ...base, hasStarted: true, engine: { started: false, at: flagAt } }))
+      .toEqual({ started: false, source: 'engine', at: null, sure: true, nearReload: false, forgotten: true })
+    // its start events from before the flag was read don't count either, also with no reload seen here
+    const old = ev('InitStepStart', 300000)
+    expect(detectGameStarted({ ...base, hasStarted: true, events: old, engine: { started: false, at: flagAt } }).started).toBe(false)
+    expect(detectGameStarted({ ...base, events: old, engine: { started: false, at: flagAt } })).toMatchObject({ started: false, forgotten: false })
+    // and the engine says it runs
+    expect(detectGameStarted({ ...base, engine: { started: true, at: flagAt } })).toMatchObject({ started: true, source: 'engine', sure: true })
+    // what this console heard after the flag was read is newer: a start answered here ...
+    expect(detectGameStarted({ ...base, hasStarted: true, output: [out('output', 'initStep.start()\n\n==>null', flagAt + 10)], engine: { started: false, at: flagAt } }))
+      .toMatchObject({ started: true, source: 'output', sure: true })
+    // (not one from before it)
+    expect(detectGameStarted({ ...base, output: [out('output', 'initStep.start()\n\n==>null', flagAt - 10)], engine: { started: false, at: flagAt } }).started).toBe(false)
+    // ... a start that threw here ...
+    expect(detectGameStarted({ ...base, output: [out('error', 'Caught error: Boom', flagAt + 10)], engine: { started: true, at: flagAt } }))
+      .toMatchObject({ started: false, forgotten: false })
+    // (when the game had started before the reload, a start tried again that threw leaves it the
+    // forgotten one: the server puts the session's flag back as it was, so it still turns people away)
+    expect(detectGameStarted({ ...base, hasStarted: true, output: [out('error', 'Caught error: Boom', flagAt + 10)], engine: { started: false, at: flagAt } }))
+      .toMatchObject({ started: false, sure: true, forgotten: true })
+    // ... or another console's start pushed live
+    expect(detectGameStarted({ ...base, events: ev('autopilotStart', 600000, flagAt + 5), engine: { started: false, at: flagAt } }))
+      .toMatchObject({ started: true, source: 'events', sure: false, at: 600000 })
+    expect(detectGameStarted({ ...base, events: ev('autopilotStart', 600000, flagAt - 5), engine: { started: false, at: flagAt } }).started).toBe(false)
+  })
+
+  it('takes the engine\'s flag only when it is current and about this session', () => {
+    const engine = { experimentId: 1, experimentName: 'E', sessionId: 9, sessionName: 'S', owner: 'me@lab.org', gameStarted: false }
+    expect(engineGameFlag(engine, true, 9, 1234)).toEqual({ started: false, at: 1234 })
+    expect(engineGameFlag({ ...engine, gameStarted: true }, true, 9, 1234)).toEqual({ started: true, at: 1234 })
+    // a rebuild under way, another session, nothing said (an older server), no engine
+    expect(engineGameFlag(engine, false, 9, 1234)).toBe(null)
+    expect(engineGameFlag(engine, true, 8, 1234)).toBe(null)
+    expect(engineGameFlag(engine, true, undefined, 1234)).toBe(null)
+    expect(engineGameFlag({ ...engine, gameStarted: null }, true, 9, 1234)).toBe(null)
+    const { gameStarted: _drop, ...older } = engine
+    expect(engineGameFlag(older, true, 9, 1234)).toBe(null)
+    expect(engineGameFlag(null, true, 9, 1234)).toBe(null)
   })
 
   it('recognises the engine\'s answer to a start', () => {
@@ -497,7 +556,7 @@ describe('session controls', () => {
   })
 
   it('names whoever the restart disconnects before resuming', async () => {
-    store.engineUsers.mockResolvedValueOnce('The autopilot has session “Auto 3” open. 4 players are in the network right now.')
+    store.engineUse.mockResolvedValueOnce({ who: 'The autopilot has session “Auto 3” open. 4 players are in the network right now.', pausesAutopilot: false })
     const done = resumeSession(inst)
     await flushPromises()
     expect(confirmState.req!.title).toBe('Resume “Pilot”?')
@@ -519,11 +578,11 @@ describe('session controls', () => {
 
   it('shows the resume is under way while it asks who uses the engine, and ignores a second click', async () => {
     let answer!: (v: string) => void
-    store.engineUsers.mockImplementationOnce(() => new Promise<string>(r => { answer = r }))
+    store.engineUse.mockImplementationOnce(() => new Promise(r => { answer = (who: string) => r({ who, pausesAutopilot: false }) }))
     const done = resumeSession(inst)
     expect(busy.resume).toBe(5)
     await resumeSession(inst)
-    expect(store.engineUsers).toHaveBeenCalledTimes(1)
+    expect(store.engineUse).toHaveBeenCalledTimes(1)
     answer('')
     await flushPromises()
     expect(confirmState.req!.title).toBe('Resume “Pilot”?')
@@ -534,10 +593,65 @@ describe('session controls', () => {
     expect(busy.resume).toBe(null)
   })
 
+  it('says that stopping the autopilot\'s session pauses the autopilot', async () => {
+    const live = { id: 9, name: 'Auto 3', status: 'RUNNING' } as any
+    store2.admin.experiment = { id: 12, name: 'Exp' }
+    store.autopilotNow.mockResolvedValueOnce({ settings: { experimentId: 12 }, status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+    let done = stopSession(live)
+    // asking the server takes a moment: the button shows it at once
+    expect(busy.stop).toBe(true)
+    await flushPromises()
+    expect(confirmState.req!.title).toBe('Stop “Auto 3”?')
+    expect(confirmState.req!.message).toContain('until you press Resume on the Autopilot page')
+    settleConfirm(true)
+    await done
+    expect(store.stopInstance).toHaveBeenCalledWith(9)
+    expect(toasts[toasts.length - 1]).toMatchObject({ title: 'Stopped “Auto 3”', detail: expect.stringMatching(/autopilot is paused/) })
+    expect(busy.stop).toBe(false)
+
+    // already paused, or not the autopilot's session: no word about it
+    store.autopilotNow.mockResolvedValueOnce({ settings: { experimentId: 12 }, status: { on: true, paused: true, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+    done = stopSession(live)
+    await flushPromises()
+    expect(confirmState.req!.message).not.toContain('Autopilot page')
+    settleConfirm(false)
+    await done
+    expect(store.stopInstance).toHaveBeenCalledTimes(1)
+    store.autopilotNow.mockResolvedValueOnce(null)
+    done = stopSession(live)
+    await flushPromises()
+    expect(confirmState.req!.message).not.toContain('Autopilot page')
+    settleConfirm(true)
+    await done
+    expect(toasts[toasts.length - 1].detail).not.toMatch(/autopilot/)
+    store2.admin.experiment = null
+  })
+
+  it('says that resuming pauses the autopilot when the engine runs its session', async () => {
+    store.engineUse.mockResolvedValueOnce({ who: 'The autopilot has session “Auto 3” open.', pausesAutopilot: true })
+    const done = resumeSession(inst)
+    await flushPromises()
+    expect(confirmState.req!.message).toContain('This also pauses the autopilot.')
+    settleConfirm(false)
+    await done
+  })
+
+  it('says a start after a reload starts the game again', async () => {
+    let done = startGame({ ...ctx, again: true })
+    expect(confirmState.req!.message).toMatch(/engine was reloaded since then, so this starts it again/)
+    expect(confirmState.req!.message).not.toMatch(/Start does nothing until the engine is reloaded/)
+    settleConfirm(false)
+    await done
+    done = startGame(ctx)
+    expect(confirmState.req!.message).toMatch(/Start does nothing until the engine is reloaded/)
+    settleConfirm(false)
+    await done
+  })
+
   it('does not ask to resume while offline, nor send when the connection drops meanwhile', async () => {
     store.ensureConnected.mockReturnValueOnce(false)
     await resumeSession(inst)
-    expect(store.engineUsers).not.toHaveBeenCalled()
+    expect(store.engineUse).not.toHaveBeenCalled()
     expect(confirmState.open).toBe(false)
 
     const done = resumeSession(inst)
@@ -611,6 +725,64 @@ describe('SessionPage', () => {
     expect(w.text()).toContain('Start it anyway')
     expect(w.text()).toContain('may not be running now')
     w.unmount()
+  })
+
+  it('offers Start the game when the engine was reloaded since the game started (the engine says so)', async () => {
+    store2.admin.instance = { ...store2.admin.instance, hasStarted: true }
+    store2.admin.events = [startEvent('InitStepStart', Date.now() - 600000)]
+    store2.admin.user = { engine: { experimentId: 12, experimentName: 'Exp', sessionId: 9, sessionName: 'Live one', owner: 'me@lab.org', gameStarted: false } }
+    store2.admin.engineInfoAt = Date.now()
+    const w = await mountPage()
+    expect(startButton(w)).toBeDefined()
+    expect(w.text()).toContain('Game not running')
+    expect(w.text()).not.toContain('Game in progress')
+    expect(w.find('.live-hero__explain').text()).toContain("closed to newcomers, but its game isn't running in the engine")
+    expect(w.find('.live-hero__explain').text()).toContain('the engine was reloaded since it started')
+    expect(w.find('.live-hero__explain').text()).not.toContain('When everyone you need is here')
+    // the engine says it runs
+    store2.admin.user = { engine: { ...store2.admin.user.engine, gameStarted: true } }
+    await nextTick()
+    expect(startButton(w)).toBeUndefined()
+    expect(w.text()).toContain('Game in progress')
+    expect(w.text()).not.toContain('Start it anyway')
+    // an older server says nothing: the session's flag decides, as before
+    store2.admin.user = { engine: { ...store2.admin.user.engine, gameStarted: null } }
+    store2.admin.engineInfoAt = 0
+    await nextTick()
+    expect(w.text()).toContain('Game in progress')
+    w.unmount()
+    store2.admin.user = null
+  })
+
+  it('promises no next session while the autopilot is paused', async () => {
+    const { autopilotStatusOf } = await import('../src/pages/session/autopilot')
+    const raw = (status: any) => ({ settings: { continuous: true, nextSessionDelaySeconds: 10 }, status: { on: true, experimentId: 12, instance: null, ...status } })
+    store2.admin.instance = { id: 9, name: 'Done one', status: 'FINISHED', creationTime: '', data: [], events: [] }
+    autopilotHint.status = autopilotStatusOf(raw({}))
+    let w = await mountPage()
+    expect(w.find('.live-hero__explain').text()).toContain('Autopilot opens the next session about 10 seconds after one finishes.')
+    w.unmount()
+    autopilotHint.status = autopilotStatusOf(raw({ paused: true, problemKind: 'paused' }))
+    expect(autopilotHint.status.halted).toBe('paused')
+    w = await mountPage()
+    expect(w.find('.live-hero__explain').text()).toContain('Autopilot is paused: it opens no new session until someone presses Resume on the Autopilot page.')
+    expect(w.find('.live-hero__explain').text()).not.toContain('opens the next session')
+    w.unmount()
+    // its one session finished ("continuous" off, or a newer server that says done)
+    expect(autopilotStatusOf(raw({ problemKind: 'done' }))!.halted).toBe('done')
+    expect(autopilotStatusOf(raw({ done: true }))!.halted).toBe('done')
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting' }))!.halted).toBe(null)
+    expect(autopilotStatusOf({ error: 'x' })).toBe(null)
+
+    // with no session open, the empty page says so too
+    const NoSession = (await import('../src/pages/session/NoSession.vue')).default
+    const paused = autopilotStatusOf(raw({ paused: true }))
+    const none = mount(NoSession, { props: { autopilot: paused }, global: { stubs: { RouterLink: true } } })
+    expect(none.text()).toContain('Autopilot runs this experiment but is paused: it opens no new session until someone presses Resume on the Autopilot page.')
+    await none.setProps({ autopilot: autopilotStatusOf(raw({})) })
+    expect(none.text()).toContain('Autopilot runs this experiment and opens a session by itself, again after each one finishes.')
+    none.unmount()
+    autopilotHint.status = null
   })
 
   it('disables Start the game while the engine runs another experiment, and says why', async () => {
@@ -695,9 +867,11 @@ describe('NewSessionDialog', () => {
     await numberInput().setValue('4')
     await submit()
     expect(store.launch).toHaveBeenCalledTimes(1)
-    const [name, params] = store.launch.mock.calls[0]
+    const [name, params, experimentId] = store.launch.mock.calls[0]
     expect(name).toBe('Session 2')
     expect(params).toEqual({ nRounds: 4, chat: true, rate: 0.333, label: 'blue' })
+    // for the experiment whose parameters the form showed
+    expect(experimentId).toBe(12)
     const opens = w.emitted('update:open') || []
     expect(opens[opens.length - 1]).toEqual([false])
     expect(w.emitted('created')?.[0]).toEqual(['Session 2'])
@@ -777,6 +951,20 @@ describe('NewSessionDialog', () => {
     answer(true)
     await flushPromises()
     expect(store.launch).not.toHaveBeenCalled()
+  })
+
+  it('never launches the parameters for an experiment selected after it opened', async () => {
+    const w = await open()
+    await numberInput().setValue('3')
+    // another experiment is selected (here or in another tab) while the form stays on screen
+    admin.experiment = { ...admin.experiment, id: 13, parameters: [] }
+    await nextTick()
+    store.launch.mockResolvedValue({ user: {} })
+    await submit()
+    expect(store.confirmEngineRebuild).not.toHaveBeenCalled()
+    expect(store.launch).not.toHaveBeenCalled()
+    const opens = w.emitted('update:open') || []
+    expect(opens[opens.length - 1]).toEqual([false])
   })
 
   it('sends nothing while offline', async () => {

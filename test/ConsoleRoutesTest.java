@@ -319,7 +319,7 @@ public class ConsoleRoutesTest extends BaseTest {
         String newToken = Json.parse(contentAsString(changedResult)).get("uid").asText();
         assertNotEquals(oldToken, newToken);
         assertEquals(newToken, changed.uid);
-        assertEquals(newToken, session(changedResult).get("uid"));
+        assertEquals(newToken, sessionValue(changedResult, "uid"));
         assertNull(User.findByUID(oldToken));
         assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/state").withSession("uid", oldToken))));
         assertEquals(OK, status(route(fakeRequest(GET, "/state").withSession("uid", newToken))));
@@ -342,7 +342,7 @@ public class ConsoleRoutesTest extends BaseTest {
         String token = user.uid;
         assertEquals(OK, status(route(fakeRequest(GET, "/state").withSession("uid", token))));
 
-        assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/logout").withSession("uid", token))));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/logout").withSession("uid", token))));
         assertNull("the old token no longer finds the account", User.findByUID(token));
         String fresh = User.findByEmail(user.email).uid;
         assertNotNull(fresh);
@@ -350,10 +350,32 @@ public class ConsoleRoutesTest extends BaseTest {
         assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/state").withSession("uid", token))));
 
         // A stale session signing out leaves the account's current sign-in alone.
-        route(fakeRequest(GET, "/logout").withSession("uid", "stale-" + UUID.randomUUID()));
+        route(fakeRequest(POST, "/logout").withSession("uid", "stale-" + UUID.randomUUID()));
         assertEquals(fresh, User.findByEmail(user.email).uid);
-        route(fakeRequest(GET, "/logout"));
+        route(fakeRequest(POST, "/logout"));
         assertEquals(fresh, User.findByEmail(user.email).uid);
+    }
+
+    // ---- requests that change something are POSTs -------------------------------------------------
+
+    @Test
+    public void approvingAnAssignmentTakesAPost() {
+        User user = user("approver");
+        // Approving pays the worker: a link (a GET, which carries the sign-in even from another site)
+        // must not do it.
+        assertNull("no GET route", route(fakeRequest(GET, "/amtadmin/approveAssignment/A1").withSession("uid", user.uid)));
+        Result posted = route(fakeRequest(POST, "/amtadmin/approveAssignment/A1?sandbox=true").withSession("uid", user.uid));
+        assertNotNull(posted);
+        assertNotEquals(NOT_FOUND, status(posted));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/amtadmin/approveAssignment/A1"))));
+
+        // Likewise signing out (everywhere) and creating a qualification type on the MTurk account.
+        assertNull(route(fakeRequest(GET, "/logout").withSession("uid", user.uid)));
+        assertNull(route(fakeRequest(GET, "/amtadmin/getExperimentQualificationTypeId/x").withSession("uid", user.uid)));
+        Result qualification = route(fakeRequest(POST, "/amtadmin/getExperimentQualificationTypeId/x?sandbox=true").withSession("uid", user.uid));
+        assertNotNull(qualification);
+        assertNotEquals(NOT_FOUND, status(qualification));
+        assertEquals("still signed in", user.uid, User.findByEmail(user.email).uid);
     }
 
     // ---- no session cookie: no account -------------------------------------------------------------

@@ -114,7 +114,7 @@ function AMTAdminSrv($http, $q, $timeout) {
   }
 
   function approveAssignment(assignmentId) {
-    return $http.get('/amtadmin/approveAssignment/' + assignmentId + ((sandbox) ? '?sandbox=true' : ''))
+    return $http.post('/amtadmin/approveAssignment/' + assignmentId + ((sandbox) ? '?sandbox=true' : ''))
       .then(function (response) {
           if (response.status < 400) {
             return $q.when(response);

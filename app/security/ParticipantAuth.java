@@ -199,13 +199,14 @@ public final class ParticipantAuth {
     return instanceId + SEP + clientId;
   }
 
-  private static String newToken() {
+  // Also used for preview tokens (PreviewTokens), which share the format but not the store.
+  static String newToken() {
     byte[] bytes = new byte[32];
     RANDOM.nextBytes(bytes);
     return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
   }
 
-  private static byte[] sha256(String value) {
+  static byte[] sha256(String value) {
     try {
       return MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
     } catch (NoSuchAlgorithmException e) {

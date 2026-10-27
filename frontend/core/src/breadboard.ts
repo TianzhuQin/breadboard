@@ -19,8 +19,17 @@ export const EDGE_EDIT_RESULT_EVENT = 'bb:edge-edit-result'
 // seat token in the URL fragment (it is also set as an HttpOnly cookie). Keep it in session
 // storage and send it explicitly, because cookies are often blocked when the page is embedded
 // in another site's iframe. Must stay in sync with security.ParticipantAuth.
+// The researcher console opens the page the same way with a preview token, and with ?preview=1,
+// in an opaque origin (a sandboxed iframe, or a tab the server sandboxes): there session storage
+// and cookies throw, as they also do where a browser blocks storage. So the token is kept in
+// memory as well, and in the history entry, which a reload keeps where storage is blocked (but
+// not in an opaque origin, where browsers drop it: a reloaded preview has to be opened again).
 const TOKEN_HEADER = 'X-Breadboard-Token'
 const TOKEN_FRAGMENT_KEY = 'bbt'
+const PREVIEW_QUERY = 'preview'
+
+/** The token this page was given, once found */
+let pageToken: string | null = null
 
 // The admin websocket address may be configured as "auto": use the page's own host. A ws://
 // address is upgraded to wss:// on https pages, where browsers refuse insecure sockets.
@@ -38,22 +47,82 @@ export function socketUrl (configured: string | undefined): string {
 export function participantToken (): string | null {
   if (typeof window === 'undefined') return null
   const storageKey = 'breadboard-token:' + window.location.pathname
-  try {
-    const hash = window.location.hash.replace(/^#/, '')
-    const params = new URLSearchParams(hash)
-    const fromFragment = params.get(TOKEN_FRAGMENT_KEY)
-    if (fromFragment) {
+  const fromFragment = takeFragmentToken(storageKey)
+  if (fromFragment) {
+    pageToken = fromFragment
+    try {
       window.sessionStorage.setItem(storageKey, fromFragment)
-      params.delete(TOKEN_FRAGMENT_KEY)
-      const rest = params.toString()
-      // Drop the token from the address bar so it isn't bookmarked, shared or kept in history.
-      window.history.replaceState(null, '', window.location.pathname + window.location.search + (rest ? '#' + rest : ''))
-      return fromFragment
-    }
+    } catch (e) {}
+    return fromFragment
+  }
+  if (!pageToken) {
+    pageToken = sessionToken(storageKey) || historyToken(storageKey)
+  }
+  return pageToken
+}
+
+/**
+ * The token in the address's fragment (#bbt=...), if there is one. It is then dropped from the
+ * address bar so it isn't bookmarked, shared or kept in history, and put in the state of this
+ * history entry instead, where a reload of the page finds it again (if the browser kept it).
+ */
+function takeFragmentToken (storageKey: string): string | null {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  const token = params.get(TOKEN_FRAGMENT_KEY)
+  if (!token) return null
+  params.delete(TOKEN_FRAGMENT_KEY)
+  const rest = params.toString()
+  try {
+    const state = window.history.state
+    const withToken = Object.assign({}, state && typeof state === 'object' ? state : {}, { [storageKey]: token })
+    window.history.replaceState(withToken, '', window.location.pathname + window.location.search + (rest ? '#' + rest : ''))
+  } catch (e) {
+    // (a browser that won't rewrite a sandboxed page's address leaves the token in it)
+  }
+  return token
+}
+
+function sessionToken (storageKey: string): string | null {
+  try {
     return window.sessionStorage.getItem(storageKey)
   } catch (e) {
     return null
   }
+}
+
+function historyToken (storageKey: string): string | null {
+  try {
+    const state = window.history.state
+    const token = state && typeof state === 'object' ? state[storageKey] : null
+    return typeof token === 'string' && token ? token : null
+  } catch (e) {
+    return null
+  }
+}
+
+/** Whether the researcher console opened this page as a preview */
+function isPreview (): boolean {
+  return new URLSearchParams(window.location.search).get(PREVIEW_QUERY) === '1'
+}
+
+/**
+ * Shown in place of the page when a preview has no token the server accepts: it ran out, the
+ * researcher signed out, or the page was reloaded. The participant login the page would go to
+ * instead offers a real seat, which a preview must not take.
+ */
+function showPreviewEnded () {
+  const app = document.getElementById('app')
+  if (!app) return
+  const page = document.createElement('div')
+  page.className = 'bb-page'
+  const panel = document.createElement('main')
+  panel.className = 'bb-panel'
+  const text = document.createElement('p')
+  text.textContent = 'This preview can’t continue: its link has expired or the page was reloaded. Open it again from the researcher console.'
+  panel.appendChild(text)
+  page.appendChild(panel)
+  app.textContent = ''
+  app.appendChild(page)
 }
 
 export class BreadboardClass extends Emitter implements BreadboardMessages {
@@ -78,6 +147,10 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       const res = await http.get<BreadboardConfig>('state', token ? { headers: { [TOKEN_HEADER]: token } } : {})
       const body = await res.json()
       if (res.status === 401 && body && body.error === 'not-logged-in' && body.login) {
+        if (isPreview()) {
+          showPreviewEnded()
+          throw new Error('Preview token not accepted')
+        }
         // A participant page opened without this seat's credentials (e.g. someone else's URL).
         window.location.href = body.login
         throw new Error('Not logged in')

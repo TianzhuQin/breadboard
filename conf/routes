@@ -16,7 +16,11 @@ POST        /images/upload                                                      
 DELETE      /images/:imageId                                                     controllers.ImagesController.removeImage(imageId: Long)
 GET         /game/:experimentId/:experimentInstanceId/:clientId/connected        controllers.ClientController.index(experimentId: String, experimentInstanceId: String, clientId: String, connectionSpeed: String ?= null)
 GET         /game/:experimentId/:experimentInstanceId/:clientId/state            controllers.ClientController.getState(experimentId: String, experimentInstanceId: String, clientId: String, connectionSpeed: String ?= null)
+# A researcher's preview runs in an opaque origin and sends its token in a header: the CORS preflight
+OPTIONS     /game/:experimentId/:experimentInstanceId/:clientId/state            controllers.ClientController.stateOptions(experimentId: String, experimentInstanceId: String, clientId: String)
 GET         /game/:experimentId/:experimentInstanceId/:clientId/connect          controllers.ClientController.connectClient(experimentId: String, experimentInstanceId: String, clientId: String)
+# A token for the console to show a participant's page as that player (security.PreviewTokens)
+POST        /preview-token                                                       controllers.ClientController.previewToken()
 
 # Authentication
 
@@ -26,7 +30,7 @@ GET         /amtadmin/getAccountBalance                                         
 GET         /amtadmin/listHITs                                                   controllers.AMTAdmin.listHITs(nextToken: String ?= null, maxResults: Integer ?= 20, sandbox: Boolean ?= false)
 GET         /amtadmin/listAssignmentsForHIT/:hitId                               controllers.AMTAdmin.listAssignmentsForHIT(hitId: String, maxResults: Integer ?= 20, nextToken: String ?= null, sandbox: Boolean ?= false)
 GET         /amtadmin/listBonusPaymentsForHIT/:hitId                             controllers.AMTAdmin.listBonusPaymentsForHIT(hitId: String, maxResults: Integer ?= 20, nextToken: String ?= null, sandbox: Boolean ?= false)
-GET         /amtadmin/approveAssignment/:assignmentId                            controllers.AMTAdmin.approveAssignment(assignmentId: String, sandbox: Boolean ?= false)
+POST        /amtadmin/approveAssignment/:assignmentId                            controllers.AMTAdmin.approveAssignment(assignmentId: String, sandbox: Boolean ?= false)
 POST        /amtadmin/rejectAssignment/:assignmentId                             controllers.AMTAdmin.rejectAssignment(assignmentId: String, sandbox: Boolean ?= false)
 POST        /amtadmin/sendBonus/:assignmentId                                    controllers.AMTAdmin.sendBonus(assignmentId: String, sandbox: Boolean ?= false)
 POST        /amtadmin/updateAssignmentCompleted/:assignmentId                    controllers.AMTAdmin.updateAssignmentCompleted(assignmentId: String)
@@ -36,7 +40,7 @@ POST        /amtadmin/importAMTWorkers/:experimentId                            
 POST        /amtadmin/assignParticipantQualification                             controllers.AMTAdmin.assignParticipantQualification(sandbox: Boolean ?= false)
 POST        /amtadmin/removeParticipantQualification                             controllers.AMTAdmin.removeParticipantQualification(sandbox: Boolean ?= false)
 POST        /amtadmin/getQualificationScore                                      controllers.AMTAdmin.getQualificationScore(sandbox: Boolean ?= false)
-GET         /amtadmin/getExperimentQualificationTypeId/:experimentUid            controllers.AMTAdmin.getExperimentQualificationTypeId(experimentUid: String, sandbox: Boolean ?= false)
+POST        /amtadmin/getExperimentQualificationTypeId/:experimentUid            controllers.AMTAdmin.getExperimentQualificationTypeId(experimentUid: String, sandbox: Boolean ?= false)
 GET         /amtadmin/listWorkersWithQualificationType/:qualificationTypeId      controllers.AMTAdmin.listWorkersWithQualificationType(qualificationTypeId: String, maxResults: Integer ?= 20, nextToken: String ?= null, sandbox: Boolean ?= false)
 POST        /amtadmin/disassociateQualificationFromWorker/:qualificationTypeId   controllers.AMTAdmin.disassociateQualificationFromWorker(qualificationTypeId: String, sandbox: Boolean ?= false)
 GET         /amtadmin/listQualificationTypes                                     controllers.AMTAdmin.listQualificationTypes(sandbox: Boolean ?= false)
@@ -98,7 +102,7 @@ POST        /game/:experimentId/:experimentInstanceId/amt                       
 POST        /login                                                               controllers.Application.authenticate()
 #GET         /createFirstUser                                                     controllers.Application.createFirstUser()
 POST        /createFirstUser                                                     controllers.Application.addFirstUser()
-GET         /logout                                                              controllers.Application.logout()
+POST        /logout                                                              controllers.Application.logout()
 
 POST        /saveUserSettings                                                    controllers.Application.saveUserSettings()
 

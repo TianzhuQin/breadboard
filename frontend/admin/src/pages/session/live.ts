@@ -1,5 +1,5 @@
 import type { GraphNode } from '@/lib/graph'
-import type { OutputEntry } from '@/store/types'
+import type { EngineInfo, OutputEntry } from '@/store/types'
 import type { FeedEvent } from './events'
 
 /** AI players added with g.addAI have ids starting with "_". */
@@ -124,8 +124,11 @@ const START_EVENTS = new Set(['initstepstart', 'autopilotstart'])
 
 export interface StartedInfo {
   started: boolean
-  /** How we know: the server said so, the engine answered a start, or the events show it. */
-  source: 'server' | 'output' | 'events' | null
+  /**
+   * How we know: the session's flag says so (server), the engine's own flag (engine), the engine
+   * answered a start (output), or the events show it.
+   */
+  source: 'server' | 'engine' | 'output' | 'events' | null
   at: number | null
   /**
    * Whether the engine itself said so (the server's flag, or its answer to a start since its last
@@ -139,6 +142,29 @@ export interface StartedInfo {
    * the few seconds the server's and this computer's clocks may disagree by.
    */
   nearReload: boolean
+  /**
+   * Not started, though the session's flag says the game started: the engine says it isn't running,
+   * because it was reloaded since (a resume, a reload), which forgets a start.
+   */
+  forgotten: boolean
+}
+
+/** What the engine itself says about the game (EngineInfo.gameStarted), and when this console heard it. */
+export interface EngineGameFlag {
+  started: boolean
+  /** When the User JSON that said it arrived (this computer's clock). */
+  at: number
+}
+
+/**
+ * The engine's own word on whether the selected session's game runs: only when the server says it
+ * (newer servers), the info is current (not from before a rebuild under way) and the engine runs
+ * this very session. Null otherwise: then the signs in detectGameStarted decide.
+ */
+export function engineGameFlag (engine: EngineInfo | null | undefined, current: boolean, sessionId: number | null | undefined, at: number): EngineGameFlag | null {
+  if (!current || !engine || typeof engine.gameStarted !== 'boolean') return null
+  if (sessionId == null || engine.sessionId !== sessionId) return null
+  return { started: engine.gameStarted, at }
 }
 
 /** How far the server's clock may be off from this computer's when comparing event times. */
@@ -153,42 +179,65 @@ function isFailedStart (o: OutputEntry): boolean {
   return o.kind === 'error' && o.source === 'RunGame' && /^Caught error:/.test(o.text) && !o.text.includes(ALREADY)
 }
 
+const isStartEvent = (e: FeedEvent) => START_EVENTS.has(e.name.toLowerCase())
+
 /**
- * Whether initStep.start() has run since the engine last loaded. The server keeps that flag only
- * in the engine, so this reads the signs: the engine's answer to a start since the last reload
- * (output "initStep.start() ==> …", the error "initStep started already", or a start that threw),
- * an explicit `hasStarted` on the session, or a start event in the session's log (InitStepStart,
- * or the autopilot's autopilotStart when it started the game itself).
+ * Whether initStep.start() has run since the engine last loaded.
+ *
+ * Newer servers say so themselves (`engine`, see engineGameFlag). That flag is as old as the User
+ * JSON it came in, so only what this console heard after it overrules it: the engine's answer to a
+ * start made here, or a start event pushed live (another console's start, the autopilot's). The
+ * session's `hasStarted` does not: it outlives a reload, which forgets the start.
+ *
+ * Without it (older servers) this reads the signs: the engine's answer to a start since the last
+ * reload (output "initStep.start() ==> …", the error "initStep started already", or a start that
+ * threw), an explicit `hasStarted` on the session, or a start event in the session's log
+ * (InitStepStart, or the autopilot's autopilotStart when it started the game itself).
  */
-export function detectGameStarted (opts: { hasStarted?: unknown, events: FeedEvent[], output: OutputEntry[], since: number }): StartedInfo {
-  // the engine's newest answer to a start since it last reloaded decides
+export function detectGameStarted (opts: { hasStarted?: unknown, events: FeedEvent[], output: OutputEntry[], since: number, engine?: EngineGameFlag | null }): StartedInfo {
+  const flag = opts.engine || null
+  // the engine's newest answer to a start since it last reloaded decides (and since its flag was read)
+  const since = flag ? Math.max(opts.since, flag.at) : opts.since
   let failedAt = 0
   for (let i = opts.output.length - 1; i >= 0; i--) {
     const o = opts.output[i]
-    if (o.at < opts.since) break
-    if (o.kind === 'output' && o.text.startsWith(START_OUTPUT)) return { started: true, source: 'output', at: o.at, sure: true, nearReload: false }
-    if (o.kind === 'error' && o.text.includes(ALREADY)) return { started: true, source: 'output', at: o.at, sure: true, nearReload: false }
+    if (o.at < since) break
+    if (o.kind === 'output' && o.text.startsWith(START_OUTPUT)) return { started: true, source: 'output', at: o.at, sure: true, nearReload: false, forgotten: false }
+    if (o.kind === 'error' && o.text.includes(ALREADY)) return { started: true, source: 'output', at: o.at, sure: true, nearReload: false, forgotten: false }
     if (isFailedStart(o)) { failedAt = o.at; break }
   }
+  if (flag && !failedAt) {
+    if (flag.started) return { started: true, source: 'engine', at: null, sure: true, nearReload: false, forgotten: false }
+    // a start heard of since the flag was read; only the log shows it, so not for certain
+    let later: FeedEvent | null = null
+    for (const e of opts.events) {
+      if (isStartEvent(e) && e.receivedAt !== undefined && e.receivedAt >= flag.at && (!later || e.at > later.at)) later = e
+    }
+    if (later) return { started: true, source: 'events', at: later.at || null, sure: false, nearReload: false, forgotten: false }
+    // (the server sets the session's flag back when a start throws, so it means a start that ran)
+    return { started: false, source: 'engine', at: null, sure: true, nearReload: false, forgotten: opts.hasStarted === true }
+  }
   // (a start that threw leaves the session's flag set on older servers, so the answer wins over it)
-  if (opts.hasStarted === true && !failedAt) return { started: true, source: 'server', at: null, sure: true, nearReload: false }
+  if (opts.hasStarted === true && !failedAt) return { started: true, source: 'server', at: null, sure: true, nearReload: false, forgotten: false }
   // the engine forgets a start when it reloads; events from before that don't count, and one that
   // can't be placed against the reload leaves it open
-  const since = opts.since
+  const reloaded = opts.since
   let unsure: FeedEvent | null = null
   for (const e of opts.events) {
-    if (!START_EVENTS.has(e.name.toLowerCase())) continue
+    if (!isStartEvent(e)) continue
     // the failed start logged its own start event: only a clearly later one is another start
     if (failedAt) {
-      if (e.at && e.at > failedAt + CLOCK_SLACK_MS) return { started: true, source: 'events', at: e.at, sure: false, nearReload: false }
+      if (e.at && e.at > failedAt + CLOCK_SLACK_MS) return { started: true, source: 'events', at: e.at, sure: false, nearReload: false, forgotten: false }
       continue
     }
-    if (!since || (e.at && e.at >= since)) return { started: true, source: 'events', at: e.at || null, sure: false, nearReload: false }
-    if (e.at && e.at < since - CLOCK_SLACK_MS) continue
+    if (!reloaded || (e.at && e.at >= reloaded)) return { started: true, source: 'events', at: e.at || null, sure: false, nearReload: false, forgotten: false }
+    if (e.at && e.at < reloaded - CLOCK_SLACK_MS) continue
     unsure = unsure || e
   }
-  if (unsure) return { started: true, source: 'events', at: unsure.at || null, sure: false, nearReload: true }
-  return { started: false, source: null, at: null, sure: true, nearReload: false }
+  if (unsure) return { started: true, source: 'events', at: unsure.at || null, sure: false, nearReload: true, forgotten: false }
+  // (with the engine's flag, only a start that threw here gets this far: the server put the
+  // session's flag back as it was, so a set one is still a start the engine forgot)
+  return { started: false, source: null, at: null, sure: true, nearReload: false, forgotten: !!flag && opts.hasStarted === true }
 }
 
 export type StartOutcome = { kind: 'started' } | { kind: 'already' } | { kind: 'error', message: string } | { kind: 'timeout' }

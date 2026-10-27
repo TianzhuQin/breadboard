@@ -149,6 +149,8 @@ const busy = ref(false)
 const checking = ref(false)
 const failure = ref('')
 const announce = ref('')
+/** The experiment whose parameters the form shows: the one selected when the dialog opened. */
+let openedFor: number | undefined
 
 const existingNames = computed(() => instances.value.map(i => i.name))
 const replacing = computed(() => {
@@ -157,6 +159,7 @@ const replacing = computed(() => {
 })
 
 function reset () {
+  openedFor = admin.experiment?.id
   fields.value = buildFields(admin.experiment?.parameters)
   for (const k of Object.keys(values)) delete values[k]
   for (const f of fields.value) values[f.name] = f.initial
@@ -229,7 +232,9 @@ async function submit () {
   }
   const sessionName = name.value.trim()
   if (!ensureConnected()) return
-  const experimentId = admin.experiment?.id
+  // the form holds the parameters of the experiment it opened for: never launch them for another one
+  const experimentId = openedFor
+  if (admin.experiment?.id !== experimentId) { close(); return }
   // a launch rebuilds the engine every account and the autopilot share: say whose session and
   // players it disconnects (no question when nobody is using it)
   checking.value = true
@@ -249,7 +254,8 @@ async function submit () {
   announce.value = 'Creating the session…'
   try {
     const askedAt = Date.now()
-    const m = await actions.launch(sessionName, built.params)
+    // (the server refuses it when the account has selected another experiment since, e.g. in another tab)
+    const m = await actions.launch(sessionName, built.params, experimentId)
     const ok = !!m || (admin.instance?.name === sessionName && admin.instance.status === 'RUNNING')
     if (!ok) {
       const refused = admin.requestError?.request === 'LaunchGame' && admin.requestError.at >= askedAt ? admin.requestError.text : ''

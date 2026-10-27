@@ -7,17 +7,31 @@ import play.libs.Json;
 import play.mvc.*;
 import play.data.Form;
 import security.ParticipantAuth;
+import security.PreviewTokens;
 import views.html.*;
 import com.fasterxml.jackson.databind.*;
 import models.*;
 import java.io.*;
+import java.util.Date;
 
 // TODO: Why does this always redirect to login?
 //@Security.Authenticated(SecuredClient.class)
 public class ClientController extends Controller 
 {
+    /**
+     * The policy a participant page opened as a researcher's preview ({@code ?preview=1}) is served
+     * with. The console frames previews with the same sandbox; the header keeps a preview sandboxed
+     * even when it is opened in a tab of its own. Without allow-same-origin the page runs in an opaque
+     * origin: no cookies, no storage, and no way to call the console's routes as the researcher.
+     */
+    static final String PREVIEW_SANDBOX = "sandbox allow-scripts allow-forms allow-modals allow-popups";
+
     public static Result index(String experimentId, String experimentInstanceId, String clientId, String connectionSpeed) 
     {
+        if ("1".equals(request().getQueryString("preview"))) {
+            // Whatever the page turns out to be (the game, or a "not running" notice).
+            response().setHeader("Content-Security-Policy", PREVIEW_SANDBOX);
+        }
         ExperimentInstance experimentInstance = null;
         Experiment experiment = null;
         
@@ -59,11 +73,17 @@ public class ClientController extends Controller
     }
 
     /**
-     * Whether the current request may act as this participant: it presents the seat's token, or
-     * comes from a logged-in researcher (the admin's Testing panel embeds participant pages).
+     * Whether the current request may act as this participant: it presents the seat's token, or a
+     * researcher's preview token for this page, or comes from a signed-in researcher (the previous
+     * console's Testing panel embeds participant pages in its own origin, with the researcher's cookie).
      */
-    static boolean isAuthorized(String experimentInstanceId, String clientId) {
+    static boolean isAuthorized(String experimentId, String experimentInstanceId, String clientId) {
         if (isResearcher()) {
+            return true;
+        }
+        String token = ParticipantAuth.presentedToken(request(), experimentInstanceId);
+        if (PreviewTokens.verify(experimentId, experimentInstanceId, clientId, token)) {
+            // A researcher's preview: as their sign-in would, the test session included.
             return true;
         }
         if (ClientLogin.isTestSession(experimentInstanceId)) {
@@ -71,7 +91,6 @@ public class ClientController extends Controller
             // before the login refused it) used to put them into the game of whatever session ran.
             return false;
         }
-        String token = ParticipantAuth.presentedToken(request(), experimentInstanceId);
         return ParticipantAuth.verify(experimentInstanceId, clientId, token);
     }
 
@@ -82,7 +101,12 @@ public class ClientController extends Controller
     }
 
     public static Result getState(String experimentId, String experimentInstanceId, String clientId, String connectionSpeed){
-        if (!isAuthorized(experimentInstanceId, clientId)) {
+        // A preview runs in an opaque origin (see PREVIEW_SANDBOX), so its request for this is
+        // cross-origin. Any origin may read the answer, but never with credentials: a page elsewhere
+        // can't use a participant's cookie or the researcher's sign-in to read it, only a token it
+        // already holds.
+        response().setHeader("Access-Control-Allow-Origin", "*");
+        if (!isAuthorized(experimentId, experimentInstanceId, clientId)) {
             ObjectNode error = Json.newObject();
             error.put("error", "not-logged-in");
             error.put("login", routes.ClientLogin.login(experimentId, experimentInstanceId).url());
@@ -109,6 +133,110 @@ public class ClientController extends Controller
         }
         result.put("connectSocket", socketUrl);
         return ok(result);
+    }
+
+    /**
+     * The CORS preflight for {@link #getState}: a preview sends its token in the X-Breadboard-Token
+     * header, which a cross-origin GET may only carry once this allows it.
+     */
+    public static Result stateOptions(String experimentId, String experimentInstanceId, String clientId) {
+        response().setHeader("Access-Control-Allow-Origin", "*");
+        response().setHeader("Access-Control-Allow-Methods", "GET");
+        response().setHeader("Access-Control-Allow-Headers", ParticipantAuth.HEADER);
+        response().setHeader("Access-Control-Max-Age", "600");
+        return noContent();
+    }
+
+    /**
+     * A preview token ({@link PreviewTokens}) for the console to show a participant's page:
+     * {@code POST /preview-token} with {"experimentId", "experimentInstanceId", "clientId"}. Answers
+     * {"token", "expiresAt" (ISO-8601, UTC)}, or 400 {"error"} when the body is wrong, there is no such
+     * session, or the session is another experiment's. The test session (0) can be previewed for any
+     * experiment the account has. The client id is any the participant login takes, and the computer
+     * players' ("_1", ...) too. Nothing about the participant's own seat changes.
+     */
+    @Security.Authenticated(Secured.class)
+    public static Result previewToken() {
+        User user = User.findByUID(session("uid"));
+        if (user == null) {
+            return unauthorized();
+        }
+        JsonNode body = request().body().asJson();
+        if (body == null || !body.isObject()) {
+            return previewRefused("Send {\"experimentId\", \"experimentInstanceId\", \"clientId\"} as JSON.");
+        }
+        Long experimentId = wholeNumber(body.get("experimentId"));
+        Long instanceId = wholeNumber(body.get("experimentInstanceId"));
+        JsonNode client = body.get("clientId");
+        String clientId = client != null && client.isTextual() ? client.textValue() : null;
+        if (experimentId == null) {
+            return previewRefused("\"experimentId\" must be a number.");
+        }
+        if (instanceId == null) {
+            return previewRefused("\"experimentInstanceId\" must be a number.");
+        }
+        if (clientId == null || clientId.trim().isEmpty()) {
+            return previewRefused("\"clientId\" must be a player's id.");
+        }
+        Experiment experiment = Experiment.findById(experimentId);
+        if (experiment == null) {
+            return previewRefused("There is no experiment with id " + experimentId + ".");
+        }
+        if (Experiment.TEST_INSTANCE_ID.equals(instanceId)) {
+            if (!canSee(user, experiment)) {
+                return previewRefused("\"" + experiment.name + "\" isn't one of your experiments.");
+            }
+        } else {
+            ExperimentInstance instance = ExperimentInstance.findById(instanceId);
+            if (instance == null) {
+                return previewRefused("There is no session with id " + instanceId + ".");
+            }
+            if (instance.experiment == null || !experimentId.equals(instance.experiment.id)) {
+                return previewRefused("Session " + instanceId + " is not a session of \"" + experiment.name + "\".");
+            }
+        }
+        PreviewTokens.Issued issued = PreviewTokens.issue(user.email, experimentId.toString(), instanceId.toString(), clientId);
+        ObjectNode result = Json.newObject();
+        result.put("token", issued.token);
+        result.put("expiresAt", Timestamps.iso(new Date(issued.expiresAt)));
+        return ok(result);
+    }
+
+    // The account's own experiments, and the one it has selected.
+    private static boolean canSee(User user, Experiment experiment) {
+        if (user.selectedExperiment != null && experiment.id.equals(user.selectedExperiment.id)) {
+            return true;
+        }
+        for (Experiment owned : user.ownedExperiments) {
+            if (experiment.id.equals(owned.id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A JSON whole number, or one written as text ("12"); else null. */
+    private static Long wholeNumber(JsonNode value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.isIntegralNumber() && value.canConvertToLong()) {
+            return value.longValue();
+        }
+        if (value.isTextual()) {
+            try {
+                return Long.valueOf(value.textValue().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static Result previewRefused(String why) {
+        ObjectNode error = Json.newObject();
+        error.put("error", why);
+        return badRequest(error);
     }
 
     /**
@@ -157,7 +285,7 @@ public class ClientController extends Controller
     {
         // Checked here, during the handshake request; the callbacks below run later on another
         // thread without access to the request.
-        final boolean authorized = isAuthorized(experimentInstanceId, clientId);
+        final boolean authorized = isAuthorized(experimentId, experimentInstanceId, clientId);
         return new WebSocket<JsonNode>() 
         {
             // Called when the Websocket Handshake is done.

@@ -612,6 +612,12 @@ function AMTAdminCtrl($scope, AMTAdminSrv, $q, $filter, $timeout, Upload, Manage
   }
 
 
+  // Quoted, with quotes inside doubled, and otherwise as recorded (a title or answer name with a
+  // quote in it used to shift the columns)
+  function csvField(value) {
+    return '"' + String(value).replace(/"/g, '""') + '"';
+  }
+
   function getAssignmentsCSV(hit) {
     var headerRow = '"hitId","hitTitle","creationTime","assignmentId","workerId","approvalTime","rejectionTime","bonusGranted"';
     var rows = [];
@@ -619,17 +625,26 @@ function AMTAdminCtrl($scope, AMTAdminSrv, $q, $filter, $timeout, Upload, Manage
     angular.forEach(hit.assignments, function (assignment) {
       angular.forEach(assignment.answer, function (value, key) {
         if (answerKeys.indexOf(key) === -1) {
-          headerRow += ',"' + key + '"';
+          headerRow += ',' + csvField(key);
           answerKeys.push(key);
         }
       });
     });
 
     angular.forEach(hit.assignments, function (assignment) {
-      var row = '"' + hit.hitid + '","' + hit.title + '","' + ($filter('date')(hit.creationTime, "yyyy-MM-dd")) + '","' + assignment.assignmentId + '","' + assignment.workerId + '","' + ((assignment.approvalTime) ? ($filter('date')(assignment.approvalTime, "yyyy-MM-dd")) : '') + '","' + ((assignment.rejectionTime) ? ($filter('date')(assignment.rejectionTime, "yyyy-MM-dd")) : '') + '","' + assignment.bonusGranted + '"';
+      var row = [
+        hit.hitid,
+        hit.title,
+        $filter('date')(hit.creationTime, "yyyy-MM-dd"),
+        assignment.assignmentId,
+        assignment.workerId,
+        (assignment.approvalTime) ? ($filter('date')(assignment.approvalTime, "yyyy-MM-dd")) : '',
+        (assignment.rejectionTime) ? ($filter('date')(assignment.rejectionTime, "yyyy-MM-dd")) : '',
+        assignment.bonusGranted
+      ].map(csvField).join(',');
       for (var i = 0; i < answerKeys.length; i++) {
         if (assignment.answer.hasOwnProperty(answerKeys[i])) {
-          row += ',"' + assignment.answer[answerKeys[i]].replace(/"/g, '""') + '"';
+          row += ',' + csvField(assignment.answer[answerKeys[i]]);
         } else {
           row += ',""'
         }

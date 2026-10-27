@@ -5,10 +5,12 @@ import { EditorView } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 
 // The store as the console sees it: a reactive admin with an output log, and actions that log
-// what was run (runScript writes the script as an "input" line, like the real store).
+// what was run (runScript writes the script as an "input" line and returns its request id, like the
+// real store).
 vi.mock('@/store/admin', async () => {
   const { reactive, ref, computed } = await import('vue')
   let seq = 100
+  let requestSeq = 0
   const admin = reactive({
     email: 'r@lab.org',
     user: { email: 'r@lab.org', currentScript: 'g.V.count()', experiments: [], defaultLanguage: null } as any,
@@ -17,9 +19,11 @@ vi.mock('@/store/admin', async () => {
     engine: 'ready',
     output: [] as any[],
   })
-  const push = (kind: string, text: string, source?: string) => { admin.output.push({ id: ++seq, kind, text, source, at: Date.now() }) }
+  const push = (kind: string, text: string, source?: string, requestId?: string) => {
+    admin.output.push({ id: ++seq, kind, text, source, at: Date.now(), ...(requestId ? { requestId } : {}) })
+  }
   const actions = {
-    runScript: vi.fn((script: string) => { push('input', script); return true }),
+    runScript: vi.fn((script: string): string | null => { push('input', script); return `req-${++requestSeq}` }),
     runStep: vi.fn(),
     refresh: vi.fn(() => Promise.resolve(null)),
     markEngineStale: vi.fn(),
@@ -61,7 +65,7 @@ import ConsolePage from '../src/pages/console/ConsolePage.vue'
 
 const admin = store.admin as any
 const actions = store.actions as any
-const push = (store as any).__push as (kind: string, text: string, source?: string) => void
+const push = (store as any).__push as (kind: string, text: string, source?: string, requestId?: string) => void
 
 beforeEach(() => {
   __resetReplies()
@@ -110,6 +114,44 @@ describe('engine replies', () => {
     for (const source of ['OnJoinStep', 'OnLeaveStep', 'Steps', 'RunGame']) {
       expect(matchReply(waiting, { id: 12, kind: 'output', text: 'a()\n\n==>1', source })).toBe(-1)
     }
+  })
+
+  it('pairs an answer that names its request id with the script sent with it, wherever it stands in line', () => {
+    const waiting = [
+      { script: 'a()', afterId: 10, request: 'SendScript' as const, requestId: 'r1' },
+      { script: 'b()', afterId: 11, request: 'SendStep' as const, requestId: 'r2' },
+    ]
+    // the second script's error, though the first is older
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Caught error: boom', source: 'SendStep', requestId: 'r2' })).toBe(1)
+    // a refusal is an answer too
+    const refusal = 'Nothing was run: the engine has another experiment loaded now. Reload the page and try again.'
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: refusal, source: 'SendScript', requestId: 'r1' })).toBe(0)
+    // also when the server tags its answers and the echo is not the script's
+    expect(matchReply(waiting, { id: 12, kind: 'output', text: 'x\n\n==>1', source: 'SendStep', requestId: 'r2' }, true)).toBe(1)
+    // an id no waiting script was sent with answers none of them
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Caught error: late', source: 'SendScript', requestId: 'r0' })).toBe(-1)
+    expect(matchReply(waiting, { id: 12, kind: 'output', text: 'a()\n\n==>1', source: 'SendScript', requestId: 'r0' })).toBe(-1)
+    // ... except a script waiting without an id, by its place in line
+    expect(matchReply([{ script: 'a()', afterId: 10 }], { id: 12, kind: 'error', text: 'Caught error: x', source: 'SendScript', requestId: 'r0' })).toBe(0)
+    // an older server echoes no id: the place in line decides, as before
+    expect(matchReply(waiting, { id: 12, kind: 'error', text: 'Caught error: boom', source: 'SendScript' })).toBe(0)
+    expect(matchReply(waiting, { id: 12, kind: 'output', text: 'b()\n\n==>2', source: 'SendStep' })).toBe(1)
+  })
+
+  it('does not take a slow script\'s late answer for the next script\'s, once the server echoes ids', async () => {
+    vi.useFakeTimers()
+    push('input', 'slow()')
+    const slow = expectReply('slow()', lastOutputId(), { request: 'SendScript', requestId: 'r-slow' }, 1000)
+    push('input', 'next()')
+    const next = expectReply('next()', lastOutputId(), { request: 'SendScript', requestId: 'r-next' }, 5000)
+    // next() fails first, then slow() answers
+    push('error', 'Caught error: next failed', 'SendScript', 'r-next')
+    await nextTick()
+    push('output', 'slow()\n\n==>1', 'SendScript', 'r-slow')
+    await nextTick()
+    expect(await next).toMatchObject({ ok: false, error: 'Caught error: next failed' })
+    expect(await slow).toMatchObject({ ok: true, values: ['1'] })
+    vi.useRealTimers()
   })
 
   it('takes untagged frames as answers only from a server that tags nothing', () => {
@@ -243,7 +285,7 @@ describe('engine errors', () => {
   it('says plainly that the game already started', () => {
     const e = parseGroovyError('Caught error: initStep started already')
     expect(e.title).toBe('The game has already started')
-    expect(e.hint).toMatch(/once per session/)
+    expect(e.hint).toMatch(/once per engine load/)
     expect(e.places).toEqual([])
   })
 
@@ -305,6 +347,25 @@ describe('history and the buffer', () => {
     expect(consoleState.buffer).toBe('theirs()')
   })
 
+  it('shows the refusal of a script the engine did not run, as the run\'s error', async () => {
+    seedConsole('refused@x.org', '')
+    const run = runConsoleScript('g.V.count()', { label: 'Script', fromLine: 1 })!
+    const id = actions.runScript.mock.results[0].value
+    expect(id).toMatch(/^req-/)
+    const refusal = 'Nothing was run: the engine has another experiment loaded now. Reload the page and try again.'
+    // another script's answer comes first: not this run's
+    push('error', 'Caught error: someone else', 'SendScript', 'req-elsewhere')
+    await nextTick()
+    expect(run.status).toBe('pending')
+    push('error', refusal, 'SendScript', id)
+    await nextTick()
+    await flushPromises()
+    expect(run).toMatchObject({ status: 'error', error: refusal })
+    // read as a plain sentence: no exception name, no line to point at
+    const e = parseGroovyError(refusal)
+    expect(e).toMatchObject({ title: refusal, hint: null, places: [] })
+  })
+
   it('runs a script and records the engine\'s answer and the history', async () => {
     seedConsole('run@x.org', '')
     const run = runConsoleScript('g.V.count()', { label: 'Script', fromLine: 1 })!
@@ -320,7 +381,7 @@ describe('history and the buffer', () => {
 
   it('adds no run and no history when the connection is down', () => {
     seedConsole('offline@x.org', '')
-    actions.runScript.mockReturnValueOnce(false)
+    actions.runScript.mockReturnValueOnce(null)
     expect(runConsoleScript('g.V.count()', { label: 'Script', fromLine: 1 })).toBeNull()
     expect(consoleState.runs).toHaveLength(0)
     expect(consoleState.history).toHaveLength(0)
@@ -471,7 +532,7 @@ describe('ConsolePage', () => {
     const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
     await nextTick()
     expect(w.find('.con__notice').text()).toContain('scripts can\'t run right now')
-    actions.runScript.mockReturnValueOnce(false)
+    actions.runScript.mockReturnValueOnce(null)
     await w.findAll('button').find(b => b.text() === 'Run script')!.trigger('click')
     expect((store as any).ensureConnected).toHaveBeenCalled()
     expect(consoleState.runs).toHaveLength(0)

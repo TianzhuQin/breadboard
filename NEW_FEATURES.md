@@ -29,6 +29,13 @@ player's own `_system.recruitment`, which drives the built-in Prolific completio
 
 The start scripts now generate `conf/application.secret` instead of using a published default.
 
+A session closes to newcomers when its game starts, however it starts: the console's Start, the
+autopilot, the AMT timer, or the experiment's own code calling `initStep.start()` (for example an
+OnJoinStep that starts the game once enough people are in). Code that only mentions
+`initStep.start()`, such as that OnJoinStep while the steps load, starts nothing. Reloading the
+engine, resuming a session or selecting its experiment again forgets the game, so the session then
+takes people again (newcomers and those who held a seat) until its game is started again.
+
 ## What participants receive about others
 
 Set from experiment scripts:
@@ -87,8 +94,13 @@ study URL.
 
 - If another experiment's session is running when you turn it on, the autopilot waits for that
   session to end; the page also offers to end it there and then.
-- Stopping the autopilot's session from the console pauses the autopilot. Press **Resume** on
-  the Autopilot page to let it open sessions again.
+- Ending the autopilot's session from the console pauses the autopilot: stopping it, or anything
+  that reloads the engine (selecting another experiment, launching or resuming another session,
+  reloading). Press **Resume** on the Autopilot page to let it open sessions again; after a run
+  with **continuous** off, the button reads **Open another session**. Both work when
+  `application.conf` is in charge too, and a pause survives a server restart.
+- While a researcher has another experiment loaded and a console open, the autopilot leaves the
+  engine to them and opens its session once they close the console.
 - While it is on, it opens a session whenever the script engine runs none. The engine is shared
   by everyone on the server, so on a server that runs the autopilot, test other experiments on
   another server, or turn the autopilot off first.
@@ -118,8 +130,9 @@ autopilot.replaceDisconnected([afterSeconds: 30, returnToHuman: true])
 
 While people wait, each one's `player._system.autopilot` holds the waiting state, which the new
 participant page shows as a waiting screen. Older pages show the waiting text instead. The waiting
-state is cleared however the game starts, whether by the autopilot, the admin's Run button or the
-AMT timer, because the server sends a `bb:game-start` event that scripts can also listen for.
+state is cleared however the game starts, whether by the autopilot, the admin's Run button, the
+AMT timer or the experiment's own code, because the server sends a `bb:game-start` event that
+scripts can also listen for.
 People who come back after a session was given up get its "could not start" notice, and are passed
 to `onCancel` too.
 
@@ -213,6 +226,13 @@ goes through `edgeEdits.adminEdit`, so the experiment's rules and the event log 
 other edit. A toast offers Undo, and Cmd/Ctrl+Z works too. The player panel lists each person's
 ties with a Cut button and a "Tie to…" picker.
 
+**Previews.** The Preview page and "Open in a new tab" show the participant page in a sandbox,
+with a preview token that works for that player only and lasts 12 hours. The page's own scripts
+(the experiment's, or text participants typed) can't act with the researcher's sign-in. Signing
+out or changing the password ends the tokens; open the preview again to get a new one. The
+console's sign-in cookie is now `SameSite=Lax`, and approving a Mechanical Turk assignment (which
+pays the worker) takes a POST, so a link on another site can't do it.
+
 **Several consoles.** Each open console gets the answers to its own actions; the server used to
 send them to whichever console had connected last. OnJoinStep and OnLeaveStep run once per
 person, whether no console, one or several are open, and a second account signing in no longer
@@ -221,6 +241,9 @@ restarts the running session.
 ## Data
 
 - **Timestamps:** CSV exports are now in true UTC. The format is unchanged.
+- **Exact values:** every CSV, the server's and the console's downloads, keeps values exactly as
+  recorded, with no byte-order mark. A spreadsheet may read a value that starts with `=`, `+`,
+  `-` or `@` as a formula, so import the file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
 - **Connection events:** `clientConnected` and `clientDisconnected`.
 - **Autopilot events:** `autopilotStart`, `autopilotCancelled`, `aiTakeover`, `aiReturned`.

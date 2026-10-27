@@ -45,11 +45,11 @@ export interface AutopilotStatus {
    * It can be by design (paused, done, waiting for another session: see problemKind) or a fault.
    */
   problem: string | null
-  /** a researcher stopped its session, so it opens none until the settings are saved again */
+  /** a researcher stopped its session, so it opens none until Resume (see resumeAutopilot) */
   paused: boolean
   /**
-   * its one session finished with "continuous" off, so it opens none until the settings are saved
-   * again. Only newer servers send it; problemKind also reads the server's message.
+   * its one session finished with "continuous" off, so it opens none until Resume (see
+   * resumeAutopilot). Only newer servers send it; haltOf also reads the server's message.
    */
   done: boolean
   /** what status.problem is about, when the server says (newer servers); see problemKind */
@@ -197,7 +197,7 @@ export function describeEngineSession (s: EngineSession): string {
 
 /**
  * What status.problem is about. 'paused', 'done' and 'waiting' are the autopilot waiting by design
- * (for a save, or for another session to end): information, not a fault. 'error' needs fixing.
+ * (for Resume, or for the engine to be free): information, not a fault. 'error' needs fixing.
  */
 export type ProblemKind = 'paused' | 'done' | 'waiting' | 'error'
 const PROBLEM_KINDS = new Set<any>(['paused', 'done', 'waiting', 'error'])
@@ -216,6 +216,23 @@ export function problemKind (state: Pick<AutopilotState, 'settings' | 'status'>)
   // session is running" message means the autopilot is just waiting.
   if (s.engineSession && /^Another session is running/i.test(s.problem)) return 'waiting'
   return 'error'
+}
+
+/**
+ * Why the autopilot opens nothing until someone presses Resume: 'paused' (a researcher stopped its
+ * session) or 'done' (its one session finished, "continuous" off); null otherwise. The server's own
+ * flags decide; an older server that sends no "done" is read from its message (problemKind).
+ */
+export function haltOf (state: Pick<AutopilotState, 'settings' | 'status'> | null): 'paused' | 'done' | null {
+  const s = state?.status
+  if (!s || !s.on) return null
+  if (s.paused) return 'paused'
+  if (s.done) return 'done'
+  return problemKind(state!) === 'done' ? 'done' : null
+}
+/** The button that resumes it: "Resume" after a pause, "Open another session" once it is done. */
+export function resumeLabel (halt: 'paused' | 'done'): string {
+  return halt === 'paused' ? 'Resume' : 'Open another session'
 }
 
 /**
@@ -403,6 +420,15 @@ export async function autopilotNow (ms = 4000): Promise<AutopilotState | null> {
  */
 export async function saveAutopilot (s: AutopilotSettings, opts: { takeOver?: boolean } = {}): Promise<AutopilotState> {
   return normalizeState(await http.post('/autopilot', opts.takeOver ? { ...s, takeOver: true } : s))
+}
+
+/**
+ * Let a paused or done autopilot open sessions again (POST /autopilot/resume), changing no
+ * settings, so it works whether the console or application.conf is in charge. A live session of
+ * another experiment is left to end. The server refuses (400) when the autopilot is off.
+ */
+export async function resumeAutopilot (): Promise<AutopilotState> {
+  return normalizeState(await http.post('/autopilot/resume'))
 }
 
 // ---- live monitoring (the open session's waiting room and events) -----------------------------

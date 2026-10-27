@@ -23,6 +23,9 @@ export function useNotificationPermission () {
       permission.addEventListener('change', handleChange)
       cb = handleChange
       permissionObj = permission
+    }).catch(err => {
+      // e.g. a preview from the researcher console, which runs in an opaque origin
+      console.log('Unable to query the notifications permission', err)
     })
   })
 
@@ -42,7 +45,14 @@ export async function requestNotificationPermission () {
     return false
   }
   if (!notificationsEnabled()) {
-    const permission = await Notification.requestPermission()
+    let permission: NotificationPermission
+    try {
+      permission = await Notification.requestPermission()
+    } catch (err) {
+      // (refused outright in some sandboxed and embedded pages)
+      console.log('Unable to request notification permission', err)
+      return false
+    }
     if (permission === 'granted') {
       console.log('Notification permission granted')
       return true

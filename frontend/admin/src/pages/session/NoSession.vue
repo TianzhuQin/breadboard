@@ -19,7 +19,12 @@
         <li><span class="live-none__num" aria-hidden="true">3</span><span><b>Start the game.</b> Everything is recorded for you.</span></li>
       </ol>
 
-      <p v-if="autoOn" class="live-none__auto is-on">
+      <p v-if="autoOn && autopilot?.halted" class="live-none__auto is-on">
+        <Bot :size="16" aria-hidden="true" />
+        <span>Autopilot runs this experiment but {{ autopilot.halted === 'paused' ? 'is paused' : 'has finished its session' }}: it opens no new session until someone presses {{ autopilot.halted === 'paused' ? 'Resume' : 'Open another session' }} on the Autopilot page.</span>
+        <RouterLink to="/autopilot">Autopilot</RouterLink>
+      </p>
+      <p v-else-if="autoOn" class="live-none__auto is-on">
         <Bot :size="16" aria-hidden="true" />
         <span>Autopilot runs this experiment and opens a session by itself{{ autopilot?.continuous ? ', again after each one finishes' : '' }}.</span>
         <RouterLink to="/autopilot">Autopilot settings</RouterLink>

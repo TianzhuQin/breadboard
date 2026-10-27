@@ -86,6 +86,19 @@ public class ScriptBoard extends UntypedActor {
   private static volatile String engineBuiltFor;
   // Counts engine builds, so a message queued for one engine can tell it has been replaced.
   private static volatile long engineGeneration = 0L;
+  // The engine whose game has started (its init step started, and didn't throw), for the console's
+  // engine.gameStarted; null when none has. Tied to the engine rather than a flag that a rebuild
+  // clears, so a start still running in an engine being replaced never counts for the new one.
+  private static volatile ScriptEngine gameStartedIn = null;
+
+  /**
+   * The script or step a researcher's action runs on this thread (SendScript, SendStep, RunGame),
+   * and the start it has marked itself, if any (see stepStarting).
+   */
+  private static final class ResearcherRun {
+    ScriptEngine startPending;
+  }
+  private static final ThreadLocal<ResearcherRun> RESEARCHER_RUN = new ThreadLocal<ResearcherRun>();
   // True while resetEngine empties the old graph: those removals are the old session ending, not
   // players leaving, so OnLeaveStep doesn't run for them against the new engine.
   private static volatile boolean resetting = false;
@@ -310,6 +323,7 @@ public class ScriptBoard extends UntypedActor {
       synchronized (REBUILD_LOCK) {
         // First: whatever was queued for the old engine is stale even if this build fails.
         engineGeneration++;
+        gameStartedIn = null;
         engineBuiltFor = builtFor;
         buildEngine(experiment);
       }
@@ -465,7 +479,7 @@ public class ScriptBoard extends UntypedActor {
     }
     for (Step step : experiment.getSteps()) {
       //should call RunStep?
-      processScript(step.source + ";null;", out, step.name, "source", STEPS_SOURCE);
+      processScript(step.source + ";null;", out, step.name, "source", STEPS_SOURCE, null, true);
     }
     afterStepsLoaded(experiment);
   }
@@ -996,8 +1010,7 @@ public class ScriptBoard extends UntypedActor {
       Logger.error("Unhandled error in ScriptBoard.onReceive", e);
       // Tell the console that asked, instead of failing silently.
       if (request != null && request.user != null && request.out != null) {
-        Breadboard.replyError(request.out, Breadboard.requestName(request),
-            "Something went wrong: " + ScriptBoardSupport.describeError(e));
+        Breadboard.replyError(request, "Something went wrong: " + ScriptBoardSupport.describeError(e));
       }
     }
   }
@@ -1019,10 +1032,19 @@ public class ScriptBoard extends UntypedActor {
           Breadboard.EditTie editTie = (Breadboard.EditTie) message;
           Breadboard.tieEditRefused(breadboardMessage.out, editTie.op, editTie.a, editTie.b, refusal);
         } else {
-          Breadboard.replyError(breadboardMessage.out, Breadboard.requestName(breadboardMessage), refusal);
+          Breadboard.replyError(breadboardMessage, refusal);
         }
         return;
       }
+    }
+    // A script or step written for another experiment than the engine's is refused too. Checked
+    // after the refusal above, which names what the engine runs and what to do: what is left is a
+    // page out of date with the account's own selection (another tab switched), or a step saved
+    // for another experiment.
+    String stale = staleRequest(breadboardMessage);
+    if (stale != null) {
+      Breadboard.replyError(breadboardMessage, stale);
+      return;
     }
     if (message instanceof Breadboard.AddAdmin) {
       Breadboard.AddAdmin addAdmin = (Breadboard.AddAdmin) message;
@@ -1068,12 +1090,25 @@ public class ScriptBoard extends UntypedActor {
       Breadboard.SendScript sendScript = (Breadboard.SendScript) message;
 
       if (breadboardMessage.user != null) {
-        // Save script in database
-        breadboardMessage.user.currentScript = sendScript.script;
-        breadboardMessage.user.update();
+        // Checked again and run under the engine lock, so no other experiment is loaded in between.
+        synchronized (REBUILD_LOCK) {
+          // (Another account may have loaded its experiment while this waited for the lock: that
+          // refusal names it and says what to do.)
+          stale = engineRefusal(breadboardMessage.user);
+          if (stale == null) {
+            stale = staleRequest(sendScript);
+          }
+          if (stale != null) {
+            Breadboard.replyError(sendScript, stale);
+            return;
+          }
+          // Save script in database
+          breadboardMessage.user.currentScript = sendScript.script;
+          breadboardMessage.user.update();
 
-        // Process script
-        processScript(sendScript.script, breadboardMessage.out, null, "request", "SendScript");
+          // Process script
+          processScript(sendScript.script, breadboardMessage.out, null, "request", "SendScript", sendScript.requestId);
+        }
       }
 
     } else if (message instanceof Breadboard.MakeChoice) {
@@ -1088,13 +1123,26 @@ public class ScriptBoard extends UntypedActor {
       if (breadboardMessage.user != null && breadboardMessage.user.selectedExperiment != null) {
         Logger.debug("SendStep: " + sendStep.id + ", " + sendStep.name + ", " + sendStep.source);
         // Now we only run the step, in this engine: if another account rebuilds it meanwhile, the
-        // step is dropped rather than run in that experiment's engine.
-        Long generation = engineGeneration;
-        getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out, "SendStep", generation), null);
+        // step is dropped rather than run in that experiment's engine. The engine checked against
+        // here is the one it is queued for.
+        Long generation;
+        synchronized (REBUILD_LOCK) {
+          stale = engineRefusal(breadboardMessage.user);
+          if (stale == null) {
+            stale = staleRequest(sendStep);
+          }
+          if (stale != null) {
+            Breadboard.replyError(sendStep, stale);
+            return;
+          }
+          generation = engineGeneration;
+        }
+        getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out, "SendStep",
+            generation, sendStep.requestId), null);
         // A re-run step may set the autopilot up itself; the console's settings apply again after it.
         getSelf().tell(new Breadboard.StepsLoaded(breadboardMessage.user, engineExperiment(), breadboardMessage.out, generation), null);
       } else {
-        Breadboard.replyError(breadboardMessage.out, "SendStep", "Select an experiment first.");
+        Breadboard.replyError(sendStep, "Select an experiment first.");
       }
     } else if (message instanceof Breadboard.RunStep) {
       // TODO: Compile step here and make available to scripting engine
@@ -1103,11 +1151,12 @@ public class ScriptBoard extends UntypedActor {
       synchronized (REBUILD_LOCK) {
         if (runStep.generation != null && runStep.generation != engineGeneration) {
           Breadboard.replyError(breadboardMessage.out, runStep.request,
-              "Nothing was run: the engine was reloaded (by you or someone else) before the step could run. Check what it runs now, then try again.");
+              "Nothing was run: the engine was reloaded (by you or someone else) before the step could run. Check what it runs now, then try again.",
+              null, runStep.echo());
         } else if (runStep.request != null) {
-          processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request);
+          processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
         } else {
-          processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE);
+          processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE, null, true);
         }
       }
     } else if (message instanceof Breadboard.StepsLoaded) {
@@ -1153,6 +1202,7 @@ public class ScriptBoard extends UntypedActor {
           if (resumed != null) {
             eventTracker.setExperimentInstance(resumed);
             gameListener.experimentInstance = resumed;
+            reopenAfterRebuild(resumed);
             for (Data param : resumed.data) {
               initParam(param, changeExperiment.experiment);
             }
@@ -1265,6 +1315,9 @@ public class ScriptBoard extends UntypedActor {
         }
         rebuildScriptBoard(selectedExperiment, builtFor(breadboardMessage));
         loadSteps(selectedExperiment, breadboardMessage.out);
+        if (carriesOn) {
+          reopenAfterRebuild(own);
+        }
         Breadboard.ReloadEngine reloadEngine = (Breadboard.ReloadEngine) message;
         if (reloadEngine.user.experimentInstanceId != -1) {
           ExperimentInstance ei = ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
@@ -1280,12 +1333,81 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  /**
+   * A session carried into a rebuilt engine (resumed, reloaded, or kept when its experiment is
+   * selected again): the rebuild forgot its game, so it takes people again, newcomers and those who
+   * held a seat, until its game is started again. Left closed, it turned everyone away: the login
+   * refused newcomers, and seat holders coming back were dropped.
+   */
+  private static void reopenAfterRebuild(ExperimentInstance session) {
+    // Only a running one: a finished or stopped session keeps the record that its game ran.
+    if (session == null || session.isTestInstance() || session.status != ExperimentInstance.Status.RUNNING
+        || !Boolean.TRUE.equals(session.hasStarted)) {
+      return;
+    }
+    try {
+      // Through the setter, which saves: a plain field write here isn't seen by Ebean's change
+      // tracking, so a save() after it wrote nothing.
+      session.setHasStarted(Boolean.FALSE);
+    } catch (Exception e) {
+      // (e.g. another actor saved this session meanwhile) The rebuild itself has happened.
+      Logger.error("Could not reopen session " + session.id + " to newcomers after the engine was rebuilt", e);
+    }
+  }
+
   // A researcher's action that runs in the engine's game (not RunStep, StepsLoaded or the join and
   // leave steps, which the engine's own actor queues).
   private static boolean actsOnTheGame(Breadboard.BreadboardMessage message) {
     return message instanceof Breadboard.RunGame || message instanceof Breadboard.SendStep
         || message instanceof Breadboard.SendScript || message instanceof Breadboard.MakeChoice
         || message instanceof Breadboard.EditTie || message instanceof Breadboard.HitCreated;
+  }
+
+  /** The answer to a script or step written for another experiment than the one the engine has loaded. */
+  static final String ENGINE_CHANGED = "Nothing was run: the engine has another experiment loaded now. Reload the page and try again.";
+
+  /**
+   * Why a SendScript or SendStep must not run in the engine as it is now, or null (also for any other
+   * message). The console says which experiment its page shows ({@code experimentId}); when the engine
+   * has another one loaded (another tab or account loaded one since), what it sends was written for
+   * another game. A saved step (id not -1) is checked the same way against the experiment it belongs
+   * to; one that no longer exists is not.
+   */
+  static String staleRequest(Breadboard.BreadboardMessage message) {
+    if (message instanceof Breadboard.SendScript) {
+      return staleRequest(((Breadboard.SendScript) message).experimentId, null);
+    }
+    if (message instanceof Breadboard.SendStep) {
+      Breadboard.SendStep sendStep = (Breadboard.SendStep) message;
+      return staleRequest(sendStep.experimentId, sendStep.id);
+    }
+    return null;
+  }
+
+  static String staleRequest(Long experimentId, Long stepId) {
+    if (engine == null) {
+      // Nothing is loaded to differ from: the run itself answers that the engine isn't running.
+      return null;
+    }
+    Long loaded = engineExperimentId;
+    if (experimentId != null && !experimentId.equals(loaded)) {
+      return ENGINE_CHANGED;
+    }
+    Long stepOf = experimentOfStep(stepId);
+    if (stepOf != null && !stepOf.equals(loaded)) {
+      return ENGINE_CHANGED;
+    }
+    return null;
+  }
+
+  /** The experiment a saved step belongs to; null for -1 (not saved) or a step that doesn't exist. */
+  static Long experimentOfStep(Long stepId) {
+    if (stepId == null || stepId < 0) {
+      return null;
+    }
+    com.avaje.ebean.SqlRow row = com.avaje.ebean.Ebean.createSqlQuery("select experiment_id from steps where id = :id")
+        .setParameter("id", stepId).findUnique();
+    return row == null ? null : row.getLong("experiment_id");
   }
 
   /**
@@ -1332,12 +1454,14 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * What the shared engine runs, for the console's User JSON ({@code engine}): {@code experimentId},
-   * {@code experimentName}, {@code sessionId}, {@code sessionName} (its live session, if any) and
-   * {@code owner} (the account running it); null values when unknown. An account's own selection
+   * {@code experimentName}, {@code sessionId}, {@code sessionName} (its live session, if any),
+   * {@code owner} (the account running it) and {@code gameStarted} (initStep.start() has run without
+   * an error since the engine was last built); null values when unknown. An account's own selection
    * can differ, and its engine actions are refused then (see engineRefusal).
    */
   static ObjectNode engineJson() {
     ObjectNode json = Json.newObject();
+    json.put("gameStarted", engine != null && gameStartedIn == engine);
     Experiment experiment = engine == null ? null : engineExperiment();
     ExperimentInstance session = engine == null ? null : Autopilot.liveEngineSession();
     String owner = engine == null ? null : engineOwnerEmail();
@@ -1623,6 +1747,8 @@ public class ScriptBoard extends UntypedActor {
         eventTracker.setExperimentInstance(instance);
         gameListener.experimentInstance = instance;
         gameListener.start();
+        // (After start(): a stopped session being resumed counts as running only from there.)
+        reopenAfterRebuild(instance);
 
         instanceData.addPropertyChangeListener(new UserDataChangeListener(instance));
       } else {
@@ -1879,7 +2005,7 @@ public class ScriptBoard extends UntypedActor {
    * on a player's behalf from the console (clientId null), answered with
    * {"request": "MakeChoice", "choice": "made"}, {"request": "MakeChoice", "choice": "gone"} when
    * the choice is no longer offered (answered, expired or the game moved on), or
-   * {"error", "request": "MakeChoice"}.
+   * {"error", "request": "MakeChoice"}; each with the choice's "choiceUID".
    */
   static void makeChoice(String clientId, String uid, String params, ThrottledWebSocketOut out) {
     boolean console = clientId == null;
@@ -1901,6 +2027,7 @@ public class ScriptBoard extends UntypedActor {
       if (console) {
         jsonOutput.put("request", "MakeChoice");
         jsonOutput.put("choice", made ? "made" : "gone");
+        jsonOutput.put("choiceUID", uid);
       } else if (!made) {
         Logger.info("Ignored choice " + uid + " from " + clientId + ": not (or no longer) offered to this participant");
       }
@@ -1913,7 +2040,8 @@ public class ScriptBoard extends UntypedActor {
         while (root.getCause() != null && root.getCause() != root) {
           root = root.getCause();
         }
-        Breadboard.replyError(out, "MakeChoice", "The choice could not be made: " + ScriptBoardSupport.describeError(root));
+        Breadboard.replyError(out, "MakeChoice", "The choice could not be made: " + ScriptBoardSupport.describeError(root), null,
+            uid == null ? Collections.<String, String>emptyMap() : Collections.singletonMap("choiceUID", uid));
         return;
       }
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
@@ -1931,13 +2059,37 @@ public class ScriptBoard extends UntypedActor {
    * tell whose answer a frame is. No tag when {@code tag} is null.
    */
   static void processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue) {
+    processScript(script, out, scriptName, tag, tagValue, null);
+  }
+
+  /** As above, with {@code "requestId": requestId} on every frame too when it is not null (see Breadboard.echoed). */
+  static void processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
+                            String requestId) {
+    processScript(script, out, scriptName, tag, tagValue, requestId, false);
+  }
+
+  /**
+   * As above. {@code stepCode}: the script is an experiment's step code (loaded or run again from the
+   * Steps page), which defines steps rather than starting the game, even when it mentions
+   * initStep.start() (e.g. an OnJoinStep that starts the game once enough people are in). Its text
+   * says nothing then: whether the game starts is seen when the init step actually starts
+   * (stepStarting).
+   */
+  static void processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
+                            String requestId, boolean stepCode) {
     if (scriptName == null) scriptName = "Unnamed Script";
 
     ObjectNode jsonOutput = Json.newObject();
     if (tag != null) {
       jsonOutput.put(tag, tagValue);
     }
-    if (engine == null) {
+    if (requestId != null) {
+      jsonOutput.put("requestId", requestId);
+    }
+    // One engine throughout, even if another actor rebuilds it meanwhile: the start is marked, run
+    // and (if it fails) undone in the same one.
+    final ScriptEngine running = engine;
+    if (running == null) {
       // Nothing has built an engine yet (no experiment selected since the server started).
       jsonOutput.put("error", "Caught error: The script engine isn't running yet. Select an experiment first.\n");
       if (out != null) {
@@ -1945,12 +2097,20 @@ public class ScriptBoard extends UntypedActor {
       }
       return;
     }
-    //TODO: better way to handle this?
+    // The start command itself (what the console's Start, the autopilot and the AMT timer send). It
+    // is known before it runs, so a second one is refused and newcomers are turned away first. Other
+    // scripts only mentioning it start nothing by that: an OnJoinStep's code defining when to start,
+    // or a participant's id in "onJoinStep.start('<id>')". A real start of the init step from any
+    // script is seen as it happens (stepStarting).
     boolean initStep = false;
+    // For a start: the game listener whose session it closed to newcomers, and that session's
+    // hasStarted from before (put back if the start fails).
+    GameListener closedBy = null;
+    Boolean startedBefore = null;
     synchronized (ScriptBoard.class) {
-      if (script.contains("initStep.start()")) {
-        if (engine.get("initStep.start()") != null) {
-          Logger.debug("engine.get(\"initStep.start()\") = " + engine.get("initStep.start()").toString());
+      if (!stepCode && START_COMMAND.equals(script.trim())) {
+        if (running.get("initStep.start()") != null) {
+          Logger.debug("engine.get(\"initStep.start()\") = " + running.get("initStep.start()").toString());
           Logger.warn("The initStep has started already.");
           jsonOutput.put("error", "Caught error: ".concat("initStep started already").concat("\n"));
           if (out != null) {
@@ -1958,14 +2118,20 @@ public class ScriptBoard extends UntypedActor {
           }
           return;
         }
-        engine.put("initStep.start()", true);
+        running.put("initStep.start()", true);
         initStep = true;
         // Close the game to newcomers once it starts, however it was started. Only the AMT timer
         // used to do this, so with a manual start late joiners were admitted mid-game.
         if (!Play.application().configuration().getBoolean("breadboard.allowLateJoin", false)) {
-          Object listener = engine.get("gameListener");
+          Object listener = running.get("gameListener");
           if (listener instanceof GameListener) {
-            ((GameListener) listener).hasStarted();
+            try {
+              startedBefore = ((GameListener) listener).closeToNewcomers();
+              closedBy = (GameListener) listener;
+            } catch (Exception e) {
+              // The game still starts; only newcomers may still get in.
+              Logger.error("Could not close the session to newcomers as its game starts", e);
+            }
           }
         }
       }
@@ -1978,15 +2144,25 @@ public class ScriptBoard extends UntypedActor {
       info.put("scriptName", scriptName);
       eventBus.emit("bb:game-start", info);
     }
+    // A researcher's script (the console's Start, Script console or Steps page) may not start a game
+    // that has started already, however it calls initStep.start(); see stepStarting.
+    ResearcherRun outer = RESEARCHER_RUN.get();
+    if ("request".equals(tag)) {
+      ResearcherRun run = new ResearcherRun();
+      run.startPending = initStep ? running : null;
+      RESEARCHER_RUN.set(run);
+    } else {
+      RESEARCHER_RUN.remove();
+    }
     try {
-      Object outputObject = engine.eval(script);
+      Object outputObject = running.eval(script);
       // Clear out error
       jsonOutput.put("error", "");
 
       // Write out the results Map as JSON
       ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
-      mapper.writeValue(outputStream, engine.getBindings(ScriptContext.ENGINE_SCOPE).get("results"));
+      mapper.writeValue(outputStream, running.getBindings(ScriptContext.ENGINE_SCOPE).get("results"));
       String outputString = script.trim().concat("\n\n==>");
 
       if (outputObject != null) {
@@ -1998,6 +2174,10 @@ public class ScriptBoard extends UntypedActor {
       }
 
       jsonOutput.put("output", outputString.trim());
+      if (initStep) {
+        gameStartedIn = running;
+        gameStartNotice("GameStarted");
+      }
     } catch (CompilationFailedException cfe) {
       // Translate Groovy's opaque "Script<N>.groovy" names back to real file names in both the
       // logged stack trace and the error sent to the browser (see ScriptLoader.humanize*).
@@ -2005,25 +2185,152 @@ public class ScriptBoard extends UntypedActor {
       Logger.error("Unable to compile the script. " + scriptName, cfe);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(cfe) + "\n");
       if (initStep) {
-        engine.put("initStep.start()", null);
+        startFailed(running, closedBy, startedBefore);
       }
     } catch (ScriptException se) {
       ScriptLoader.humanizeStackTrace(se);
       Logger.error("Script Error. " + scriptName, se);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(se) + "\n");
       if (initStep) {
-        engine.put("initStep.start()", null);
+        startFailed(running, closedBy, startedBefore);
       }
     } catch (Exception e) {
       ScriptLoader.humanizeStackTrace(e);
       Logger.error("Failed to process the script. " + scriptName, e);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
       if (initStep) {
-        engine.put("initStep.start()", null);
+        startFailed(running, closedBy, startedBefore);
       }
     } finally {
+      if (outer != null) {
+        RESEARCHER_RUN.set(outer);
+      } else {
+        RESEARCHER_RUN.remove();
+      }
       if (out != null) {
         out.write(jsonOutput);
+      }
+    }
+  }
+
+  /** The script that starts the game. */
+  static final String START_COMMAND = "initStep.start()";
+
+  /** What stepStarting marked when an init step started outside processScript, for stepStartFailed. */
+  static final class StartMark {
+    final ScriptEngine engine;
+    final GameListener closedBy;
+    final Boolean before;
+
+    StartMark(ScriptEngine engine, GameListener closedBy, Boolean before) {
+      this.engine = engine;
+      this.closedBy = closedBy;
+      this.before = before;
+    }
+  }
+
+  /**
+   * A step is starting (groovy/step.groovy calls this, through GameListener, from Step.start()). When
+   * it is the engine's initStep, the game starts, however it was started. The start command
+   * (console's Start, autopilot, AMT timer) has been marked by processScript already. A start in the
+   * experiment's own code (e.g. an OnJoinStep that starts the game once enough people are in) is
+   * marked now, as processScript would: the next Start answers "started already", the session is
+   * closed to newcomers, the console sees gameStarted, and scripts get "bb:game-start". Returns what
+   * it marked, which Step.start hands to stepStartFailed if the init step throws; null when it
+   * marked nothing. Steps of an engine that has since been replaced are ignored.
+   *
+   * @throws IllegalStateException "initStep started already" when a researcher's script starts a
+   *     game that has started already (the console's Start is refused the same way)
+   */
+  static StartMark stepStarting(GameListener listener, Object step) {
+    ScriptEngine running = engine;
+    if (running == null || listener == null || step == null || listener.engine != running) {
+      return null;
+    }
+    if (step != running.get("initStep")) {
+      return null;
+    }
+    StartMark mark = null;
+    synchronized (ScriptBoard.class) {
+      if (running != engine) {
+        return null;
+      }
+      ResearcherRun researcher = RESEARCHER_RUN.get();
+      if (running.get("initStep.start()") == null) {
+        running.put("initStep.start()", true);
+        GameListener closedBy = null;
+        Boolean before = null;
+        if (!Play.application().configuration().getBoolean("breadboard.allowLateJoin", false)) {
+          try {
+            before = listener.closeToNewcomers();
+            closedBy = listener;
+          } catch (Exception e) {
+            // The game still starts; only newcomers may still get in.
+            Logger.error("Could not close the session to newcomers as its game starts", e);
+          }
+        }
+        mark = new StartMark(running, closedBy, before);
+      } else if (researcher != null && researcher.startPending == running) {
+        // The start command's own start, marked before it ran; it undoes it itself if it fails.
+        researcher.startPending = null;
+      } else if (researcher != null) {
+        throw new IllegalStateException("initStep started already");
+      }
+      gameStartedIn = running;
+    }
+    if (mark != null) {
+      // Outside the lock, as in processScript: a handler may hold its own lock and call back in here.
+      Map<String, Object> info = new HashMap<String, Object>();
+      info.put("scriptName", "initStep");
+      eventBus.emit("bb:game-start", info);
+      gameStartNotice("GameStarted");
+    }
+    return mark;
+  }
+
+  /**
+   * Tell every open console that the game started (or that a start from the experiment's own code
+   * was taken back), so it asks again what the engine runs: a start by the autopilot, the AMT timer
+   * or the experiment's code answers no console request.
+   */
+  private static void gameStartNotice(String what) {
+    ObjectNode notice = Json.newObject();
+    notice.putObject("notify").put(what, new Date().getTime());
+    toAllAdmins(notice);
+  }
+
+  /**
+   * The init step whose start stepStarting marked threw: undone as for the start command (see
+   * startFailed), unless the engine has been replaced since. Never throws.
+   */
+  static void stepStartFailed(Object token) {
+    if (!(token instanceof StartMark)) {
+      return;
+    }
+    StartMark mark = (StartMark) token;
+    synchronized (ScriptBoard.class) {
+      if (mark.engine != engine) {
+        return;
+      }
+    }
+    startFailed(mark.engine, mark.closedBy, mark.before);
+    gameStartNotice("GameStartFailed");
+  }
+
+  /**
+   * initStep.start() threw: it may be tried again, the game doesn't count as started, and its session
+   * takes newcomers again if it did before (hasStarted back to {@code before}, saved). Never throws.
+   */
+  private static void startFailed(ScriptEngine running, GameListener closedBy, Boolean before) {
+    running.put("initStep.start()", null);
+    if (gameStartedIn == running) {
+      gameStartedIn = null;
+    }
+    if (closedBy != null) {
+      try {
+        closedBy.startFailed(before);
+      } catch (Exception e) {
+        Logger.error("Could not reopen the session to newcomers after its start failed", e);
       }
     }
   }

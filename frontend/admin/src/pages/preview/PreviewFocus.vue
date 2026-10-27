@@ -25,7 +25,7 @@
       <div ref="stage" class="pfx__stage" :class="{ 'is-actual': zoom === 'actual' }">
         <PreviewFrame
           :key="`${playerId}-${nonce}`"
-          :src="src"
+          :target="target"
           :title="`Participant page of ${playerId}`"
           :device="device"
           :width="frameWidth"
@@ -41,11 +41,11 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, ExternalLink, Monitor, RotateCw, Smartphone } from 'lucide-vue-next'
 import { BButton, BDialog, BTabs, type TabItem } from '@/ui'
 import PreviewFrame from './PreviewFrame.vue'
-import { DEVICES, frameGeometry, naturalWidth, widthToFit, type DeviceKind } from './preview'
+import { DEVICES, frameGeometry, naturalWidth, widthToFit, type DeviceKind, type PreviewTarget } from './preview'
 
 const props = defineProps<{
   playerId: string | null
-  src: string
+  target: PreviewTarget | null
   index: number
   count: number
   initialDevice: DeviceKind

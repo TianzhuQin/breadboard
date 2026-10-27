@@ -4,12 +4,14 @@
       <span class="apst__icon" aria-hidden="true"><Bot :size="20" /></span>
       <div class="apst__titles" aria-live="polite">
         <h2 id="apst-title" class="apst__title">
-          {{ status.on ? (status.paused ? 'The autopilot is paused' : 'The autopilot is on') : stalled ? 'The autopilot can’t run' : 'The autopilot is off' }}
+          {{ halt ? `The autopilot is ${halt}` : status.on ? 'The autopilot is on' : stalled ? 'The autopilot can’t run' : 'The autopilot is off' }}
         </h2>
+        <!-- The way out of a pause is the same button whoever is in charge (POST /autopilot/resume),
+             so this never asks for a save: application.conf autopilots have nothing to save. -->
         <p class="apst__sub">
-          <template v-if="status.on && status.paused">Its session was stopped, so it opens no new one for now. Press Resume below to start again.</template>
-          <template v-else-if="status.on && kind === 'done'">
-            Its one session{{ expName ? ` of “${expName}”` : '' }} has finished, so it opens no new one for now.{{ source === 'config' ? '' : ' Press Open another session below when you want one.' }}
+          <template v-if="halt === 'paused'">Its session was stopped, so it opens no new one for now. Press Resume below to start again.</template>
+          <template v-else-if="halt === 'done'">
+            Its one session{{ expName ? ` of “${expName}”` : '' }} has finished, so it opens no new one for now. Press Open another session below when you want one.
           </template>
           <template v-else-if="status.on && expName">Running “{{ expName }}” unattended.</template>
           <template v-else-if="status.on">Running an experiment unattended.</template>
@@ -96,7 +98,7 @@ import { computed } from 'vue'
 import { ArrowRight, Bot, CirclePause, CircleX, Hourglass, Info, Lock, RefreshCw, Timer, TriangleAlert } from 'lucide-vue-next'
 import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
-import { describeEngineSession, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import { describeEngineSession, haltOf, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
 
 const props = defineProps<{
   state: AutopilotState
@@ -118,18 +120,27 @@ const expName = computed(() => status.value.experimentName || props.experimentNa
 const stalled = computed(() => props.state.settings.enabled && !status.value.on)
 /** what status.problem is about: a fault, or the autopilot waiting by design */
 const kind = computed(() => problemKind(props.state))
+/** paused or done: it opens nothing until Resume */
+const halt = computed(() => haltOf(props.state))
 
 const badge = computed<{ tone: 'success' | 'warning' | 'neutral', label: string, pulse: boolean }>(() => {
-  if (status.value.on && status.value.paused) return { tone: 'warning', label: 'Paused', pulse: false }
+  if (halt.value === 'paused') return { tone: 'warning', label: 'Paused', pulse: false }
+  if (halt.value === 'done') return { tone: 'neutral', label: 'Done', pulse: false }
   if (status.value.on) return { tone: 'success', label: 'On', pulse: true }
   return stalled.value ? { tone: 'warning', label: 'Not running', pulse: false } : { tone: 'neutral', label: 'Off', pulse: false }
 })
 
-const infoTitle = computed(() => ({
-  paused: 'Paused until you resume it',
-  done: 'Its one session has finished',
-  waiting: 'Waiting for another session to end',
-} as Record<string, string>)[kind.value || ''] || 'Note')
+const infoTitle = computed(() => {
+  if (kind.value === 'waiting') {
+    // without a live session to wait for, another researcher has their experiment loaded in the
+    // engine; the server's message says who and what
+    return status.value.engineSession ? 'Waiting for another session to end' : 'Waiting for the script engine'
+  }
+  return ({
+    paused: 'Paused until you resume it',
+    done: 'Its one session has finished',
+  } as Record<string, string>)[kind.value || ''] || 'Note'
+})
 const infoText = computed(() => {
   const other = status.value.engineSession
   if (kind.value === 'waiting' && other) {
@@ -143,7 +154,7 @@ const infoText = computed(() => {
  * whatever the server's timer says (another experiment's finished session can still set one).
  */
 const nextOpen = computed(() => {
-  if (status.value.paused || kind.value === 'paused' || kind.value === 'done') return ''
+  if (halt.value || kind.value === 'paused' || kind.value === 'done') return ''
   const at = status.value.nextOpenAt ? new Date(status.value.nextOpenAt) : null
   if (!at || isNaN(at.getTime())) return ''
   return at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })

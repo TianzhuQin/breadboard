@@ -111,7 +111,8 @@ public class FileWatcher {
   }
 
   public void loadStep(String source, ThrottledWebSocketOut out, String name) {
-    ScriptBoard.processScript(source, out, name);
+    // Step code: it defines steps, so mentioning initStep.start() starts nothing (see processScript).
+    ScriptBoard.processScript(source, out, name, "source", ScriptBoard.STEPS_SOURCE, null, true);
     // A reloaded step may have set up the autopilot itself; the console's settings win again.
     ScriptBoard.afterStepsLoaded(ScriptBoard.engineExperiment());
   }

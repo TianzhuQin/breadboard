@@ -180,14 +180,15 @@ async function saveNow (b: StepsBucket, d: StepDraft): Promise<boolean> {
 export function runDraft (d: StepDraft): boolean {
   const source = d.source
   const afterId = lastOutputId()
-  if (!actions.runStep({ id: d.id, name: d.name, source })) {
+  const requestId = actions.runStep({ id: d.id, name: d.name, source })
+  if (!requestId) {
     d.run = { status: 'notsent', values: [], error: null, at: Date.now() }
     if (d.engineBehind) actions.markEngineStale()
     return false
   }
   d.run = { status: 'pending', values: [], error: null, at: Date.now() }
   const run = d.run
-  expectReply(source, afterId, 'SendStep').then(reply => {
+  expectReply(source, afterId, { request: 'SendStep', requestId }).then(reply => {
     if (d.run !== run) return
     // it didn't load: the engine still has the version before this save (or half of this one)
     if ((!reply || !reply.ok) && d.engineBehind) actions.markEngineStale()

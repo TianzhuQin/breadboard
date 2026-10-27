@@ -29,8 +29,11 @@ import { http } from '@/lib/http'
 
 interface AutopilotStatus {
   source: 'admin' | 'config' | 'off'
-  /** paused: a researcher stopped its session, and it opens none until the settings are saved */
-  status: { on: boolean, experimentId: number | null, experimentName: string | null, paused?: boolean }
+  /**
+   * paused: a researcher stopped its session; done: its one session finished ("continuous" off).
+   * Either way it opens none, and the Prolific link leads nowhere, until Resume on the Autopilot page.
+   */
+  status: { on: boolean, experimentId: number | null, experimentName: string | null, paused?: boolean, done?: boolean }
 }
 
 const props = defineProps<{ experimentId: number }>()
@@ -41,11 +44,13 @@ const ap = ref<AutopilotStatus | null>(null)
 
 const forThis = computed(() => !!ap.value?.status?.on && ap.value.status.experimentId === props.experimentId)
 const paused = computed(() => forThis.value && ap.value?.status?.paused === true)
-const tone = computed(() => (paused.value ? 'warning' : forThis.value ? 'success' : ap.value?.status?.on ? 'warning' : 'neutral'))
+const done = computed(() => forThis.value && !paused.value && ap.value?.status?.done === true)
+const tone = computed(() => (paused.value || done.value ? 'warning' : forThis.value ? 'success' : ap.value?.status?.on ? 'warning' : 'neutral'))
 const label = computed(() => {
   const s = ap.value?.status
   if (!s?.on) return 'Off'
   if (paused.value) return 'Paused for this experiment'
+  if (done.value) return 'Done: it opens no more sessions'
   if (forThis.value) return 'On for this experiment'
   return `On for ${s.experimentName || 'another experiment'}`
 })

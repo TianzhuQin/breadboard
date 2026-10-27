@@ -117,10 +117,19 @@ async function apply () {
   const stepsBefore = e.steps?.length || 0
   busy.value = true
   error.value = ''
+  const askedAt = Date.now()
   try {
     await actions.toggleFileMode()
     const now = admin.experiment
-    // The server only logs a failure to read or write the folder and leaves the mode as it was.
+    // A newer server says why it couldn't switch ("Couldn't switch file mode: …", e.g. a folder it
+    // may not write); only a refusal of this request, not an older one, is shown.
+    const err = admin.requestError
+    if (err && err.request === 'ToggleFileMode' && err.at >= askedAt) {
+      error.value = err.text
+      busy.value = false
+      return
+    }
+    // An older server only logs a failure to read or write the folder and leaves the mode as it was.
     if (!now || now.id !== e.id || !!now.fileMode !== wanted) {
       error.value = wanted
         ? `The server couldn't write to dev/${dir.value}/. Check that it may write to its dev folder; the server log has details.`

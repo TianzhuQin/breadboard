@@ -511,6 +511,31 @@ describe('Experiments page', () => {
     w.unmount()
   })
 
+  it('shows why the server couldn\'t switch file mode, but not an older refusal', async () => {
+    const FileModeDialog = (await import('../src/pages/experiments/FileModeDialog.vue')).default
+    const admin = (store as any).admin
+    admin.requestError = { request: 'ToggleFileMode', text: 'An old refusal.', at: Date.now() - 60000 }
+    store.actions.toggleFileMode.mockImplementationOnce(async () => {
+      admin.requestError = { request: 'ToggleFileMode', text: 'Couldn\'t switch file mode: dev/Alpha is not writable', at: Date.now() }
+      return null
+    })
+    const w = mount(FileModeDialog, { props: { open: true }, attachTo: document.body })
+    await flushPromises()
+    const go = () => [...document.querySelectorAll<HTMLButtonElement>('.b-dialog button')].find(b => /Switch to file mode/.test(b.textContent || ''))!
+    go().click()
+    await flushPromises()
+    expect(document.querySelector('.xfm__error')!.textContent).toBe('Couldn\'t switch file mode: dev/Alpha is not writable')
+
+    // no answer from a newer server (or an older one that only logs it): the old refusal isn't it
+    admin.requestError = { request: 'ToggleFileMode', text: 'An old refusal.', at: Date.now() - 60000 }
+    store.actions.toggleFileMode.mockImplementationOnce(async () => null)
+    go().click()
+    await flushPromises()
+    expect(document.querySelector('.xfm__error')!.textContent).toMatch(/couldn't write to dev\/Alpha_300\/.*server log/)
+    admin.requestError = null
+    w.unmount()
+  })
+
   it('opens the New dialog from ?action=new and clears the query', async () => {
     const { w, router } = await mountAt('/experiments?action=new')
     expect(document.querySelector('.b-dialog__title')!.textContent).toBe('New experiment')

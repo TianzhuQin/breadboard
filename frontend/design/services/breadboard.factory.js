@@ -19,6 +19,15 @@ export default function BreadboardFactory(
 ) {
   let websocket
   let nodeChangeListeners = []
+  let reloading = false
+
+  function signedOut() {
+    if (reloading) return
+    reloading = true
+    // no more reconnects with the old uid, also if the reload is held up
+    Breadboard.disconnect()
+    window.location.reload()
+  }
 
   function processMessage(data, callback) {
     //console.log('processMessage', data);
@@ -83,6 +92,15 @@ export default function BreadboardFactory(
 
       Breadboard.on('message', (d) => {
         const data = JSON.parse(d)
+        // This page's sign-in is no longer valid: the account signed out or changed its password,
+        // maybe in another tab. The server says so before it closes the socket (and in answer to a
+        // frame with the old uid). Reconnecting would keep the old uid; a reload asks /state again,
+        // which gives this browser's current sign-in or leads to the sign-in page. A page that was
+        // never signed in (no uid) is already shown the sign-in page, so it doesn't reload.
+        if (data.status === 'unauthorized' && config && config.uid) {
+          signedOut()
+          return
+        }
         if (data.hasOwnProperty('queuedMessages')) {
           for (var i = 0; i < data.queuedMessages.length; i++) {
             processMessage(data.queuedMessages[i], callback)

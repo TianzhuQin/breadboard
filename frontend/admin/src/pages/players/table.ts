@@ -97,8 +97,9 @@ export function csvKeys (nodes: GraphNode[]): string[] {
 }
 
 /**
- * A CSV of the given players: id, status, ties, then the given properties. It starts with a byte
- * order mark so Excel reads names and answers in any language as UTF-8.
+ * A CSV of the given players: id, status, ties, then the given properties. No byte order mark, like
+ * the server's data CSV (GET /csv/data/:id): the two files are read with the same tools and joined
+ * on id, and a mark would end up in front of the first column's name.
  */
 export function toCsv (nodes: GraphNode[], keys: string[], degree: Degree): string {
   const head = ['id', 'status', 'ties', 'choices waiting', ...keys]
@@ -112,5 +113,5 @@ export function toCsv (nodes: GraphNode[], keys: string[], degree: Degree): stri
       ...keys.map(k => valueOf(n, k, degree)),
     ].map(csvCell).join(','))
   }
-  return '\uFEFF' + lines.join('\r\n') + '\r\n'
+  return lines.join('\r\n') + '\r\n'
 }

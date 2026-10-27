@@ -54,8 +54,10 @@ public class BaseTest {
         config.put("breadboard.rootUrl", "http://localhost:9000");
         config.put("breadboard.wsUrl", "ws://localhost:9000/connect");
         // Auto-apply all evolutions (1.sql through 29.sql) to create the base schema.
-        // Disable the custom Global class since the evolutions create the
-        // breadboard_version table empty, causing Global to skip the v2.4 upgrade.
+        // Meant to disable the custom Global class since the evolutions create the
+        // breadboard_version table empty, causing Global to skip the v2.4 upgrade. Play 2.2 reads
+        // application.global from conf/application.conf alone, though, so the suite does run with
+        // Global, and route() passes every response through its filters (app/filters).
         config.put("applyEvolutions.default", "true");
         config.put("application.global", "play.GlobalSettings");
         app = fakeApplication(config);
@@ -97,6 +99,26 @@ public class BaseTest {
         // Clear them too, otherwise a later test can read a stale cached bean for a row that
         // was just truncated -- making behaviour order-dependent.
         Ebean.getServer("default").getServerCacheManager().clearAll();
+    }
+
+    /**
+     * A value of the session a result sets, or null. Play's own session(result) reads only the header
+     * named exactly "Set-Cookie", and the session cookie is sent under "set-cookie" (see
+     * filters.SessionCookieSameSite).
+     */
+    protected static String sessionValue(play.mvc.Result result, String key) {
+        String line = header(filters.SessionCookieSameSite$.MODULE$.RawSetCookie(), result);
+        if (line == null) {
+            return null;
+        }
+        for (scala.collection.Iterator<play.api.mvc.Cookie> it = play.api.mvc.Cookies$.MODULE$.decode(line).iterator(); it.hasNext(); ) {
+            play.api.mvc.Cookie cookie = it.next();
+            if ("PLAY_SESSION".equals(cookie.name())) {
+                scala.Option<String> value = play.api.mvc.Session$.MODULE$.decode(cookie.value()).get(key);
+                return value.isDefined() ? value.get() : null;
+            }
+        }
+        return null;
     }
 
     /**

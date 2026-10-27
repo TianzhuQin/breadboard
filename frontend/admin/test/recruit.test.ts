@@ -58,6 +58,9 @@ import RecruitPage from '@/pages/recruit/RecruitPage.vue'
 import HitDetail from '@/pages/recruit/mturk/HitDetail.vue'
 import AutopilotCard from '@/pages/recruit/prolific/AutopilotCard.vue'
 import { moneyState, settleMoney } from '@/pages/recruit/mturk/moneyConfirm'
+import { activeJobs, track } from '@/pages/recruit/mturk/jobs'
+import { confirmSignOut, unsavedTotal } from '@/shell/unsaved'
+import { confirmState, settleConfirm } from '@/ui/confirm'
 
 // the mocked store holds partial objects
 const admin = realAdmin as any
@@ -150,11 +153,20 @@ describe('CSV', () => {
     expect(toCsv([['a', 'b'], ['c,d', 'e']])).toBe('"a","b"\r\n"c,d","e"\r\n')
   })
 
-  it('defuses spreadsheet formulas typed by workers but leaves numbers alone', () => {
-    expect(csvCell('=HYPERLINK("x")')).toBe('"\'=HYPERLINK(""x"")"')
-    expect(csvCell('@SUM(A1)')).toBe('"\'@SUM(A1)"')
+  it('writes values exactly as recorded, like the server\'s data file (no apostrophe, no byte-order mark)', () => {
+    expect(csvCell('=HYPERLINK("x")')).toBe('"=HYPERLINK(""x"")"')
+    expect(csvCell('@anna yes')).toBe('"@anna yes"')
+    expect(csvCell('-')).toBe('"-"')
     expect(csvCell('-0.5')).toBe('"-0.5"')
     expect(csvCell('+3')).toBe('"+3"')
+    expect(csvCell('\tindented')).toBe('"\tindented"')
+    const csv = assignmentsCsv({ hitId: '=H1', title: '@t' }, [
+      { assignmentId: 'A1', workerId: 'W1', status: 'approved', approvalTime: null, rejectionTime: null, bonusPaid: null, completed: true, answers: { a: '-1+2' }, answerKeys: ['a'] },
+    ])
+    expect(csv.charCodeAt(0)).toBe('"'.charCodeAt(0))
+    expect(csv).not.toContain('\uFEFF')
+    expect(csv.split('\r\n')[1]).toMatch(/^"=H1","@t",/)
+    expect(csv.split('\r\n')[1]).toMatch(/,"-1\+2"$/)
   })
 
   it('escapes the HIT title and every field, not only answers', () => {
@@ -414,6 +426,27 @@ describe('Recruitment page', () => {
   })
 })
 
+describe('Mechanical Turk requests under way', () => {
+  it('make signing out ask first, as requests still running rather than unsaved changes', async () => {
+    let finish!: () => void
+    const job = track(() => new Promise<void>(resolve => { finish = resolve }))
+    expect(activeJobs.value).toBe(1)
+    // not an unsaved change...
+    expect(unsavedTotal()).toBe(0)
+    // ...but signing out asks, and says what is still running
+    const answer = confirmSignOut()
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.req!.title).toBe('Sign out while requests are still running?')
+    expect(confirmState.req!.message).toContain('Still running: Mechanical Turk requests (1).')
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+    finish()
+    await job
+    expect(activeJobs.value).toBe(0)
+    expect(await confirmSignOut()).toBe(true)
+  })
+})
+
 describe('Bonus dialog', () => {
   it('shows the total of the amounts reported in the answers and lets them be edited', async () => {
     const rows = [
@@ -446,6 +479,13 @@ describe('Prolific autopilot card', () => {
     const w2 = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
     await flushPromises()
     expect(w2.text()).toContain('On for this experiment')
+  })
+  it('says when its one session has finished, so the Prolific link leads nowhere', async () => {
+    vi.mocked(http.get).mockResolvedValueOnce({ source: 'config', status: { on: true, experimentId: 3, experimentName: 'Trust game', done: true } })
+    const w = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
+    await flushPromises()
+    expect(w.text()).toContain('Done: it opens no more sessions')
+    expect(w.text()).not.toContain('On for this experiment')
   })
 })
 
@@ -728,5 +768,17 @@ describe('HIT submissions', () => {
     } finally {
       Object.defineProperty(globalThis, 'crypto', { value: real, configurable: true })
     }
+  })
+})
+
+describe('Approving an assignment', () => {
+  it('is a POST, so a link on another site cannot approve (and pay) one', async () => {
+    const { mturkApi } = await import('@/pages/recruit/mturk/api')
+    vi.mocked(http.get).mockReset()
+    vi.mocked(http.post).mockReset()
+    vi.mocked(http.post).mockResolvedValue(undefined)
+    await mturkApi('sandbox').approve('A 1')
+    expect(vi.mocked(http.post)).toHaveBeenCalledWith('/amtadmin/approveAssignment/A%201?sandbox=true')
+    expect(vi.mocked(http.get)).not.toHaveBeenCalled()
   })
 })

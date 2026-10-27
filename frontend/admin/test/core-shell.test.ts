@@ -7,6 +7,7 @@ import OutputDrawer from '../src/shell/OutputDrawer.vue'
 import ExperimentSwitcher from '../src/shell/ExperimentSwitcher.vue'
 import EngineNotice from '../src/shell/EngineNotice.vue'
 import AccountMenu from '../src/shell/AccountMenu.vue'
+import TopBar from '../src/shell/TopBar.vue'
 import { registerUnsaved, unsavedTotal, confirmSignOut } from '../src/shell/unsaved'
 import { admin, actions, connection, graph, __receive } from '../src/store/admin'
 import { isStaleBuildError, onStaleBuild } from '../src/router'
@@ -189,6 +190,46 @@ describe('switching experiments on the shared engine', () => {
     expect(confirmState.open).toBe(false)
     expect(send).not.toHaveBeenCalled()
     expect(toasts.some(t => t.title === 'Not connected to the server')).toBe(true)
+  })
+})
+
+describe('reloading the engine from the top bar', () => {
+  async function askToReload () {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
+    const w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    await w.find('.topbar__chip').trigger('click')
+    await nextTick()
+    await w.findAll('[role="menuitem"]').find(o => o.text().includes('Reload engine'))!.trigger('click')
+    return w
+  }
+
+  it('says that it pauses the autopilot when the engine runs the autopilot\'s session', async () => {
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    graph.clear()
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    const status = { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ status })))
+    let w = await askToReload()
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
+    expect(confirmState.req!.message).toMatch(/\n\nThis also pauses the autopilot: .*Resume on the Autopilot page, so .*\.$/)
+    settleConfirm(false)
+    await tick()
+    expect(send).not.toHaveBeenCalled()
+    w.unmount()
+
+    // paused already: nothing more to pause
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ status: { ...status, paused: true } })))
+    w = await askToReload()
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
+    expect(confirmState.req!.message).not.toContain('pauses the autopilot')
+    settleConfirm(true)
+    await tick()
+    expect(send).toHaveBeenCalledWith('ReloadEngine', {})
+    connection.state.value = 'idle'
+    w.unmount()
   })
 })
 

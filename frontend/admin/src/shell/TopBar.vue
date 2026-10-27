@@ -59,7 +59,7 @@ import { useRoute } from 'vue-router'
 import { Menu, WifiOff, PanelBottom, Cpu, CircleCheck, TriangleAlert, RotateCw } from 'lucide-vue-next'
 import { BMenu, BSpinner, confirm, type MenuItem } from '@/ui'
 import { admin, actions, connectionState, ensureConnected } from '@/store/admin'
-import { engineUsers } from '@/store/engineGuard'
+import { REBUILD_PAUSES_AUTOPILOT, engineUse, reloadKeeps } from '@/store/engineGuard'
 
 defineProps<{ outputOpen: boolean, navOpen?: boolean }>()
 const emit = defineEmits<{ menu: [], 'toggle-output': [] }>()
@@ -97,11 +97,13 @@ const engineHeading = computed(() => {
 async function reload () {
   if (!ensureConnected()) return
   // the engine is shared by every account and the autopilot, so the people in it may not be ours
-  const who = await engineUsers()
+  // (this account's own running session carries on through a reload)
+  const { who, pausesAutopilot } = await engineUse(reloadKeeps())
   const ok = await confirm({
     title: 'Reload the script engine?',
     message: who
-      ? `${who}\n\nReloading restarts the experiment's scripts from its steps. The engine is shared by every researcher on this server, so everyone in the network is disconnected and the network is emptied.`
+      ? `${who}\n\nReloading restarts the experiment's scripts from its steps. The engine is shared by every researcher on this server, so everyone in the network is disconnected and the network is emptied.` +
+        (pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : '')
       : 'This restarts the experiment\'s scripts from its steps.',
     confirmLabel: 'Reload',
     danger: !!who,

@@ -2,8 +2,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import {
   DEVICES, MAX_PREVIEWS, frameGeometry, isAIPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth,
-  playerPageUrl, previewMemory, quickPick, sortPlayers, tileWidth, truthyFlag, widthToFit, wouldDisplace,
+  previewMemory, previewPageUrl, quickPick, sortPlayers, tileWidth, truthyFlag, widthToFit, wouldDisplace,
 } from '../src/pages/preview/preview'
+import { fetchPreviewToken } from '../src/pages/preview/previewLink'
+import { HttpError } from '../src/lib/http'
+
+// POST /preview-token answers a token naming the player and how many were asked for, so a test
+// can tell a fresh token from an old one
+const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }))
+let minted = 0
+function mintToken (_url: string, body: any) {
+  minted++
+  return Promise.resolve({ token: `tok-${body.clientId}-${minted}`, expiresAt: '2026-10-28T09:00:00Z' })
+}
+vi.mock('@/lib/http', async (orig) => {
+  const real = await orig<typeof import('../src/lib/http')>()
+  return { ...real, http }
+})
 
 vi.mock('@/store/admin', async () => {
   const { reactive } = await import('vue')
@@ -76,10 +91,25 @@ describe('quick picks', () => {
 })
 
 describe('addresses', () => {
-  it('builds the participant page and the sign-up page', () => {
-    expect(playerPageUrl(12, 44, 'p1', 'https://lab.org')).toBe('https://lab.org/game/12/44/p1/connected')
-    expect(playerPageUrl(12, 44, 'a b/c', 'https://lab.org')).toBe('https://lab.org/game/12/44/a%20b%2Fc/connected')
+  it('builds the sandboxed participant page with its preview token, and the sign-up page', () => {
+    const t = { experimentId: 12, instanceId: 44, playerId: 'p1' }
+    expect(previewPageUrl(t, 'abc', 'https://lab.org')).toBe('https://lab.org/game/12/44/p1/connected?preview=1#bbt=abc')
+    expect(previewPageUrl({ ...t, playerId: 'a b/c' }, 'x/y+z=', 'https://lab.org'))
+      .toBe('https://lab.org/game/12/44/a%20b%2Fc/connected?preview=1#bbt=x%2Fy%2Bz%3D')
+    // the page reads the fragment with URLSearchParams: the token comes back exactly
+    expect(new URLSearchParams(previewPageUrl(t, 'x/y+z=&a', 'https://lab.org').split('#')[1]).get('bbt')).toBe('x/y+z=&a')
+    // participants' own sign-up link is unchanged
     expect(joinUrl(12, 44, 'https://lab.org')).toBe('https://lab.org/game/12/44/login')
+  })
+
+  it('asks the server for a preview token of exactly that player and session', async () => {
+    http.post.mockReset()
+    http.post.mockResolvedValueOnce({ token: 't1', expiresAt: '2026-10-28T09:00:00Z' })
+    expect(await fetchPreviewToken({ experimentId: 12, instanceId: 0, playerId: '_bot' })).toEqual({ token: 't1', expiresAt: '2026-10-28T09:00:00Z' })
+    expect(http.post).toHaveBeenCalledWith('/preview-token', { experimentId: 12, experimentInstanceId: 0, clientId: '_bot' })
+    // an answer without a token is an error, not a page without one
+    http.post.mockResolvedValueOnce({})
+    await expect(fetchPreviewToken({ experimentId: 12, instanceId: 0, playerId: 'p1' })).rejects.toThrow(/no preview token/)
   })
 })
 
@@ -139,6 +169,9 @@ describe('PreviewPage', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    http.post.mockReset()
+    http.post.mockImplementation(mintToken)
+    minted = 0
     store.graph.clear()
     Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false, device: 'desktop', size: 'M', interactive: false })
     store.admin.experiment = { id: 7, name: 'Trust game', instances: [] }
@@ -183,42 +216,123 @@ describe('PreviewPage', () => {
     await settle()
     const frames = w.findAll('iframe')
     expect(frames).toHaveLength(1)
-    expect(frames[0].attributes('src')).toBe(`${window.location.origin}/game/7/44/p1/connected`)
+    expect(http.post).toHaveBeenCalledWith('/preview-token', { experimentId: 7, experimentInstanceId: 44, clientId: 'p1' })
+    expect(frames[0].attributes('src')).toBe(`${window.location.origin}/game/7/44/p1/connected?preview=1#bbt=tok-p1-1`)
     expect(frames[0].attributes('title')).toBe('Participant page of p1')
-    // the sandbox keeps a well-behaved page from navigating the console away, and its pop-ups sandboxed
-    expect(frames[0].attributes('sandbox')).not.toContain('allow-top-navigation')
-    expect(frames[0].attributes('sandbox')).not.toContain('allow-popups-to-escape-sandbox')
     w.unmount()
   })
 
-  it('always says that previews run with the researcher\'s sign-in', async () => {
+  it('runs each preview in an opaque origin on its own token, never on the researcher\'s sign-in', async () => {
+    addPlayer('p1', { testmode: true })
+    addPlayer('p2', { testmode: true })
+    await settle()
+    const w = await mountPage()
+    await settle()
+    const frames = w.findAll('iframe')
+    expect(frames).toHaveLength(2)
+    for (const f of frames) {
+      // no allow-same-origin: the page can't reach the console, its cookies or its socket; no
+      // allow-top-navigation or allow-popups-to-escape-sandbox either
+      expect(f.attributes('sandbox')).toBe('allow-scripts allow-forms allow-modals allow-popups')
+    }
+    // one token per tile, each for its own player
+    expect(http.post.mock.calls.map(c => c[1].clientId).sort()).toEqual(['p1', 'p2'])
+    expect(frames.map(f => f.attributes('src')).every(src => /\/connected\?preview=1#bbt=tok-p\d-\d$/.test(src!))).toBe(true)
+    // with the page isolated, the warning that previews run with the researcher's rights is gone
+    expect(w.find('.pv__warn').exists()).toBe(false)
+    expect(w.text()).not.toMatch(/researcher sign-in/)
+    // what stays true is said once and can be put away: a preview is a live seat
+    expect(w.find('.pv__notice').text()).toMatch(/Previews are live/)
+    await w.find('.pv__notice button').trigger('click')
+    expect(w.find('.pv__notice').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('fetches a new token on reload and when the tile\'s session changes', async () => {
     addPlayer('p1', { testmode: true })
     await settle()
     const w = await mountPage()
     await settle()
-    // the live-preview notice can be put away; the warning can't
-    await w.find('.pv__notice button').trigger('click')
-    expect(w.find('.pv__notice').exists()).toBe(false)
-    const warn = w.find('.pv__warn')
-    expect(warn.text()).toMatch(/run with your researcher sign-in/)
-    expect(warn.find('button').exists()).toBe(false)
+    expect(w.find('iframe').attributes('src')).toMatch(/\/game\/7\/44\/p1\/connected\?preview=1#bbt=tok-p1-1$/)
+    await w.find('.pt__acts button').trigger('click') // Reload
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(2)
+    expect(w.find('iframe').attributes('src')).toMatch(/#bbt=tok-p1-2$/)
+
+    store.admin.instance = { id: 45, name: 'pilot 2', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] }
+    await settle()
+    expect(http.post).toHaveBeenLastCalledWith('/preview-token', { experimentId: 7, experimentInstanceId: 45, clientId: 'p1' })
+    expect(w.find('iframe').attributes('src')).toBe(`${window.location.origin}/game/7/45/p1/connected?preview=1#bbt=tok-p1-3`)
     w.unmount()
   })
 
-  it('opens a new tab cut off from the console before the participant page loads', async () => {
+  it('shows the server\'s refusal in the tile, with a Retry', async () => {
     addPlayer('p1', { testmode: true })
     await settle()
-    const tab = { opener: {} as any, location: { href: '' } }
+    http.post.mockReset()
+    http.post.mockRejectedValueOnce(new HttpError(400, 'That session is not of this experiment.'))
+    http.post.mockImplementation(mintToken)
+    const w = await mountPage()
+    await settle()
+    expect(w.find('iframe').exists()).toBe(false)
+    const err = w.find('.pf__error')
+    expect(err.attributes('role')).toBe('alert')
+    expect(err.text()).toMatch(/That session is not of this experiment\./)
+    await err.find('button').trigger('click')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(2)
+    expect(w.find('.pf__error').exists()).toBe(false)
+    expect(w.find('iframe').attributes('src')).toMatch(/\/game\/7\/44\/p1\/connected\?preview=1#bbt=tok-p1-/)
+    w.unmount()
+  })
+
+  it('opens a new tab at once, cut off from the console, and loads the page there once its token is here', async () => {
+    addPlayer('p1', { testmode: true })
+    await settle()
+    const tab = { opener: {} as any, location: { href: '' }, closed: false, close: vi.fn() }
     const open = vi.spyOn(window, 'open').mockImplementation(() => tab as any)
     try {
       const w = await mountPage()
       await settle()
+      let answer!: (v: any) => void
+      http.post.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      const PreviewTile = (await import('../src/pages/preview/PreviewTile.vue')).default
+      w.findComponent(PreviewTile).vm.$emit('open-tab')
+      // opened in the same turn as the click, so pop-up blockers let it through
+      expect(open).toHaveBeenCalledWith('about:blank', '_blank')
+      expect(tab.opener).toBeNull()
+      expect(tab.location.href).toBe('')
+      answer({ token: 'tab-token', expiresAt: '2026-10-28T09:00:00Z' })
+      await flushPromises()
+      expect(http.post).toHaveBeenLastCalledWith('/preview-token', { experimentId: 7, experimentInstanceId: 44, clientId: 'p1' })
+      expect(tab.location.href).toBe(`${window.location.origin}/game/7/44/p1/connected?preview=1#bbt=tab-token`)
+      // one connection per player: the tile steps aside
+      expect(w.find('.pt iframe').exists()).toBe(false)
+      expect(w.find('.pt').text()).toContain('Open in another tab')
+      w.unmount()
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('closes the new tab and says why when no token comes', async () => {
+    addPlayer('p1', { testmode: true })
+    await settle()
+    const tab = { opener: {} as any, location: { href: '' }, closed: false, close: vi.fn() }
+    const open = vi.spyOn(window, 'open').mockImplementation(() => tab as any)
+    try {
+      const w = await mountPage()
+      await settle()
+      http.post.mockRejectedValueOnce(new HttpError(400, 'Unknown session'))
       const PreviewTile = (await import('../src/pages/preview/PreviewTile.vue')).default
       w.findComponent(PreviewTile).vm.$emit('open-tab')
       await flushPromises()
-      expect(open).toHaveBeenCalledWith('about:blank', '_blank')
-      expect(tab.opener).toBeNull()
-      expect(tab.location.href).toBe(`${window.location.origin}/game/7/44/p1/connected`)
+      await settle()
+      expect(tab.close).toHaveBeenCalled()
+      expect(tab.location.href).toBe('')
+      expect(ui.notify.error).toHaveBeenCalledWith('Couldn’t open p1’s page in a new tab', 'Unknown session')
+      // the tile shows the page again
+      expect(w.find('.pt iframe').exists()).toBe(true)
       w.unmount()
     } finally {
       open.mockRestore()

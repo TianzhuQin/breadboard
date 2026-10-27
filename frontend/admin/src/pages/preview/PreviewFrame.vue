@@ -6,28 +6,35 @@
   >
     <div class="pf__screen">
       <!--
-        The participant page is the console's own (same-origin) page: it needs the researcher's
-        sign-in to act as the player. With allow-scripts and allow-same-origin together the sandbox
-        is no protection: a script in the page can reach the console (window.parent), its cookies
-        and the admin socket, and can even lift the sandbox. So whatever HTML the page shows runs
-        with the researcher's rights, and the Preview page says so. The flags only keep a
-        well-behaved page (an end-of-study redirect written for window.top) from navigating the
-        console away, and keep its pop-ups sandboxed. Real isolation needs the participant pages on
-        another origin.
+        The page is loaded with ?preview=1 and a preview token in its fragment (previewLink.ts), not
+        with the researcher's sign-in. Without allow-same-origin it runs in an opaque origin (the
+        server also sends it with a CSP sandbox, so the same holds in a tab of its own): a script
+        that a participant hid in what the page shows can't reach the console (window.parent), its
+        cookies, storage or socket. The token lets it act only as this player of this session.
+        No allow-top-navigation, so an end-of-study redirect written for window.top can't navigate
+        the console away; no allow-popups-to-escape-sandbox, so its pop-ups stay sandboxed too.
       -->
       <iframe
+        v-if="src"
         :src="src"
         :title="title"
         class="pf__frame"
         :style="{ width: `${geo.deviceWidth}px`, height: `${geo.deviceHeight}px`, transform: `scale(${geo.scale})` }"
         :tabindex="interactive ? 0 : -1"
         :loading="lazy ? 'lazy' : undefined"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
+        sandbox="allow-scripts allow-forms allow-modals allow-popups"
         referrerpolicy="same-origin"
         @load="loaded = true"
       />
     </div>
-    <div v-if="!loaded" class="pf__loading" aria-hidden="true">
+    <!-- above a tile's cover button (a later sibling), so Retry gets the click -->
+    <div v-if="error" class="pf__error" role="alert">
+      <TriangleAlert :size="16" class="pf__error-icon" aria-hidden="true" />
+      <p class="pf__error-title">Couldn’t open this page</p>
+      <p class="pf__error-text">{{ error }}</p>
+      <BButton size="sm" :icon="RotateCw" @click="retry">Retry</BButton>
+    </div>
+    <div v-else-if="!loaded" class="pf__loading" aria-hidden="true">
       <BSpinner :size="18" />
     </div>
   </div>
@@ -35,11 +42,14 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { BSpinner } from '@/ui'
-import { frameGeometry, type DeviceKind } from './preview'
+import { RotateCw, TriangleAlert } from 'lucide-vue-next'
+import { BButton, BSpinner } from '@/ui'
+import { frameGeometry, type DeviceKind, type PreviewTarget } from './preview'
+import { usePreviewLink } from './previewLink'
 
 const props = defineProps<{
-  src: string
+  /** whose page to show; a preview token is fetched for it (again when it changes) */
+  target: PreviewTarget | null
   title: string
   device: DeviceKind
   /** Outer width in CSS pixels; the height follows the device's shape. */
@@ -50,8 +60,9 @@ const props = defineProps<{
 }>()
 
 const geo = computed(() => frameGeometry(props.device, props.width))
+const { src, error, retry } = usePreviewLink(() => props.target)
 const loaded = ref(false)
-watch(() => props.src, () => { loaded.value = false })
+watch(src, () => { loaded.value = false })
 </script>
 
 <style>
@@ -96,4 +107,25 @@ watch(() => props.src, () => { loaded.value = false })
   place-items: center;
   background: var(--surface-sunken);
 }
+.pf__error {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 10px;
+  overflow: auto;
+  text-align: center;
+  background: var(--surface-sunken);
+  color: var(--text-soft);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.pf__error-icon { flex: none; color: var(--warning); }
+.pf__error-title { font-weight: 650; color: var(--text); }
+.pf__error-text { max-width: 320px; overflow-wrap: anywhere; }
+.pf__error .b-btn { margin-top: 4px; flex: none; }
 </style>

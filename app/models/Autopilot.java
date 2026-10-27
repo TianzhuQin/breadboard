@@ -288,6 +288,13 @@ public final class Autopilot {
       Logger.info("Autopilot: session " + instance.name + " finished; continuous is off, not opening another");
       return;
     }
+    if (pausedBecause != null || doneBecause != null) {
+      // Nothing opens by itself until Resume (or a save); a next session counted down to here would
+      // be shown as due, and opened the moment the pause is lifted.
+      Logger.info("Autopilot: session " + instance.name + " finished; it is " + (pausedBecause != null ? "paused" : "done")
+          + ", so no next session is scheduled");
+      return;
+    }
     // Its own session finished (continuous), or another experiment's did and the engine is free again:
     // either way the autopilot's turn, after the pause it is set to keep between sessions (unless the
     // researcher whose session it was has their experiment still loaded: see openWhenDue).
@@ -565,6 +572,10 @@ public final class Autopilot {
   private static void setHalt(Long experimentId, String paused, String done) {
     pausedBecause = paused;
     doneBecause = done;
+    if (paused != null || done != null) {
+      // A next session counting down after a finished one doesn't open (its task then does nothing).
+      nextOpenAt = 0L;
+    }
     try {
       AutopilotSettings.saveHalt(paused == null && done == null ? null : experimentId, paused, done);
     } catch (Exception ex) {
@@ -726,7 +737,8 @@ public final class Autopilot {
     status.put("paused", e.isOn() && pausedBecause != null);
     status.put("done", e.isOn() && pausedBecause == null && doneBecause != null);
     long due = nextOpenAt;
-    if (e.isOn() && due > System.currentTimeMillis()) {
+    // Nothing is due while paused or done: it opens nothing by itself then.
+    if (e.isOn() && pausedBecause == null && doneBecause == null && due > System.currentTimeMillis()) {
       status.put("nextOpenAt", Timestamps.iso(new Date(due)));
     } else {
       status.putNull("nextOpenAt");
@@ -766,13 +778,19 @@ public final class Autopilot {
     return status;
   }
 
-  /** The engine's live session when it is not of this experiment (or the autopilot has none), else null. */
+  /**
+   * The engine's live session when it is not of this experiment, else null. Null too when the
+   * autopilot has no experiment: then nothing waits for the engine, so no session is in its way.
+   */
   private static ExperimentInstance otherLiveSession(Long experimentId) {
+    if (experimentId == null) {
+      return null;
+    }
     ExperimentInstance live = liveEngineSession();
     if (live == null || live.isTestInstance()) {
       return null;
     }
-    boolean ours = experimentId != null && live.experiment != null && experimentId.equals(live.experiment.id);
+    boolean ours = live.experiment != null && experimentId.equals(live.experiment.id);
     return ours ? null : live;
   }
 
@@ -815,8 +833,9 @@ public final class Autopilot {
           + (console ? " (or saves the settings)" : "") + " on the Autopilot page.");
     }
     if (doneBecause != null) {
-      return new Problem("done", doneBecause + ", so it opens no more until someone presses "
-          + (console ? "Open another session (or saves the settings)" : "Resume") + " on the Autopilot page.");
+      // The page's button for this state is "Open another session", whoever is in charge.
+      return new Problem("done", doneBecause + ", so it opens no more until someone presses Open another session"
+          + (console ? " (or saves the settings)" : "") + " on the Autopilot page.");
     }
     if (otherSession != null) {
       String owner = ScriptBoard.engineOwnerEmail();
@@ -828,7 +847,7 @@ public final class Autopilot {
       Experiment loaded = ScriptBoard.engineExperiment();
       return new Problem("waiting", (loaded == null ? "Another experiment" : "\"" + loaded.name + "\"") + " is loaded in the engine for "
           + holder + ", who has a console open, so the autopilot leaves the engine to them. It opens its own session once they "
-          + "close the console, or when someone presses Resume on the Autopilot page.");
+          + "close the console" + (console ? ", or when someone saves these settings (which loads it over theirs)." : "."));
     }
     return lastProblem == null ? null : new Problem("error", lastProblem);
   }

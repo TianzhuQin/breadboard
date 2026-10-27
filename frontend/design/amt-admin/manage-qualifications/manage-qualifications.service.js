@@ -19,7 +19,7 @@ function ManageQualificationsSrv($http, $q, $timeout) {
   return service;
 
   function getExperimentQualificationTypeId(experimentUid, sandbox) {
-    return $http.get('/amtadmin/getExperimentQualificationTypeId/' + experimentUid + ((sandbox) ? '?sandbox=true' : ''))
+    return $http.post('/amtadmin/getExperimentQualificationTypeId/' + experimentUid + ((sandbox) ? '?sandbox=true' : ''))
       .then(function (response) {
           if (response.status < 400) {
             return $q.when(response);

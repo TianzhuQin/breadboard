@@ -1,10 +1,11 @@
 import { reactive, ref } from 'vue'
 import { admin, actions, engineElsewhere, ensureConnected, nextMessage, NOT_CONNECTED } from '@/store/admin'
-import { engineUsers } from '@/store/engineGuard'
+import { REBUILD_PAUSES_AUTOPILOT, engineUse } from '@/store/engineGuard'
 import { http, saveText } from '@/lib/http'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Instance } from '@/store/types'
+import { STOP_PAUSES_AUTOPILOT, autopilotNow, stopPausesAutopilot } from '../autopilot/autopilot'
 import { classifyStartReply, engineElsewhereText, isStartReply, safeFileName } from './live'
 
 /**
@@ -26,8 +27,11 @@ export const busy = reactive({
   download: null as number | null,
 })
 
-/** RunGame = initStep.start(): everyone waiting is let in and newcomers are turned away. */
-export async function startGame (ctx: { connected: number, people: number, waitingRoom: boolean }) {
+/**
+ * RunGame = initStep.start(): everyone waiting is let in and newcomers are turned away. `again`: the
+ * game started before, but the engine was reloaded since and no longer runs it.
+ */
+export async function startGame (ctx: { connected: number, people: number, waitingRoom: boolean, again?: boolean }) {
   if (busy.start) return
   // the server refuses to start a session the engine isn't running (the page disables the button too)
   const elsewhere = engineElsewhere.value
@@ -45,7 +49,9 @@ export async function startGame (ctx: { connected: number, people: number, waiti
       who,
       'Everyone who is waiting is let in and the experiment begins (it runs initStep.start()). People who arrive after this are turned away.',
       ctx.waitingRoom ? 'This skips the rest of the waiting room.' : '',
-      'A game can start only once per session.',
+      ctx.again
+        ? 'The game started earlier, but the engine was reloaded since then, so this starts it again from the beginning.'
+        : 'Once it has started, Start does nothing until the engine is reloaded.',
     ].filter(Boolean).join('\n\n'),
     confirmLabel: 'Start the game',
   })
@@ -63,7 +69,7 @@ export async function startGame (ctx: { connected: number, people: number, waiti
     if (out.kind === 'started') {
       notify.success('The game has started', 'Everyone who was waiting is in. New arrivals are turned away.')
     } else if (out.kind === 'already') {
-      notify.info('The game had already started', 'It can start only once per session, so nothing changed.')
+      notify.info('The game had already started', 'It was running already, so nothing changed.')
     } else if (out.kind === 'error') {
       toast('error', 'The game could not start', out.message, { action: showOutput })
     } else {
@@ -77,25 +83,32 @@ export async function startGame (ctx: { connected: number, people: number, waiti
 /** StopGame: the session stops taking people in; it can be resumed later. */
 export async function stopSession (inst: Instance) {
   if (busy.stop) return
-  const ok = await confirm({
-    title: `Stop “${inst.name}”?`,
-    message: [
-      'Nobody new can join with its links, and it no longer counts as running.',
-      'People who are on the page now are not sent away, but the experiment\'s launch parameters are unset, so the game may stop working for them.',
-      'You can resume it later. Resuming restarts the experiment\'s scripts and disconnects everyone.',
-    ].join('\n\n'),
-    confirmLabel: 'Stop session',
-    danger: true,
-  })
-  if (!ok) return
+  // marked at once: asking the server about the autopilot can take a few seconds
   busy.stop = true
   try {
+    // Stopping the autopilot's session pauses the autopilot (the server's Autopilot.sessionStopped).
+    // The session shown here is the selected experiment's.
+    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: inst.id, experimentId: admin.experiment?.id }, admin.user?.engine?.sessionId)
+    const ok = await confirm({
+      title: `Stop “${inst.name}”?`,
+      message: [
+        'Nobody new can join with its links, and it no longer counts as running.',
+        'People who are on the page now are not sent away, but the experiment\'s launch parameters are unset, so the game may stop working for them.',
+        pausesAutopilot ? STOP_PAUSES_AUTOPILOT : '',
+        'You can resume it later. Resuming restarts the experiment\'s scripts and disconnects everyone.',
+      ].filter(Boolean).join('\n\n'),
+      confirmLabel: 'Stop session',
+      danger: true,
+    })
+    if (!ok) return
     const m = await actions.stopInstance(inst.id)
     if (!m) {
       notify.error('The server did not confirm the stop', 'Check your connection, then look at Sessions & data to see the session\'s status.')
       return
     }
-    toast('success', `Stopped “${inst.name}”`, 'Resume it from this page or from Sessions & data.', {
+    toast('success', `Stopped “${inst.name}”`, pausesAutopilot
+      ? 'The autopilot is paused and opens no new session until you press Resume on the Autopilot page. Resume this session from this page or from Sessions & data.'
+      : 'Resume it from this page or from Sessions & data.', {
       action: { label: 'Resume', run: () => { void resumeSession(inst) } },
     })
   } finally {
@@ -114,7 +127,7 @@ export async function resumeSession (inst: Instance) {
     const other = cur && cur.id !== inst.id && (cur.status === 'RUNNING' || cur.status === 'TESTING') ? cur : null
     // The engine is shared by every account and the autopilot: say whose session and players the
     // restart disconnects ('' when nobody is using it). It names your running session too.
-    const users = await engineUsers()
+    const { who: users, pausesAutopilot } = await engineUse(inst.id)
     const ok = await confirm({
       title: `Resume “${inst.name}”?`,
       message: [
@@ -122,6 +135,7 @@ export async function resumeSession (inst: Instance) {
         users
           ? 'Resuming restarts the script engine, which every researcher on this server shares: the network is emptied and everyone in it is disconnected, whoever\'s session they are in. People can then join again with this session\'s links.'
           : 'The experiment\'s scripts restart from its steps: the network is emptied and anyone still connected is disconnected. People can then join again with the session\'s links.',
+        pausesAutopilot ? REBUILD_PAUSES_AUTOPILOT : '',
         'Data recorded so far is kept.',
       ].filter(Boolean).join('\n\n'),
       confirmLabel: 'Resume session',

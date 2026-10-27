@@ -56,8 +56,12 @@ describe('admin store', () => {
   it('collects live events and starts again for another session', () => {
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: { id: 5, name: 's', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] } })
+    const before = Date.now()
     __receive({ event: { id: 1, name: 'clientLogIn', datetime: '2026-10-27T10:00:00.000Z', data: { clientId: 'p1' } } })
     expect(admin.events.length).toBe(1)
+    // with when it arrived here (to tell it from what an older User JSON said)
+    expect(admin.events[0]).toMatchObject({ id: 1, name: 'clientLogIn', receivedAt: expect.any(Number) })
+    expect(admin.events[0].receivedAt).toBeGreaterThanOrEqual(before)
     // same session again: the feed stays
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: { id: 5, name: 's', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] } })
     expect(admin.events.length).toBe(1)
@@ -217,10 +221,10 @@ describe('while the connection is down', () => {
     expect(actions.startGame()).toBe(false)
     expect(actions.reloadEngine()).toBe(false)
     expect(actions.makeChoice('c1')).toBe(false)
-    expect(actions.runStep({ id: 1, name: 's', source: '' })).toBe(false)
+    expect(actions.runStep({ id: 1, name: 's', source: '' })).toBe(null)
     // a script that was not sent is not shown as run
     const before = admin.output.length
-    expect(actions.runScript('a = 1')).toBe(false)
+    expect(actions.runScript('a = 1')).toBe(null)
     expect(admin.output.length).toBe(before)
     // every call reached the connection, which refused each one
     expect(spy.mock.results.every(r => r.value === false)).toBe(true)
@@ -232,8 +236,36 @@ describe('while the connection is down', () => {
     expect(spy).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 })
     __receive({ user: { email: 'r', experiments: [exp(2, 'a')], currentScript: '' }, experiment: exp(2, 'a'), experimentInstance: '' })
     expect(await reply).not.toBe(null)
-    expect(actions.runScript('a = 1')).toBe(true)
+    expect(typeof actions.runScript('a = 1')).toBe('string')
     expect(admin.output[admin.output.length - 1]).toMatchObject({ kind: 'input', text: 'a = 1' })
+  })
+})
+
+describe('running scripts in the engine', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('sends each script with a fresh request id and the selected experiment', () => {
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    __receive({ user: { email: 'r', experiments: [exp(3, 'C')], currentScript: '' }, experiment: exp(3, 'C'), experimentInstance: '' })
+    const a = actions.runScript('a = 1')!
+    const b = actions.runStep({ id: null, name: 'NewStep', source: 'b = 2' })!
+    expect(send).toHaveBeenNthCalledWith(1, 'SendScript', { script: 'a = 1', requestId: a, experimentId: 3 })
+    expect(send).toHaveBeenNthCalledWith(2, 'SendStep', { id: -1, name: 'NewStep', source: 'b = 2', requestId: b, experimentId: 3 })
+    expect(a).not.toBe(b)
+    for (const id of [a, b]) expect(id.length).toBeLessThanOrEqual(64)
+    expect(actions.runScript('a = 1')).not.toBe(a)
+  })
+
+  it('keeps the request id the server echoes on its answer', () => {
+    actions.clearOutput()
+    __receive({ error: 'Nothing was run: the engine has another experiment loaded now. Reload the page and try again.', request: 'SendScript', requestId: 'r1' })
+    __receive({ error: '', output: 'a = 1\n\n==>1', request: 'SendStep', requestId: 'r2' })
+    __receive({ error: '', output: 'b\n\n==>2', request: 'SendScript' })
+    expect(admin.output.map(o => o.requestId)).toEqual(['r1', 'r2', undefined])
+    expect('requestId' in admin.output[2]).toBe(false)
+    // a refusal is shown like any other answer, and as the request's error
+    expect(admin.output[0]).toMatchObject({ kind: 'error', source: 'SendScript' })
+    expect(admin.requestError).toMatchObject({ request: 'SendScript', text: expect.stringMatching(/^Nothing was run/) })
   })
 })
 
@@ -359,6 +391,16 @@ describe('waiting for the answer to a request', () => {
     }
   })
 
+  it('a file-mode switch the server says it could not make ends at once, with the reason', async () => {
+    push({ experiment: exp(1, 'A') })
+    const t = track(actions.toggleFileMode())
+    __receive({ error: 'Couldn\'t switch file mode: dev/a is not writable', request: 'ToggleFileMode' })
+    await flush()
+    expect(t.done).toBe(true)
+    expect(t.value).toBe(null)
+    expect(admin.requestError).toMatchObject({ request: 'ToggleFileMode', text: 'Couldn\'t switch file mode: dev/a is not writable' })
+  })
+
   it('launching sends the experiment the page showed, when it says', () => {
     const send = vi.mocked(connection.send)
     push({ experiment: exp(2, 'B') })
@@ -399,7 +441,7 @@ describe('what the engine runs', () => {
 
   it('reads it beside the user, and says when it is another experiment', () => {
     push(1, engine(2, 7))
-    expect(admin.user!.engine).toEqual({ experimentId: 2, experimentName: 'E2', sessionId: 7, sessionName: 'S7', owner: 'other@lab' })
+    expect(admin.user!.engine).toEqual({ experimentId: 2, experimentName: 'E2', sessionId: 7, sessionName: 'S7', owner: 'other@lab', gameStarted: null })
     expect(engineElsewhere.value).toMatchObject({ experimentId: 2, sessionName: 'S7' })
     push(2, engine(2, 7))
     expect(engineElsewhere.value).toBe(null)
@@ -409,6 +451,36 @@ describe('what the engine runs', () => {
     push(1, undefined)
     expect(admin.user!.engine).toBe(null)
     expect(engineElsewhere.value).toBe(null)
+  })
+
+  it('reads whether the engine runs the game, and when that was said', () => {
+    push(1, { ...engine(1, 7), gameStarted: true })
+    expect(admin.user!.engine!.gameStarted).toBe(true)
+    const at = admin.engineInfoAt
+    expect(at).toBeGreaterThan(0)
+    push(1, { ...engine(1, 7), gameStarted: false })
+    expect(admin.user!.engine!.gameStarted).toBe(false)
+    expect(admin.engineInfoAt).toBeGreaterThanOrEqual(at)
+    push(1, { ...engine(1, 7), gameStarted: 'yes' })
+    expect(admin.user!.engine!.gameStarted).toBe(null)
+    // what a User JSON says during a rebuild is not current, so it has no time either
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    expect(admin.engineInfoAt).toBe(0)
+    push(1, { ...engine(1, 7), gameStarted: true })
+    expect(admin.engineInfoAt).toBe(0)
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    push(1, { ...engine(1, 7), gameStarted: false })
+    expect(admin.engineInfoAt).toBeGreaterThan(0)
+  })
+
+  it('asks what the engine runs when a game starts, or a start is taken back, without this console asking', () => {
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    __receive({ notify: { GameStarted: 5 } })
+    expect(send).toHaveBeenLastCalledWith('Update')
+    send.mockClear()
+    __receive({ notify: { GameStartFailed: 6 } })
+    expect(send).toHaveBeenLastCalledWith('Update')
+    send.mockRestore()
   })
 
   it('does not trust what the reply to a rebuild says, and asks again once the rebuild is done', () => {

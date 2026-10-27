@@ -199,7 +199,8 @@ export function mturkApi (mode: MturkMode) {
     },
 
     approve (assignmentId: string) {
-      return call(() => http.get(`/amtadmin/approveAssignment/${seg(assignmentId)}${qs({ sandbox })}`))
+      // A POST: approving pays the worker, so a link elsewhere must not be able to do it.
+      return call(() => http.post(`/amtadmin/approveAssignment/${seg(assignmentId)}${qs({ sandbox })}`))
     },
 
     reject (assignmentId: string, requesterFeedback: string) {
@@ -263,7 +264,8 @@ export function mturkApi (mode: MturkMode) {
       const key = `${mode}:${experimentUid}`
       let p = typeCache.get(key)
       if (!p) {
-        p = call(() => http.get<{ qualificationTypeId: string }>(`/amtadmin/getExperimentQualificationTypeId/${seg(experimentUid)}${qs({ sandbox })}`))
+        // A POST: it creates the type on the Mechanical Turk account when there is none yet.
+        p = call(() => http.post<{ qualificationTypeId: string }>(`/amtadmin/getExperimentQualificationTypeId/${seg(experimentUid)}${qs({ sandbox })}`))
           .then((r) => {
             if (!r || !r.qualificationTypeId) throw new Error('MTurk did not return a qualification type.')
             return r.qualificationTypeId

@@ -117,8 +117,10 @@ public class SharedEngineTest extends BaseTest {
         assertEquals(alice.email, engineInfo.get("owner").asText());
         assertEquals(his.id.longValue(), lastUserJson(b).get("experiment").get("id").asLong());
 
-        b.send("SendScript", "script", "bobWasHere = 1");
-        b.send("SendStep", "id", -1, "name", "Setup", "source", "bobStep = 1");
+        // As the console sends them, naming the experiment its page shows: the refusal that names
+        // what the engine runs answers, not "reload the page" (which wouldn't help).
+        b.send("SendScript", "script", "bobWasHere = 1", "requestId", "bob-1", "experimentId", his.id);
+        b.send("SendStep", "id", -1, "name", "Setup", "source", "bobStep = 1", "experimentId", his.id);
         b.send("RunGame");
         b.send("MakeChoice", "choiceUID", "nope");
         b.send("SubmitAMTTask", "lifetimeInSeconds", 60, "tutorialTime", 0);
@@ -128,6 +130,10 @@ public class SharedEngineTest extends BaseTest {
             String text = b.first(AdminSocketsTest.error(request)).get("error").asText();
             assertTrue(text, text.contains("the engine is running \"Hers\"") && text.contains("\"His\""));
         }
+        assertEquals("the refusal carries the console's requestId", "bob-1",
+            b.first(AdminSocketsTest.error("SendScript")).get("requestId").asText());
+        assertFalse(b.first(AdminSocketsTest.error("SendStep")).has("requestId"));
+        assertEquals("and the choice's id", "nope", b.first(AdminSocketsTest.error("MakeChoice")).get("choiceUID").asText());
         await("EditTie refused", () -> b.count(f -> f.has("tieEdit") && !f.get("tieEdit").get("ok").asBoolean()) == 1);
         Thread.sleep(300);
         assertNull(engine().get("bobWasHere"));
@@ -139,6 +145,50 @@ public class SharedEngineTest extends BaseTest {
         a.send("SendScript", "script", "aliceWasHere = 1");
         await("her script ran", () -> Integer.valueOf(1).equals(engine().get("aliceWasHere")));
         assertEquals(0, a.count(AdminSocketsTest.error("SendScript")));
+    }
+
+    // ---- a script or step written for another experiment than the engine's runs nothing ----------------
+
+    @Test
+    public void aScriptOrStepWrittenForAnotherExperimentRunsNothing() throws Exception {
+        final User user = user("stale");
+        final Experiment shown = createExperiment("Shown");
+        final Experiment loaded = createExperiment("Loaded");
+        Step shownStep = createStep(shown, "Setup", "shownStep = 1");
+        Step loadedStep = createStep(loaded, "Setup", "loadedStep = 1");
+        own(user, shown);
+        own(user, loaded);
+
+        final AdminSocketsTest.Tab t = loggedIn(user);
+        t.send("SelectExperiment", "experimentId", loaded.id);
+        await("loaded in the engine", () -> loaded.id.equals(engineExperimentId()) && Integer.valueOf(1).equals(engine().get("loadedStep")));
+
+        // This page still shows "Shown" (another tab has selected "Loaded" since).
+        t.send("SendScript", "script", "staleScript = 1", "experimentId", shown.id, "requestId", "s-1");
+        t.send("SendStep", "id", -1, "name", "Setup", "source", "staleStep = 1", "experimentId", shown.id, "requestId", "s-2");
+        // A saved step of another experiment, even from a page that doesn't say which it shows.
+        t.send("SendStep", "id", shownStep.id, "name", "Setup", "source", "shownStep = 1", "requestId", "s-3");
+        String[][] refused = {{"s-1", "SendScript"}, {"s-2", "SendStep"}, {"s-3", "SendStep"}};
+        for (final String[] r : refused) {
+            await(r[0] + " refused", () -> t.count(f -> f.has("requestId") && r[0].equals(f.get("requestId").asText())) == 1);
+            JsonNode error = t.first(f -> f.has("requestId") && r[0].equals(f.get("requestId").asText()));
+            assertEquals("Nothing was run: the engine has another experiment loaded now. Reload the page and try again.",
+                error.get("error").asText());
+            assertEquals(r[1], error.get("request").asText());
+        }
+        Thread.sleep(300);
+        assertNull(engine().get("staleScript"));
+        assertNull(engine().get("staleStep"));
+        assertNull(engine().get("shownStep"));
+        assertFalse("its script isn't saved as the account's either", "staleScript = 1".equals(User.findByEmail(user.email).currentScript));
+
+        // What is written for the experiment loaded runs.
+        t.send("SendScript", "script", "freshScript = 1", "experimentId", loaded.id, "requestId", "s-4");
+        t.send("SendStep", "id", loadedStep.id, "name", "Setup", "source", "loadedStep = 2", "experimentId", loaded.id, "requestId", "s-5");
+        await("ran", () -> Integer.valueOf(1).equals(engine().get("freshScript")) && Integer.valueOf(2).equals(engine().get("loadedStep")));
+        for (final String id : new String[]{"s-4", "s-5"}) {
+            await(id + " answered", () -> t.count(f -> f.has("requestId") && id.equals(f.get("requestId").asText()) && f.has("output")) == 1);
+        }
     }
 
     // ---- a page that shows another experiment can't launch; every tab learns the selection -------------
@@ -361,7 +411,7 @@ public class SharedEngineTest extends BaseTest {
         final AdminSocketsTest.Tab theirs = loggedIn(other);
         final int before = ScriptBoard.adminCount();
 
-        play.test.Helpers.route(play.test.Helpers.fakeRequest("GET", "/logout").withSession("uid", user.uid));
+        play.test.Helpers.route(play.test.Helpers.fakeRequest("POST", "/logout").withSession("uid", user.uid));
         for (final AdminSocketsTest.Tab t : new AdminSocketsTest.Tab[]{one, two}) {
             await("told", () -> t.count(f -> f.has("status") && "unauthorized".equals(f.get("status").asText())) == 1);
             assertTrue(t.first(f -> f.has("status")).get("error").asText().startsWith("You are not signed in"));

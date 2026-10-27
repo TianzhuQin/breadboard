@@ -10,6 +10,7 @@ import play.Logger;
 import play.db.DB;
 import play.libs.F;
 import play.libs.Yaml;
+import play.api.mvc.EssentialFilter;
 import play.mvc.Action;
 import play.mvc.Http;
 
@@ -201,6 +202,17 @@ public class Global extends GlobalSettings {
   @Override
   public Action onRequest(Http.Request request, Method actionMethod) {
     return super.onRequest(request, actionMethod);
+  }
+
+  /**
+   * What every response passes through (app/filters): the researcher's session cookie goes out with
+   * SameSite=Lax, and the files under /assets can be loaded by participant pages that run in an
+   * opaque origin (a researcher's sandboxed preview).
+   */
+  @Override
+  @SuppressWarnings("unchecked")
+  public <T extends EssentialFilter> Class<T>[] filters() {
+    return new Class[]{filters.SessionCookieSameSite.class, filters.AssetsCors.class};
   }
 
   static class InitialData {

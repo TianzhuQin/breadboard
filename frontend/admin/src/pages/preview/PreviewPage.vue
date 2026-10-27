@@ -47,17 +47,6 @@
     </BPanel>
 
     <template v-else>
-      <!-- not dismissable: it stays true until participant pages are served from another origin -->
-      <div class="pv__warn" role="note">
-        <ShieldAlert :size="16" class="pv__warn-icon" aria-hidden="true" />
-        <p>
-          <strong>Previews run with your researcher sign-in.</strong>
-          The participant page shows text as HTML, so if this experiment puts what one participant typed on another’s page
-          (chat, names, free answers), that participant could hide code in it that runs as you when you preview the page,
-          here or in a new tab. Preview only pages whose content you trust.
-        </p>
-      </div>
-
       <div v-if="!noticeSeen" class="pv__notice" role="note">
         <Info :size="18" class="pv__notice-icon" aria-hidden="true" />
         <div class="pv__notice-text">
@@ -132,7 +121,7 @@
                 v-for="t in tiles"
                 :key="t.id"
                 :player-id="t.id"
-                :src="pageUrl(t.id)"
+                :target="targetOf(t.id)"
                 :device="memory.device"
                 :width="tileW"
                 :interactive="memory.interactive"
@@ -154,7 +143,7 @@
 
       <PreviewFocus
         :player-id="focusId"
-        :src="focusId ? pageUrl(focusId) : ''"
+        :target="focusId ? targetOf(focusId) : null"
         :index="focusIndex"
         :count="tiles.length"
         :initial-device="memory.device"
@@ -171,19 +160,21 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Bot, ChevronDown, Database, FlaskConical, Info, ListOrdered, Monitor, MonitorOff, MonitorSmartphone, Play, Plus,
-  RotateCw, ShieldAlert, Smartphone, UserPlus, Users, UsersRound,
+  RotateCw, Smartphone, UserPlus, Users, UsersRound,
 } from 'lucide-vue-next'
 import { BButton, BEmpty, BPage, BPanel, BSpinner, BSwitch, BTabs, confirm, notify, type TabItem } from '@/ui'
 import { admin, graph } from '@/store/admin'
+import { describeError } from '../experiments/experiments'
 import { canResume } from '../sessions/sessionData'
 import { useSessionActions } from '../sessions/useSessionActions'
 import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  MAX_PREVIEWS, isAIPlayer, isConnected, isTestPlayer, joinUrl, playerPageUrl, previewMemory as memory, quickPick,
-  sortPlayers, tileWidth, wouldDisplace, type PlayerLike, type QuickPick,
+  MAX_PREVIEWS, isAIPlayer, isConnected, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, quickPick,
+  sortPlayers, tileWidth, wouldDisplace, type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
+import { fetchPreviewToken } from './previewLink'
 
 const router = useRouter()
 const route = useRoute()
@@ -194,8 +185,9 @@ const isRunning = computed(() => inst.value?.status === 'RUNNING')
 const statusWord = computed(() => (inst.value?.status || '').toLowerCase())
 
 const joinLink = computed(() => exp.value && inst.value ? joinUrl(exp.value.id, inst.value.id) : '')
-function pageUrl (id: string) {
-  return exp.value && inst.value ? playerPageUrl(exp.value.id, inst.value.id, id) : ''
+/** Whose page a tile or link shows: each one fetches its own preview token for it. */
+function targetOf (playerId: string): PreviewTarget | null {
+  return exp.value && inst.value ? { experimentId: exp.value.id, instanceId: inst.value.id, playerId } : null
 }
 
 // ---- players ------------------------------------------------------------------------------------
@@ -325,17 +317,33 @@ function closeFocus () {
 }
 watch(focusId, (id) => { if (id) tabbed.delete(id) })
 
-function openTab (id: string) {
-  // a blank tab first, cut off from this one before the participant page loads in it
+async function openTab (id: string) {
+  const target = targetOf(id)
+  if (!target) return
+  // The tab is opened now, while the click still counts, so pop-up blockers let it through; the
+  // page loads in it once its preview token is here. It is cut off from this tab first.
   const w = window.open('about:blank', '_blank')
   if (!w) {
     notify.error('The browser blocked the new tab', 'Allow pop-ups for this site, then try again.')
     return
   }
   try { w.opener = null } catch (e) { /* not allowed: the page loads anyway */ }
-  w.location.href = pageUrl(id)
+  // one connection per player: the tile and the full-size view step aside right away
   tabbed.add(id)
   if (focusId.value === id) focusId.value = null
+  try {
+    const { token } = await fetchPreviewToken(target)
+    if (w.closed) {
+      tabbed.delete(id)
+      return
+    }
+    w.location.href = previewPageUrl(target, token)
+  } catch (e) {
+    try { w.close() } catch (err) { /* already gone */ }
+    // nothing opened: the tile shows the page again
+    tabbed.delete(id)
+    notify.error(`Couldn’t open ${id}’s page in a new tab`, describeError(e))
+  }
 }
 
 // ---- following the session ---------------------------------------------------------------
@@ -406,19 +414,6 @@ function readFlag (key: string) {
 .pv__gridbox { min-width: 0; }
 .pv__grid { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 20px 18px; align-items: flex-start; }
 
-.pv__warn {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 14px;
-  border-radius: var(--radius);
-  background: var(--warning-soft);
-  color: var(--warning-soft-text);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-}
-.pv__warn-icon { flex: none; margin-top: 2px; }
-.pv__warn strong { font-weight: 650; }
 .pv__notice {
   display: flex;
   align-items: flex-start;

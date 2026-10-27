@@ -59,9 +59,10 @@ describe('players table', () => {
     expect(people.filter(n => quickMatch(n, 'choice')).map(n => n.id)).toEqual(['p1'])
   })
 
-  it('writes CSV with quotes, commas and line breaks escaped, starting with a BOM for Excel', () => {
+  it('writes CSV with quotes, commas and line breaks escaped, and no byte order mark (like the server\'s data CSV)', () => {
     const csv = toCsv([node('p1', { note: 'say "hi", then\nleave', obj: { a: 1 } })], ['note', 'obj'], () => 2)
-    expect(csv).toBe('\uFEFFid,status,ties,choices waiting,note,obj\r\np1,,2,0,"say ""hi"", then\nleave","{""a"":1}"\r\n')
+    expect(csv).toBe('id,status,ties,choices waiting,note,obj\r\np1,,2,0,"say ""hi"", then\nleave","{""a"":1}"\r\n')
+    expect(csv.charCodeAt(0)).not.toBe(0xFEFF)
   })
 
   it('writes values exactly as they are, like the session\'s event CSV, so the files join on id', () => {
@@ -75,7 +76,7 @@ describe('players table', () => {
     // leading or trailing white space is kept by quoting the field
     expect(csvCell('\tlead')).toBe('"\tlead"')
     const csv = toCsv([node('-k7', { '@k': '-x' })], ['@k'], () => 0)
-    expect(csv.split('\r\n')[0]).toBe('\uFEFFid,status,ties,choices waiting,@k')
+    expect(csv.split('\r\n')[0]).toBe('id,status,ties,choices waiting,@k')
     expect(csv.split('\r\n')[1]).toBe('-k7,,0,0,-x')
   })
 
@@ -160,6 +161,29 @@ describe('choosing for a player', () => {
       return true
     })
     expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
+  })
+
+  it('takes the answers of a server that names the choice on every reply, and of one that names none', async () => {
+    let replies: any[] = []
+    vi.spyOn(actions, 'makeChoice').mockImplementation(() => {
+      replies.forEach((m, i) => setTimeout(() => __receive(m), 2 + i * 5))
+      return true
+    })
+    replies = [{ request: 'MakeChoice', choice: 'made', choiceUID: 'c1' }]
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
+    replies = [{ request: 'MakeChoice', choice: 'gone', choiceUID: 'c1' }]
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, gone: true, sent: true })
+    // the error names the choice too; one about another choice is not this one's
+    replies = [
+      { request: 'MakeChoice', error: 'Caught error: not this one', choiceUID: 'c2' },
+      { request: 'MakeChoice', error: 'Caught error: no such round', choiceUID: 'c1' },
+    ]
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, error: 'Caught error: no such round' })
+    // an older server's answers, or a refusal made before the request was read, name none
+    replies = [{ request: 'MakeChoice', choice: 'made', choiceUID: null }]
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: true })
+    replies = [{ request: 'MakeChoice', error: 'You are not signed in (or your sign-in has expired). Sign in again.' }]
+    expect(await submitChoice('p1', 'c1', 2000)).toEqual({ ok: false, error: replies[0].error })
   })
 
   it('says so at once when there is no connection', async () => {

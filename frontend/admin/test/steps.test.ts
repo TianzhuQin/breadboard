@@ -17,9 +17,11 @@ vi.mock('@/store/admin', async () => {
     requestError: null as any,
     output: [] as any[],
   })
+  // runStep returns the request id the engine's answer carries, like the real store
+  let requestSeq = 0
   const actions = {
-    runScript: vi.fn(() => true),
-    runStep: vi.fn(() => true),
+    runScript: vi.fn((): string | null => `script-${++requestSeq}`),
+    runStep: vi.fn((): string | null => `step-${++requestSeq}`),
     refresh: vi.fn(() => Promise.resolve(null)),
     markEngineStale: vi.fn(() => { admin.engine = 'stale' }),
     markEngineCurrent: vi.fn(() => { if (admin.engine === 'stale' && !admin.engineProblem) admin.engine = 'ready' }),
@@ -324,12 +326,35 @@ describe('the live engine', () => {
     expect(admin.engine).toBe('ready')
   })
 
+  it('shows the engine\'s refusal to run a step for another experiment on that step', async () => {
+    await nextTick()
+    const b = ensureBucket(7, false)
+    b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }), draftFromStep({ id: 2, name: 'B', source: 'b()' }))
+    const [a, bb] = b.drafts
+    a.engineBehind = true
+    runDraft(a)
+    runDraft(bb)
+    const [idA, idB] = actions.runStep.mock.results.map((r: any) => r.value)
+    const refusal = 'Nothing was run: the engine has another experiment loaded now. Reload the page and try again.'
+    // B's answer first: the id says whose it is, though A was sent first
+    admin.output.push({ id: ++outId, kind: 'error', text: refusal, source: 'SendStep', requestId: idB, at: Date.now() })
+    await flushPromises()
+    expect(bb.run).toMatchObject({ status: 'error', error: refusal })
+    expect(a.run).toMatchObject({ status: 'pending' })
+    admin.output.push({ id: ++outId, kind: 'error', text: refusal, source: 'SendStep', requestId: idA, at: Date.now() })
+    await flushPromises()
+    expect(a.run).toMatchObject({ status: 'error', error: refusal })
+    // the saved version did not load
+    expect(a.engineBehind).toBe(true)
+    expect(actions.markEngineStale).toHaveBeenCalled()
+  })
+
   it('says at once that a step did not run while the connection is down', () => {
     const b = ensureBucket(7, false)
     b.drafts.push(draftFromStep({ id: 1, name: 'A', source: 'a()' }))
     const d = b.drafts[0]
     d.engineBehind = true
-    actions.runStep.mockReturnValueOnce(false)
+    actions.runStep.mockReturnValueOnce(null)
     expect(runDraft(d)).toBe(false)
     expect(d.run).toMatchObject({ status: 'notsent' })
     expect(d.engineBehind).toBe(true)
@@ -629,7 +654,7 @@ describe('StepsPage', () => {
     const { w } = await open()
     await w.find('textarea.code-stub').setValue('initStep = 4')
     post.mockResolvedValueOnce({ id: 1, name: 'InitStep', source: 'initStep = 4' })
-    actions.runStep.mockReturnValueOnce(false)
+    actions.runStep.mockReturnValueOnce(null)
     await w.findAll('button').find(b => b.text() === 'Save & run')!.trigger('click')
     await flushPromises()
     expect(actions.runStep).toHaveBeenCalled()

@@ -22,10 +22,11 @@ export function shortError (error: string): string {
 const hasError = (m: any) => typeof m.error === 'string' && m.error.trim() !== ''
 /**
  * The server's answer to this MakeChoice: tagged {"request": "MakeChoice"} with "choice": "made" or
- * "gone", or with the error. When it names the choice ("choiceUID"), an answer about another choice
- * (one chosen from another page meanwhile) is not taken for this one's.
+ * "gone", or with the error. Newer servers name the choice ("choiceUID") on both: an answer about
+ * another choice (one chosen from another page meanwhile) is not taken for this one's. An answer
+ * that names none (older servers, or a refusal before the request was read) still counts.
  */
-const isReplyTo = (choiceUID: string) => (m: any) => m.request === 'MakeChoice' && (m.choiceUID === undefined || m.choiceUID === choiceUID)
+const isReplyTo = (choiceUID: string) => (m: any) => m.request === 'MakeChoice' && (m.choiceUID == null || m.choiceUID === choiceUID)
 
 /**
  * Make a choice on a player's behalf (MakeChoice) and find out whether it took.
