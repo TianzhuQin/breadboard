@@ -15,8 +15,26 @@ Easier to install, safer to leave running, and ready for a lab of several resear
   them; [docs/install.md](docs/install.md#backups) says how to go back to one.
 - `GET /health` for uptime monitors and service managers; examples for starting Breadboard again by
   itself with systemd, launchd (macOS) and Task Scheduler (Windows).
+- Sessions & data: **Download all data**, every listed session's events in one file, each row with
+  its session and launch parameters.
+- The console says where computers on the same network reach the server, wherever it shows
+  participant links while it was opened at localhost (links that work on this computer only).
+- Help in the menu under your email: the console's guide, the Chinese quick start, troubleshooting.
 
 #### Changed
+- The autopilot no longer sends participants into a broken session: when the steps of a session it
+  opens don't load, it stops that session before anyone joins and pauses, naming the step and line
+  (`stepsFailedToLoad`). While it runs an experiment, that experiment's Steps page says so.
+- On a new server, the first account can be created from another computer (or through a proxy) only
+  with the setup code the server prints in its window and log.
+- The study's shared link asks a browser that already has a seat whether to continue as that person
+  or join as someone else, so a study can be tried in several tabs of one browser.
+- The network game example: its network size and waiting room are launch parameters, and
+  everything participants read is on the Content page; it is offered first when there is no
+  experiment yet.
+- The Autopilot page leaves the waiting room and takeover to the steps of an experiment that sets
+  them, and suggests giving a lone participant ten minutes before calling the session off.
+- No "Reload needed" after saving steps while no session runs: the next session loads them.
 - Sessions that were running when the server stopped are marked Stopped when it starts again, with a
   `sessionInterrupted` event; Resume starts their game again.
 - Experiment names are unique on the server, and every open console updates its experiment list
@@ -25,8 +43,12 @@ Easier to install, safer to leave running, and ready for a lab of several resear
   someone they are tied to.
 - The launchers say when the port is taken (and by Breadboard itself, if so) instead of printing a
   stack trace; the Windows launcher keeps the jars in the build's order.
-- The events drawer says in plain words what the well-known events mean.
-- Participant pages no longer print Vue's notices for developers in the browser console.
+- The events drawer says in plain words what the well-known events mean, and engine errors on the
+  Live session and Autopilot pages are explained as on the Steps page.
+- The sidebar fits laptop screens; Live session says when the console isn't connected; the sign-in
+  page says how to get a new password; the previous console opens in a new tab and links back.
+- Participant pages no longer print Vue's notices for developers in the browser console, and their
+  scripts and styles are sent compressed.
 
 ### [v3.0.0] - 2026-10-28
 The first release of this fork ([TianzhuQin/breadboard](https://github.com/TianzhuQin/breadboard)),
