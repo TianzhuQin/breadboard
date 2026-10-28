@@ -10,6 +10,9 @@ export enum SocketState {
 /**
  * A WebSocket wrapper with automatic reconnection with exponential backoff and message queuing.
  * Once closed with close(), it stays closed: it never reconnects and sends nothing more.
+ *
+ * When the server takes the connection and closes it again without sending anything, several
+ * times in a row, it emits 'refused': reconnecting alone is not going to change that.
  */
 export class Socket extends Emitter {
   public state: SocketState = SocketState.CLOSED
@@ -21,6 +24,14 @@ export class Socket extends Emitter {
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   /** close() was called */
   private closed = false
+  /** stopReconnecting() was called */
+  private reconnectStopped = false
+  /** A message came over the current connection */
+  private heard = false
+  /** Connections in a row that the server closed before sending anything */
+  private refusals = 0
+  /** How many of those make 'refused' */
+  private maxRefusals = 3
 
   constructor (private url: string, private protocols?: string | string[]) {
     super()
@@ -61,6 +72,15 @@ export class Socket extends Emitter {
     }
     this._clearBuffer()
     this.removeListeners()
+  }
+
+  /**
+   * Don't reconnect once the connection there is now closes (e.g. the server said the session is
+   * over for this page). Unlike close(), what is open stays open, and its messages still arrive.
+   */
+  public stopReconnecting () {
+    this.reconnectStopped = true
+    this.clearRetry()
   }
 
   /**
@@ -118,6 +138,7 @@ export class Socket extends Emitter {
    */
   private onOpen () {
     this.state = SocketState.OPEN
+    this.heard = false
     this.emit('open')
     this.nTries = 1
     this.flush()
@@ -128,6 +149,8 @@ export class Socket extends Emitter {
    * @param data 
    */
   private onMessage (ev: MessageEvent) {
+    this.heard = true
+    this.refusals = 0
     this.emit('message', ev.data, ev)
   }
 
@@ -144,7 +167,10 @@ export class Socket extends Emitter {
    * Handle the WebSocket.onclose event internally
    */
   private onClose () {
-    if (this.state !== SocketState.CLOSING && !this.closed) {
+    const dropped = this.state !== SocketState.CLOSING && !this.closed
+    // Taken and closed again without a word (not a server that can't be reached: that never opens)
+    const refused = dropped && this.state === SocketState.OPEN && !this.heard
+    if (dropped && !this.reconnectStopped) {
       this.nTries++
       // Exponential back-off w/ randomness to make it easier for the server to come back online w/out a huge, immediate traffic spike
       const wait = clamp(this.nTries * 2000 + randomInt(500, 4000), 1000, this.maxWait)
@@ -156,6 +182,10 @@ export class Socket extends Emitter {
     }
     this.state = SocketState.CLOSED
     this.emit('close')
+    if (refused && ++this.refusals >= this.maxRefusals) {
+      this.refusals = 0
+      this.emit('refused')
+    }
   }
 
 }
