@@ -92,7 +92,7 @@
               </template>
               <template v-else-if="room.min != null && room.here < room.min">Waiting room: {{ room.here }} of the {{ room.min }} people needed {{ room.here === 1 ? 'is' : 'are' }} here</template>
               <template v-else>
-                Waiting room: {{ room.here }} {{ room.here === 1 ? 'person is' : 'people are' }} here, enough to start<template v-if="room.startsIn">. The game starts in about {{ room.startsIn }} s<template v-if="room.max"> (at once if {{ room.max }} are here)</template>.</template>
+                Waiting room: {{ room.here }} {{ room.here === 1 ? 'person is' : 'people are' }} here, enough to start<template v-if="startsInLeft">. The game starts in about {{ startsInLeft }} s<template v-if="room.max"> (at once if {{ room.max }} are here)</template>.</template>
               </template>
             </p>
             <div
@@ -257,16 +257,25 @@ function onStart () {
 
 const now = ref(Date.now())
 const countdownEnd = ref(0)
+const startsInEnd = ref(0)
 let ticker: ReturnType<typeof setInterval> | null = null
 function stopTicker () { if (ticker) { clearInterval(ticker); ticker = null } }
 watch(() => room.value && room.value.state === 'starting' ? room.value.seconds : null, (secs) => {
-  if (secs == null) { stopTicker(); return }
+  if (secs == null) { if (startsInEnd.value === 0) stopTicker(); return }
   now.value = Date.now()
   countdownEnd.value = now.value + secs * 1000
   if (!ticker) ticker = setInterval(() => { now.value = Date.now() }, 250)
 }, { immediate: true })
+// the wait before that countdown, once enough people are here: counted down here too, as on their pages
+watch(() => room.value && room.value.state === 'waiting' ? room.value.startsIn ?? null : null, (secs) => {
+  if (secs == null) { startsInEnd.value = 0; if (!countdownEnd.value || countdown.value === 0) stopTicker(); return }
+  now.value = Date.now()
+  startsInEnd.value = now.value + secs * 1000
+  if (!ticker) ticker = setInterval(() => { now.value = Date.now() }, 250)
+}, { immediate: true })
 onBeforeUnmount(stopTicker)
 const countdown = computed(() => Math.max(0, Math.ceil((countdownEnd.value - now.value) / 1000)))
+const startsInLeft = computed(() => startsInEnd.value ? Math.max(0, Math.ceil((startsInEnd.value - now.value) / 1000)) : null)
 
 const roomTarget = computed(() => {
   const r = room.value
@@ -309,6 +318,7 @@ const explanation = computed(() => {
   if (isRunning.value) {
     if (startBlocked.value) return startBlocked.value
     if (started.value.started && started.value.nearReload) return 'The session\'s log shows the game starting at about the time the engine last reloaded, and a reload forgets a start, so the game may not be running now.'
+    if (started.value.started && openedByAutopilot.value) return 'The game is on and new arrivals are turned away. The experiment ends it, and the autopilot then opens the next session. (Stopping it pauses the autopilot.)'
     if (started.value.started) return 'The game is on and new arrivals are turned away. Stop the session when you are done, or let the experiment finish it.'
     // (the server reopens a session it carries into a rebuilt engine, so after a reload this shows
     // only until the next update; an AMT session's entry also closes before its game starts)

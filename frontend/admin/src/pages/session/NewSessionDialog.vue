@@ -127,6 +127,7 @@ import { uid } from '@/ui/uid'
 import { admin, actions, ensureConnected, instances } from '@/store/admin'
 import { confirmEngineRebuild } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
+import { stepsCall } from '../autopilot/autopilot'
 import {
   TYPE_LABEL, buildFields, buildLaunchParams, checkParam, checkSessionName, fieldErrors, rangeText, suggestName,
   type FieldValue, type ParamField,
@@ -293,7 +294,9 @@ async function submit () {
     busy.value = false
     emit('update:open', false)
     emit('created', sessionName)
-    notify.success(`“${sessionName}” is open`, 'People can join with its links now. Start the game when everyone is here.')
+    notify.success(`“${sessionName}” is open`, stepsCall(admin.experiment?.steps, 'waitingRoom')
+      ? 'People can join with its links now. Its waiting room starts the game once enough are here.'
+      : 'People can join with its links now. Start the game when everyone is here.')
   } finally {
     busy.value = false
   }

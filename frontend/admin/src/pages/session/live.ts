@@ -318,6 +318,6 @@ export function formatWhen (at: number, now = Date.now()): string {
 /** A file name the browser and every OS accept. */
 export function safeFileName (s: string): string {
   // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only)
-  const cleaned = (s || '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
+  const cleaned = (s || '').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
   return (cleaned || 'session').slice(0, 120)
 }

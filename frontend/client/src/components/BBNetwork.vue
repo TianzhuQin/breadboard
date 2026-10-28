@@ -571,6 +571,7 @@ export default Vue.extend({
     // Worth opening: something can be done, or the experiment says why something can't.
     movesPossible (): boolean { return this.moves.some((m: any) => m.available || m.reason) },
     movesToggleText (): string {
+      if (this.movesOpen && this.moves.length) return 'Hide the list of changes'
       if (!this.moves.length || !this.movesPossible) return 'No changes to list right now'
       if (this.movesOpen) return 'Hide the list of changes'
       const n = this.moves.filter(m => m.available).length
@@ -1437,22 +1438,13 @@ function lighten (color: string): string {
   font-size: 12.5px;
   font-weight: 600;
 }
-/* A fixed height, so what the bar shows never resizes the picture; longer content (a confirmation
-   that wraps on a phone) hangs over the top of the picture instead. */
+/* A fixed height, so what the bar shows never resizes the picture (on a phone it grows instead:
+   see below). */
 .bb-network__bar {
   position: relative;
   height: 60px;
   flex: none;
   outline: none;
-}
-/* On a phone the question can take two lines: the bar grows instead of covering the people. */
-@media (max-width: 600px) {
-  .bb-network__bar { height: auto; min-height: 60px; padding: 10px 0; box-sizing: border-box; }
-  .bb-network__bar > * { position: relative; top: 0; }
-}
-/* fingers need bigger buttons */
-@media (pointer: coarse) {
-  .bb-network__btn, .bb-network__moves-toggle, .bb-network__move { min-height: 44px; }
 }
 .bb-network__bar > * {
   position: absolute;
@@ -1464,6 +1456,15 @@ function lighten (color: string): string {
   max-width: calc(100% - 24px);
   box-sizing: border-box;
   z-index: 2;
+}
+/* On a phone the question can take two lines: the bar grows instead of covering the people. */
+@media (max-width: 600px) {
+  .bb-network__bar { height: auto; min-height: 60px; padding: 10px 0; box-sizing: border-box; }
+  .bb-network__bar > * { position: relative; top: 0; }
+}
+/* fingers need bigger buttons */
+@media (pointer: coarse) {
+  .bb-network__btn, .bb-network__moves-toggle, .bb-network__move { min-height: 44px; }
 }
 .bb-network__hint {
   max-width: 100%;

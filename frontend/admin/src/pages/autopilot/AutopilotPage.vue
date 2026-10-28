@@ -100,8 +100,8 @@
               <span>
                 Its sessions use each launch parameter's default:
                 <template v-for="(p, i) in launchDefaults" :key="p.name"><code>{{ p.name }}</code> {{ p.value === '' ? '(empty)' : p.value }}{{ i < launchDefaults.length - 1 ? ', ' : '.' }} </template>
-                <template v-if="emptyDefaults.length">Check that {{ emptyDefaults.join(' and ') }} can be empty. </template>
-                Change them on the <RouterLink to="/parameters">Parameters</RouterLink> page.
+                <template v-if="emptyDefaults.length">Check that {{ emptyDefaults.join(' and ') }} can be empty.</template>
+                Change them on the <RouterLink to="/parameters">Parameters</RouterLink> page; a session already open keeps the values it opened with.
               </span>
             </p>
             <div v-if="holder" class="ap-preview ap-holder" role="note">

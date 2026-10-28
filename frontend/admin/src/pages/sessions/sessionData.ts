@@ -316,7 +316,7 @@ export function safeFileName (name: string, fallback = 'session'): string {
   // eslint-disable-next-line no-control-regex
   // (letters in any script, digits, spaces and . _ ( ) - only: "Autopilot · Oct 28, 14:11 UTC"
   // becomes "Autopilot - Oct 28- 14-11 UTC", easier in a shell or an analysis script)
-  const cleaned = (name || '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
+  const cleaned = (name || '').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
   return (cleaned || fallback).slice(0, 120)
 }
 

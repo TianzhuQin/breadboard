@@ -275,7 +275,7 @@ describe('CSV', () => {
     expect(safeFileName('')).toBe('session')
     expect(safeFileName('', 'sessions')).toBe('sessions')
     // symbols go (the autopilot's names), letters of any script stay
-    expect(safeFileName('Autopilot · Oct 28, 14:11:04 UTC')).toBe('Autopilot - Oct 28- 14-11-04 UTC')
+    expect(safeFileName('Autopilot · Oct 28, 14:11:04 UTC')).toBe('Autopilot - Oct 28 14-11-04 UTC')
     expect(safeFileName('合作实验 第1轮')).toBe('合作实验 第1轮')
   })
 

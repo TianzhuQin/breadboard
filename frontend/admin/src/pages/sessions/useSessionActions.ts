@@ -50,7 +50,7 @@ export function useSessionActions () {
     const { who, pausesAutopilot, endsSession } = await engineUse(s.id)
     const verb = s.status === 'STOPPED' ? 'Resume' : 'Make current'
     const lines = [
-      `The script engine restarts with this session's launch parameters, and the network starts empty: people who were in it join again with its links, and its game has to be started again.`,
+      `The script engine restarts with this session's launch parameters, and the network starts empty: people who were in it join again with its links, and its game starts again from the beginning. The data recorded so far is kept, and a sessionResumed event marks where the new run begins.`,
     ]
     if (who) {
       lines.push(endsSession
