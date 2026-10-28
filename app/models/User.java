@@ -63,8 +63,23 @@ public class User extends Model {
     return find.all();
   }
 
+  /**
+   * The account with this email, ignoring case and surrounding spaces (a sign-in typed with a
+   * capital letter used to be refused as a wrong password). An exact match wins, as an older
+   * database may hold two addresses that differ only in case.
+   */
   public static User findByEmail(String email) {
-    return find.where().eq("email", email).findUnique();
+    if (email == null || email.trim().isEmpty()) {
+      return null;
+    }
+    String wanted = email.trim();
+    List<User> users = find.where().ieq("email", wanted).findList();
+    for (User u : users) {
+      if (wanted.equals(u.email)) {
+        return u;
+      }
+    }
+    return users.size() == 1 ? users.get(0) : null;
   }
 
   /**
@@ -80,12 +95,8 @@ public class User extends Model {
   }
 
   public static User authenticate(String email, String password) {
-    Logger.debug("authenticate(" + email + ")");
-    User user = find.where()
-        .eq("email", email)
-        .findUnique();
-    Logger.debug("user: " + user);
-    if (user == null) {
+    User user = findByEmail(email);
+    if (user == null || password == null) {
       return null;
     }
     if (BCrypt.checkpw(password, user.password)) {
@@ -110,6 +121,11 @@ public class User extends Model {
 
   /** Shortest password a password change accepts (the console's Settings page and the websocket). */
   public static final int PASSWORD_MIN_LENGTH = 8;
+
+  /** Something@something.something, without spaces: enough to catch a typo or a name in the email field. */
+  public static boolean looksLikeEmail(String email) {
+    return email != null && email.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+");
+  }
 
   /** Store a new password, hashed (the caller saves the user). */
   public void changePassword(String raw) {

@@ -156,7 +156,7 @@ public class AutopilotSessionTest extends BaseTest {
         Thread.sleep(500);
         assertEquals("one session", 1, sessions(experiment).size());
         final ExperimentInstance first = sessions(experiment).get(0);
-        assertTrue(first.name, first.name.startsWith("auto "));
+        assertTrue(first.name, first.name.startsWith("Autopilot · "));
         await("the console's waiting room over the experiment's own",
             () -> Integer.valueOf(3).equals(engineValue("autopilot.room?.minPlayers")));
         assertEquals(true, engineValue("autopilot.room.onCancel != null"));

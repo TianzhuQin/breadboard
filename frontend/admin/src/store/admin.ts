@@ -28,8 +28,8 @@ const state = reactive({
   uid: '',
   /**
    * Why the sign-in page is showing, when this console didn't sign out itself: 'ended' when the
-   * server ended this browser's session (the account signed in or out somewhere else, or its
-   * password changed). Cleared by the next sign-in.
+   * server ended this browser's session (the account signed out somewhere else, or its password
+   * changed). Cleared by the next sign-in.
    */
   signOutReason: null as null | 'ended',
   /** The newest User JSON (null until the first one arrives after sign-in). */
@@ -419,7 +419,7 @@ async function refreshSignIn (refusedUid: string | null) {
     state.uid = cfg.uid
     socketSetting = cfg.connectSocket
     conn.start(cfg.uid, cfg.connectSocket)
-    if (refusedUid) notify.info('Reconnected', 'Your sign-in changed in another tab (you signed in again or changed your password), so this tab reconnected. Try your last action again.')
+    if (refusedUid) notify.info('Reconnected', 'Your password was changed in another tab, so this tab reconnected. Try your last action again.')
   } catch (e: any) {
     if (e instanceof HttpError && e.status === 401) signedOut(e.body)
     // otherwise the server is unreachable right now; the next refusal tries again

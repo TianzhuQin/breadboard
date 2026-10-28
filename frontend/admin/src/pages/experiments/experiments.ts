@@ -61,10 +61,19 @@ export function validateExperimentName (raw: string, existing: string[] = []): s
   return null
 }
 
-/** A suggested experiment name for an uploaded file: the file name without its folder and ".zip". */
+/** A suggested experiment name for an uploaded file: the file name without its folder and extension. */
 export function importNameFromFile (fileName: string): string {
   const base = (fileName || '').split(/[/\\]/).pop() || ''
-  return base.replace(/\.zip$/i, '').replace(/[/\\]/g, '-').trim()
+  return base.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[/\\]/g, '-').trim()
+}
+
+/** `name`, or "name 2", "name 3", ... when an experiment is called that already (ignoring case). */
+export function uniqueName (name: string, existing: string[]): string {
+  const taken = new Set(existing.map(n => (n || '').trim().toLowerCase()))
+  if (!name || !taken.has(name.trim().toLowerCase())) return name
+  let n = 2
+  while (taken.has(`${name} ${n}`.toLowerCase())) n++
+  return `${name} ${n}`
 }
 
 /** The import route; the name is a path segment, so it must be encoded (the old console sent it raw). */

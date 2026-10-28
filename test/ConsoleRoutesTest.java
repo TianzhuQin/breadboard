@@ -659,6 +659,14 @@ public class ConsoleRoutesTest extends BaseTest {
         JsonNode second = Json.parse(contentAsString(again));
         assertEquals("logo-2.png", second.get("fileName").asText());
         assertEquals("image/png", Image.findById(second.get("id").asLong()).contentType);
+
+        // A text file with an image's name is refused (it used to be stored and shown as broken).
+        File text = File.createTempFile("bb-image", ".png");
+        text.deleteOnExit();
+        Files.write(text.toPath(), "just some notes".getBytes(StandardCharsets.UTF_8));
+        Result notImage = ImagesController.storeImage(experiment.id.toString(), "notes.png", "image/png", text);
+        assertEquals(BAD_REQUEST, status(notImage));
+        assertTrue(Json.parse(contentAsString(notImage)).get("message").asText().contains("isn't an image"));
     }
 
     // ---- file-mode images stay in their folder ---------------------------------------------------------

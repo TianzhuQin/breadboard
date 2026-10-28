@@ -43,7 +43,7 @@ public class ClientController extends Controller
         if (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING) {
           // Mechanical Turk workers are asked to return the HIT; everyone else gets the general notice.
           return ok(experimentInstance != null && experimentInstance.getHit() != null
-              ? amtError.render() : ClientLogin.notRunning());
+              ? amtError.render() : ClientLogin.notRunning(experimentId, experimentInstanceId));
         }
 
         // A signed invitation link claims the seat, then redirects to the plain page URL so the

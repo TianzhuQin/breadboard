@@ -45,7 +45,7 @@ vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: fal
 import { createRouter, createMemoryHistory } from 'vue-router'
 import ExperimentsPage from '../src/pages/experiments/ExperimentsPage.vue'
 import {
-  checkExperimentZip, describeError, devDirName, formatWhen, importNameFromFile, importUrl, lastSession, manifestName,
+  checkExperimentZip, describeError, devDirName, formatWhen, importNameFromFile, importUrl, lastSession, manifestName, uniqueName,
   parseServerTime, readZipEntries, runningSession, uniqueLanguages, validateExperimentName, zipFileName,
 } from '../src/pages/experiments/experiments'
 import { HttpError } from '../src/lib/http'
@@ -141,7 +141,10 @@ describe('import name handling', () => {
     expect(importNameFromFile('C:\\Users\\me\\Trust game.ZIP')).toBe('Trust game')
     expect(importNameFromFile('archive.zip.zip')).toBe('archive.zip')
     expect(importNameFromFile('no-extension')).toBe('no-extension')
+    expect(importNameFromFile('notes.txt')).toBe('notes')
     expect(importNameFromFile('')).toBe('')
+    expect(uniqueName('Network game', ['network GAME', 'Network game 2'])).toBe('Network game 3')
+    expect(uniqueName('Fresh', ['Other'])).toBe('Fresh')
   })
   it('encodes the name in the import URL (the old console sent it raw)', () => {
     expect(importUrl('Trust game #3?')).toBe('/experiment/import/Trust%20game%20%233%3F')
@@ -338,8 +341,13 @@ describe('Import dialog', () => {
     w.unmount()
   })
 
-  it('refuses a duplicate name before uploading', async () => {
+  it('suggests a free name, and refuses a duplicate one typed in before uploading', async () => {
     const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'existing.zip'))
+    const name = document.querySelector<HTMLInputElement>('.b-dialog input[maxlength="120"]')!
+    expect(name.value).toMatch(/ 2$/)
+    name.value = name.value.replace(/ 2$/, '')
+    name.dispatchEvent(new Event('input'))
+    await flushPromises()
     submit().click()
     await flushPromises()
     expect(http.post).not.toHaveBeenCalled()

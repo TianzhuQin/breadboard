@@ -11,7 +11,7 @@
         v-else
         key="grid"
         class="bb-game__grid"
-        :class="{ 'is-waiting': waiting, 'is-single': !waiting && !networkShown, 'is-idle': idle }"
+        :class="{ 'is-waiting': waiting, 'is-single': !waiting && !networkShown, 'is-idle': idle, 'is-finished': finished }"
       >
         <!-- Only this column changes when the session starts. The panel next to it stays the same
              element, so a form or choice the participant began during the wait keeps its input. -->
@@ -52,6 +52,10 @@
         <!-- v-show, not v-if: hiding an empty panel must not throw away its Form and choices.
              The keys keep each one matched to its old instance when the slots appear around it. -->
         <section v-show="panelShown" class="bb-card bb-game__panel">
+          <!-- the end: the experiment set player.finished -->
+          <div v-if="finished" key="done" class="bb-game__done" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="26" height="26"><path d="M5 12.5l4.2 4.2L19 7" /></svg>
+          </div>
           <div v-if="hasTimers" key="timers" class="bb-timers">
             <PlayerTimers :player="player" />
           </div>
@@ -144,8 +148,14 @@ export default Vue.extend({
     amongCount (): number {
       return this.edges.length - this.tieCount
     },
+    // The experiment says the participant is done (player.finished, e.g. set from
+    // player.private.finished): one calm card with its last words, without the network.
+    finished (): boolean {
+      return !this.waiting && !!this.player && !!this.player.finished
+    },
     networkShown (): boolean {
       if (this.network === true || this.network === 'true') return true
+      if (this.finished) return false
       if (this.network === false || this.network === 'false') return false
       // Someone allowed to add ties needs the network before they have any.
       const edits = this.player.edgeEdits
@@ -254,7 +264,7 @@ export default Vue.extend({
   border-top-color: #64748b;
 }
 .bb-game__legend i.is-own.is-editable {
-  border-top-color: #a5b4fc;
+  border-top-color: #818cf8;
 }
 .bb-game__canvas {
   position: relative;
@@ -277,6 +287,31 @@ export default Vue.extend({
 }
 .bb-game__panel:empty {
   display: none;
+}
+.bb-game__grid.is-finished {
+  grid-template-columns: minmax(0, 560px);
+  margin-top: 10vh;
+}
+.bb-game__grid.is-finished .bb-game__panel {
+  text-align: center;
+  padding: 36px 32px 32px;
+}
+.bb-game__done {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto -4px;
+  border-radius: 50%;
+  background: #ecfdf5;
+  box-shadow: 0 0 0 8px #f0fdf4;
+}
+.bb-game__done path {
+  fill: none;
+  stroke: #059669;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .bb-game__grid.is-idle {
   grid-template-columns: minmax(0, 520px);
@@ -321,7 +356,9 @@ export default Vue.extend({
 .bb-game__grid.is-waiting {
   grid-template-columns: minmax(0, 560px);
   justify-content: center;
-  min-height: 0;
+  /* in the middle of the screen, where the sign-in card was */
+  align-content: center;
+  min-height: calc(100vh - 48px);
 }
 .bb-game__waiting .bb-waiting {
   /* the grid gap spaces it from the panel */
@@ -375,7 +412,9 @@ export default Vue.extend({
   .bb-game__panel { position: static; padding: 20px; order: -1; }
   /* but not before the waiting card */
   .bb-game__grid.is-waiting .bb-game__panel { order: 0; }
-  .bb-game__legend { display: none; }
+  /* the legend goes under the heading */
+  .bb-game__head { flex-wrap: wrap; padding: 16px 16px 0; gap: 6px 16px; }
+  .bb-game__legend { font-size: 12px; gap: 12px; }
 }
 @media (max-width: 600px) {
   /* lines up with the BBWaiting card */

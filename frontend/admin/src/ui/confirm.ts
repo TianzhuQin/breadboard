@@ -31,3 +31,18 @@ export function settleConfirm (ok: boolean) {
   confirmState.resolve = null
   if (r) r(ok)
 }
+
+/**
+ * Text as typed-to-confirm compares it: the case, runs of spaces, and kinds of dash and quote don't
+ * count (an em dash or a curly quote in a name is hard to type), nor does Unicode normalisation.
+ */
+export function looseText (s: string): string {
+  return (s || '')
+    .normalize('NFKC')
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\u2018\u2019\u201b]/g, "'")
+    .replace(/[\u201c\u201d\u201f]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}

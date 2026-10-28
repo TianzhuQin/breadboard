@@ -10,7 +10,7 @@
           :key="i"
           class="bb-waiting__dot"
           :class="{ 'is-here': d.here }"
-          :cx="d.x" :cy="d.y" r="9"
+          :cx="d.x" :cy="d.y" :r="d.here ? 10 : 7"
         />
       </g>
       <circle class="bb-waiting__core" r="26" />
@@ -23,13 +23,14 @@
       <p class="bb-waiting__count">
         <strong>{{ here }}</strong> {{ here === 1 ? 'person is' : 'people are' }} here.
         <template v-if="enough">
-          That's enough to begin: the session starts shortly<template v-if="max && here < max">, or as soon as {{ max }} are here</template>.
+          That's enough to begin: the session starts
+          {{ startsIn != null && startsIn > 0 ? `in about ${startsIn} s` : 'shortly' }}<template v-if="max && here < max">, or as soon as {{ max }} are here</template>.
         </template>
         <template v-else>
           The session starts when {{ target }} {{ maxIsOne ? 'person is' : 'people are' }} here.
         </template>
       </p>
-      <div class="bb-waiting__bar" :aria-label="`${here} of ${min}`">
+      <div class="bb-waiting__bar" :aria-label="`${here} of ${barTarget}`">
         <span :style="{ width: `${progress}%` }" />
       </div>
     </template>
@@ -64,6 +65,7 @@ export default Vue.extend({
   data () {
     return {
       countdownStart: 0,
+      waitStart: Date.now(),
       now: Date.now(),
       ticker: 0 as any,
       originalTitle: '',
@@ -85,8 +87,17 @@ export default Vue.extend({
     maxIsOne (): boolean { return (this.max || this.min) === 1 },
     // The minimum is here: the autopilot waits a little longer for more, then starts.
     enough (): boolean { return this.min > 0 && this.here >= this.min },
+    // Towards the minimum, then (when there is a maximum) towards the maximum.
+    barTarget (): number {
+      return this.enough && this.max ? this.max : this.min
+    },
     progress (): number {
-      return this.min ? Math.min(100, Math.round((100 * this.here) / this.min)) : 0
+      return this.barTarget ? Math.min(100, Math.round((100 * this.here) / this.barTarget)) : 0
+    },
+    // Seconds until the game starts unless more people come (sent once enough are here).
+    startsIn (): number | null {
+      if (typeof this.info.startsIn !== 'number') return null
+      return Math.max(0, Math.ceil(this.info.startsIn - (this.now - this.waitStart) / 1000))
     },
     remaining (): number {
       const seconds = this.info.seconds || 0
@@ -128,6 +139,7 @@ export default Vue.extend({
         }
       },
     },
+    'info.startsIn' () { this.waitStart = Date.now() },
     // Someone who reconnects during the countdown is sent the seconds that are left.
     'info.seconds' () {
       if (this.state === 'starting') this.restartCountdown()
@@ -172,16 +184,19 @@ export default Vue.extend({
   stroke-width: 2;
   stroke-dasharray: 3 8;
 }
+/* an empty seat: a light outline; someone who is here: a full dot */
 .bb-waiting__dot {
-  fill: #e2e8f0;
+  fill: #ffffff;
   stroke: #cbd5e1;
   stroke-width: 1.5;
+  stroke-dasharray: 2.5 2.5;
   transition: fill 400ms ease;
 }
 .bb-waiting__dot.is-here {
   fill: #6366f1;
   stroke: #ffffff;
   stroke-width: 3;
+  stroke-dasharray: none;
 }
 .bb-waiting__core {
   fill: #4f46e5;

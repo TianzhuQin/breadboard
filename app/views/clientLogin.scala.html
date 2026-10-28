@@ -15,7 +15,7 @@
       <p class="bb-lead">Enter the ID you were given to take your seat.</p>
 
       @if(form.hasGlobalErrors) {
-        <p class="bb-alert bb-alert--error" role="alert">@form.globalError.message</p>
+        <p id="bb-id-error" class="bb-alert bb-alert--error" role="alert">@form.globalError.message</p>
       }
       @if(flash.contains("success")) {
         <p class="bb-alert bb-alert--success">@flash.get("success")</p>
@@ -24,7 +24,7 @@
       @helper.form(routes.ClientLogin.authenticate(experimentId, experimentInstanceId)) {
         <div class="bb-field">
           <label for="bb-id">Your ID</label>
-          <input id="bb-id" type="text" name="id" value="@form("id").value" autocomplete="off" autocapitalize="off" spellcheck="false" required autofocus>
+          <input id="bb-id" type="text" name="id" value="@form("id").value" autocomplete="off" autocapitalize="off" spellcheck="false" required autofocus@if(form.hasGlobalErrors) { aria-invalid="true" aria-describedby="bb-id-error"}>
         </div>
         @if(models.ScriptBoard.hasPassword()) {
           <div class="bb-field">

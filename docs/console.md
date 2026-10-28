@@ -14,8 +14,11 @@ an **Email**, a **Password** of at least 8 characters (typed twice), and the **D
 new content is written in. **Create account** creates it and signs you in. The form only appears
 while the server has no account. From then on the console opens with **Sign in to Breadboard**.
 
-To sign out, use the menu under your email at the bottom of the sidebar, or Settings. Signing out
-doesn't stop a running session; participants keep playing. With unsaved changes, it asks first.
+The email is not case-sensitive. The account can be signed in on several browsers at once (say a
+laptop and the lab's computer). To sign out, use the menu under your email at the bottom of the
+sidebar, or Settings: this signs the account out on every browser, as changing its password does.
+Signing out doesn't stop a running session; participants keep playing. With unsaved changes, it
+asks first.
 
 ## Finding your way around
 
@@ -325,7 +328,11 @@ of event with a column per data name.
 | **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |
 | **Download CSV** | Players | The players shown, with every property. |
 
-Timestamps in the CSV files are in UTC. Values are written exactly as recorded. A spreadsheet may
+Timestamps in the CSV files are in UTC, written as `2026-10-28T13:24:23:757Z` (with a colon
+before the milliseconds, as earlier versions of Breadboard wrote them, so existing analysis scripts
+keep working). In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
+reads them; in Python, `pandas.to_datetime(s, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`.
+Values are written exactly as recorded. A spreadsheet may
 read a value that starts with `=`, `+`, `-` or `@` as a formula, so import the file as text when
 participants could type such values.
 

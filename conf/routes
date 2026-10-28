@@ -74,6 +74,7 @@ POST        /parameters/:experimentId/:parameterId                              
 
 # Create New Experiment
 PUT         /experiment                                                          controllers.ExperimentController.createExperiment()
+POST        /experiment/:experimentId/name                                       controllers.ExperimentController.renameExperiment(experimentId: Long)
 POST        /experiment/import/:name                                             controllers.ExperimentController.importExperiment(name: String)
 GET         /experiment/export/:experimentId                                     controllers.ExperimentController.exportExperiment(experimentId: Long)
 

@@ -1,9 +1,14 @@
 <template>
   <BDialog :open="confirmState.open" :title="req?.title" size="sm" @close="settleConfirm(false)">
     <p v-if="req?.message" class="b-confirm__msg">{{ req.message }}</p>
-    <BField v-if="req?.typeToConfirm" :label="`Type “${req.typeToConfirm}” to confirm`" class="b-confirm__type">
-      <template #default="{ id }">
-        <BInput :id="id" v-model="typed" autocomplete="off" data-autofocus @keydown.enter.prevent="ok" />
+    <BField
+      v-if="req?.typeToConfirm"
+      :label="`Type “${req.typeToConfirm}” to confirm`"
+      :hint="typed.trim() && !canConfirm ? 'Doesn\'t match yet.' : 'Capital letters, spaces and kinds of dash don\'t matter.'"
+      class="b-confirm__type"
+    >
+      <template #default="{ id, describedby }">
+        <BInput :id="id" v-model="typed" autocomplete="off" data-autofocus :aria-describedby="describedby" @keydown.enter.prevent="ok" />
       </template>
     </BField>
     <template #footer>
@@ -19,12 +24,12 @@ import BDialog from './BDialog.vue'
 import BButton from './BButton.vue'
 import BField from './BField.vue'
 import BInput from './BInput.vue'
-import { confirmState, settleConfirm } from './confirm'
+import { confirmState, looseText, settleConfirm } from './confirm'
 
 const req = computed(() => confirmState.req)
 const typed = ref('')
 watch(() => confirmState.open, () => { typed.value = '' })
-const canConfirm = computed(() => !req.value?.typeToConfirm || typed.value.trim() === req.value.typeToConfirm.trim())
+const canConfirm = computed(() => !req.value?.typeToConfirm || looseText(typed.value) === looseText(req.value.typeToConfirm))
 function ok () { if (canConfirm.value) settleConfirm(true) }
 </script>
 

@@ -3,8 +3,8 @@
     <form novalidate @submit.prevent="submit">
       <p v-if="error" class="auth__error" role="alert">{{ error }}</p>
       <p v-else-if="admin.signOutReason === 'ended'" class="auth__note" role="status">
-        You were signed out because this account signed in on another browser or device (or signed
-        out, or changed its password there). Sign in again to continue here.
+        You were signed out because this account signed out, or changed its password, in another
+        browser or tab. Sign in again to continue here.
       </p>
       <BField label="Email">
         <template #default="{ id }">

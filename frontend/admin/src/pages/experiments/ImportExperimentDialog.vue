@@ -93,7 +93,7 @@ import { http } from '@/lib/http'
 import { actions, experiments, running } from '@/store/admin'
 import type { Experiment } from '@/store/types'
 import {
-  checkExperimentZip, describeError, importNameFromFile, importUrl, manifestName, plural, readBytes, validateExperimentName,
+  checkExperimentZip, describeError, importNameFromFile, importUrl, manifestName, plural, readBytes, uniqueName, validateExperimentName,
   type ZipCheck,
 } from './experiments'
 import { switchToNew } from './switchTo'
@@ -157,7 +157,7 @@ async function choose (f: File) {
   check.value = null
   // the name follows the file until the researcher types their own
   if (!touched.value || !name.value.trim()) {
-    name.value = importNameFromFile(f.name)
+    name.value = uniqueName(importNameFromFile(f.name), experiments.value.map(e => e.name))
     touched.value = false
   }
   checking.value = true
@@ -168,7 +168,7 @@ async function choose (f: File) {
     check.value = result
     if (result.ok && !touched.value) {
       const recorded = await manifestName(bytes, result)
-      if (mine === seq && recorded && !touched.value) name.value = recorded
+      if (mine === seq && recorded && !touched.value) name.value = uniqueName(recorded, experiments.value.map(e => e.name))
     }
   } catch (e) {
     if (mine === seq) check.value = { ok: true, root: '', steps: 0, content: 0, images: 0, warning: 'This file couldn\'t be checked before uploading. The server will check it.' }

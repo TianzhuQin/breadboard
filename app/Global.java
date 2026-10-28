@@ -194,6 +194,8 @@ public class Global extends GlobalSettings {
     // Interpolated Groovy strings must reach browsers as text.
     models.JsonSetup.install();
 
+    resetPasswordIfAsked();
+
     // Open a session of the configured experiment so participants can join without an admin.
     models.Autopilot.start();
   }
@@ -279,9 +281,72 @@ public class Global extends GlobalSettings {
     }
   }
 
+  /**
+   * A forgotten password: start the server with -Dbreadboard.resetPassword=<email> (e.g.
+   * ./breadboard.sh -Dbreadboard.resetPassword=me@lab.org) and the account gets a new random
+   * password, printed on the server's console (not written to the log). Every browser signed in to
+   * it is signed out. Start the server without the option afterwards.
+   */
+  static void resetPasswordIfAsked() {
+    String email = System.getProperty("breadboard.resetPassword");
+    if (email == null || email.trim().isEmpty()) {
+      return;
+    }
+    User user = User.findByEmail(email);
+    if (user == null) {
+      System.out.println("breadboard.resetPassword: there is no account " + email.trim()
+          + ". The accounts are: " + accountList());
+      return;
+    }
+    String alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    java.security.SecureRandom random = new java.security.SecureRandom();
+    StringBuilder password = new StringBuilder();
+    for (int i = 0; i < 16; i++) {
+      password.append(alphabet.charAt(random.nextInt(alphabet.length())));
+    }
+    user.changePassword(password.toString());
+    user.uid = UUID.randomUUID().toString();
+    user.update();
+    System.out.println();
+    System.out.println("  The password of " + user.email + " is now:  " + password);
+    System.out.println("  Sign in with it, change it in Settings, and start the server without");
+    System.out.println("  -Dbreadboard.resetPassword next time.");
+    System.out.println();
+    Logger.warn("breadboard.resetPassword: the password of " + user.email + " was reset (shown on the console only)");
+  }
+
+  private static String accountList() {
+    StringBuilder list = new StringBuilder();
+    for (User u : User.findAll()) {
+      if (list.length() > 0) list.append(", ");
+      list.append(u.email);
+    }
+    return list.length() == 0 ? "(none)" : list.toString();
+  }
+
   @Override
   public Action onRequest(Http.Request request, Method actionMethod) {
     return super.onRequest(request, actionMethod);
+  }
+
+  /**
+   * A participant's link that leads nowhere (cut off, or mistyped) gets the participant pages' own
+   * notice, readable on a phone, instead of Play's developer page; a session's address without
+   * /login goes to its sign-in page.
+   */
+  @Override
+  public F.Promise<play.mvc.SimpleResult> onHandlerNotFound(Http.RequestHeader request) {
+    String path = request.path();
+    if (path.startsWith("/game/") || path.startsWith("/play/")) {
+      java.util.regex.Matcher session = java.util.regex.Pattern.compile("^/game/(\\d+)/(\\d+)/?$").matcher(path);
+      if (session.matches()) {
+        return F.Promise.pure((play.mvc.SimpleResult) play.mvc.Results.redirect(
+            "/game/" + session.group(1) + "/" + session.group(2) + "/login"));
+      }
+      return F.Promise.pure((play.mvc.SimpleResult) play.mvc.Results.notFound(
+          controllers.ClientLogin.invalidLinkPage()));
+    }
+    return super.onHandlerNotFound(request);
   }
 
   /**

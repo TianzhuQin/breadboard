@@ -230,6 +230,10 @@ class PlayerActions {
         if (c.class)
           choiceMap.class = c.class
 
+        // Colour of the button on the new participant page (BBGame), e.g. color: "#2563eb"
+        if (c.color)
+          choiceMap.color = c.color.toString()
+
         // Custom question type
         if (c.custom)
           choiceMap.custom = c.custom

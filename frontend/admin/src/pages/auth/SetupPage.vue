@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { BButton, BField, BInput, BSelect } from '@/ui'
-import { createFirstUser } from '@/store/admin'
+import { boot, createFirstUser } from '@/store/admin'
 import { http } from '@/lib/http'
 import AuthCard from './AuthCard.vue'
 
@@ -58,6 +58,8 @@ onMounted(async () => {
 async function submit () {
   error.value = ''
   if (!email.value.trim()) return void (error.value = 'Enter an email address.')
+  // (The email is the account's sign-in and can't be changed later: catch typos now.)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) return void (error.value = 'Enter a valid email address, like name@university.edu.')
   if (password.value.length < 8) return void (error.value = 'Choose a password of at least 8 characters.')
   if (password.value !== confirmPw.value) return void (error.value = 'The two passwords are different.')
   if (languageId.value == null) return void (error.value = 'Choose a default language.')
@@ -65,6 +67,11 @@ async function submit () {
   try {
     await createFirstUser(email.value.trim(), password.value, languageId.value)
   } catch (e: any) {
+    if (/already exists/.test(e?.message || '')) {
+      // created meanwhile (another tab): show the sign-in page
+      await boot()
+      return
+    }
     error.value = e?.message || 'Could not create the account.'
   } finally {
     busy.value = false

@@ -71,6 +71,19 @@ test("the waiting screen state is published to each waiting participant and clea
   ap.stop()
 }
 
+test("once enough are here, the waiting screen gets the seconds until the start") {
+  def ap = pilot('ap-soon-', [:])
+  ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 30])
+  def v = arrive(ap, 'ap-soon-1')
+  assert v._system.autopilot.startsIn == null
+  arrive(ap, 'ap-soon-2')
+  assert v._system.autopilot.startsIn in 29..30
+  // someone leaves: not enough any more, no countdown to the start
+  leave(ap, 'ap-soon-2')
+  assert v._system.autopilot.startsIn == null
+  ap.stop()
+}
+
 test.async("with minPlayers here the game starts after waitSeconds", 4000) { done ->
   def hooks = [:]
   def ap = pilot('ap-min-', hooks)

@@ -62,6 +62,12 @@
         if (this.choice.class) {
           res.class = this.choice.class
         }
+        // A colour from the experiment (a.add(player, [name: "Blue", color: "#2563eb"])): the
+        // participant theme paints the button with it.
+        if (typeof this.choice.color === 'string' && this.choice.color) {
+          res.class = [res.class, 'has-color']
+          res.style = { ...(res.style || {}), '--bb-choice': this.choice.color }
+        }
         return res
       }
     }

@@ -55,7 +55,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  ArrowRight, Check, Copy, Database, Download, Ellipsis, FlaskConical, HardDrive, Languages, Trash2,
+  ArrowRight, Check, Copy, Database, Download, Ellipsis, FlaskConical, HardDrive, Languages, Pencil, Trash2,
 } from 'lucide-vue-next'
 import { BBadge, BButton, BMenu, type MenuItem } from '@/ui'
 import { uid } from '@/ui/uid'
@@ -69,7 +69,7 @@ const props = defineProps<{
   exporting?: boolean
   flash?: boolean
 }>()
-const emit = defineEmits<{ select: [], export: [], duplicate: [], 'file-mode': [], delete: [] }>()
+const emit = defineEmits<{ select: [], export: [], duplicate: [], rename: [], 'file-mode': [], delete: [] }>()
 
 const titleId = uid('xcard')
 const live = computed(() => runningSession(props.exp))
@@ -86,6 +86,7 @@ const languageTitle = computed(() => languageNames.value.join(', ') || undefined
 
 const menu = computed<MenuItem[]>(() => [
   { label: props.exporting ? 'Exporting…' : 'Export as .zip', icon: Download, disabled: props.exporting, run: () => emit('export') },
+  { label: 'Rename…', icon: Pencil, run: () => emit('rename') },
   { label: 'Duplicate…', icon: Copy, run: () => emit('duplicate') },
   props.exp.fileMode
     ? { label: 'Leave file mode…', icon: Database, run: () => emit('file-mode') }

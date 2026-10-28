@@ -12,7 +12,7 @@
       <span class="xsw__icon" aria-hidden="true"><FlaskConical :size="16" /></span>
       <span class="xsw__text">
         <span class="xsw__eyebrow">Experiment</span>
-        <span class="xsw__name">{{ admin.experiment ? admin.experiment.name : 'Choose an experiment' }}</span>
+        <span class="xsw__name" :title="admin.experiment ? admin.experiment.name : undefined">{{ admin.experiment ? admin.experiment.name : 'None chosen' }}</span>
       </span>
       <ChevronsUpDown :size="15" class="xsw__chev" aria-hidden="true" />
     </button>
@@ -55,7 +55,7 @@
           <li v-if="!filtered.length" class="xsw__none">{{ experiments.length ? 'No match' : 'No experiments yet' }}</li>
         </ul>
         <div class="xsw__actions">
-          <button type="button" class="xsw__action" @click="go('/experiments?action=new')"><Plus :size="15" /> New experiment</button>
+          <button type="button" class="xsw__action" @click="go('/experiments?action=new')"><Plus :size="15" /> New</button>
           <button type="button" class="xsw__action" @click="go('/experiments?action=import')"><Upload :size="15" /> Import</button>
           <button type="button" class="xsw__action" @click="go('/experiments')"><Settings2 :size="15" /> Manage</button>
         </div>
@@ -192,6 +192,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
   color: var(--text-soft);
   font-size: var(--text-sm);
   font-weight: 550;
+  white-space: nowrap;
   cursor: pointer;
 }
 .xsw__action:hover { background: var(--surface-hover); color: var(--text); }

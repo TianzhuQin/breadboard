@@ -64,7 +64,8 @@
               :d="e.d"
               class="bb-network__edge-hit"
               :role="e.interactive ? 'button' : 'img'"
-              :tabindex="e.interactive ? 0 : null"
+              :tabindex="e.interactive ? 0 : -1"
+              :focusable="e.interactive ? 'true' : 'false'"
               :aria-label="e.ariaLabel"
               @mouseenter="hoverEdge = e.key"
               @mouseleave="hoverEdge = null"
@@ -110,8 +111,8 @@
             <circle class="bb-network__disc" :r="n.r" :fill="`url(#${n.gradient})`" :filter="`url(#${uid('shadow')})`" />
             <circle v-if="n.selected" class="bb-network__selection" :r="n.r + 7" />
             <slot name="node-content" :node="n.node" :radius="n.r" :is-ego="n.isEgo">
-              <text v-if="n.isEgo" class="bb-network__ego-label" text-anchor="middle" dominant-baseline="central">{{ egoLabel }}</text>
-              <text v-else-if="n.initials" class="bb-network__initials" :style="{ fontSize: `${Math.round(n.r * 0.57)}px` }" text-anchor="middle" dominant-baseline="central">{{ n.initials }}</text>
+              <text v-if="n.isEgo" class="bb-network__ego-label" :style="{ fill: n.ink }" text-anchor="middle" dominant-baseline="central">{{ egoLabel }}</text>
+              <text v-else-if="n.initials" class="bb-network__initials" :style="{ fontSize: `${Math.round(n.r * 0.57)}px`, fill: n.ink }" text-anchor="middle" dominant-baseline="central">{{ n.initials }}</text>
             </slot>
             <text v-if="!n.isEgo && n.shortLabel" class="bb-network__label" :style="{ fontSize: `${labelSize}px` }" text-anchor="middle" :y="n.labelY">{{ n.shortLabel }}</text>
             <g v-if="n.badge" :transform="`translate(0, ${n.badgeY})`" class="bb-network__badge">
@@ -242,6 +243,8 @@ export default Vue.extend({
       resultHandler: null as any,
       barReserved: false,
       movesReserved: false,
+      // "tap" on touch screens, "click" with a mouse
+      press: typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(pointer: coarse)').matches ? 'tap' : 'click',
       movesOpen: false,
       movesAutoOpened: false,
       // people drawn too small to tap reliably (then the list opens by itself)
@@ -406,6 +409,8 @@ export default Vue.extend({
           badgeY,
           badge: this.nodeBadge ? this.nodeBadge(node, this.player) : '',
           gradient: this.gradientIndex[this.colorsFor(node)[1]],
+          // white or dark letters, whichever reads better on this person's colour
+          ink: inkOn(this.colorsFor(node)),
           selected,
           interactive: selectable,
           blockedReason,
@@ -505,11 +510,11 @@ export default Vue.extend({
       const how: string[] = []
       if (e.remove && this.canCut) {
         parts.push(e.remainingRemoves != null ? `cut ${e.remainingRemoves} tie${e.remainingRemoves === 1 ? '' : 's'}` : 'cut ties')
-        how.push('click a tie to cut it')
+        how.push(`${this.press} a tie to cut it`)
       }
       if (e.add && this.canConnect) {
         parts.push(e.remainingAdds != null ? `make ${e.remainingAdds} new tie${e.remainingAdds === 1 ? '' : 's'}` : 'make new ties')
-        how.push('click two people to connect them')
+        how.push(`${this.press} two people to connect them`)
       }
       if (!parts.length) return e.add || e.remove ? 'There is no change you can make right now.' : 'You have made all the changes you can.'
       const instructions = how.join('; ')
@@ -550,7 +555,7 @@ export default Vue.extend({
           key: `${m.op}:${pairKey(m.a, m.b)}`,
           available: m.op === 'add' ? this.addAllowed(m.a, m.b) : (this.connected(m.a, m.b) && this.removeAllowed(m.a, m.b)),
           reason: c && c.available === false ? (c.reason || 'Not available') : '',
-          text: m.op === 'remove' ? `Cut ${this.nameOf(m.a)} – ${this.nameOf(m.b)}` : `Connect ${this.nameOf(m.a)} + ${this.nameOf(m.b)}`,
+          text: moveText(m.op, m.a === this.egoId ? m.b : m.a, m.a === this.egoId || m.b === this.egoId ? null : m.b, this.nameOf),
         }
       })
     },
@@ -655,7 +660,6 @@ export default Vue.extend({
       return (n && this.labelFor(n)) || this.fallbackNames[id] || 'this person'
     },
     colorsFor (node: AnyNode): [string, string] {
-      if (node.id === this.egoId && !this.nodeColor) return PALETTE.ego
       let c: any = this.nodeColor
       if (typeof c === 'function') c = c(node, this.player)
       if (!c && node.data && typeof node.data.color === 'string') c = node.data.color
@@ -675,8 +679,11 @@ export default Vue.extend({
       let next = Object.keys(this.fallbackNames).length
       let added = false
       const names = { ...this.fallbackNames }
-      for (const node of this.others) {
-        if (names[node.id]) continue
+      // On the ring, clockwise from the top: Person A at 12 o'clock, B next to them, and so on.
+      const order = this.isRing ? this.ringOrder() : []
+      const place = (id: string) => { const i = order.indexOf(id); return i < 0 ? Infinity : i }
+      const unnamed = this.others.filter(n => !names[n.id]).sort((a, b) => place(a.id) - place(b.id))
+      for (const node of unnamed) {
         names[node.id] = `Person ${next < 26 ? String.fromCharCode(65 + next) : next + 1}`
         next++
         added = true
@@ -1155,6 +1162,31 @@ function initialsOf (label: string): string {
 }
 
 // A lighter tint of a CSS colour for the gradient highlight (hex colours; others pass through).
+// "Cut your tie with Ana" / "Cut the tie between Ana and Ben"; "Connect with Ana" / "Connect Ana and Ben".
+function moveText (op: string, a: string, b: string | null, nameOf: (id: string) => string): string {
+  if (op === 'remove') return b == null ? `Cut your tie with ${nameOf(a)}` : `Cut the tie between ${nameOf(a)} and ${nameOf(b)}`
+  return b == null ? `Connect with ${nameOf(a)}` : `Connect ${nameOf(a)} and ${nameOf(b)}`
+}
+
+function luminance (hex: string): number | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || '').trim())
+  if (!m) return null
+  const v = parseInt(m[1], 16)
+  const lin = (c: number) => { const x = c / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4) }
+  return 0.2126 * lin((v >> 16) & 255) + 0.7152 * lin((v >> 8) & 255) + 0.0722 * lin(v & 255)
+}
+const INK_LIGHT = '#ffffff'
+const INK_DARK = '#334155'
+// White or dark slate letters, whichever contrasts more with the disc's colour (its gradient only
+// lightens the top edge).
+function inkOn ([, base]: [string, string]): string {
+  const b = luminance(base)
+  if (b == null) return INK_DARK
+  const onWhite = 1.05 / (b + 0.05)
+  const onDark = (b + 0.05) / ((luminance(INK_DARK) as number) + 0.05)
+  return onWhite >= onDark ? INK_LIGHT : INK_DARK
+}
+
 function lighten (color: string): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(color.trim())
   if (!m) return color
@@ -1220,7 +1252,7 @@ function lighten (color: string): string {
 /* Ties that can be cut stand out, and keep their own colour family: the participant's own in
    their (indigo) colour, ties between others darker slate. */
 .bb-network__edge.is-own.is-removable .bb-network__edge-line {
-  stroke: #a5b4fc;
+  stroke: #818cf8;
 }
 .bb-network__edge.is-among.is-removable .bb-network__edge-line {
   stroke: #475569;
@@ -1247,6 +1279,10 @@ function lighten (color: string): string {
   stroke-width: 26;
   stroke-linecap: round;
   outline: none;
+}
+/* a finger needs a wider target than a mouse */
+@media (pointer: coarse) {
+  .bb-network__edge-hit { stroke-width: 44; }
 }
 .bb-network__edge.is-clickable .bb-network__edge-hit {
   cursor: pointer;

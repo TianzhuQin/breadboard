@@ -5,8 +5,19 @@ finishStep.run = {
   g.V.each { p ->
     if (isHuman(p)) {
       p.text = """<h2>Thank you!</h2>
-<p>You scored <strong>${p.score}</strong> out of ${rounds}.</p>
-<p>The study is over. You can close this page.</p>""".toString()
+<p>${p.private.lastResult}</p>
+<p>You scored <strong>${p.score}</strong> out of ${rounds}. The study is over: you can close this page.</p>""".toString()
+      // The new participant page shows its finished screen (no network).
+      p.private.finished = true
+      // Someone who came from Prolific gets the study's completion code (the prolificCode launch
+      // parameter), with a button back to Prolific, so they can submit and be paid.
+      if (p._system?.recruitment?.source == "prolific") {
+        if (prolificCode) {
+          recruitment.completeProlific(p, [completionCode: prolificCode])
+        } else {
+          eventTracker.track("noCompletionCode", [player: p.id])
+        }
+      }
     }
   }
 }

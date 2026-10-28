@@ -95,6 +95,43 @@ public class ExperimentController extends Controller {
   }
 
   /**
+   * Rename one of the researcher's experiments: JSON {"name": "..."}. 200 with its JSON, or 400 with
+   * what is wrong. Its sessions and data stay with it (they belong to its id). Not in file mode,
+   * where the experiment's folder is named after it.
+   */
+  @Security.Authenticated(Secured.class)
+  public static Result renameExperiment(Long experimentId) {
+    User user = User.findByUID(session().get("uid"));
+    Experiment experiment = Experiment.findById(experimentId);
+    if (user == null || experiment == null || !user.ownedExperiments.contains(experiment)) {
+      return notFound("There is no such experiment.");
+    }
+    JsonNode json = request().body().asJson();
+    String name = json == null ? null : json.path("name").textValue();
+    name = name == null ? "" : name.trim();
+    if (name.isEmpty()) {
+      return badRequest("Give the experiment a name.");
+    }
+    if (name.length() > 120) {
+      return badRequest("Keep the name under 120 characters.");
+    }
+    if (name.contains("/") || name.contains("\\") || name.matches(".*\\p{Cntrl}.*")) {
+      return badRequest("Names can't contain / or \\ or line breaks.");
+    }
+    if (Boolean.TRUE.equals(experiment.fileMode)) {
+      return badRequest("Leave file mode first: in file mode, the experiment's folder is named after it.");
+    }
+    for (Experiment other : Experiment.findAll()) {
+      if (!other.id.equals(experiment.id) && other.name != null && other.name.trim().equalsIgnoreCase(name)) {
+        return badRequest("There is already an experiment called \"" + other.name + "\".");
+      }
+    }
+    experiment.name = name;
+    experiment.save();
+    return ok(experiment.toJson());
+  }
+
+  /**
    * Import an exported experiment (multipart {@code file}, a zip) under the name in the path. The zip
    * is unpacked and checked before the experiment is created: a file that isn't a zip, or has neither
    * a Steps nor a Content folder, is refused without leaving an empty experiment behind (it used to

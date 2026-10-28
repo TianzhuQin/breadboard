@@ -46,6 +46,7 @@ class Autopilot {
   Long firstArrivalAt = null
   Long countdownEndsAt = null
   BBTimer startTimer = null
+  Long startAt = null        // when startTimer fires: the waiting screen counts down to it
   BBTimer giveUpTimer = null
   BBTimer countdownTimer = null
   Map<String, BBTimer> takeoverTimers = [:]
@@ -137,21 +138,26 @@ class Autopilot {
         giveUpTimer = schedule(room.maxWaitSeconds) { giveUp() }
       }
     }
+    boolean full = room.maxPlayers && here >= room.maxPlayers
+    if (!full && here >= room.minPlayers) {
+      if (startTimer == null) {
+        startAt = System.currentTimeMillis() + Math.round(room.waitSeconds * 1000)
+        startTimer = schedule(room.waitSeconds) { beginCountdown() }
+      }
+    } else if (!full) {
+      cancelTimer("start")
+    }
+    // Once enough are here: the seconds until the game starts unless more come (the page counts down).
+    Integer startsIn = startAt == null ? null : (int) Math.max(0, Math.ceil((startAt - System.currentTimeMillis()) / 1000d))
     players.each { status(it, [state: "waiting", here: here, min: room.minPlayers, max: room.maxPlayers,
-                               customText: room.customText]) }
+                               customText: room.customText, startsIn: startsIn]) }
     if (room.waitingText != null) {
       String text = room.waitingText(here, room.minPlayers, room.maxPlayers)?.toString()
       players.each { it.text = text }
     }
-    if (room.maxPlayers && here >= room.maxPlayers) {
+    if (full) {
       cancelTimer("start")
       beginCountdown()
-    } else if (here >= room.minPlayers) {
-      if (startTimer == null) {
-        startTimer = schedule(room.waitSeconds) { beginCountdown() }
-      }
-    } else {
-      cancelTimer("start")
     }
   }
 
@@ -312,9 +318,12 @@ class Autopilot {
   }
 
   private void cancelTimer(String which) {
-    if (which == "start" && startTimer != null) {
-      startTimer.cancel()
-      startTimer = null
+    if (which == "start") {
+      startAt = null
+      if (startTimer != null) {
+        startTimer.cancel()
+        startTimer = null
+      }
     }
     if (which == "giveUp" && giveUpTimer != null) {
       giveUpTimer.cancel()

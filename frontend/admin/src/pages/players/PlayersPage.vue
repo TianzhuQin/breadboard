@@ -146,7 +146,7 @@
                 <td><span v-if="r.status" class="plist__status-text" :class="`is-${r.tone}`">{{ r.status }}</span><span v-else class="plist__none" aria-label="unknown">—</span></td>
                 <td class="is-num">{{ r.ties }}</td>
                 <td><BBadge v-if="r.choices" tone="info" :title="`${r.choices} ${r.choices === 1 ? 'option' : 'options'} on their screen`">Waiting</BBadge></td>
-                <td v-for="c in extraColumns" :key="c.key" class="plist__value" :class="{ 'is-num': r.numeric[c.key] }" :title="r.full[c.key]">{{ r.cells[c.key] }}</td>
+                <td v-for="c in extraColumns" :key="c.key" class="plist__value" :class="{ 'is-num': r.numeric[c.key] }" :title="r.full[c.key]"><span v-if="isColour(r.cells[c.key])" class="plist__swatch" :style="{ background: r.cells[c.key] }" aria-hidden="true" />{{ r.cells[c.key] }}</td>
               </tr>
             </tbody>
           </table>
@@ -189,6 +189,11 @@ import { download } from '@/network/exporters'
 import PlayerPanel from './PlayerPanel.vue'
 import PlayerDetails from './PlayerDetails.vue'
 import { BASE_COLUMNS, QUICK_FILTERS, csvKeys, quickMatch, sortNodes, toCsv, type Column, type QuickFilter, type Sort } from './table'
+
+/** A value such as #2563eb: the table shows its colour next to it. */
+function isColour (v: unknown): boolean {
+  return typeof v === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -431,6 +436,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <style>
+.plist__swatch { display: inline-block; width: 10px; height: 10px; margin-right: 7px; border-radius: 50%; vertical-align: -1px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
 .plist { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
 .plist.has-panel { grid-template-columns: minmax(0, 1fr) auto; }
 .plist__main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

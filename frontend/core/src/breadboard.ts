@@ -418,7 +418,6 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         }
       }
       if (data.eventName && data.data) {
-        console.log('custom event', data)
         this.emit(data.eventName, ...data.data)
       }
     })

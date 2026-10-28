@@ -27,6 +27,13 @@ describe('Choice button prop binding', () => {
     expect(btn.attributes('color')).toBe('red')
   })
 
+  it('paints the button with the colour the experiment gave the choice', () => {
+    const w = mountChoice({ name: 'Blue', uid: '1', color: '#2563eb' })
+    const btn = w.find('button')
+    expect(btn.classes()).toContain('has-color')
+    expect(btn.attributes('style')).toContain('--bb-choice: #2563eb')
+  })
+
   it('renders fine with no props (backward compatible)', () => {
     const w = mountChoice({ name: 'Plain', uid: '2' })
     const btn = w.find('button')

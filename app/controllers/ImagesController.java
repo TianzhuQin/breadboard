@@ -51,6 +51,30 @@ public class ImagesController extends Controller {
    * Store an uploaded image file for the experiment with id {@code experimentIdText}: 200 with
    * {"id", "fileName"}, or 400 with {"message"}.
    */
+  /** Whether the file starts like an image (its first bytes, not its name: a renamed text file isn't one). */
+  static boolean looksLikeImage(File file) {
+    byte[] head = new byte[512];
+    int n;
+    try (java.io.InputStream in = new java.io.FileInputStream(file)) {
+      n = in.read(head);
+    } catch (java.io.IOException e) {
+      return false;
+    }
+    if (n < 4) {
+      return false;
+    }
+    int b0 = head[0] & 0xff, b1 = head[1] & 0xff, b2 = head[2] & 0xff, b3 = head[3] & 0xff;
+    if (b0 == 0x89 && b1 == 'P' && b2 == 'N' && b3 == 'G') return true;                     // PNG
+    if (b0 == 0xFF && b1 == 0xD8 && b2 == 0xFF) return true;                                 // JPEG
+    if (b0 == 'G' && b1 == 'I' && b2 == 'F' && b3 == '8') return true;                       // GIF
+    if (b0 == 'B' && b1 == 'M') return true;                                                 // BMP
+    if (b0 == 0 && b1 == 0 && b2 == 1 && b3 == 0) return true;                               // ICO
+    if (n >= 12 && b0 == 'R' && b1 == 'I' && b2 == 'F' && b3 == 'F'
+        && head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P') return true; // WebP
+    String text = new String(head, 0, n, java.nio.charset.StandardCharsets.UTF_8).trim().toLowerCase();
+    return text.startsWith("<svg") || (text.startsWith("<?xml") && text.contains("<svg"));   // SVG
+  }
+
   public static Result storeImage(String experimentIdText, String fileName, String contentType, File file) {
     Long eid;
     try {
@@ -69,6 +93,9 @@ public class ImagesController extends Controller {
       return uploadFailed("The image file has no name.");
     }
     fileName = FilenameUtils.getName(fileName.trim());
+    if (!looksLikeImage(file)) {
+      return uploadFailed("\"" + fileName + "\" isn't an image Breadboard can show (PNG, JPEG, GIF, WebP, SVG, BMP or ICO).");
+    }
 
     try {
       Image image = new Image();

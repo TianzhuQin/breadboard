@@ -19,7 +19,8 @@ public class Application extends Controller {
   public static Result addFirstUser() {
 
     if (User.findRowCount() > 0) {
-      return badRequest("User table is not empty.");
+      // (Another tab, or someone else, created it first: the console then shows the sign-in page.)
+      return badRequest("An account already exists on this server. Sign in instead.");
     }
 
     String email, password;
@@ -37,6 +38,13 @@ public class Application extends Controller {
 
     if (email == null || password == null || defaultLanguage == null) {
       return badRequest("Please provide email, password, and default language.");
+    }
+    email = email.trim();
+    if (!User.looksLikeEmail(email)) {
+      return badRequest("Enter a valid email address, like name@university.edu.");
+    }
+    if (password.length() < User.PASSWORD_MIN_LENGTH) {
+      return badRequest("The password must be at least " + User.PASSWORD_MIN_LENGTH + " characters long.");
     }
 
     User user = new User();
@@ -72,28 +80,28 @@ public class Application extends Controller {
       result.put("status", "error");
       return badRequest(result);
     } else {
-      String email = loginForm.get().email;
-
-      session("email", email);
-
-      String uid = UUID.randomUUID().toString();
-      String juid = UUID.randomUUID().toString();
-      session("uid", uid);
-      session("juid", uid);
-
-      User user = User.findByEmail(email);
-
-      if (user != null) {
+      User user = User.findByEmail(loginForm.get().email);
+      if (user == null) {
+        return badRequest(login.render(loginForm));
+      }
+      // The account's current token, so that signing in on a second browser (a laptop and the lab's
+      // computer, or two people sharing the lab's account) doesn't sign the first one out. Signing
+      // out or changing the password replaces it, and so signs out every browser.
+      String uid = user.uid;
+      if (uid == null || uid.trim().isEmpty()) {
+        uid = UUID.randomUUID().toString();
         user.uid = uid;
         user.update();
-        result = Json.newObject();
-        result.put("uid", uid);
-        result.put("email", email);
-        result.put("juid", juid);
-        return ok(result);
       }
-
-      return badRequest(login.render(loginForm));
+      String juid = UUID.randomUUID().toString();
+      session("email", user.email);
+      session("uid", uid);
+      session("juid", uid);
+      result = Json.newObject();
+      result.put("uid", uid);
+      result.put("email", user.email);
+      result.put("juid", juid);
+      return ok(result);
     }
   }
 
@@ -307,9 +315,14 @@ public class Application extends Controller {
       }
     });
     for (Event event : events) {
+      String when = event.datetime == null ? null : Timestamps.csv(event.datetime);
+      if (event.eventData == null || event.eventData.isEmpty()) {
+        // An event with no data (e.g. Finished) still gets its row, with empty data columns.
+        csvRow(csv, Arrays.<Object>asList(event.id, event.name, when, null, null));
+        continue;
+      }
       for (EventData eventData : event.eventData) {
-        csvRow(csv, Arrays.<Object>asList(event.id, event.name,
-            event.datetime == null ? null : Timestamps.csv(event.datetime), eventData.name, eventData.value));
+        csvRow(csv, Arrays.<Object>asList(event.id, event.name, when, eventData.name, eventData.value));
       }
     }
 
@@ -358,7 +371,6 @@ public class Application extends Controller {
     public String password;
 
     public String validate() {
-      Logger.debug("email: " + email);
       if (User.authenticate(email, password) == null) {
         return "Invalid user or password";
       }

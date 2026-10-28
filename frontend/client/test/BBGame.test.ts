@@ -126,6 +126,14 @@ describe('BBGame', () => {
     expect(mountGame({ id: 'me', edgeEdits: { enabled: true }, _system: {} }).find('.bb-game__idle').exists()).toBe(false)
   })
 
+  it('ends on one card without the network once the experiment says the player is finished', () => {
+    const edges = [{ id: 1, source: me, target: ana, data: {} }]
+    const w = mountGame({ id: 'me', text: '<h2>Thank you!</h2>', finished: true, _system: {} }, edges)
+    expect(w.find('.network-stub').exists()).toBe(false)
+    expect(w.find('.bb-game__done').exists()).toBe(true)
+    expect(w.find('.bb-game__grid').classes()).toContain('is-finished')
+  })
+
   it('keeps the network after the player loses their last tie', async () => {
     const graph = { nodes: [me, ana], edges: [{ id: 1, source: me, target: ana, data: {} }] }
     const w = mount(BBGame, { propsData: { player: { id: 'me', _system: {} }, graph }, stubs })
@@ -146,10 +154,14 @@ describe('BBWaiting', () => {
     expect(w.findAll('.bb-waiting__dot.is-here').length).toBe(2)
   })
 
-  it('says the session starts soon once enough people are here', () => {
+  it('says the session starts soon once enough people are here, and when', () => {
     const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 3, min: 3, max: 5 } } } } })
     expect(w.find('.bb-waiting__title').text()).toBe('Starting soon')
     expect(w.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('3 people are here. That\'s enough to begin: the session starts shortly, or as soon as 5 are here.')
+    // the bar now fills towards the maximum
+    expect(w.find('.bb-waiting__bar span').attributes('style')).toContain('width: 60%')
+    const timed = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 2, min: 2, max: 8, startsIn: 18 } } } } })
+    expect(timed.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. That\'s enough to begin: the session starts in about 18 s, or as soon as 8 are here.')
   })
 
   it('counts down before the start', () => {

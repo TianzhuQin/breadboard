@@ -30,8 +30,8 @@ public class Secured extends Security.Authenticator {
       result.put("status", "create-first-user");
     } else {
       result.put("status", "unauthorized");
-      // This browser was signed in, but the account has signed in or out somewhere else since (or
-      // changed its password), which ended this session: the console says so.
+      // This browser was signed in, but the account has signed out somewhere else since (or changed
+      // its password), which ended this session: the console says so.
       String uid = ctx.session().get("uid");
       if (uid != null && !uid.trim().isEmpty()) {
         result.put("reason", "ended");

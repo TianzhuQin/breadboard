@@ -1,3 +1,4 @@
 Name,Type,Min.,Max.,Default,Short Description
 rounds,Integer,1,20,3,How many rounds are played
 roundSeconds,Integer,10,600,40,How long each round lasts (seconds)
+prolificCode,Text,,,,"Prolific completion code, if you recruit there (Prolific participants are shown it at the end)"

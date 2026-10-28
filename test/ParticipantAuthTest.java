@@ -164,6 +164,55 @@ public class ParticipantAuthTest extends BaseTest {
         assertNull("no new token is issued", header(LOCATION, second));
     }
 
+    @Test
+    public void comingBackThroughTheSignInPageInTheBrowserThatHoldsTheSeatLetsYouIn() {
+        Result first = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("P4")));
+        Http.Cookie cookie = cookie(ParticipantAuth.cookieName(i), first);
+        // the tab was closed; the participant opens the link they were given and types their ID again
+        Result back = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("P4")).withCookies(cookie));
+        assertEquals(SEE_OTHER, status(back));
+        assertEquals("/game/" + e + "/" + i + "/P4/connected", header(LOCATION, back));
+    }
+
+    @Test
+    public void theStudysSharedLinkTakesSomeoneWhoLeftBackToTheirSeatAfterTheStart() {
+        Result first = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("P7")));
+        Http.Cookie seat = cookie("bb_seat_" + e, first);
+        assertNotNull("the shared links' cookie is set", seat);
+        assertEquals("/play/" + e, seat.path());
+        instance.setHasStarted(Boolean.TRUE);
+        instance.save();
+        // the game started, so no session is open to newcomers; this browser goes back to its seat
+        Result back = route(fakeRequest(GET, "/play/" + e + "/login").withCookies(seat));
+        assertEquals(SEE_OTHER, status(back));
+        assertEquals("/game/" + e + "/" + i + "/P7/connected", header(LOCATION, back));
+        // anyone else is told no session is open
+        Result other = route(fakeRequest(GET, "/play/" + e + "/login"));
+        assertEquals(OK, status(other));
+        assertTrue(contentAsString(other).contains("No session is open"));
+        Result prolific = route(fakeRequest(GET, "/play/" + e + "/prolific?PROLIFIC_PID=x"));
+        assertTrue(contentAsString(prolific).contains("return the study on Prolific"));
+    }
+
+    @Test
+    public void spacesAroundAnIdAreIgnored() {
+        Result result = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form(" P6 ")));
+        assertEquals(SEE_OTHER, status(result));
+        assertTrue(header(LOCATION, result), header(LOCATION, result).startsWith("/game/" + e + "/" + i + "/P6/connected#"));
+        assertTrue(ParticipantAuth.isClaimed(i, "P6"));
+        Result again = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("P6")));
+        assertEquals("the same seat, so someone else's", FORBIDDEN, status(again));
+    }
+
+    @Test
+    public void aLinkToASessionThatDoesntExistSaysTheLinkIsWrong() {
+        Result page = route(fakeRequest(GET, "/game/" + e + "/999999/login"));
+        assertEquals(OK, status(page));
+        assertTrue(contentAsString(page), contentAsString(page).contains("link isn"));
+        Result garbage = route(fakeRequest(GET, "/game/abc/def/login"));
+        assertTrue(contentAsString(garbage).contains("link isn"));
+    }
+
     // === invitation links ===
 
     @Test

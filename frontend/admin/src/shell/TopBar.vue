@@ -24,8 +24,8 @@
 
       <BMenu :items="engineItems" align="right" :width="250">
         <template #trigger="{ toggle, attrs }">
-          <button type="button" class="topbar__chip" :class="`is-${admin.engine}`" v-bind="attrs" :title="engineTitle" @click="toggle">
-            <BSpinner v-if="admin.engine === 'loading'" :size="13" label="Engine reloading" />
+          <button type="button" class="topbar__chip" :class="`is-${engineState}`" v-bind="attrs" :title="engineTitle" @click="toggle">
+            <BSpinner v-if="engineState === 'loading'" :size="13" label="Loading the experiment's steps" />
             <component :is="engineIcon" v-else :size="15" aria-hidden="true" />
             <span class="topbar__chip-text">{{ engineLabel }}</span>
           </button>
@@ -84,8 +84,11 @@ const sessionLabel = computed(() => {
 })
 const sessionTitle = computed(() => admin.instance ? `Session "${admin.instance.name}" (${admin.instance.status.toLowerCase()})` : 'No session is selected')
 
-const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Reloading…', loaded: 'Reloaded', stale: 'Reload needed' }[admin.engine]))
-const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, stale: TriangleAlert }[admin.engine]))
+// (With no experiment chosen yet, e.g. right after creating the first account, the engine's loading
+// means nothing to the researcher: it just says Engine.)
+const engineState = computed(() => admin.experiment ? admin.engine : 'ready')
+const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', stale: 'Reload needed' }[engineState.value]))
+const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, stale: TriangleAlert }[engineState.value]))
 const engineTitle = computed(() => admin.engine === 'stale'
   ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')
   : 'The script engine that runs the experiment')

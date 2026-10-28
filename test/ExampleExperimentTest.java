@@ -48,7 +48,7 @@ public class ExampleExperimentTest extends BaseTest {
         java.util.Collections.sort(expected);
         java.util.Collections.sort(names);
         assertEquals(expected, names);
-        assertEquals(2, saved.getParameters().size());
+        assertEquals(3, saved.getParameters().size());
         assertEquals(Experiment.defaultClientHTML(), saved.getClientHtml());
         assertEquals(1, saved.languages.size());
 
@@ -62,6 +62,7 @@ public class ExampleExperimentTest extends BaseTest {
         // launch parameters, as a session would bind them
         harness.put("rounds", 2);
         harness.put("roundSeconds", 1);
+        harness.put("prolificCode", "");
         for (String name : stepNames()) {
             harness.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
         }
@@ -78,6 +79,7 @@ public class ExampleExperimentTest extends BaseTest {
             + "        assert p.text.contains('Thank you')\n"
             + "        assert p.score >= 0 && p.score <= 2\n"
             + "        assert p.private.edgeEdits.enabled == false\n"
+            + "        assert p.private.finished == true\n"
             + "        assert p.both.count() >= 1\n"
             + "      }\n"
             + "    }\n"

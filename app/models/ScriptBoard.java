@@ -202,6 +202,64 @@ public class ScriptBoard extends UntypedActor {
     return frame;
   }
 
+  /**
+   * The researcher stopped this session: its participants' pages say so (instead of a game that
+   * no longer answers), and keep saying so if they reconnect. Their sockets are closed, so the
+   * engine, which still holds the game, sends them nothing more.
+   */
+  static void endParticipants(Long instanceId) {
+    if (instanceId == null) {
+      return;
+    }
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("text", "<h3>This session has been stopped</h3><p>The researcher stopped this session. "
+        + "If they start it again, open the link you were given once more. Otherwise, thank you for "
+        + "taking part: you can close this page.</p>");
+    List<Client> ended = new ArrayList<>();
+    for (Client client : clients.values()) {
+      if (client.experimentInstance != null && instanceId.equals(client.experimentInstance.id)) {
+        ended.add(client);
+      }
+    }
+    for (Client client : ended) {
+      client.lastFrame = frame;
+      try {
+        client.out.write(frame);
+        client.disconnect();
+      } catch (Exception e) {
+        Logger.debug("Could not tell " + client.id + " that the session stopped: " + e);
+      }
+      clients.remove(client.id, client);
+      if (graphChangedListener != null) {
+        graphChangedListener.removeClientListener(client);
+      }
+    }
+    rememberLastScreens(ended);
+  }
+
+  private static boolean hasPlayer(String clientId) {
+    try {
+      Object g = engine == null ? null : engine.get("g");
+      return g instanceof Graph && clientId != null && ((Graph) g).getVertex(clientId) != null;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  /** What someone new is sent when the game started before they arrived. */
+  static ObjectNode sessionStartedScreen() {
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("text", "<h3>The session has already started</h3><p>It began before you arrived, so it can't "
+        + "take anyone new. Please contact the researcher.</p>");
+    return frame;
+  }
+
   /** What a page of a session the engine doesn't run (now) is sent instead of joining a game. */
   static ObjectNode sessionNotRunningScreen() {
     ObjectNode frame = Json.newObject();
@@ -893,8 +951,12 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
 
-      if (client == null && experimentInstance.hasStarted) {
+      if (client == null && experimentInstance.hasStarted && !hasPlayer(clientId)) {
+        // Someone new after the start (sign-in already turns them away, so e.g. an old page): say
+        // so instead of leaving the page connecting for ever. Someone whose player is in the game
+        // (a participant whose page is gone, a researcher's preview of a computer player) goes on.
         Logger.debug("New client trying to join after game has already started.");
+        out.write(sessionStartedScreen());
         return;
       }
 
@@ -1246,7 +1308,11 @@ public class ScriptBoard extends UntypedActor {
                 engine.getBindings(ScriptContext.ENGINE_SCOPE).remove(p.name);
             }
           }
+          LinkedHashMap<Object, Object> stopped = new LinkedHashMap<Object, Object>();
+          stopped.put("by", breadboardMessage.user.email);
+          trackEvent("sessionStopped", stopped);
           stopSession(running);
+          endParticipants(instance.id);
         } else {
           // (This used to change the status in memory only.)
           stopQuietly(instance.id);
@@ -1716,6 +1782,7 @@ public class ScriptBoard extends UntypedActor {
     if (user.selectedExperiment == null || !experiment.id.equals(user.selectedExperiment.id)) {
       user.setSelectedExperiment(experiment);
     }
+    boolean resuming = target.status == ExperimentInstance.Status.STOPPED;
 
     synchronized (REBUILD_LOCK) {
       // The engine's current session ends (the account that started it may be another one), and so
@@ -1749,6 +1816,12 @@ public class ScriptBoard extends UntypedActor {
         gameListener.start();
         // (After start(): a stopped session being resumed counts as running only from there.)
         reopenAfterRebuild(instance);
+        if (resuming) {
+          // Its game starts again from the beginning: the data says where, so the runs can be told apart.
+          LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+          data.put("by", user.email);
+          eventTracker.track("sessionResumed", data);
+        }
 
         instanceData.addPropertyChangeListener(new UserDataChangeListener(instance));
       } else {

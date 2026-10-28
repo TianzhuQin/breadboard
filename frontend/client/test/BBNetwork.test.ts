@@ -56,6 +56,38 @@ function nodeWithId (w: any, id: string) {
   return w.findAll('.bb-network__node').at(index)
 }
 
+describe('BBNetwork looks', () => {
+  it('writes letters in white on dark colours and in slate on light ones', () => {
+    const node = (id: string, color?: string) => ({ id, x: 0, y: 0, data: color ? { color } : {} })
+    const me = node('me'), blue = node('b', '#2563eb'), grey = node('g', '#e2e8f0'), plain = node('p')
+    const edge = (id: number, s: any, t: any) => ({ id, source: s, target: t, data: {} })
+    const w = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph: { nodes: [me, blue, grey, plain], edges: [edge(1, me, blue), edge(2, me, grey), edge(3, me, plain)] } } })
+    const ink = (id: string) => (w.vm as any).drawnNodes.find((n: any) => n.id === id).ink
+    expect(ink('b')).toBe('#ffffff')
+    expect(ink('g')).toBe('#334155')
+    expect(ink('p')).toBe('#334155')
+    expect(ink('me')).toBe('#ffffff')
+  })
+
+  it('names unnamed neighbors clockwise from the top', () => {
+    const node = (id: string) => ({ id, x: 0, y: 0, data: {} })
+    const me = node('me'), a = node('z1'), b = node('z2'), c = node('z3'), d = node('z4')
+    const edge = (id: number, s: any, t: any) => ({ id, source: s, target: t, data: {} })
+    const w = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph: { nodes: [me, d, c, b, a], edges: [edge(1, me, a), edge(2, me, b), edge(3, me, c), edge(4, me, d)] } } })
+    const vm = w.vm as any
+    const top = vm.ring[0]
+    expect(vm.fallbackNames[top]).toBe('Person A')
+    expect(vm.fallbackNames[vm.ring[1]]).toBe('Person B')
+  })
+
+  it('says "your tie" for the participant\'s own ties in the list of changes', async () => {
+    const w = mountNetwork({ enabled: true, remove: true, add: false, scope: 'own' })
+    await openMoveList(w)
+    const texts = w.findAll('.bb-network__move').wrappers.map((x: any) => x.text())
+    expect(texts).toEqual(expect.arrayContaining(['Cut your tie with Ana']))
+  })
+})
+
 describe('BBNetwork layout', () => {
   it('puts the participant in the middle and their neighbors on a circle', () => {
     const w = mountNetwork()
@@ -372,7 +404,7 @@ describe('BBNetwork editing', () => {
     expect(w.find('.bb-network__confirm').exists()).toBe(false)
     await openMoveList(w)
     const move = w.find('.bb-network__move')
-    expect(move.text()).toBe('Cut Ana – Ben')
+    expect(move.text()).toBe('Cut the tie between Ana and Ben')
     expect(move.attributes('disabled')).toBe('disabled')
     expect(w.find('.bb-network__move-reason').text()).toBe('Ben would be left with one tie.')
   })
@@ -383,7 +415,7 @@ describe('BBNetwork editing', () => {
     expect(w.find('.bb-network__moves-toggle').text()).toBe('Show the changes as a list (3 possible)')
     await openMoveList(w)
     const texts = w.findAll('.bb-network__move').wrappers.map(m => m.text())
-    expect(texts).toEqual(expect.arrayContaining(['Cut Ana – Ben', 'Connect Ana + Cleo', 'Connect Ben + Cleo']))
+    expect(texts).toEqual(expect.arrayContaining(['Cut the tie between Ana and Ben', 'Connect Ana and Cleo', 'Connect Ben and Cleo']))
     await w.findAll('.bb-network__move').at(0).trigger('click')
     expect(w.find('.bb-network__confirm').exists()).toBe(true)
   })
@@ -468,7 +500,7 @@ describe('BBNetwork editing', () => {
     })
     expect(w.findAll('.bb-network__label').length).toBe(0)
     await openMoveList(w)
-    expect(w.find('.bb-network__move').text()).toMatch(/^Cut Person [A-Z] – Person [A-Z]$/)
+    expect(w.find('.bb-network__move').text()).toMatch(/^Cut the tie between Person [A-Z] and Person [A-Z]$/)
   })
 
   it('does not offer to connect neighbors when their ties are hidden from the participant', () => {

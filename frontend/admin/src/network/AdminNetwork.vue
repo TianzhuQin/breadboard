@@ -505,7 +505,8 @@ function fitView (w: number, h: number, pad: { top: number, right: number, botto
   const bh = Math.max(160, b.maxY - b.minY)
   const aw = Math.max(40, w - pad.left - pad.right)
   const ah = Math.max(40, h - pad.top - pad.bottom)
-  const k = Math.min(1.8, Math.max(K_MIN, Math.min(aw / bw, ah / bh)))
+  // (small networks are drawn larger, up to 2.6×, so a handful of people fill the view)
+  const k = Math.min(2.6, Math.max(K_MIN, Math.min(aw / bw, ah / bh)))
   const cx = (b.minX + b.maxX) / 2
   const cy = (b.minY + b.maxY) / 2
   return { k, x: pad.left + aw / 2 - cx * k, y: pad.top + ah / 2 - cy * k }

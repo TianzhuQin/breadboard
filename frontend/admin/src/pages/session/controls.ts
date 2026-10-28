@@ -95,7 +95,7 @@ export async function stopSession (inst: Instance) {
         'Nobody new can join with its links, and it no longer counts as running.',
         'People who are on the page now are not sent away, but the experiment\'s launch parameters are unset, so the game may stop working for them.',
         pausesAutopilot ? STOP_PAUSES_AUTOPILOT : '',
-        'You can resume it later. Resuming restarts the experiment\'s scripts and disconnects everyone.',
+        'Its participants are told the session was stopped. You can resume it later, but its game then starts again from the beginning.',
       ].filter(Boolean).join('\n\n'),
       confirmLabel: 'Stop session',
       danger: true,
@@ -109,7 +109,7 @@ export async function stopSession (inst: Instance) {
     toast('success', `Stopped “${inst.name}”`, pausesAutopilot
       ? 'The autopilot is paused and opens no new session until you press Resume on the Autopilot page. Resume this session from this page or from Sessions & data.'
       : 'Resume it from this page or from Sessions & data.', {
-      action: { label: 'Resume', run: () => { void resumeSession(inst) } },
+      action: { label: 'Resume session', run: () => { void resumeSession(inst) } },
     })
   } finally {
     busy.stop = false
@@ -136,7 +136,7 @@ export async function resumeSession (inst: Instance) {
           ? 'Resuming restarts the script engine, which every researcher on this server shares: the network is emptied and everyone in it is disconnected, whoever\'s session they are in. People can then join again with this session\'s links.'
           : 'The experiment\'s scripts restart from its steps: the network is emptied and anyone still connected is disconnected. People can then join again with the session\'s links.',
         pausesAutopilot ? REBUILD_PAUSES_AUTOPILOT : '',
-        'Data recorded so far is kept.',
+        'Its game starts again from the beginning. The data recorded so far is kept, and a sessionResumed event marks where the new run begins.',
       ].filter(Boolean).join('\n\n'),
       confirmLabel: 'Resume session',
       danger: !!users || !!other,

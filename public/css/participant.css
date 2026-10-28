@@ -127,14 +127,18 @@ body.bb-page { margin: 0; }
 .bb-page .bb-button:hover { background: var(--bb-accent-hover); }
 .bb-page .bb-button:active { transform: translateY(1px); }
 
-.bb-page .bb-alert {
+/* (.bb-panel in the selectors: ".bb-page .bb-panel p" would otherwise win and turn them grey) */
+.bb-page .bb-panel .bb-alert {
   font-size: 14.5px;
+  line-height: 1.45;
   border-radius: 12px;
   padding: 10px 14px;
   margin: 0 0 18px;
 }
-.bb-page .bb-alert--error { background: #fff1f2; color: #9f1239; }
-.bb-page .bb-alert--success { background: #ecfdf5; color: #065f46; }
+.bb-page .bb-panel .bb-alert--error { background: #fff1f2; color: #9f1239; box-shadow: inset 3px 0 0 #e11d48; }
+.bb-page .bb-panel .bb-alert--success { background: #ecfdf5; color: #065f46; }
+.bb-page .bb-field input[aria-invalid="true"] { border-color: #e11d48; }
+.bb-page .bb-field input[aria-invalid="true"]:focus { box-shadow: 0 0 0 4px rgba(225, 29, 72, 0.15); }
 
 .bb-page .bb-loading {
   display: flex;

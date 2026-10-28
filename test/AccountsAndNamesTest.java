@@ -1,0 +1,106 @@
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import models.*;
+import org.junit.Test;
+import play.libs.Json;
+import play.mvc.Result;
+
+import static org.junit.Assert.*;
+import static play.test.Helpers.*;
+
+/**
+ * Researcher accounts and experiment names: sign-in ignores the email's case and doesn't sign out
+ * the account's other browsers; the first account needs a real email address; experiments can be
+ * renamed.
+ */
+public class AccountsAndNamesTest extends BaseTest {
+
+    private Result signIn(String email, String password) {
+        return route(fakeRequest(POST, "/login").withFormUrlEncodedBody(
+            java.util.Collections.unmodifiableMap(new java.util.HashMap<String, String>() {{
+                put("email", email);
+                put("password", password);
+            }})));
+    }
+
+    @Test
+    public void signingInIgnoresTheEmailsCaseAndKeepsOtherBrowsersSignedIn() {
+        Language lang = createLanguage("eng", "English");
+        createUser("lab@test.org", "Lab", "password123", lang);
+
+        Result first = signIn("lab@test.org", "password123");
+        assertEquals(OK, status(first));
+        String firstUid = Json.parse(contentAsString(first)).get("uid").asText();
+
+        Result second = signIn("  Lab@Test.ORG ", "password123");
+        assertEquals(OK, status(second));
+        assertEquals("the second browser shares the token", firstUid, Json.parse(contentAsString(second)).get("uid").asText());
+        assertEquals("lab@test.org", Json.parse(contentAsString(second)).get("email").asText());
+
+        Result state = route(fakeRequest(GET, "/state").withSession("uid", firstUid));
+        assertEquals("the first browser is still signed in", OK, status(state));
+
+        assertEquals(BAD_REQUEST, status(signIn("lab@test.org", "wrong-password")));
+    }
+
+    @Test
+    public void signingOutEndsEveryBrowsersSessionAndSaysWhy() {
+        Language lang = createLanguage("eng", "English");
+        createUser("out@test.org", "Out", "password123", lang);
+        String uid = Json.parse(contentAsString(signIn("out@test.org", "password123"))).get("uid").asText();
+
+        route(fakeRequest(POST, "/logout").withSession("uid", uid));
+        Result state = route(fakeRequest(GET, "/state").withSession("uid", uid));
+        assertEquals(UNAUTHORIZED, status(state));
+        assertEquals("ended", Json.parse(contentAsString(state)).get("reason").asText());
+    }
+
+    @Test
+    public void theFirstAccountNeedsARealEmailAndALongEnoughPassword() {
+        Language lang = createLanguage("eng", "English");
+        ObjectNode body = Json.newObject();
+        body.put("email", "not-an-email");
+        body.put("password", "password123");
+        body.put("defaultLanguageId", lang.getId());
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(POST, "/createFirstUser").withJsonBody(body))));
+
+        body.put("email", "first@test.org");
+        body.put("password", "short");
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(POST, "/createFirstUser").withJsonBody(body))));
+
+        body.put("email", " first@test.org ");
+        body.put("password", "password123");
+        assertEquals(OK, status(route(fakeRequest(POST, "/createFirstUser").withJsonBody(body))));
+        assertNotNull(User.findByEmail("first@test.org"));
+
+        Result again = route(fakeRequest(POST, "/createFirstUser").withJsonBody(body));
+        assertEquals(BAD_REQUEST, status(again));
+        assertTrue(contentAsString(again).contains("Sign in instead"));
+    }
+
+    @Test
+    public void anExperimentCanBeRenamedButNotToAnotherOnesName() {
+        Language lang = createLanguage("eng", "English");
+        User user = createUser("names@test.org", "Names", "password123", lang);
+        Experiment a = createExperiment("Pilot");
+        Experiment b = createExperiment("Main study");
+        user.ownedExperiments.add(a);
+        user.ownedExperiments.add(b);
+        user.update();
+        user.saveManyToManyAssociations("ownedExperiments");
+
+        ObjectNode body = Json.newObject();
+        body.put("name", "  Pilot, wave 2 ");
+        Result ok = route(fakeRequest(POST, "/experiment/" + a.id + "/name").withSession("uid", user.uid).withJsonBody(body));
+        assertEquals(contentAsString(ok), OK, status(ok));
+        assertEquals("Pilot, wave 2", Experiment.findById(a.id).name);
+
+        body.put("name", "main STUDY");
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(POST, "/experiment/" + a.id + "/name").withSession("uid", user.uid).withJsonBody(body))));
+        body.put("name", "a/b");
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(POST, "/experiment/" + a.id + "/name").withSession("uid", user.uid).withJsonBody(body))));
+        assertEquals("Pilot, wave 2", Experiment.findById(a.id).name);
+
+        body.put("name", "Not mine");
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/experiment/" + a.id + "/name").withJsonBody(body))));
+    }
+}

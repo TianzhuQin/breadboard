@@ -8,6 +8,7 @@ import models.*;
 import play.Logger;
 import play.data.Form;
 import play.mvc.Controller;
+import play.mvc.Http;
 import play.mvc.Result;
 import play.mvc.WebSocket;
 import security.ParticipantAuth;
@@ -55,7 +56,7 @@ public class ClientLogin extends Controller {
   public static Result login(String experimentId, String experimentInstanceId) {
     if (!isTestSession(experimentInstanceId) && !ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
       // Say so before anyone types their ID in (e.g. a participant sent here after a restart).
-      return ok(notRunning());
+      return ok(notRunning(experimentId, experimentInstanceId));
     }
     return ok(clientLogin.render(experimentId, experimentInstanceId, Form.form(CLogin.class)));
   }
@@ -67,9 +68,36 @@ public class ClientLogin extends Controller {
    */
   static play.api.templates.Html notRunning() {
     return participantMessage.render("This session isn't running right now",
-        "The session you are trying to reach has finished, or was interrupted (for example, because "
-        + "the server restarted). If you were given a link to the study, open that link again to join "
-        + "the session that is open now. Otherwise, please contact the researcher.");
+        "It has finished, or was interrupted (for example by a server restart). If you were given a "
+        + "link to the study, open it again to join the session that is open now; otherwise, please "
+        + "contact the researcher.");
+  }
+
+  /** notRunning(), or, for a session that doesn't exist at all (a mistyped or cut-off link), invalidLink(). */
+  static play.api.templates.Html notRunning(String experimentId, String experimentInstanceId) {
+    return sessionExists(experimentId, experimentInstanceId) ? notRunning() : invalidLink();
+  }
+
+  /** invalidLink(), for Global's not-found handler. */
+  public static play.api.templates.Html invalidLinkPage() {
+    return invalidLink();
+  }
+
+  static play.api.templates.Html invalidLink() {
+    return participantMessage.render("This link isn't valid",
+        "There is no study session at this address. Please check that you opened the whole link you "
+        + "were given, or contact the researcher.");
+  }
+
+  /** Whether the experiment has a session with this id. */
+  static boolean sessionExists(String experimentId, String experimentInstanceId) {
+    try {
+      ExperimentInstance instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+      return instance != null && instance.experiment != null
+          && instance.experiment.id.equals(Long.valueOf(experimentId));
+    } catch (NumberFormatException e) {
+      return false;
+    }
   }
 
   public static Result amtLogin(Long experimentId, Long experimentInstanceId, String hitId, String assignmentId, String workerId) {
@@ -189,8 +217,9 @@ public class ClientLogin extends Controller {
       return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
     } else {
       Logger.debug("! loginForm.hasErrors()");
-      String clientId = loginForm.get().id;
-      if (clientId == null || clientId.trim().isEmpty()) {
+      // (Pasted ids often bring a space along: " p1 " would be another seat that looks like p1.)
+      String clientId = loginForm.get().id == null ? null : loginForm.get().id.trim();
+      if (clientId == null || clientId.isEmpty()) {
         loginForm.reject("Please enter your ID.");
         return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
@@ -209,15 +238,20 @@ public class ClientLogin extends Controller {
       if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
         // The engine runs another session (or none, since a restart): this one's game is not there
         // to join. Checked first: someone coming back to a session that started is told it's gone.
-        return forbidden(notRunning());
+        return forbidden(notRunning(experimentId, experimentInstanceId));
+      }
+      if (ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
+        // Coming back (e.g. after closing the tab) in the browser that holds this seat: straight in.
+        return redirect(routes.ClientController.index(experimentId, experimentInstanceId, clientId, null).url());
       }
       if (closedToNewcomers(experimentInstanceId, clientId)) {
-        loginForm.reject("This session has already started.");
-        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+        return forbidden(participantMessage.render("The session has already started",
+            "This session began before you arrived, so it can't take anyone new. Please contact the researcher."));
       }
       String token = ParticipantAuth.claim(experimentInstanceId, clientId);
       if (token == null) {
-        loginForm.reject("This ID is already in use.");
+        loginForm.reject("This ID is already in use. If it is yours, open the study in the browser "
+            + "where you first signed in; otherwise, check the ID you were given.");
         return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
       return enterGame(experimentId, experimentInstanceId, clientId, token, null);
@@ -296,16 +330,52 @@ public class ClientLogin extends Controller {
   }
 
   private static Result toOpenSession(String experimentId, String entry) {
+    String query = request().uri().contains("?") ? request().uri().substring(request().uri().indexOf('?')) : "";
+    // Coming back to a session this browser has a seat in, while the engine still runs it (its game
+    // may have started, so it is no longer open to newcomers).
+    Http.Cookie back = request().cookie(PLAY_COOKIE + experimentId);
+    if (back != null && back.value() != null && back.value().contains("/")) {
+      String instanceId = back.value().substring(0, back.value().indexOf('/'));
+      String clientId = urlDecode(back.value().substring(back.value().indexOf('/') + 1));
+      if (!clientId.isEmpty() && ScriptBoard.runsSession(experimentId, instanceId)
+          && ParticipantAuth.isClaimed(instanceId, clientId)) {
+        return "prolific".equals(entry)
+            ? redirect("/game/" + experimentId + "/" + instanceId + "/prolific" + query)
+            : redirect(routes.ClientController.index(experimentId, instanceId, clientId, null).url());
+      }
+    }
     ExperimentInstance open = null;
     try {
       open = Autopilot.openInstance(Long.valueOf(experimentId));
     } catch (NumberFormatException ignored) {}
     if (open == null) {
+      if ("prolific".equals(entry)) {
+        // A Prolific study's places are timed: waiting makes no sense, returning lets someone else in.
+        return ok(participantMessage.render("No session is open right now",
+            "There is no session taking participants at the moment. Please return the study on Prolific."));
+      }
       return ok(participantMessage.render("No session is open right now",
-          "There is no session accepting participants at the moment. Please try again in a few minutes."));
+          "There is no session taking participants at the moment. Please try again in a few minutes, or contact the researcher."));
     }
-    String query = request().uri().contains("?") ? request().uri().substring(request().uri().indexOf('?')) : "";
     return redirect("/game/" + experimentId + "/" + open.id + "/" + entry + query);
+  }
+
+  private static final String PLAY_COOKIE = "bb_seat_";
+
+  private static String urlEncode(String s) {
+    try {
+      return java.net.URLEncoder.encode(s, "UTF-8");
+    } catch (java.io.UnsupportedEncodingException e) {
+      return s;
+    }
+  }
+
+  private static String urlDecode(String s) {
+    try {
+      return java.net.URLDecoder.decode(s, "UTF-8");
+    } catch (Exception e) {
+      return "";
+    }
   }
 
   /** Whether this is the id of an experiment's test session (0), which takes no participants. */
@@ -341,6 +411,11 @@ public class ClientLogin extends Controller {
     boolean secure = play.Play.application().configuration().getBoolean("breadboard.secureCookies", false);
     response().setCookie(ParticipantAuth.cookieName(experimentInstanceId), token, null,
         ParticipantAuth.cookiePath(experimentId, experimentInstanceId), null, secure, true);
+    // Which seat this browser took, for the study's shared links (/play/...): someone who closes the
+    // tab and opens the link again goes back to their seat, also once the game has started. Only
+    // where to go: the seat's token stays in the cookie above.
+    response().setCookie(PLAY_COOKIE + experimentId, experimentInstanceId + "/" + urlEncode(clientId), 24 * 3600,
+        "/play/" + experimentId, null, secure, true);
     String url = routes.ClientController.index(experimentId, experimentInstanceId, clientId, connectionSpeed).url();
     return redirect(url + "#" + ParticipantAuth.FRAGMENT_KEY + "=" + token);
   }

@@ -20,6 +20,7 @@
         </div>
         <div class="xcur__actions">
           <BButton size="sm" :icon="Download" :loading="exportingId === current.id" @click="exportExp(current)">Export .zip</BButton>
+          <BButton size="sm" variant="ghost" :icon="Pencil" :disabled="current.fileMode" :title="current.fileMode ? 'Leave file mode to rename it' : undefined" @click="rename(current)">Rename</BButton>
           <BButton size="sm" variant="ghost" :icon="Copy" @click="duplicate(current)">Duplicate</BButton>
         </div>
       </div>
@@ -86,6 +87,7 @@
           @select="select(e)"
           @export="exportExp(e)"
           @duplicate="duplicate(e)"
+          @rename="rename(e)"
           @file-mode="fileModeFor(e)"
           @delete="remove(e)"
         />
@@ -118,6 +120,7 @@
     <NewExperimentDialog v-model:open="newOpen" :copy-from="copyFrom" @created="e => flash(e.id)" />
     <ImportExperimentDialog v-model:open="importOpen" :initial-file="importFile" @imported="e => flash(e.id)" />
     <FileModeDialog v-model:open="fileModeOpen" />
+    <RenameExperimentDialog v-model:open="renameOpen" :exp="renameTarget" @renamed="e => flash(e.id)" />
   </BPage>
 </template>
 
@@ -125,7 +128,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Copy, Database, Download, FileArchive, FlaskConical, HardDrive, Plus, Search, Upload,
+  Copy, Database, Download, FileArchive, FlaskConical, HardDrive, Pencil, Plus, Search, Upload,
 } from 'lucide-vue-next'
 import { BButton, BEmpty, BInput, BPage, BSelect, confirm, notify, toast } from '@/ui'
 import { admin, actions, ensureConnected, experiments, running } from '@/store/admin'
@@ -135,6 +138,7 @@ import ExperimentCard from './ExperimentCard.vue'
 import NewExperimentDialog from './NewExperimentDialog.vue'
 import ImportExperimentDialog from './ImportExperimentDialog.vue'
 import FileModeDialog from './FileModeDialog.vue'
+import RenameExperimentDialog from './RenameExperimentDialog.vue'
 import { autopilotNow } from '../autopilot/autopilot'
 import {
   describeError, devDirName, downloadExperiment, lastSession, plural, runningSession, zipFileName,
@@ -256,12 +260,29 @@ function duplicate (e: Experiment) {
   openNew(e.id)
 }
 
+const renameOpen = ref(false)
+const renameTarget = ref<Experiment | null>(null)
+function rename (e: Experiment) {
+  if (e.fileMode) {
+    notify.info(`“${e.name}” is in file mode`, 'Its folder on the server is named after it: leave file mode first, then rename it.')
+    return
+  }
+  renameTarget.value = e
+  renameOpen.value = true
+}
+
 function fileModeFor (e: Experiment) {
   if (!current.value || current.value.id !== e.id) {
     // ToggleFileMode works on the experiment you're working on, so offer to switch to it first
     toast('info', `Work on “${e.name}” first`,
       'File mode is changed for the experiment you are working on.',
-      running.value ? {} : { action: { label: 'Work on it', run: () => select(e) } })
+      running.value ? {} : {
+        action: {
+          label: 'Work on it',
+          // then carry on with what was asked
+          run: async () => { await select(e); if (current.value?.id === e.id) fileModeOpen.value = true },
+        },
+      })
     return
   }
   fileModeOpen.value = true
@@ -386,6 +407,8 @@ onBeforeUnmount(() => {
 .xcur__storage-btn { flex: none; align-self: center; }
 @media (max-width: 640px) {
   .xcur__storage { flex-wrap: wrap; }
+  /* the text takes the row (it was squeezed beside the button), the button goes under it */
+  .xcur__storage-text { flex-basis: calc(100% - 48px); }
   .xcur__storage-btn { margin-left: 48px; }
 }
 

@@ -639,10 +639,11 @@ public final class Autopilot {
     return users.isEmpty() ? null : users.get(0);
   }
 
+  /** e.g. "Autopilot · Oct 28, 13:16:05 UTC" (the seconds keep sessions opened a minute apart distinct). */
   private static String sessionName() {
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    SimpleDateFormat format = new SimpleDateFormat("MMM d, HH:mm:ss", java.util.Locale.ENGLISH);
     format.setTimeZone(TimeZone.getTimeZone("UTC"));
-    return "auto " + format.format(new Date()) + " UTC";
+    return "Autopilot · " + format.format(new Date()) + " UTC";
   }
 
   // ---- what the engine is doing --------------------------------------------------------------------

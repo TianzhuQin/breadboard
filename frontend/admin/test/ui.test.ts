@@ -6,7 +6,7 @@ import BTabs from '../src/ui/BTabs.vue'
 import BDialog from '../src/ui/BDialog.vue'
 import BToasts from '../src/ui/BToasts.vue'
 import BMenu from '../src/ui/BMenu.vue'
-import { confirm, confirmState, settleConfirm } from '../src/ui/confirm'
+import { confirm, confirmState, looseText, settleConfirm } from '../src/ui/confirm'
 import { toasts, toast, dismiss, holdToast, releaseToast } from '../src/ui/toast'
 import { scaleFor, NEUTRAL } from '../src/network/palette'
 
@@ -40,6 +40,15 @@ describe('confirm', () => {
     settleConfirm(true)
     expect(await second).toBe(true)
     expect(confirmState.open).toBe(false)
+  })
+})
+
+describe('typing a name to confirm', () => {
+  it('ignores case, extra spaces and kinds of dash and quote', () => {
+    const name = 'Public goods — wave 2 (“pilot”)'
+    expect(looseText('public goods - wave  2 ("pilot")')).toBe(looseText(name))
+    expect(looseText('实验 #1：合作？')).toBe(looseText('实验 #1:合作?'))
+    expect(looseText('Public goods wave 2')).not.toBe(looseText(name))
   })
 })
 

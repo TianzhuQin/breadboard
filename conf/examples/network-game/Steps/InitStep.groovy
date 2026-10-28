@@ -2,7 +2,7 @@
 //
 //  1. People sign in and wait until enough are here (the waiting room below).
 //  2. They are placed on a network, topped up with computer players to NETWORK_SIZE.
-//  3. Each round everyone picks a colour, and scores a point when it matches the colour most of
+//  3. Each round everyone picks a color, and scores a point when it matches the color most of
 //     their neighbors picked. The network shows what each neighbor picked last round. During a
 //     round, everyone may also cut one of their ties, right on the network.
 //  4. Everyone sees their score. The session ends, and the autopilot (if it is on) opens the next.
@@ -12,7 +12,7 @@
 
 NETWORK_SIZE = 8   // people on the network, computer players included
 NEAREST = 2        // everyone starts tied to the NEAREST people on each side of a ring
-COLORS = [Blue: "#2563eb", Orange: "#ea580c"]
+COLORS = [Blue: "#2563eb", Orange: "#ea580c"]   // the choices, and the people on the network
 
 // Start without a researcher: as soon as 2 people are here, wait 20 seconds for more (or start
 // right away with NETWORK_SIZE), then count down 5 seconds. Give up after 10 minutes.
