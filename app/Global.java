@@ -10,7 +10,13 @@ import play.Logger;
 import play.db.DB;
 import play.libs.F;
 import play.libs.Yaml;
+import play.api.PlayException;
+import play.api.db.DBApi;
+import play.api.db.DBPlugin;
+import play.api.db.evolutions.DownScript;
+import play.api.db.evolutions.Evolutions$;
 import play.api.mvc.EssentialFilter;
+import scala.collection.JavaConversions;
 import play.mvc.Action;
 import play.mvc.Http;
 
@@ -31,6 +37,11 @@ public class Global extends GlobalSettings {
 
   @Override
   public void onStart(Application app) {
+
+    applyNewEvolutions(app);
+    // Before anything reads Experiment, which maps this column: a database built from evolutions
+    // 1-29 (v2.3) lacks it, and so does a v2.2 one, which the migration below reads.
+    version2Point4Upgrade();
 
     String sql = "select count(*) as table_count from information_schema.tables where table_name = 'breadboard_version';";
     SqlRow versionTableCount = Ebean.createSqlQuery(sql).findUnique();
@@ -171,12 +182,68 @@ public class Global extends GlobalSettings {
         version2Point4Upgrade();
       } // Otherwise, no upgrade needed
     }
+    // A database built from the evolutions has an empty breadboard_version: record the version that
+    // brought it up to date, for later upgrades.
+    String version = app.configuration().getString("application.version");
+    if (version != null && tableRows("breadboard_version") == 0) {
+      Ebean.createSqlUpdate("insert into breadboard_version values (:version)").setParameter("version", version).execute();
+    }
 
     // Interpolated Groovy strings must reach browsers as text.
     models.JsonSetup.install();
 
     // Open a session of the configured experiment so participants can join without an admin.
     models.Autopilot.start();
+  }
+
+  /**
+   * Releases run with evolutions off (conf/application-prod.conf), so that Play never rewrites a
+   * database copied over from an older release. This does their work where that is safe: an empty
+   * database (a new install) gets its tables from the evolution scripts, and a database whose
+   * evolutions Play recorded (play_evolutions) gets the ones it lacks, e.g. one an older release
+   * built from evolutions 1-29, or a first start that was interrupted. Only new evolutions are ever
+   * run: when the recorded ones differ from this version's, nothing is, since Play would run their
+   * Downs first. An older database without that record is brought up to date by onStart instead.
+   * With evolutions on, Play has applied them already and nothing is left to run.
+   */
+  @SuppressWarnings("unchecked")
+  private static void applyNewEvolutions(Application app) {
+    boolean empty = !tableExists("experiments");
+    if (!empty && (!tableExists("play_evolutions") || tableRows("play_evolutions") == 0)) {
+      return;
+    }
+    DBApi api = app.plugin(DBPlugin.class).api();
+    try {
+      scala.collection.Seq<scala.Product> script =
+          Evolutions$.MODULE$.evolutionScript(api, app.path(), app.classloader(), "default");
+      List<scala.Product> steps = JavaConversions.seqAsJavaList(script);
+      if (steps.isEmpty()) {
+        return;
+      }
+      for (scala.Product step : steps) {
+        if (step instanceof DownScript) {
+          Logger.warn("The evolutions recorded in this database differ from this version's, so none are applied.");
+          return;
+        }
+      }
+      Logger.info(empty ? "The database is empty: creating its tables"
+          : "Bringing the database up to date (" + steps.size() + " evolution(s))");
+      Evolutions$.MODULE$.applyScript(api, "default", (scala.collection.Seq) script);
+    } catch (PlayException e) {
+      throw new IllegalStateException("The database could not be brought up to date: " + e.getMessage()
+          + ". If this is a new install, stop the server, delete the db folder and start again; "
+          + "otherwise restore the database from a backup.", e);
+    }
+  }
+
+  private static boolean tableExists(String name) {
+    SqlRow row = Ebean.createSqlQuery("select count(*) as table_count from information_schema.tables "
+        + "where lower(table_name) = :name").setParameter("name", name).findUnique();
+    return !"0".equals(row.getString("table_count"));
+  }
+
+  private static int tableRows(String table) {
+    return Ebean.createSqlQuery("select count(*) as row_count from " + table).findUnique().getInteger("row_count");
   }
 
   private void version2Point4Upgrade() {

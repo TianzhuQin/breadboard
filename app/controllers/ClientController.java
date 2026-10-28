@@ -41,18 +41,23 @@ public class ClientController extends Controller
         } catch (NumberFormatException ignored) {}
 
         if (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING) {
-          return ok( amtError.render() );
+          // Mechanical Turk workers are asked to return the HIT; everyone else gets the general notice.
+          return ok(experimentInstance != null && experimentInstance.getHit() != null
+              ? amtError.render() : ClientLogin.notRunning());
         }
 
         // A signed invitation link claims the seat, then redirects to the plain page URL so the
         // signature doesn't linger in the address bar or browser history.
         String invite = request().getQueryString("invite");
         if (invite != null) {
+          boolean amt = experimentInstance.getHit() != null;
           if (!ParticipantAuth.verifyInvite(experimentInstanceId, clientId, invite)) {
-            return forbidden(amtError.render());
+            return forbidden(amt ? amtError.render() : participantMessage.render("This link isn't valid",
+                "This invitation link isn't valid. Please check the link you were given, or contact the researcher."));
           }
           if (ClientLogin.closedToNewcomers(experimentInstanceId, clientId)) {
-            return ok(amtGameStarted.render());
+            return ok(amt ? amtGameStarted.render() : participantMessage.render("The session has already started",
+                "This session began before you arrived, so it takes no one new. Please contact the researcher."));
           }
           String token = ParticipantAuth.claim(experimentInstanceId, clientId);
           if (token == null) {

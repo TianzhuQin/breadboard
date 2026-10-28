@@ -1,51 +1,36 @@
 # Contributing
-There are many different ways to contribute to the Breadboard project. We welcome issues, code, documentation
-and examples. 
 
-## Development
+Contributions to Breadboard are welcome: bug reports, fixes, documentation and example
+experiments. This fork's issues and pull requests are at
+[github.com/TianzhuQin/breadboard](https://github.com/TianzhuQin/breadboard).
 
-### Environment setup
-Breadboard requires **Java 8** specifically (the Play 2.2 / Scala 2.10 / sbt 0.13.18 stack does
-not build under Java 9 or newer — it hangs silently during compilation). Install a Java 8 JDK and
-point sbt at it, e.g. `sbt -java-home /path/to/jdk8 test`. See `CLAUDE.md` for the full build/test
-commands.
+## Reporting a problem
 
-- `cd frontend`
-- `pnpm install`
+Open an issue at <https://github.com/TianzhuQin/breadboard/issues>. Say:
 
-#### Building from a clean machine
-Plain `sbt` no longer resolves this build on its own: the old `http://` resolvers are gone and
-`play-docs` is no longer published. `bin/sbt8` downloads a checksum-verified sbt launcher and
-resolves everything over https (`project/sbt-repositories`):
+- which release you run (its folder is named after it, e.g. `breadboard-v3.0.0`), your
+  operating system and your Java version (`java -version`);
+- what you did, what you expected, and what happened instead;
+- the relevant lines of `logs/application.log`, or of the server's output.
 
-```bash
-export JAVA8_HOME=/path/to/jdk8
-(cd frontend && pnpm install && pnpm run build:all)
-bin/sbt8 compile test stage
-bin/run-local 9000        # fresh H2 database in .local-run/, evolutions applied
-```
+For a problem with an experiment, the smallest script that shows it helps most. Leave out
+`conf/application.secret`, passwords and participants' data.
 
-`bin/run-local` creates its own database and a random `application.secret`, so it is safe to
-delete `.local-run/` to start over.
+## Proposing a change
 
-### Running
-#### Backend development
-If modifications will be made to files in the **frontend** directory, use the frontend development instructions instead
-- Start the play framework server using `sbt "run -Dconfig.file=conf/application-prod.conf"`
+1. Fork the repository and make a branch from `main`.
+2. Make the change, with tests: the server's in `test/`, the engine's in `groovy/*_test.groovy`,
+   the front end's in each package's `test/` folder.
+3. Run the checks described in [docs/development.md](docs/development.md#tests).
+4. If people using Breadboard will notice the change, add a line to `CHANGELOG.md` and update the
+   documentation in `docs/`.
+5. Open a pull request against `main` that says what the change does and why. CI builds and
+   tests every pull request.
 
-#### Frontend development
-This uses a slightly different configuration to allow hot module replacement via webpack on frontend files.
-- Start the webpack server using `cd frontend && pnpm start`
-- Start the play framework server using `sbt "run -Dconfig.file=conf/application-dev.conf"`
+For a larger change, open an issue first to talk it over. Changes to the database have their own
+rules: see [docs/development.md](docs/development.md#database-changes).
 
+## Building and testing
 
-From a terminal run . This will start a dev server which will
-automatically rebuild the frontend files whenever a file changes.
-
-
-## Production
-
-### Compile jars
-- `cd frontend && pnpm run build:all` to build frontend assets (incl. the client/core packages) if this code has changed
-- `sh create_prod_dist.sh` to compile distributable files
-- In many cases, only copying the compiled **breadboard.jar** file is enough to update existing Breadboard applications.
+[docs/development.md](docs/development.md) covers the requirements (Java 8, Node, pnpm), building
+the server and the front end, running from source, the tests, CI and making a release.

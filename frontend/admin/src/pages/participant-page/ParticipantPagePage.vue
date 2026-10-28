@@ -128,7 +128,8 @@ import {
   AlertCircle, AlertTriangle, Braces, CloudOff, FileCode2, MonitorSmartphone, Palette, RotateCw, Save, SaveAll,
   Sparkles, Undo2,
 } from 'lucide-vue-next'
-import { BButton, BCodeEditor, BEmpty, BTabs, confirm, notify, toast, type TabItem } from '@/ui'
+import { BButton, BEmpty, BTabs, confirm, notify, toast, type TabItem } from '@/ui'
+import BCodeEditor from '@/ui/BCodeEditor.vue'
 import { http, HttpError } from '@/lib/http'
 import { admin, actions } from '@/store/admin'
 import FileModeNotice from '../parameters/FileModeNotice.vue'

@@ -53,19 +53,35 @@ public class ClientLogin extends Controller {
   }
 
   public static Result login(String experimentId, String experimentInstanceId) {
+    if (!isTestSession(experimentInstanceId) && !ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
+      // Say so before anyone types their ID in (e.g. a participant sent here after a restart).
+      return ok(notRunning());
+    }
     return ok(clientLogin.render(experimentId, experimentInstanceId, Form.form(CLogin.class)));
+  }
+
+  /**
+   * The page for a session that isn't running: it finished, or the engine no longer runs it (the
+   * server restarted, or the researcher moved the engine to another session). A study's own link
+   * (e.g. /play/{experimentId}/login, or the one on Prolific) leads to whichever session is open.
+   */
+  static play.api.templates.Html notRunning() {
+    return participantMessage.render("This session isn't running right now",
+        "The session you are trying to reach has finished, or was interrupted (for example, because "
+        + "the server restarted). If you were given a link to the study, open that link again to join "
+        + "the session that is open now. Otherwise, please contact the researcher.");
   }
 
   public static Result amtLogin(Long experimentId, Long experimentInstanceId, String hitId, String assignmentId, String workerId) {
     Experiment experiment = Experiment.findById(experimentId);
     ExperimentInstance experimentInstance = ExperimentInstance.findById(experimentInstanceId);
-    AMTHit amtHit = experimentInstance.getHit();
 
     if (experiment == null || experimentInstance == null || experimentInstance.status != ExperimentInstance.Status.RUNNING) {
       return ok(amtError.render());
     }
+    AMTHit amtHit = experimentInstance.getHit();
 
-    if (Boolean.TRUE.equals(experimentInstance.hasStarted) && (workerId == null || (!amtHit.hasWorker(workerId)))) {
+    if (Boolean.TRUE.equals(experimentInstance.hasStarted) && (workerId == null || amtHit == null || !amtHit.hasWorker(workerId))) {
       return ok(amtGameStarted.render());
     }
 
@@ -190,13 +206,13 @@ public class ClientLogin extends Controller {
         loginForm.reject("This session isn't running right now. Please check the link you were given.");
         return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
+      if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
+        // The engine runs another session (or none, since a restart): this one's game is not there
+        // to join. Checked first: someone coming back to a session that started is told it's gone.
+        return forbidden(notRunning());
+      }
       if (closedToNewcomers(experimentInstanceId, clientId)) {
         loginForm.reject("This session has already started.");
-        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
-      }
-      if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
-        // The engine runs another session (or none): this one's game is not there to join.
-        loginForm.reject("This session isn't running right now. Please check the link you were given.");
         return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
       String token = ParticipantAuth.claim(experimentInstanceId, clientId);

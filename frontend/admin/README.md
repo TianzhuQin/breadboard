@@ -48,7 +48,10 @@ prefix nobody uses yet.
 
 `vite.config.ts` puts dependencies in a `vendor` chunk and shared code in an `app` chunk, so a
 lazily loaded page never imports `admin.js` itself: the page loads it as `admin.js?v=<version>`,
-and an import of the plain URL would start the app a second time.
+and an import of the plain URL would start the app a second time. The code editor and CodeMirror
+go in an `editor` chunk that only the pages with an editor load, so pages import `BCodeEditor`
+from `@/ui/BCodeEditor.vue` rather than from `@/ui`. Set `BB_SOURCEMAPS=1` to add source maps
+to a production build.
 
 ## Talking to the server
 

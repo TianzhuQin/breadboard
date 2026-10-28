@@ -102,7 +102,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BookOpen, Check, Copy, Ellipsis, Eraser, History, Info, PanelBottom, Play, WifiOff } from 'lucide-vue-next'
-import { BButton, BCodeEditor, BDialog, BMenu, confirm, notify, toast, type MenuItem } from '@/ui'
+import { BButton, BDialog, BMenu, confirm, notify, toast, type MenuItem } from '@/ui'
+import BCodeEditor from '@/ui/BCodeEditor.vue'
 import { admin, connectionState, ensureConnected, graph, running } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import ConsoleResults from './ConsoleResults.vue'

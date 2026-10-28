@@ -4,9 +4,19 @@ const path = require('path')
 const VueLoaderPlugin = require('vue-loader/lib/plugin')
 const MiniCssExtractPlugin = require('mini-css-extract-plugin')
 const buildPath = path.resolve(__dirname, '../public/bundles/')
+// The minifier webpack itself uses (it isn't a dependency of this package).
+const TerserPlugin = require(require.resolve('terser-webpack-plugin', {
+  paths: [path.dirname(require.resolve('webpack/package.json'))],
+}))
+// The AngularJS bundles (the previous console, and older experiments' AngularJS page) let Angular
+// find services by parameter name, e.g. directive('compile', function ($compile, $timeout) ...),
+// so minifying them must keep the names.
+const ANGULAR_BUNDLES = /^(design|client-angular)\.js$/
 
 const PORT = 8765
 const isProd = process.env.NODE_ENV === 'production'
+// BB_SOURCEMAPS=1 adds separate source maps to a production build.
+const sourceMaps = /^(1|true|yes)$/i.test(process.env.BB_SOURCEMAPS || '')
 // 'auto': chunks load from wherever the entry script was served (breadboard.assetsRoot, e.g. a CDN).
 const publicPath = isProd
   ? 'auto'
@@ -53,6 +63,8 @@ module.exports = {
   },
   cache: {
     type: 'filesystem',
+    // The cache doesn't follow devtool: builds with and without source maps keep one each.
+    name: `${isProd ? 'production' : 'development'}${sourceMaps ? '-sourcemaps' : ''}`,
   },
   output: {
     path: buildPath,
@@ -64,7 +76,9 @@ module.exports = {
     clean: true,
   },
   mode: isProd ? 'production' : 'development',
-  devtool: 'eval-source-map',
+  // Production bundles carry no source maps unless BB_SOURCEMAPS is set, and then in separate .map
+  // files: the eval'd maps of development builds made design.js about 21 MB and client.js 5.6 MB.
+  devtool: isProd ? (sourceMaps ? 'source-map' : false) : 'eval-source-map',
   devServer: {
     port: PORT,
     hot: true,
@@ -205,6 +219,10 @@ module.exports = {
   //   vue: 'Vue'
   // }
   optimization: {
+    minimizer: [
+      new TerserPlugin({ exclude: ANGULAR_BUNDLES }),
+      new TerserPlugin({ include: ANGULAR_BUNDLES, terserOptions: { mangle: false } }),
+    ],
     splitChunks: {
       chunks: 'async',
       cacheGroups: {

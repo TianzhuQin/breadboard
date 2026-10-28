@@ -193,7 +193,8 @@ import {
   ChevronLeft, CircleAlert, CircleDashed, Code2, Copy, CopyPlus, Ellipsis, FileText, Info, Languages,
   PanelRightClose, PanelRightOpen, Pencil, Plus, RotateCw, Save, Trash2, TriangleAlert, Type, Undo2,
 } from 'lucide-vue-next'
-import { BBadge, BButton, BCodeEditor, BEmpty, BInput, BMenu, BSpinner, BTabs, notify, type MenuItem, type TabItem } from '@/ui'
+import { BBadge, BButton, BEmpty, BInput, BMenu, BSpinner, BTabs, notify, type MenuItem, type TabItem } from '@/ui'
+import BCodeEditor from '@/ui/BCodeEditor.vue'
 import { uid } from '@/ui/uid'
 import { admin } from '@/store/admin'
 import type { Language } from '@/store/types'

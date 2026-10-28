@@ -16,7 +16,7 @@
       <div v-if="target" class="rc-note rc-note--success">
         <CircleCheck :size="16" aria-hidden="true" />
         <span>
-          Right now it leads to <strong>{{ target.name }}</strong>, the newest running session whose game hasn’t started.
+          Right now it leads to <strong>{{ target.name }}</strong>, the session the engine is running, whose game hasn’t started.
           Once that session’s game has started, newcomers are turned away until another session opens.
         </span>
       </div>

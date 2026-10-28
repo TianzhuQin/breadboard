@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Check a release the way someone installing it would use it: unzip it into a temporary directory,
+# start it on an empty database, create the first account, sign in, load the consoles and the
+# participant pages, then restart it on the same database and sign in again.
+#
+#   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
+#
+# --db starts the release on a copy of an older release's database instead (an upgrade). When that
+# database has accounts already, it can't sign in (it doesn't know their passwords) and only checks
+# that the server starts and serves its pages.
+# PORT (default 19000) is the port it uses.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ZIP=""
+OLD_DB=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --db) OLD_DB="$2"; shift 2 ;;
+    *) ZIP="$1"; shift ;;
+  esac
+done
+if [ -z "$ZIP" ]; then
+  ZIP="$(ls -t "$ROOT"/target/release/breadboard-*.zip 2>/dev/null | head -1 || true)"
+fi
+if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
+  echo "bin/smoke-dist: no release zip; build one with bin/make-dist." >&2
+  exit 1
+fi
+ZIP="$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")"
+PORT="${PORT:-19000}"
+BASE="http://localhost:$PORT"
+
+WORK="$(mktemp -d)"
+SERVER=""
+cleanup () {
+  if [ -n "$SERVER" ] && kill -0 "$SERVER" 2>/dev/null; then
+    kill "$SERVER" 2>/dev/null || true
+    wait "$SERVER" 2>/dev/null || true
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+fail () {
+  echo "FAIL: $*" >&2
+  if [ -f "$WORK/server.log" ]; then
+    echo "---- server output ----" >&2
+    tail -60 "$WORK/server.log" >&2
+  fi
+  exit 1
+}
+pass () { echo "ok   $*"; }
+
+unzip -q "$ZIP" -d "$WORK"
+APP="$(find "$WORK" -mindepth 1 -maxdepth 1 -type d -name 'breadboard-*' | head -1)"
+[ -x "$APP/breadboard.sh" ] || fail "the zip has no breadboard.sh"
+[ -f "$APP/conf/application-prod.conf" ] || fail "the zip has no conf/application-prod.conf"
+[ -f "$APP/groovy/step.groovy" ] || fail "the zip has no groovy/ engine scripts"
+if ls "$APP"/groovy/*_test.groovy >/dev/null 2>&1; then fail "the zip carries test scripts"; fi
+[ -s "$APP/lib/classpath.txt" ] || fail "the zip has no lib/classpath.txt"
+[ "$(wc -l < "$APP/lib/classpath.txt")" -eq "$(find "$APP/lib" -name '*.jar' | wc -l)" ] \
+  || fail "lib/classpath.txt doesn't list every jar in lib/"
+[ -f "$APP/docs/install.md" ] || fail "the zip has no docs/"
+grep -q "$(printf '\r')$" "$APP/breadboard.bat" || fail "breadboard.bat doesn't have Windows line endings"
+pass "release layout"
+if [ -n "$OLD_DB" ]; then
+  cp "$OLD_DB" "$APP/db/breadboard.h2.db"
+fi
+
+start () {
+  (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") >> "$WORK/server.log" 2>&1 &
+  SERVER=$!
+  for _ in $(seq 1 180); do
+    if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/" || true)" = "200" ]; then
+      pass "server started ($1)"
+      # The secret goes to the server in its environment, never on its command line.
+      if ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF "$(cat "$APP/conf/application.secret")"; then
+        fail "application.secret is visible on the server's command line"
+      fi
+      return
+    fi
+    sleep 1
+  done
+  fail "the server did not answer within 180 s"
+}
+
+stop () {
+  kill "$SERVER"
+  wait "$SERVER" 2>/dev/null || true
+  SERVER=""
+  [ ! -f "$APP/RUNNING_PID" ] || rm -f "$APP/RUNNING_PID"
+}
+
+# GET a path; fail unless the status is $2 (default 200). The body goes to $WORK/body.
+get () {
+  local code
+  code="$(curl -s -o "$WORK/body" -w '%{http_code}' -b "$WORK/cookies" -c "$WORK/cookies" "$BASE$1")"
+  [ "$code" = "${2:-200}" ] || fail "GET $1 answered $code, expected ${2:-200}"
+}
+
+pages () {
+  get /
+  grep -q 'admin/admin.js' "$WORK/body" || fail "the console page doesn't load admin.js"
+  get /legacy-admin
+  for asset in admin/admin.js admin/admin.css bundles/client.js bundles/design.js bundles/breadboard.js css/participant.css; do
+    get "/assets/$asset"
+  done
+  # The startup bundle of the console, and the participant page, stay small.
+  local client
+  client="$(curl -s "$BASE/assets/bundles/client.js" | wc -c | tr -d ' ')"
+  [ "$client" -lt 2000000 ] || fail "client.js is $client bytes"
+  pass "consoles, participant bundles and stylesheets"
+  get /game/999/999/someone/connected
+  grep -q 'running right now' "$WORK/body" || fail "a session that doesn't exist isn't reported as not running"
+  pass "participant page of a session that isn't running"
+}
+
+json () { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print($1)" "$WORK/body"; }
+
+sign_in () {
+  rm -f "$WORK/cookies"
+  local code
+  code="$(curl -s -o "$WORK/body" -w '%{http_code}' -c "$WORK/cookies" \
+    --data-urlencode "email=$EMAIL" --data-urlencode "password=$PASSWORD" "$BASE/login")"
+  [ "$code" = "200" ] || fail "signing in answered $code"
+  get /state
+  [ "$(json "d.get('email')")" = "$EMAIL" ] || fail "/state doesn't name the signed-in account"
+  get /autopilot
+  pass "signed in; account state and autopilot settings load"
+}
+
+if [ -n "$OLD_DB" ]; then start "an older release's database"; else start "empty database"; fi
+[ -s "$APP/conf/application.secret" ] || fail "no conf/application.secret was generated"
+pages
+
+get /autopilot 401
+get /languages
+LANG_ID="$(json "[l['id'] for l in d['languages'] if l['code'] == 'eng'][0]")"
+EMAIL="smoke@breadboard.test"
+PASSWORD="smoke-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+code="$(curl -s -o "$WORK/body" -w '%{http_code}' -H 'Content-Type: application/json' \
+  -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"defaultLanguageId\":$LANG_ID}" "$BASE/createFirstUser")"
+SIGN_IN=1
+if [ "$code" = "200" ]; then
+  pass "first account created"
+  sign_in
+elif [ -n "$OLD_DB" ] && grep -q "not empty" "$WORK/body"; then
+  SIGN_IN=""
+  pass "the older database has accounts: pages load, sign-in still required"
+else
+  fail "creating the first account answered $code: $(cat "$WORK/body")"
+fi
+stop
+
+start "same database again"
+pages
+if [ -n "$SIGN_IN" ]; then
+  sign_in
+fi
+stop
+
+# Play colours the level in its console output; logs/application.log has none.
+ESC="$(printf '\033')"
+if { sed "s/${ESC}\[[0-9;]*m//g" "$WORK/server.log"; cat "$APP"/logs/*.log 2>/dev/null; } \
+    | grep -nE '^\[error\]|\[ERROR\]|Exception' > "$WORK/errors"; then
+  head -20 "$WORK/errors" >&2
+  fail "the server logged errors"
+fi
+pass "no errors in the server's output"
+echo "The release in $(basename "$ZIP") works."

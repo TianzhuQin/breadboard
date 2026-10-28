@@ -9,7 +9,7 @@
         <ol class="pl-steps">
           <li>
             <span class="pl-steps__n" aria-hidden="true">1</span>
-            <div><strong>They join the open session.</strong> Breadboard forwards them to this experiment’s newest running session whose game hasn’t started. With no such session they see “No session is open right now”.</div>
+            <div><strong>They join the open session.</strong> Breadboard forwards them to the session the engine is running, when it is this experiment’s and its game hasn’t started. Otherwise they see “No session is open right now”.</div>
           </li>
           <li>
             <span class="pl-steps__n" aria-hidden="true">2</span>
@@ -51,8 +51,11 @@ import AutopilotCard from './AutopilotCard.vue'
 import ProlificPlayers from './ProlificPlayers.vue'
 import { prolificTarget } from './prolific'
 
-/** Where /play/<e>/prolific leads: the newest running session whose game hasn't started. */
-const target = computed(() => prolificTarget(instances.value))
+/** Where /play/<e>/prolific leads: the engine's session, while its game hasn't started. */
+const target = computed(() => {
+  const engine = admin.user?.engine
+  return prolificTarget(instances.value, engine ? engine.sessionId : undefined)
+})
 </script>
 
 <style>

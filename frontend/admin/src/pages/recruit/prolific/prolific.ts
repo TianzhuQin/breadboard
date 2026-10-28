@@ -22,17 +22,20 @@ export function prolificTestUrl (origin: string, experimentId: number, token: st
 
 /**
  * Where /play/<experiment>/prolific leads right now, picked as Autopilot.openInstance does: the
- * newest RUNNING session whose game hasn't started. `started` is the newest running session whose
- * game has started, which explains why there is none.
+ * session the engine runs (`engineSessionId`, from the engine info), when it is one of this
+ * experiment's (`list`), RUNNING, and its game hasn't started. `started` is that session once its
+ * game has started, which explains why there is none. A session left RUNNING that the engine no
+ * longer runs (e.g. since a restart) takes no one. While the engine info is unknown (undefined),
+ * the newest running session stands in for the engine's.
  */
-export function prolificTarget<T extends { id: number, status: string, hasStarted?: boolean }> (list: T[]): { open: T | null, started: T | null } {
-  let open: T | null = null
-  let started: T | null = null
+export function prolificTarget<T extends { id: number, status: string, hasStarted?: boolean }> (list: T[], engineSessionId?: number | null): { open: T | null, started: T | null } {
+  let live: T | null = null
   for (const i of list) {
     if (i.status !== 'RUNNING') continue
-    if (i.hasStarted) { if (!started || i.id > started.id) started = i } else if (!open || i.id > open.id) open = i
+    if (engineSessionId === undefined ? (!live || i.id > live.id) : i.id === engineSessionId) live = i
   }
-  return { open, started }
+  if (!live) return { open: null, started: null }
+  return live.hasStarted ? { open: null, started: live } : { open: live, started: null }
 }
 
 export function randomToken (): string {

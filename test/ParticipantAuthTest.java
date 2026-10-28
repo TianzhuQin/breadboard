@@ -184,6 +184,21 @@ public class ParticipantAuthTest extends BaseTest {
         Result result = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P2/connected?invite=" + sig));
         assertEquals(FORBIDDEN, status(result));
         assertFalse(ParticipantAuth.isClaimed(i, "P2"));
+        // Not a Mechanical Turk session: no "return this HIT".
+        assertTrue(contentAsString(result), contentAsString(result).contains("link isn"));
+        assertFalse(contentAsString(result).contains("HIT"));
+    }
+
+    @Test
+    public void anInvitationAfterTheGameStartedSaysSoWithoutMentioningHits() {
+        instance.setHasStarted(Boolean.TRUE);
+        instance.save();
+        String sig = ParticipantAuth.inviteSignature(i, "LATE2");
+        Result result = route(fakeRequest(GET, "/game/" + e + "/" + i + "/LATE2/connected?invite=" + sig));
+        assertEquals(OK, status(result));
+        assertTrue(contentAsString(result), contentAsString(result).contains("already started"));
+        assertFalse(contentAsString(result).contains("HIT"));
+        assertFalse(ParticipantAuth.isClaimed(i, "LATE2"));
     }
 
     // === Prolific entry ===
@@ -260,6 +275,44 @@ public class ParticipantAuthTest extends BaseTest {
         Experiment other = createExperiment("Other");
         Result wrong = route(fakeRequest(POST, "/game/" + other.id + "/" + i + "/login").withFormUrlEncodedBody(form("P8")));
         assertEquals(FORBIDDEN, status(wrong));
+    }
+
+    @Test
+    public void someoneComingBackAfterARestartIsToldTheSessionIsGone() throws Exception {
+        // Their session had started, then the server restarted: the engine runs nothing, and the seat
+        // they held is forgotten. They are told the session isn't running, not that it started
+        // without them, and the sign-in page says so before they type their ID in.
+        instance.setHasStarted(Boolean.TRUE);
+        instance.save();
+        engineSession.set(null, null);
+
+        Result page = route(fakeRequest(GET, "/game/" + e + "/" + i + "/login"));
+        assertEquals(OK, status(page));
+        assertTrue(contentAsString(page), contentAsString(page).contains("running right now"));
+        assertFalse(contentAsString(page).contains("<form"));
+
+        Result login = route(fakeRequest(POST, "/game/" + e + "/" + i + "/login").withFormUrlEncodedBody(form("BACK1")));
+        assertEquals(FORBIDDEN, status(login));
+        assertTrue(contentAsString(login).contains("running right now"));
+        assertFalse(contentAsString(login).contains("already started"));
+        assertFalse(ParticipantAuth.isClaimed(i, "BACK1"));
+    }
+
+    @Test
+    public void aFinishedSessionsPageAsksOnlyMechanicalTurkWorkersToReturnTheHit() {
+        // Through the entity's own method: test code isn't Ebean-enhanced (see above).
+        instance.finish();
+        instance.save();
+        Result page = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P1/connected"));
+        assertEquals(OK, status(page));
+        assertTrue(contentAsString(page).contains("running right now"));
+        assertFalse(contentAsString(page).contains("HIT"));
+
+        AMTHit hit = new AMTHit();
+        hit.experimentInstance = instance;
+        hit.save();
+        Result amt = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P1/connected"));
+        assertTrue(contentAsString(amt), contentAsString(amt).contains("return this HIT"));
     }
 
     @Test

@@ -1,3 +1,61 @@
+# Changelog
+
+### [v3.0.0] - 2026-10-28
+The first release of this fork ([TianzhuQin/breadboard](https://github.com/TianzhuQin/breadboard)),
+based on Breadboard v2.4.0. Existing experiments keep working, and a v2 database can be copied
+over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment authors are in
+[docs/whats-new.md](docs/whats-new.md).
+
+#### Added
+- A new researcher console at the server's address, with every feature of the previous one
+  (which stays at `/legacy-admin`): experiments, steps, content, parameters, participant page,
+  images, previews, sessions and data, Mechanical Turk, settings. New: a live session view, a
+  network view where researchers draw and cut ties, a script console with run-selection, light
+  and dark themes.
+- A new participant page for new experiments (`BBGame`, `BBNetwork`): the participant and their
+  neighbors on a ring that fits phones and computers; ties added or cut by clicking, with
+  confirmation, reasons for unavailable moves and an accessible list of every move. Restyled
+  sign-in and message pages.
+- Visibility: `g.setVisibility("egoTies")` shows participants the ties among their neighbors.
+  Neighbors appear under random aliases; engine bookkeeping is no longer sent to them.
+- Tie editing by participants and researchers (`edgeEdits.allow`, `edgeEdits.adminEdit`), with
+  validation, proposals and an `edgeEdit` event naming who made each change.
+- Autopilot: sessions open, fill a waiting room, start, replace people who drop out with computer
+  players, and finish with no researcher present; set on the console's Autopilot page or in the
+  settings. One link (`/play/{experiment}/login`, or the Prolific URL) leads to whichever session
+  is open.
+- Prolific entry (`/game/{e}/{i}/prolific?PROLIFIC_PID=...`) with pseudonymous ids and the
+  completion screen.
+- Steps with a time limit (`step.duration`).
+- Release packaging (`bin/make-dist`, `bin/smoke-dist`), continuous integration, and
+  documentation in `docs/`, including a Chinese quick start.
+
+#### Changed
+- A new install creates its database at first start; releases no longer ship a pre-built one.
+- Start scripts generate a private `application.secret` instead of using a published one, check
+  for Java 8, run in UTC and remove a stale `RUNNING_PID`.
+- Much smaller downloads: the participant page's script went from 5.6 MB to 0.5 MB and the
+  previous console's from 21 MB to under 3 MB; the release zip from 140 MB to about 60 MB. The
+  new console loads its code editor only on the pages that have one.
+- Sessions close to newcomers whenever their game starts, unless `breadboard.allowLateJoin` is
+  set.
+- Participants whose session isn't running (it finished, or the server restarted) are told so
+  plainly, with what to do next; only Mechanical Turk workers are asked to return the HIT.
+- CSV exports are in true UTC and keep values exactly.
+- Login events no longer store IP address, user agent or referer.
+
+#### Fixed
+- Anyone who knew a participant's page address could take over their seat. Every way in now
+  hands out a personal token.
+- Pages and previews could act with the researcher's sign-in; previews now run in a sandbox with
+  a token for that player only. Sign-out and Mechanical Turk approval take a POST.
+- A step without choices ended at once; idle and drop timers dropped players who had answered.
+- Removing tracked ties threw an error after logging the removal.
+- OnLeaveStep never ran; `ReadyUpSequence` ignored its options.
+- Simultaneous joins could fail with ConcurrentModificationException.
+- Groovy interpolated strings reached browsers as objects instead of text.
+- A fresh database built from the evolutions lacked `experiments.file_mode`.
+
 ### [v2.3.0] - 2018-02-26
 #### Added
 - Added module for administering AMT HITs within breadboard

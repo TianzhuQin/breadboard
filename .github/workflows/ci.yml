@@ -1,0 +1,106 @@
+# Every push to main and every pull request: build the front end and run its unit tests, run the
+# server's tests, then package a release and start it on an empty database (bin/smoke-dist).
+# The release zip is kept as a build artifact for a week.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Front end
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm run build:all
+      - name: Type check the console
+        run: pnpm --filter ./admin run typecheck
+      - name: Unit tests
+        run: pnpm run test:all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: |
+            public/admin
+            public/bundles
+          retention-days: 3
+
+  server:
+    name: Server tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '8'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ivy2/cache
+            ~/.sbt
+            .sbt-launcher
+          key: sbt-${{ hashFiles('project/Build.scala', 'project/plugins.sbt', 'project/build.properties', 'project/sbt-repositories') }}
+          restore-keys: sbt-
+      - name: Tests
+        run: JAVA8_HOME="$JAVA_HOME" bin/sbt8 test
+
+  release:
+    name: Release package
+    needs: [frontend, server]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '8'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ivy2/cache
+            ~/.sbt
+            .sbt-launcher
+          key: sbt-${{ hashFiles('project/Build.scala', 'project/plugins.sbt', 'project/build.properties', 'project/sbt-repositories') }}
+          restore-keys: sbt-
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: public
+      - name: Package
+        run: SKIP_FRONTEND=1 JAVA8_HOME="$JAVA_HOME" bin/make-dist
+      - name: Start it on an empty database
+        run: JAVA8_HOME="$JAVA_HOME" bin/smoke-dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: breadboard-release
+          path: |
+            target/release/breadboard-*.zip
+            target/release/breadboard-*.zip.sha256
+          retention-days: 7

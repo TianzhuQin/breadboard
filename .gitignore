@@ -1,12 +1,11 @@
-breadboard.sh
-breadboard-without-keys.sh
+/breadboard.sh
+/breadboard-without-keys.sh
 public/bundles
 public/admin
 .idea
 .idea_modules
 .settings
 archive
-docs
 logo
 logs
 db

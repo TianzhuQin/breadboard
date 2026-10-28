@@ -1,32 +1,66 @@
-README - breadboard v2 
-=====================================
+Breadboard
+==========
 
-*If you have any questions about breadboard, or want to discuss how you're using breadboard for your project, head over to GitHub Discussions by clicking the "Discussions" tab above or going to: [https://github.com/human-nature-lab/breadboard/discussions](https://github.com/human-nature-lab/breadboard/discussions]).*
+Breadboard runs experiments in which people interact over a network. Each participant sees the
+people they are tied to, makes choices, and, when the experiment allows it, adds or cuts ties.
+The researcher builds the experiment and runs its sessions from a web console, or lets the
+autopilot run them with nobody at the console.
 
-breadboard is a software platform for developing and conducting human interaction experiments on networks. 
+This is a maintained fork of [human-nature-lab/breadboard](https://github.com/human-nature-lab/breadboard)
+(v2.4). Version 3 keeps everything v2 did, and existing experiments keep working. It adds:
 
-It allows researchers to rapidly design experiments using a flexible domain-specific language and provides researchers with immediate access to a diverse pool of online participants.
+- **A new researcher console**: every v2 feature, plus a network you edit directly (draw a tie
+  between two people, cut one), a live view of each session, and previews of the participant
+  page. The v2 console is still at `/legacy-admin`.
+- **A new participant page**: a clear picture of the participant and their neighbors, on
+  phones too, where participants add or cut ties when the experiment lets them.
+- **Visibility modes**: an experiment can show participants the ties among their neighbors
+  (`g.setVisibility("egoTies")`), not only their own.
+- **Autopilot**: sessions open, fill a waiting room, start, replace people who drop out with
+  computer players and finish, with no researcher present. One sign-in link, or one Prolific
+  study URL, leads participants to whichever session is open.
+- **Security fixes**: nobody can take over another participant's page by knowing its address,
+  and previews can't act with the researcher's sign-in.
+- **Fixes to the engine**: steps with time limits, games closed to latecomers once started,
+  correct UTC timestamps in the data, and many more (see [CHANGELOG.md](CHANGELOG.md)).
 
-Features:
+## Getting started
 
-* Experiment logic is expressed in a graph traversal DSL 
-* Experiment content is stored in a content management system and edited using a WYSIWYG editor 
-* Real-time graph visualization during experiment design and deployment
-* High performance bi-directional client-server communication using Netty and WebSockets
-* An interactive script window allows the experimenter to quickly make changes to the graph and experiment
-* Recruit online participants from Amazon Mechanical Turk using the integrated module
+Download the zip from the [latest release](https://github.com/TianzhuQin/breadboard/releases/latest),
+unzip it, and with Java 8 installed:
 
-breadboard is built using:
+```bash
+./breadboard.sh          # Windows: breadboard.bat
+```
 
-* [The Play Framework](https://www.playframework.com/)
-* [Groovy](http://www.groovy-lang.org/) 
-* [TinkerPop's](http://tinkerpop.incubator.apache.org/) open source graph computing framework  
-* [AngularJS](https://angularjs.org/)
-* [D3.js](http://d3js.org/)
-* [TinyMCE](http://www.tinymce.com/)
-* [CodeMirror](https://codemirror.net/)
+Open <http://localhost:9000> and create the researcher account. [docs/install.md](docs/install.md)
+covers putting it on a server, HTTPS, backups and upgrading from v2.
 
-Also [Apache Commons](https://commons.apache.org/), [imgscalr](https://github.com/thebuzzmedia/imgscalr), [JUNG](http://jung.sourceforge.net/), [jQuery](https://jquery.com/), [Modernizr](https://modernizr.com/), [Underscore](http://underscorejs.org/), and [Bootstrap](http://getbootstrap.com/).
+## Documentation
+
+| | |
+|---|---|
+| [Installing and running](docs/install.md) | Requirements, settings, HTTPS, backups, upgrading |
+| [The researcher console](docs/console.md) | Building an experiment, running sessions, recruiting, data |
+| [What's new for experiment authors](docs/whats-new.md) | Script API additions: visibility, tie editing, timed steps, autopilot, the participant page |
+| [Developing Breadboard](docs/development.md) | Building from source, tests, CI, making a release |
+| [中文快速上手](docs/zh-CN.md) | 安装、建实验、自动运行、导出数据 |
+
+The [original Breadboard wiki](https://github.com/human-nature-lab/breadboard/wiki) still
+describes the experiment language (steps, `g`, `a`, content), which is unchanged.
+
+## Built with
+
+[Play Framework](https://www.playframework.com/) 2.2 (Java 8), [Groovy](https://groovy-lang.org/),
+[TinkerPop](https://tinkerpop.apache.org/) Blueprints, an H2 database, and on the front end
+[Vue](https://vuejs.org/) 3 (console), Vue 2 with Vuetify (participant page), d3-force and
+[CodeMirror](https://codemirror.net/).
+
+## License
+
+MIT, see [LICENSE.md](LICENSE.md). Breadboard was created by the
+[Human Nature Lab](https://humannaturelab.net/) at Yale.
 
 ### Contributing
-See the [contributing guide](CONTRIBUTING.md)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).

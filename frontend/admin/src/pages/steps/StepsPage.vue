@@ -230,8 +230,9 @@ import {
   PanelBottom, Pencil, Play, Plus, RotateCw, Save, Trash2, TriangleAlert, Undo2, WifiOff, X,
 } from 'lucide-vue-next'
 import {
-  BBadge, BButton, BCodeEditor, BEmpty, BField, BInput, BMenu, BSpinner, confirm, notify, toast, type MenuItem,
+  BBadge, BButton, BEmpty, BField, BInput, BMenu, BSpinner, confirm, notify, toast, type MenuItem,
 } from '@/ui'
+import BCodeEditor from '@/ui/BCodeEditor.vue'
 import { actions, admin, ensureConnected } from '@/store/admin'
 import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'

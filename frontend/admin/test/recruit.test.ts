@@ -335,14 +335,19 @@ describe('Prolific helpers', () => {
     expect(prolificStudyUrl('https://bb.example.org', 12)).toBe('https://bb.example.org/play/12/prolific?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}')
   })
 
-  it('points at the newest running session whose game hasn’t started, as the server does', () => {
+  it('points at the session the engine runs while its game hasn’t started, as the server does', () => {
     const s = (id: number, status: string, hasStarted = false) => ({ id, status, hasStarted, name: `s${id}` })
-    expect(prolificTarget([s(9, 'RUNNING', true), s(5, 'RUNNING'), s(7, 'RUNNING'), s(8, 'FINISHED')]))
-      .toEqual({ open: s(7, 'RUNNING'), started: s(9, 'RUNNING', true) })
-    // the only running session has started: nothing is open, and that is why
-    const only = prolificTarget([s(9, 'RUNNING', true), s(3, 'STOPPED')])
-    expect(only.open).toBeNull()
-    expect(only.started?.id).toBe(9)
+    const list = [s(9, 'RUNNING', true), s(5, 'RUNNING'), s(7, 'RUNNING'), s(8, 'FINISHED')]
+    expect(prolificTarget(list, 5)).toEqual({ open: s(5, 'RUNNING'), started: null })
+    // its game has started: nothing is open, and that is why
+    expect(prolificTarget(list, 9)).toEqual({ open: null, started: s(9, 'RUNNING', true) })
+    // sessions left RUNNING that the engine doesn't run (e.g. after a restart) take no one
+    expect(prolificTarget(list, null)).toEqual({ open: null, started: null })
+    expect(prolificTarget(list, 8)).toEqual({ open: null, started: null })
+    expect(prolificTarget(list, 42)).toEqual({ open: null, started: null })
+    // engine info not known yet: the newest running session stands in for it
+    expect(prolificTarget(list)).toEqual({ open: null, started: s(9, 'RUNNING', true) })
+    expect(prolificTarget([s(5, 'RUNNING'), s(7, 'RUNNING')])).toEqual({ open: s(7, 'RUNNING'), started: null })
     expect(prolificTarget([])).toEqual({ open: null, started: null })
   })
 

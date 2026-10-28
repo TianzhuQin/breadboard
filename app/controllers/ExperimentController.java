@@ -171,7 +171,7 @@ public class ExperimentController extends Controller {
       experiment.name = name;
       experiment.save();
       try {
-        if (eVersion != null && (eVersion.startsWith("v2.3") || eVersion.startsWith("v2.4"))) {
+        if (eVersion != null && (eVersion.startsWith("v2.3") || eVersion.startsWith("v2.4") || eVersion.startsWith("v3."))) {
           try {
             import23To23(experiment, user, outputFolder);
           } catch (IOException e) {
@@ -280,6 +280,7 @@ public class ExperimentController extends Controller {
       ZipEntry e;
 
       ObjectNode dotBreadboard = Json.newObject();
+      // The export format is still v2.4's, so older Breadboards can import it.
       dotBreadboard.put("version", "v2.4.0");
       dotBreadboard.put("experimentName", experiment.name);
       dotBreadboard.put("experimentUid", experiment.uid);

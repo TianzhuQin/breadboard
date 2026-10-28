@@ -5,7 +5,7 @@ import play.Project._
 object ApplicationBuild extends Build {
 
     val appName         = "breadboard"
-    val appVersion      = "v2.3.1"
+    val appVersion      = "v3.0.0"
 
     val appDependencies = Seq(
       javaCore,
@@ -25,7 +25,9 @@ object ApplicationBuild extends Build {
       "net.sf.jung" % "jung2" % "2.0.1",
       "org.mindrot" % "jbcrypt" % "0.3m",
       "com.google.code.gson" % "gson" % "2.8.2",
-      "com.amazonaws" % "aws-java-sdk" % "1.11.328",
+      // Only the Mechanical Turk client (and the SDK core it needs): the whole SDK, with every AWS
+      // service, made up most of a release's size.
+      "com.amazonaws" % "aws-java-sdk-mechanicalturkrequester" % "1.11.328",
       // The Play 2.2 sbt-plugin already provides junit + junit-interface 0.10 on the test
       // classpath, so `sbt test` discovers the JUnit 4 tests in test/ without this line.
       // We pin it explicitly (at the same 0.10) to make the dependency obvious and guard

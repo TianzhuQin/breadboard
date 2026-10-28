@@ -1,6 +1,9 @@
-# What's new in this fork
+# What's new in Breadboard 3
 
-These changes add to the platform; existing experiments keep working unless noted.
+Everything here adds to Breadboard 2.4; existing experiments keep working unless noted. The
+experiment language itself (steps, `g`, `a`, content) is unchanged and still described in the
+[original wiki](https://github.com/human-nature-lab/breadboard/wiki). For running a release, see
+[install.md](install.md); for the console, [console.md](console.md).
 
 ## Participant login and recruitment
 
@@ -222,8 +225,9 @@ The console is new: open the server's address and sign in. The previous console 
 
 **Editing the network.** On the Network page, choose **Tie** (key `C`) and click two people, or
 drag from one to the other. Choose **Cut** (key `X`) and click a tie to remove it. Every edit
-goes through `edgeEdits.adminEdit`, so the experiment's rules and the event log apply as for any
-other edit. A toast offers Undo, and Cmd/Ctrl+Z works too. The player panel lists each person's
+goes through `edgeEdits.adminEdit`: the rules set for participants don't limit researchers, and
+the edit is logged as an `edgeEdit` event with the actor `admin`. A toast offers Undo when the
+edit worked, and Cmd/Ctrl+Z works too. The player panel lists each person's
 ties with a Cut button and a "Tie to…" picker.
 
 **Previews.** The Preview page and "Open in a new tab" show the participant page in a sandbox,
