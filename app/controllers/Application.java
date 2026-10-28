@@ -9,6 +9,7 @@ import play.data.Form;
 import play.libs.Json;
 import play.mvc.*;
 import security.PreviewTokens;
+import security.SetupCode;
 import views.html.*;
 import java.io.*;
 import java.text.SimpleDateFormat;
@@ -39,6 +40,20 @@ public class Application extends Controller {
     if (email == null || password == null || defaultLanguage == null) {
       return badRequest("Please provide email, password, and default language.");
     }
+    // From another computer, the code the server printed (SetupCode): otherwise whoever reached a
+    // new server first would own it.
+    if (!SetupCode.isLocal(request())) {
+      JsonNode given = json.get("setupCode");
+      SetupCode.current();
+      if (given == null || !SetupCode.matches(given.asText())) {
+        ObjectNode refused = Json.newObject();
+        refused.put("message", given == null || given.asText().trim().isEmpty()
+            ? "Enter the setup code: the server printed it in its window and in logs/application.log."
+            : "That isn't the setup code the server printed. Check its window or logs/application.log.");
+        refused.put("setupCodeRequired", true);
+        return forbidden(refused);
+      }
+    }
     email = email.trim();
     if (!User.looksLikeEmail(email)) {
       return badRequest("Enter a valid email address, like name@university.edu.");
@@ -58,6 +73,7 @@ public class Application extends Controller {
     // A token nobody holds until the first sign-in (a missing one used to match a request with none).
     user.uid = UUID.randomUUID().toString();
     user.save();
+    SetupCode.forget();
 
     // TODO: Make method for creating demo experiments and associating with new user
     /*

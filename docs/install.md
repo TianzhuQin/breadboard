@@ -35,7 +35,10 @@ Then start it:
 - **Linux**: `./breadboard.sh` in the folder.
 
 The console opens in your browser once the server is up (or open <http://localhost:9000>). On a new
-install it asks you to create the first researcher account. Stop the server with Ctrl+C, or by
+install it asks you to create the first researcher account. Opened from another computer (a server
+you reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
+it in its window and in `logs/application.log`, so only whoever runs the server can create that
+first account. Stop the server with Ctrl+C, or by
 closing its window. If the port is taken, the launcher says so: often Breadboard is running
 already, and its address is the one to open.
 

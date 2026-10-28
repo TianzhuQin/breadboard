@@ -2,6 +2,17 @@
   <AuthCard title="Welcome to Breadboard" subtitle="Create the first researcher account for this server.">
     <form novalidate @submit.prevent="submit">
       <p v-if="error" class="auth__error" role="alert">{{ error }}</p>
+      <template v-if="admin.setupCodeRequired">
+        <p class="auth__note">
+          You opened this new server from another computer. To show it's you, enter the setup code the server
+          printed in its window (and in <code>logs/application.log</code>).
+        </p>
+        <BField label="Setup code">
+          <template #default="{ id }">
+            <BInput :id="id" v-model="setupCode" autocomplete="off" spellcheck="false" placeholder="ABCD-EFGH" />
+          </template>
+        </BField>
+      </template>
       <BField label="Email">
         <template #default="{ id }">
           <BInput :id="id" v-model="email" type="email" autocomplete="username" autofocus />
@@ -30,7 +41,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { BButton, BField, BInput, BSelect } from '@/ui'
-import { boot, createFirstUser } from '@/store/admin'
+import { admin, boot, createFirstUser } from '@/store/admin'
 import { http } from '@/lib/http'
 import AuthCard from './AuthCard.vue'
 
@@ -41,6 +52,7 @@ const languageId = ref<number | null>(null)
 const languages = ref<{ id: number, code: string, name: string }[]>([])
 const busy = ref(false)
 const error = ref('')
+const setupCode = ref('')
 
 const languageOptions = computed(() => languages.value.map(l => ({ value: l.id, label: `${l.name} (${l.code})` })))
 
@@ -63,9 +75,10 @@ async function submit () {
   if (password.value.length < 8) return void (error.value = 'Choose a password of at least 8 characters.')
   if (password.value !== confirmPw.value) return void (error.value = 'The two passwords are different.')
   if (languageId.value == null) return void (error.value = 'Choose a default language.')
+  if (admin.setupCodeRequired && !setupCode.value.trim()) return void (error.value = 'Enter the setup code the server printed.')
   busy.value = true
   try {
-    await createFirstUser(email.value.trim(), password.value, languageId.value)
+    await createFirstUser(email.value.trim(), password.value, languageId.value, admin.setupCodeRequired ? setupCode.value.trim() : undefined)
   } catch (e: any) {
     if (/already exists/.test(e?.message || '')) {
       // created meanwhile (another tab): show the sign-in page

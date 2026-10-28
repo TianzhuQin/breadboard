@@ -22,6 +22,17 @@ public class ExampleExperimentTest extends BaseTest {
     private static final File EXAMPLE = new File("conf/examples/network-game");
     private ScriptTestHarness harness;
 
+    /** As the engine's {@code c} (ContentFetcher): the example's texts, read from its Content folder. */
+    public static class ExampleTexts {
+        public String get(String name, Object... parameters) throws java.io.IOException {
+            String html = FileUtils.readFileToString(new File(EXAMPLE, "Content/" + name + ".html")).trim();
+            for (int i = 0; i < parameters.length; i++) {
+                html = html.replace("{" + i + "}", String.valueOf(parameters[i]));
+            }
+            return html;
+        }
+    }
+
     @After
     public void closeEngine() throws Exception {
         if (harness != null) {
@@ -49,6 +60,16 @@ public class ExampleExperimentTest extends BaseTest {
         java.util.Collections.sort(names);
         assertEquals(expected, names);
         assertEquals(6, saved.getParameters().size());
+        // what participants read is on the Content page, in the account's language
+        List<String> texts = new ArrayList<String>();
+        for (Content c : saved.getContent()) texts.add(c.name);
+        assertTrue(texts.toString(), texts.containsAll(java.util.Arrays.asList("RoundPrompt", "Finished", "RoundTimer")));
+        assertEquals(15, texts.size());
+        for (Content c : saved.getContent()) {
+            assertEquals(c.name, 1, c.translations.size());
+            assertEquals("eng", c.translations.get(0).language.getCode());
+            assertFalse(c.name, c.translations.get(0).getHtml().trim().isEmpty());
+        }
         assertEquals(Experiment.defaultClientHTML(), saved.getClientHtml());
         assertEquals(1, saved.languages.size());
 
@@ -60,6 +81,7 @@ public class ExampleExperimentTest extends BaseTest {
     public void itsStepsPlayAWholeGameByThemselves() throws Exception {
         // the scripts a release loads (an experimental-only script missing there used to break the end)
         harness = new ScriptTestHarness(false);
+        harness.put("c", new ExampleTexts());
         // launch parameters, as a session would bind them
         harness.put("networkSize", 5);
         harness.put("minPlayers", 2);
@@ -82,6 +104,7 @@ public class ExampleExperimentTest extends BaseTest {
             + "      ['p1', 'p2'].each { id ->\n"
             + "        def p = g.getVertex(id)\n"
             + "        assert p.text.contains('Thank you')\n"
+            + "        assert p.text.contains('out of 2')\n"
             + "        assert p.score >= 0 && p.score <= 2\n"
             + "        assert p.private.edgeEdits.enabled == false\n"
             + "        assert p.private.finished == true\n"
@@ -99,6 +122,7 @@ public class ExampleExperimentTest extends BaseTest {
     public void itsStepsLoadWithoutASessionUsingTheDefaults() throws Exception {
         // a reload of the engine with no session open: no launch parameters are bound
         harness = new ScriptTestHarness(false);
+        harness.put("c", new ExampleTexts());
         for (String name : stepNames()) {
             harness.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
         }

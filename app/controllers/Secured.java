@@ -28,6 +28,12 @@ public class Secured extends Security.Authenticator {
     ObjectNode result = Json.newObject();
     if (User.findRowCount() == 0) {
       result.put("status", "create-first-user");
+      // From another computer the first account needs the code the server prints (SetupCode).
+      boolean local = security.SetupCode.isLocal(ctx.request());
+      result.put("setupCodeRequired", !local);
+      if (!local) {
+        security.SetupCode.current();
+      }
     } else {
       result.put("status", "unauthorized");
       // This browser was signed in, but the account has signed out somewhere else since (or changed

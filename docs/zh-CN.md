@@ -22,7 +22,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
    - **macOS**：双击 `Start Breadboard.command`。第一次 macOS 可能提示"无法验证开发者"：右键点这个文件，选 **打开**（较新的 macOS 要到 系统设置 → 隐私与安全性 里点 **仍要打开**）。也可以在终端里进入文件夹，运行 `./breadboard.sh`。
    - **Windows**：双击 `breadboard.bat`。如果 SmartScreen 拦截，点 **更多信息** → **仍要运行**。
    - **Linux**：在文件夹里运行 `./breadboard.sh`。
-3. 服务器启动好后，浏览器会自动打开控制台（也可以手动打开 <http://localhost:9000>）。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
+3. 服务器启动好后，浏览器会自动打开控制台（也可以手动打开 <http://localhost:9000>）。如果是从别的电脑打开一台新服务器（例如远程的服务器），还要填 **Setup code**：服务器会把它打印在自己的窗口里和 `logs/application.log` 里，这样只有管理这台服务器的人能创建第一个账号。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
 4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。所有研究者都能看到和修改这台服务器上的每个实验。
 5. 停止服务器：在它的窗口里按 Ctrl+C，或直接关掉窗口。
 
@@ -40,7 +40,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
 - **Preview**（页面标题是 Participant preview）：开场后，在这里按选中参与者的视角看页面，可选 **Desktop** 或 **Phone**。**预览是真的**：在预览里点一个选项，就等于那位参与者做了这个选择，会记进数据。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，在 **Parameters** 页面就能改，不用改代码。每次选择和每轮得分会记成 `ColourPick`、`RoundResult` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，在 **Parameters** 页面就能改，不用改代码；参与者看到的所有文字都在 **Content** 页面，可以直接改写或翻译。每次选择和每轮得分会记成 `ColourPick`、`RoundResult` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 

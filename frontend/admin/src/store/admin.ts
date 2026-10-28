@@ -32,6 +32,8 @@ const state = reactive({
    * changed), 'removed' when another researcher removed the account. Cleared by the next sign-in.
    */
   signOutReason: null as null | 'ended' | 'removed',
+  /** A new server opened from another computer: creating the first account needs its setup code. */
+  setupCodeRequired: false,
   /** Where computers on the same network reach this server (GET /state), e.g. "http://192.168.1.23:9000". */
   lanAddresses: [] as string[],
   /** The newest User JSON (null until the first one arrives after sign-in). */
@@ -389,6 +391,8 @@ function signedOut (body?: any) {
   resetState()
   state.signOutReason = body && (body.reason === 'ended' || body.reason === 'removed') ? body.reason : null
   state.auth = body && body.status === 'create-first-user' ? 'firstUser' : 'signedOut'
+  // a new server opened from another computer: the first account needs the code the server printed
+  state.setupCodeRequired = !!(body && body.setupCodeRequired)
 }
 
 onUnauthorized((body) => signedOut(body))
@@ -506,8 +510,8 @@ async function logout (): Promise<boolean> {
   return true
 }
 
-async function createFirstUser (email: string, password: string, defaultLanguageId: number) {
-  await http.post('/createFirstUser', { email, password, defaultLanguageId }, { quiet401: true })
+async function createFirstUser (email: string, password: string, defaultLanguageId: number, setupCode?: string) {
+  await http.post('/createFirstUser', { email, password, defaultLanguageId, ...(setupCode ? { setupCode } : {}) }, { quiet401: true })
   await login(email, password)
 }
 

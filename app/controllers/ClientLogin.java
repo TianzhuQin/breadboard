@@ -43,7 +43,12 @@ public class ClientLogin extends Controller {
     public String experimentInstanceId;
 
     public String validate() {
-      Logger.info("Client Login, ID: " + id);
+      // (Before any check, so only at debug level, shortened and without control characters: anyone
+      // can post an ID of any length here.)
+      if (Logger.isDebugEnabled()) {
+        String shown = id == null ? "" : id.replaceAll("\\p{Cntrl}", "?");
+        Logger.debug("Client Login, ID: " + (shown.length() > 64 ? shown.substring(0, 64) + "…" : shown));
+      }
 
       // TODO: make password a groovy closure to allow for hash functions or custom passwords
       if (!ScriptBoard.checkPassword(password)) {
