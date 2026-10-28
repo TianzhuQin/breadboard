@@ -41,7 +41,10 @@ pick = { p, colour ->
   // Everything recorded with eventTracker is in the session's data download.
   eventTracker.track("ColourPick", [player: p.id, round: round, colour: colour])
   if (isHuman(p)) {
-    p.text = roundText(p, "<p>You picked <strong>${colour}</strong>. Waiting for the others…</p>")
+    // (the computer plays the seat of someone who left; they see it when they come back)
+    p.text = roundText(p, p.ai == 1
+        ? "<p>While you were away, the computer picked <strong>${colour}</strong> for you. Waiting for the others…</p>"
+        : "<p>You picked <strong>${colour}</strong>. Waiting for the others…</p>")
   }
 }
 

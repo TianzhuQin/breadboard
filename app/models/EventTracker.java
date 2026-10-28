@@ -33,6 +33,13 @@ public class EventTracker {
     enabled = false;
   }
 
+  /** Whether events go to a session that is still going (not finished, stopped or archived). */
+  public boolean sessionLive() {
+    ExperimentInstance i = experimentInstance;
+    return enabled && i != null && (i.status == null || i.status == ExperimentInstance.Status.RUNNING
+        || i.status == ExperimentInstance.Status.TESTING);
+  }
+
   public void setExperimentInstance(ExperimentInstance experimentInstance) {
     this.experimentInstance = experimentInstance;
   }

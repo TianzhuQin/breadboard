@@ -305,6 +305,15 @@ describe('asking before an engine rebuild', () => {
   })
 })
 
+describe('switching experiments', () => {
+  it('does not show the ended session of the experiment selected before', () => {
+    __receive({ user: { email: 'r@lab', experiments: [], currentScript: '' }, experiment: { id: 4, name: 'Other', instances: [] }, experimentInstance: { id: 9, name: 'Session 3', status: 'FINISHED' } })
+    expect(admin.instance).toBeNull()
+    __receive({ user: { email: 'r@lab', experiments: [], currentScript: '' }, experiment: { id: 4, name: 'Other', instances: [{ id: 9, name: 'Session 3', status: 'FINISHED' }] }, experimentInstance: { id: 9, name: 'Session 3', status: 'FINISHED' } })
+    expect(admin.instance?.id).toBe(9)
+  })
+})
+
 describe('what a reload or resume carries on', () => {
   it('leaves the session it carries on out of those it ends, and says nothing of the autopilot pausing then', async () => {
     const { engineUse, reloadKeeps } = await import('../src/store/engineGuard')

@@ -317,5 +317,7 @@ export function formatWhen (at: number, now = Date.now()): string {
 
 /** A file name the browser and every OS accept. */
 export function safeFileName (s: string): string {
-  return (s || 'session').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 120) || 'session'
+  // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only)
+  const cleaned = (s || '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
+  return (cleaned || 'session').slice(0, 120)
 }

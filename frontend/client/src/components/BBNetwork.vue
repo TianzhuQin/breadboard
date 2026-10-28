@@ -134,7 +134,7 @@
         class="bb-network__moves-toggle"
         :aria-expanded="String(movesOpen)"
         :aria-controls="uid('moves')"
-        :disabled="!moves.length"
+        :disabled="!moves.length || (!movesPossible && !movesOpen)"
         @click="movesOpen = !movesOpen"
       >{{ movesToggleText }}</button>
       <ul v-if="movesOpen && moves.length" :id="uid('moves')" class="bb-network__move-list">
@@ -498,8 +498,10 @@ export default Vue.extend({
     },
     proposalText (): string {
       if (!this.proposal) return ''
-      const a = this.nameOf(this.proposal.a)
-      const b = this.nameOf(this.proposal.b)
+      // ("you" first: "Cut the tie between you and Person B?")
+      const [first, second] = this.proposal.b === this.egoId ? [this.proposal.b, this.proposal.a] : [this.proposal.a, this.proposal.b]
+      const a = this.nameOf(first)
+      const b = this.nameOf(second)
       return this.proposal.op === 'remove' ? `Cut the tie between ${a} and ${b}?` : `Connect ${a} and ${b}?`
     },
     // Changes that can be made right now, as the picture shows them.
@@ -523,7 +525,7 @@ export default Vue.extend({
         parts.push(e.remainingAdds != null ? `make ${e.remainingAdds} new tie${e.remainingAdds === 1 ? '' : 's'}` : 'make new ties')
         how.push(`${this.press} two people to connect them`)
       }
-      if (!parts.length) return e.add || e.remove ? 'There is no change you can make right now.' : 'You have made all the changes you can.'
+      if (!parts.length) return e.add || e.remove ? 'There is no change you can make right now.' : 'You have made all the changes you can for now.'
       const instructions = how.join('; ')
       return `You can ${parts.join(' and ')}. ${instructions.charAt(0).toUpperCase()}${instructions.slice(1)}.`
     },
@@ -566,8 +568,10 @@ export default Vue.extend({
         }
       })
     },
+    // Worth opening: something can be done, or the experiment says why something can't.
+    movesPossible (): boolean { return this.moves.some((m: any) => m.available || m.reason) },
     movesToggleText (): string {
-      if (!this.moves.length) return 'No changes to list right now'
+      if (!this.moves.length || !this.movesPossible) return 'No changes to list right now'
       if (this.movesOpen) return 'Hide the list of changes'
       const n = this.moves.filter(m => m.available).length
       return `Show the changes as a list (${n} possible)`
@@ -1440,6 +1444,15 @@ function lighten (color: string): string {
   height: 60px;
   flex: none;
   outline: none;
+}
+/* On a phone the question can take two lines: the bar grows instead of covering the people. */
+@media (max-width: 600px) {
+  .bb-network__bar { height: auto; min-height: 60px; padding: 10px 0; box-sizing: border-box; }
+  .bb-network__bar > * { position: relative; top: 0; }
+}
+/* fingers need bigger buttons */
+@media (pointer: coarse) {
+  .bb-network__btn, .bb-network__moves-toggle, .bb-network__move { min-height: 44px; }
 }
 .bb-network__bar > * {
   position: absolute;

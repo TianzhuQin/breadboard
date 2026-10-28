@@ -66,6 +66,7 @@ export default Vue.extend({
     return {
       countdownStart: 0,
       waitStart: Date.now(),
+      startsTotal: 0,
       now: Date.now(),
       ticker: 0 as any,
       originalTitle: '',
@@ -92,6 +93,10 @@ export default Vue.extend({
       return this.enough && this.max ? this.max : this.min
     },
     progress (): number {
+      // once enough are here and the start is timed, the bar runs to the start
+      if (this.enough && this.startsIn != null && this.startsTotal > 0) {
+        return Math.min(100, Math.max(0, Math.round(100 * (1 - this.startsIn / this.startsTotal))))
+      }
       return this.barTarget ? Math.min(100, Math.round((100 * this.here) / this.barTarget)) : 0
     },
     // Seconds until the game starts unless more people come (sent once enough are here).
@@ -139,7 +144,17 @@ export default Vue.extend({
         }
       },
     },
-    'info.startsIn' () { this.waitStart = Date.now() },
+    'info.startsIn': {
+      immediate: true,
+      handler (n: any) {
+        this.waitStart = Date.now()
+        // the longest wait seen, so the bar fills over the whole of it
+        if (typeof n === 'number' && n > this.startsTotal) this.startsTotal = n
+        if (n == null) this.startsTotal = 0
+      },
+    },
+    // the heading changed without the state changing ("Starting soon" once enough are here)
+    title (t: string) { if (this.state !== 'starting') this.announcement = t },
     // Someone who reconnects during the countdown is sent the seconds that are left.
     'info.seconds' () {
       if (this.state === 'starting') this.restartCountdown()

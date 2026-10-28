@@ -198,6 +198,7 @@ public class ScriptBoard extends UntypedActor {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
+    player.put("finished", true);
     player.put("text", "<h3>This session has ended</h3><p>Thank you for taking part. You can close this page.</p>");
     return frame;
   }
@@ -215,6 +216,7 @@ public class ScriptBoard extends UntypedActor {
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
+    player.put("ended", "stopped");
     player.put("text", "<h3>This session has been stopped</h3><p>The researcher stopped this session. "
         + "If they start it again, open the link you were given once more. Otherwise, thank you for "
         + "taking part: you can close this page.</p>");
@@ -249,12 +251,23 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  private static void cancelEngineTimers() {
+    try {
+      if (engine != null && engine.get("timers") != null) {
+        engine.eval("timers.cancel(); null");
+      }
+    } catch (Exception e) {
+      Logger.warn("Could not cancel the game's timers: " + e);
+    }
+  }
+
   /** What someone new is sent when the game started before they arrived. */
   static ObjectNode sessionStartedScreen() {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
+    player.put("ended", "notRunning");
     player.put("text", "<h3>The session has already started</h3><p>It began before you arrived, so it can't "
         + "take anyone new. Please contact the researcher.</p>");
     return frame;
@@ -265,8 +278,10 @@ public class ScriptBoard extends UntypedActor {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "notRunning");
     player.put("text", "<h3>This session isn't running</h3><p>It may have ended, or it hasn't been opened yet. "
-        + "Please check the link you were given, or close this page.</p>");
+        + "If you were given a link to the study, open it again; otherwise you can close this page.</p>");
     return frame;
   }
 
@@ -933,12 +948,15 @@ public class ScriptBoard extends UntypedActor {
         // either: the id is taken in the game the engine runs.
         Logger.info("addClient: " + clientId + " of instance " + experimentInstanceId + " refused: that id is a participant of "
             + (client.experimentInstance == null ? "another session" : "instance " + client.experimentInstance.id));
-        boolean over = experimentInstance.status != null && !experimentInstance.status.isRunnable();
+        // (a stopped session counts as over here: its participants keep the "stopped" screen)
+        boolean over = experimentInstance.status != null
+            && (!experimentInstance.status.isRunnable() || experimentInstance.status == ExperimentInstance.Status.STOPPED);
         out.write(over ? endedSessionScreen(experimentInstance.id, clientId) : sessionNotRunningScreen());
         return;
       }
 
-      if (client == null && experimentInstance.status != null && !experimentInstance.status.isRunnable()) {
+      if (client == null && experimentInstance.status != null
+          && (!experimentInstance.status.isRunnable() || experimentInstance.status == ExperimentInstance.Status.STOPPED)) {
         // The session is over (finished, or given up by the autopilot), and the engine may already
         // be running the next one, which this participant must not be pulled into. Give the page
         // back its last screen (a completion code, a "could not start" notice) instead.
@@ -1321,6 +1339,11 @@ public class ScriptBoard extends UntypedActor {
           trackEvent("sessionStopped", stopped);
           stopSession(running);
           endParticipants(instance.id);
+          // The game's timers (a round's time limit, takeovers, the experiment's own) would go on
+          // firing into a stopped session, without its launch parameters; and nothing more is
+          // recorded in it until it is resumed (which turns recording back on).
+          cancelEngineTimers();
+          eventTracker.disable();
         } else {
           // (This used to change the status in memory only.)
           stopQuietly(instance.id);
@@ -2027,7 +2050,8 @@ public class ScriptBoard extends UntypedActor {
       Logger.error("Could not record connection state for " + clientId, e);
     } finally {
       try {
-        if (eventTracker != null) {
+        // (not into a session that is over: people leaving its thank-you page aren't part of it)
+        if (eventTracker != null && eventTracker.sessionLive()) {
           LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
           data.put("clientId", clientId);
           eventTracker.track(connected ? "clientConnected" : "clientDisconnected", data);

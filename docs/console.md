@@ -74,7 +74,7 @@ up by name in `application.conf` needs the new name there too.
 | **New experiment** | Starts from **Breadboard's template** (the empty steps OnJoinStep, OnLeaveStep and InitStep, and the standard participant page), from **Example: network game**, or from **A copy of an experiment** (its steps, content, translations, parameters, images and participant page, without sessions or data). Names must be unique and can't contain `/` or `\`. |
 | **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment; nothing you have is changed. |
 | **Export .zip** | Downloads the experiment, to move it to another server or keep a copy. |
-| **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm (capital letters, spaces and kinds of dash don't matter). Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
+| **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm (capital letters, spaces and dashes don't matter). Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
 
 **File mode** lets you edit an experiment with your own code editor, or keep it in version control.
 Breadboard then reads it from `dev/<name>_<id>/` in the server's folder (spaces in the name become
@@ -329,7 +329,7 @@ of event with a column per data name.
 |---|---|---|
 | **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
-| **Export all**, **Export filtered** | A session's events | The same columns as the session's file. Events without data keep a row. |
+| **Export all**, **Export filtered** | A session's events | The same columns as the session's file, with times in standard ISO 8601 (`2026-10-28T13:24:23.757Z`). Events without data keep a row. |
 | **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |
 | **Download CSV** | Players | The players shown, with every property. |
 
@@ -337,6 +337,8 @@ Timestamps in the CSV files are in UTC, written as `2026-10-28T13:24:23:757Z` (w
 before the milliseconds, as earlier versions of Breadboard wrote them, so existing analysis scripts
 keep working). In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
 reads them; in Python, `pandas.to_datetime(s, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`.
+Sort rows by `event_date`, not by `id`: ids are given out in blocks and don't follow the order
+events happened in. After a session finishes or is stopped, nothing more is recorded in it.
 Values are written exactly as recorded. A spreadsheet may
 read a value that starts with `=`, `+`, `-` or `@` as a formula, so import the file as text when
 participants could type such values.

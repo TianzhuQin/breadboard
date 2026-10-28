@@ -353,9 +353,13 @@ export function humanSeconds (s: number | null | undefined): string {
 }
 
 /** The waiting room in one or two plain sentences, for the preview under the form. */
-export function describeWaitingRoom (f: AutopilotForm): string {
+export function describeWaitingRoom (f: AutopilotForm, ownRoom = false): string {
   const w = f.waitingRoom
-  if (!w.enabled) return 'There is no waiting room: the game starts when you press Start, or when the experiment\'s own script starts it.'
+  if (!w.enabled) {
+    return ownRoom
+      ? 'The waiting room set in the experiment\'s steps is used.'
+      : 'There is no waiting room: the game starts when you press Start, or when the experiment\'s own script starts it.'
+  }
   const min = w.minPlayers ?? DEFAULTS.waitingRoom.minPlayers
   const people = (n: number) => `${n} ${n === 1 ? 'person' : 'people'}`
   const parts: string[] = []

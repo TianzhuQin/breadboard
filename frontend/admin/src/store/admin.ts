@@ -318,7 +318,12 @@ function applyUserJson (m: any) {
   state.user = m.user
   // missing key = nothing selected (User.java omits it)
   state.experiment = m.experiment && typeof m.experiment === 'object' ? m.experiment : null
-  const inst = m.experimentInstance && typeof m.experimentInstance === 'object' ? m.experimentInstance : null
+  let inst = m.experimentInstance && typeof m.experimentInstance === 'object' ? m.experimentInstance : null
+  // The server can still name a session of the experiment selected before (one that has ended):
+  // it isn't this experiment's, so its page, data and chip mustn't show here.
+  const exp = state.experiment
+  if (inst && exp && Array.isArray(exp.instances) && inst.status !== 'RUNNING' && inst.status !== 'TESTING' &&
+    !exp.instances.some((x: any) => x && x.id === inst.id)) inst = null
   if (!inst || !state.instance || inst.id !== state.instance.id) {
     // a different session: its live event feed starts again from what the server recorded
     state.events = []

@@ -40,7 +40,13 @@ public class ClientController extends Controller
           experiment = Experiment.findById(Long.valueOf(experimentId));
         } catch (NumberFormatException ignored) {}
 
-        if (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING) {
+        // Someone who took part reloading their page after the session ended (or was stopped) gets
+        // their last screen back (their score, a completion code) over the socket, not a notice that
+        // sends them to the next session.
+        boolean returning = experimentInstance != null && experiment != null
+            && (experimentInstance.status == ExperimentInstance.Status.FINISHED || experimentInstance.status == ExperimentInstance.Status.STOPPED)
+            && ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId));
+        if (!returning && (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING)) {
           // Mechanical Turk workers are asked to return the HIT; everyone else gets the general notice.
           return ok(experimentInstance != null && experimentInstance.getHit() != null
               ? amtError.render() : ClientLogin.notRunning(experimentId, experimentInstanceId));

@@ -107,8 +107,9 @@ public final class ScriptLoader {
     new LinkedHashSet<String>(Arrays.asList(
       "wait_group.groovy",
       "groups.groovy",
-      "waiting_room.groovy",
-      "recruitment.groovy"
+      "waiting_room.groovy"
+      // (recruitment.groovy is always loaded: Prolific completion codes, the console's Recruitment
+      // page and the autopilot's onCancel examples rely on it)
     ))
   );
 

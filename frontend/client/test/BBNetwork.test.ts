@@ -460,7 +460,7 @@ describe('BBNetwork editing', () => {
 
   it('says so when every allowed change has been made', () => {
     const w = mountNetwork({ enabled: true, add: false, remove: false, scope: 'amongNeighbors', remainingAdds: 0, remainingRemoves: 0 })
-    expect(w.find('.bb-network__hint').text()).toBe('You have made all the changes you can.')
+    expect(w.find('.bb-network__hint').text()).toBe('You have made all the changes you can for now.')
   })
 
   it('shows the server\'s answer', async () => {

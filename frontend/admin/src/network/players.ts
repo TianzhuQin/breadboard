@@ -45,7 +45,8 @@ export function connectionOf (n: GraphNode | undefined | null): Connection {
 /** Short status word: AI player, connected, disconnected (or '' when the server hasn't said). */
 export function statusOf (n: GraphNode | undefined | null): string {
   if (!n) return ''
-  if (isAi(n)) return 'AI player'
+  // (a person whose seat the computer plays while they are away, e.g. autopilot.replaceDisconnected)
+  if (isAi(n)) return /^_/.test(n.id) ? 'AI player' : 'Away: computer playing'
   const c = connectionOf(n)
   return c === 'connected' ? 'Connected' : c === 'disconnected' ? 'Disconnected' : ''
 }

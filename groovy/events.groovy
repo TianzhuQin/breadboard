@@ -6,7 +6,8 @@ final PLAYER_DATA_PROP = "data"
 final PLAYER_ID_PROP = "playerId"
 final SEND_EVENT = "__send-event"
 
-logPlayerEvents = true
+// Set to true to print every player.on / off / send on the server's console (when looking into a problem).
+logPlayerEvents = false
 
 def makePlayerEventHash (String id, String eventName) {
   return "__player-" + id + "-" + eventName

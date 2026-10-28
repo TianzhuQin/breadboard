@@ -24,7 +24,7 @@
       @helper.form(routes.ClientLogin.authenticate(experimentId, experimentInstanceId)) {
         <div class="bb-field">
           <label for="bb-id">Your ID</label>
-          <input id="bb-id" type="text" name="id" value="@form("id").value" autocomplete="off" autocapitalize="off" spellcheck="false" required autofocus@if(form.hasGlobalErrors) { aria-invalid="true" aria-describedby="bb-id-error"}>
+          <input id="bb-id" type="text" name="id" value="@form("id").value" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64" required autofocus@if(form.hasGlobalErrors) { aria-invalid="true" aria-describedby="bb-id-error"}>
         </div>
         @if(models.ScriptBoard.hasPassword()) {
           <div class="bb-field">

@@ -223,6 +223,11 @@ public class ClientLogin extends Controller {
         loginForm.reject("Please enter your ID.");
         return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
+      if (clientId.length() > 64) {
+        // (the data's columns hold 255 characters; an id this long is a pasted mistake anyway)
+        loginForm.reject("This ID is too long. Please use the ID you were given (at most 64 characters).");
+        return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      }
       if (clientId.startsWith("_")) {
         // Ids starting with "_" are the computer players' (g.addAI makes _1, _2, ...): signing in as
         // one took over its seat.
@@ -345,9 +350,14 @@ public class ClientLogin extends Controller {
       }
     }
     ExperimentInstance open = null;
+    Experiment experiment = null;
     try {
+      experiment = Experiment.findById(Long.valueOf(experimentId));
       open = Autopilot.openInstance(Long.valueOf(experimentId));
     } catch (NumberFormatException ignored) {}
+    if (experiment == null) {
+      return notFound(invalidLink());
+    }
     if (open == null) {
       if ("prolific".equals(entry)) {
         // A Prolific study's places are timed: waiting makes no sense, returning lets someone else in.

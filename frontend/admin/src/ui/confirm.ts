@@ -39,7 +39,8 @@ export function settleConfirm (ok: boolean) {
 export function looseText (s: string): string {
   return (s || '')
     .normalize('NFKC')
-    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    // (a dash of any kind counts as a space, so "Template-Study" can be typed "template study")
+    .replace(/[-\u2010-\u2015\u2212]/g, ' ')
     .replace(/[\u2018\u2019\u201b]/g, "'")
     .replace(/[\u201c\u201d\u201f]/g, '"')
     .replace(/\s+/g, ' ')

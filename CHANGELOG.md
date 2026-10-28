@@ -80,6 +80,10 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
 - A tie cut confirmed just as a round ended was made in the next round and used up its allowance;
   each `edgeEdits.allow()` is now a turn of its own.
 - Debug logging wrote researchers' session tokens to the log.
+- `recruitment.completeProlific` was only loaded with `breadboard.experimental` on, so Prolific
+  completion codes failed in a release; it is always loaded now.
+- Reloading a finished or stopped page lost its last screen (a score, a completion code); after a
+  stop, the game's timers kept recording into the stopped session.
 - The participant's network could be drawn inside out, in a corner, when the game started while
   the page was still being laid out.
 - The console window itself could scroll away (with a blank area below) on pages with hidden

@@ -15,6 +15,7 @@ finishStep.run = {
         if (prolificCode) {
           recruitment.completeProlific(p, [completionCode: prolificCode])
         } else {
+          // (set prolificCode on the Parameters page: the autopilot's sessions use its default)
           eventTracker.track("noCompletionCode", [player: p.id])
         }
       }

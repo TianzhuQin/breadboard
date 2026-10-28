@@ -101,6 +101,14 @@ public class ScriptTestHarness {
     public final RecordingGameListener gameListener;
 
     public ScriptTestHarness() {
+        this(true);
+    }
+
+    /**
+     * @param experimental also load the experimental scripts (ScriptLoader.EXPERIMENTAL_SCRIPTS); false
+     *     loads exactly what a release with the default settings loads
+     */
+    public ScriptTestHarness(boolean experimental) {
         try {
             this.engine = new ScriptEngineManager().getEngineByName("gremlin-groovy");
             if (this.engine == null) {
@@ -123,7 +131,7 @@ public class ScriptTestHarness {
             // load is fatal; a non-core drop-in script failing is skipped, matching production
             // and keeping the rest of the suite runnable.
             File dir = groovyDir();
-            for (String name : ScriptLoader.resolveLoadOrder(dir)) {
+            for (String name : ScriptLoader.resolveLoadOrder(dir, experimental)) {
                 try {
                     ScriptLoader.evalNamed(engine, name, loadSource(dir, name));
                 } catch (ScriptException | RuntimeException ex) {

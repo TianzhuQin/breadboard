@@ -94,6 +94,16 @@
                 </div>
               </template>
             </BField>
+            <!-- the autopilot can't ask for launch parameters: its sessions use the defaults -->
+            <p v-if="launchDefaults.length" class="ap-preview ap-params" :class="{ 'is-warn': emptyDefaults.length }">
+              <Info :size="15" aria-hidden="true" />
+              <span>
+                Its sessions use each launch parameter's default:
+                <template v-for="(p, i) in launchDefaults" :key="p.name"><code>{{ p.name }}</code> {{ p.value === '' ? '(empty)' : p.value }}{{ i < launchDefaults.length - 1 ? ', ' : '.' }} </template>
+                <template v-if="emptyDefaults.length">Check that {{ emptyDefaults.join(' and ') }} can be empty. </template>
+                Change them on the <RouterLink to="/parameters">Parameters</RouterLink> page.
+              </span>
+            </p>
             <div v-if="holder" class="ap-preview ap-holder" role="note">
               <Hourglass :size="15" aria-hidden="true" />
               <div>
@@ -372,7 +382,7 @@ const canSave = computed(() => dirty.value || state.value?.source === 'off' || !
 const errors = computed<Record<string, string>>(() => (readOnly.value ? {} : validateAutopilot(form.value)))
 const roomOff = computed(() => readOnly.value || !form.value.waitingRoom.enabled)
 const leaveOff = computed(() => readOnly.value || !form.value.replaceDisconnected.enabled)
-const roomSummary = computed(() => describeWaitingRoom(form.value))
+const roomSummary = computed(() => describeWaitingRoom(form.value, !!ownRoom.value))
 
 const experimentOptions = computed(() => {
   const opts = experiments.value.map(e => ({ value: e.id as number | null, label: e.name }))
@@ -428,6 +438,9 @@ const activity = computed(() => {
 const formExperiment = computed(() => experiments.value.find(e => e.id === form.value.experimentId) ||
   (admin.experiment && admin.experiment.id === form.value.experimentId ? admin.experiment : null))
 const ownRoom = computed(() => stepsCall(formExperiment.value?.steps, 'waitingRoom'))
+const launchDefaults = computed(() => (formExperiment.value?.parameters || []).map(p => ({ name: p.name, value: String(p.defaultVal ?? '') })))
+// (an empty text default is often a completion code someone forgot to fill in)
+const emptyDefaults = computed(() => launchDefaults.value.filter(p => p.value === '').map(p => p.name))
 const ownLeave = computed(() => stepsCall(formExperiment.value?.steps, 'replaceDisconnected'))
 
 /**
@@ -449,10 +462,11 @@ function adopt (s: AutopilotState, resetForm: boolean) {
     // (never set up: the suggestion is the starting point, not an edit; Save still saves it)
     form.value = suggested(s)
     baseline.value = suggested(s)
-  } else if (!dirty.value && !sameForm(baseline.value, toForm(s.settings))) {
+  } else if (!dirty.value && !sameForm(baseline.value, suggested(s))) {
     // changed elsewhere (another admin, or the config) while nothing was being edited here
-    form.value = toForm(s.settings)
-    baseline.value = toForm(s.settings)
+    // (and, never set up, the suggestion stays the suggestion)
+    form.value = suggested(s)
+    baseline.value = suggested(s)
   }
 }
 
@@ -711,6 +725,9 @@ useUnsavedGuard(dirty, {
 .ap-own code { overflow-wrap: anywhere; color: inherit; }
 .ap-own svg { flex: none; margin-top: 2px; }
 .ap-own.is-warn { background: var(--warning-soft); color: var(--warning-soft-text); }
+.ap-params code { color: var(--text-soft); }
+.ap-params.is-warn { background: var(--warning-soft); border-color: transparent; color: var(--warning-soft-text); }
+.ap-params.is-warn svg { color: inherit; }
 
 .ap-savebar {
   position: relative;

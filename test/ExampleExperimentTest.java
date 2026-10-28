@@ -58,16 +58,18 @@ public class ExampleExperimentTest extends BaseTest {
 
     @Test
     public void itsStepsPlayAWholeGameByThemselves() throws Exception {
-        harness = new ScriptTestHarness();
+        // the scripts a release loads (an experimental-only script missing there used to break the end)
+        harness = new ScriptTestHarness(false);
         // launch parameters, as a session would bind them
         harness.put("rounds", 2);
         harness.put("roundSeconds", 1);
-        harness.put("prolificCode", "");
+        harness.put("prolificCode", "C0DE1234");
         for (String name : stepNames()) {
             harness.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
         }
         harness.runAsync("{ done ->\n"
             + "  ['p1', 'p2'].each { g.addPlayer(it) }\n"
+            + "  recruitment.registerProlific(g.getVertex('p2'))\n"
             + "  initStep.start()\n"
             + "  def poll\n"
             + "  poll = {\n"
@@ -82,6 +84,8 @@ public class ExampleExperimentTest extends BaseTest {
             + "        assert p.private.finished == true\n"
             + "        assert p.both.count() >= 1\n"
             + "      }\n"
+            + "      assert g.getVertex('p2')._system.recruitment.completionCode == 'C0DE1234'\n"
+            + "      assert !g.getVertex('p1')._system.recruitment?.completionCode\n"
             + "    }\n"
             + "  }\n"
             + "  poll()\n"

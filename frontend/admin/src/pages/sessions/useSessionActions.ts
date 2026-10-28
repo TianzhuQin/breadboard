@@ -98,10 +98,10 @@ export function useSessionActions () {
     const ok = await confirm({
       title: `Stop “${s.name}”?`,
       message: (admin.instance?.id === s.id
-        ? 'Nobody new can join, and it stops being the current session. People already on the page stay connected until the engine reloads, and everything recorded so far is kept.'
+        ? 'Nobody new can join, its game stops and its participants see a page saying the session was stopped. Everything recorded so far is kept.'
         : 'Nobody new can join it. Everything recorded so far is kept, and your current session is not affected.') +
         (pausesAutopilot ? `\n\n${STOP_PAUSES_AUTOPILOT}` : '') +
-        '\n\nYou can resume it later from this page.',
+        '\n\nYou can resume it later from this page; its game then starts again from the beginning.',
       confirmLabel: 'Stop session',
       danger: true,
     })

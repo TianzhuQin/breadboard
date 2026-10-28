@@ -53,8 +53,10 @@
              The keys keep each one matched to its old instance when the slots appear around it. -->
         <section v-show="panelShown" class="bb-card bb-game__panel">
           <!-- the end: the experiment set player.finished -->
-          <div v-if="finished" key="done" class="bb-game__done" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="26" height="26"><path d="M5 12.5l4.2 4.2L19 7" /></svg>
+          <div v-if="finished" key="done" class="bb-game__done" :class="{ 'is-ended': !!player.ended }" aria-hidden="true">
+            <!-- a tick for the experiment's own end; a pause sign when the session was stopped or isn't running -->
+            <svg v-if="player.ended" viewBox="0 0 24 24" width="24" height="24"><path d="M9 6.5v11M15 6.5v11" /></svg>
+            <svg v-else viewBox="0 0 24 24" width="26" height="26"><path d="M5 12.5l4.2 4.2L19 7" /></svg>
           </div>
           <div v-if="hasTimers" key="timers" class="bb-timers">
             <PlayerTimers :player="player" />
@@ -290,7 +292,11 @@ export default Vue.extend({
 }
 .bb-game__grid.is-finished {
   grid-template-columns: minmax(0, 560px);
-  margin-top: 10vh;
+  justify-content: center;
+  /* in the middle of the screen, like the sign-in and waiting cards */
+  align-content: center;
+  min-height: calc(100vh - 48px);
+  margin-top: 0;
 }
 .bb-game__grid.is-finished .bb-game__panel {
   text-align: center;
@@ -305,6 +311,13 @@ export default Vue.extend({
   border-radius: 50%;
   background: #ecfdf5;
   box-shadow: 0 0 0 8px #f0fdf4;
+}
+.bb-game__done.is-ended {
+  background: #f1f5f9;
+  box-shadow: 0 0 0 8px #f8fafc;
+}
+.bb-game__done.is-ended path {
+  stroke: #64748b !important;
 }
 .bb-game__done path {
   fill: none;

@@ -92,10 +92,9 @@ export async function stopSession (inst: Instance) {
     const ok = await confirm({
       title: `Stop “${inst.name}”?`,
       message: [
-        'Nobody new can join with its links, and it no longer counts as running.',
-        'People who are on the page now are not sent away, but the experiment\'s launch parameters are unset, so the game may stop working for them.',
+        'Nobody new can join with its links, and its game stops: its participants see a page saying the session was stopped. Everything recorded so far is kept.',
         pausesAutopilot ? STOP_PAUSES_AUTOPILOT : '',
-        'Its participants are told the session was stopped. You can resume it later, but its game then starts again from the beginning.',
+        'You can resume it later, but its game then starts again from the beginning.',
       ].filter(Boolean).join('\n\n'),
       confirmLabel: 'Stop session',
       danger: true,

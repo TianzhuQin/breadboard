@@ -4,7 +4,7 @@
     <BField
       v-if="req?.typeToConfirm"
       :label="`Type “${req.typeToConfirm}” to confirm`"
-      :hint="typed.trim() && !canConfirm ? 'Doesn\'t match yet.' : 'Capital letters, spaces and kinds of dash don\'t matter.'"
+      :hint="typed.trim() && !canConfirm ? 'Doesn\'t match yet.' : 'Capital letters, spaces and dashes don\'t matter.'"
       class="b-confirm__type"
     >
       <template #default="{ id, describedby }">
