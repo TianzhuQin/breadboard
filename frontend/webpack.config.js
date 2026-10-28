@@ -212,7 +212,10 @@ module.exports = {
     ],
     // prevents multiple copies of vue being loaded
     alias: {
-      vue$: 'vue/dist/vue.js', // 'vue/dist/vue.common.js' for webpack 1
+      // The full build: participant pages compile their template in the browser. It is the
+      // development build on purpose, so that mistakes in an experiment's page show as warnings in
+      // the browser console (the production build fails silently).
+      vue$: 'vue/dist/vue.js',
     },
   },
   // externals: {

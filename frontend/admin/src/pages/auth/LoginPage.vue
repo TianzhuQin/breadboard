@@ -2,14 +2,18 @@
   <AuthCard title="Sign in to Breadboard" subtitle="The researcher's console">
     <form novalidate @submit.prevent="submit">
       <p v-if="error" class="auth__error" role="alert">{{ error }}</p>
+      <p v-else-if="admin.signOutReason === 'ended'" class="auth__note" role="status">
+        You were signed out because this account signed in on another browser or device (or signed
+        out, or changed its password there). Sign in again to continue here.
+      </p>
       <BField label="Email">
         <template #default="{ id }">
-          <BInput :id="id" v-model="email" type="email" autocomplete="username" autofocus required />
+          <BInput :id="id" v-model="email" type="email" autocomplete="username" :autofocus="!email" required />
         </template>
       </BField>
       <BField label="Password">
         <template #default="{ id }">
-          <BInput :id="id" v-model="password" type="password" autocomplete="current-password" required />
+          <BInput :id="id" v-model="password" type="password" autocomplete="current-password" :autofocus="!!email" required />
         </template>
       </BField>
       <BButton type="submit" variant="primary" size="lg" block :loading="busy">Sign in</BButton>
@@ -23,10 +27,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { BButton, BField, BInput } from '@/ui'
-import { login } from '@/store/admin'
+import { admin, login } from '@/store/admin'
 import AuthCard from './AuthCard.vue'
 
-const email = ref('')
+// (Signed out from elsewhere: the address is still known.)
+const email = ref(admin.signOutReason ? admin.email : '')
 const password = ref('')
 const busy = ref(false)
 const error = ref('')

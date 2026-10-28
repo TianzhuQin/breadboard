@@ -27,11 +27,13 @@ JAVA8_HOME=/opt/zulu8 ./breadboard.sh  # 指定 Java 8 的位置
 
 控制台的大多数页面都针对一个实验：侧栏顶部选中的那个。点它可以切换实验，也可以新建或导入。
 
-- **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 InitStep、OnJoinStep、OnLeaveStep 三个步骤和标准的参与者页面）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
+- **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 InitStep、OnJoinStep、OnLeaveStep 三个空步骤和标准的参与者页面）开始，从 **Example: network game**（一个可以直接运行的网络小游戏）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
 - **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S）只是保存。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。注意：重新加载会让网络里的所有人断开。
 - **Content**：参与者读到的文字，比如说明和知情同意书。每段文字有一个名字，程序里用 `c.get("名字")` 显示。每种语言各写一份。
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
 - **Preview**（页面标题是 Participant preview）：开场后，在这里按选中参与者的视角看页面，可选 **Desktop** 或 **Phone**。**预览是真的**：在预览里点一个选项，就等于那位参与者做了这个选择，会记进数据。
+
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），用两个浏览器窗口登录，就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。轮数和每轮时长是启动参数（Parameters）。每次选择和每轮得分会记成 `ColourPick`、`RoundResult` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 

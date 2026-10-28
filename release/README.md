@@ -52,7 +52,7 @@ Then set `breadboard.secureCookies=true` and `session.secure=true` in
 | `db/breadboard.h2.db` | The database: experiments, sessions, accounts and data. Back it up by copying it while the server is stopped. |
 | `conf/application-prod.conf` | The settings |
 | `conf/application.secret` | Generated at first start; signs sign-ins and invitation links. Keep it private. |
-| `logs/application.log` | The server's log |
+| `logs/application.log` | The server's log (a new one every day; 30 days are kept; set in `conf/logger.xml`) |
 | `groovy/` | The engine's scripts (part of Breadboard; don't edit) |
 
 ## Upgrading from an earlier release

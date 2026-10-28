@@ -154,7 +154,8 @@ public class Breadboard extends UntypedActor {
     String action = null;
     Map<String, String> echo = Collections.emptyMap();
     try {
-      Logger.debug(event.toString());
+      // (Only the action: every frame carries the account's token in "uid".)
+      Logger.debug("Console frame: " + event.path("action").asText());
       // TODO: check if there is a better way to do this with new version of Jackson
       Map<String, Object> jsonInput;
       try {

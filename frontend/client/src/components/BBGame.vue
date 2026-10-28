@@ -11,7 +11,7 @@
         v-else
         key="grid"
         class="bb-game__grid"
-        :class="{ 'is-waiting': waiting, 'is-single': !waiting && !networkShown }"
+        :class="{ 'is-waiting': waiting, 'is-single': !waiting && !networkShown, 'is-idle': idle }"
       >
         <!-- Only this column changes when the session starts. The panel next to it stays the same
              element, so a form or choice the participant began during the wait keeps its input. -->
@@ -32,7 +32,7 @@
                 </div>
               </div>
               <div v-if="amongCount" class="bb-game__legend" aria-hidden="true">
-                <span><i class="is-own" />your ties</span>
+                <span><i class="is-own" :class="{ 'is-editable': ownEditable }" />your ties</span>
                 <span><i class="is-among" />between others</span>
               </div>
             </header>
@@ -61,6 +61,15 @@
             <slot name="text" :text="player.text">
               <div v-html="player.text" />
             </slot>
+          </div>
+          <!-- Nothing to show yet (or between two screens): never a blank page. -->
+          <div v-if="idle" key="idle" class="bb-game__idle" role="status">
+            <span class="bb-game__idle-pulse" aria-hidden="true" />
+            <h2 class="bb-game__idle-title">{{ hadContent ? 'Please wait' : 'You\'re in' }}</h2>
+            <p class="bb-game__idle-text">
+              {{ hadContent ? 'The next part will appear here by itself.' : 'The study will begin shortly. This page will change by itself.' }}
+              Please keep it open.
+            </p>
           </div>
           <PlayerChoices key="choices" :player="player" class="bb-game__choices" />
           <Form key="form" :player="player" />
@@ -102,7 +111,7 @@ export default Vue.extend({
     networkTitle: { type: String, default: 'Your network' },
   },
   data () {
-    return { hadTies: false }
+    return { hadTies: false, hadContent: false }
   },
   computed: {
     // Pass clicks on people and ties on only when the page listens for them; a tie that nobody
@@ -127,6 +136,11 @@ export default Vue.extend({
       const me = this.player.id
       return this.edges.filter(e => e.source.id === me || e.target.id === me).length
     },
+    // The participant may cut their own ties: the network draws those in their colour.
+    ownEditable (): boolean {
+      const e = this.player.edgeEdits
+      return !!e && !!e.enabled && !!e.remove && (e.scope === 'own' || e.scope === 'visible')
+    },
     amongCount (): number {
       return this.edges.length - this.tieCount
     },
@@ -149,6 +163,11 @@ export default Vue.extend({
       const f = this.player.forms
       return !!f && Object.keys(f).length > 0
     },
+    // Connected, not waiting, and the experiment shows nothing at all (yet).
+    idle (): boolean {
+      return !this.waiting && !this.networkShown && !this.player.text && !this.hasTimers &&
+        !this.hasChoices && !this.hasForms && !this.$scopedSlots['panel-top'] && !this.$scopedSlots['panel-bottom']
+    },
     // While waiting the panel holds only the experiment's timers, choices and forms.
     panelShown (): boolean {
       return !this.waiting || this.hasTimers || this.hasChoices || this.hasForms
@@ -158,6 +177,10 @@ export default Vue.extend({
     'edges.length': {
       immediate: true,
       handler (n: number) { if (n > 0) this.hadTies = true },
+    },
+    idle: {
+      immediate: true,
+      handler (idle: boolean) { if (!idle && !this.loading && !this.waiting) this.hadContent = true },
     },
   },
 })
@@ -230,6 +253,9 @@ export default Vue.extend({
 .bb-game__legend i.is-among {
   border-top-color: #64748b;
 }
+.bb-game__legend i.is-own.is-editable {
+  border-top-color: #a5b4fc;
+}
 .bb-game__canvas {
   position: relative;
   flex: 1;
@@ -251,6 +277,45 @@ export default Vue.extend({
 }
 .bb-game__panel:empty {
   display: none;
+}
+.bb-game__grid.is-idle {
+  grid-template-columns: minmax(0, 520px);
+  margin-top: 12vh;
+}
+.bb-game__idle {
+  text-align: center;
+  padding: 28px 8px 20px;
+}
+.bb-game__idle-pulse {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  background: #6366f1;
+  box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.45);
+  animation: bb-game-pulse 1.8s ease-out infinite;
+}
+@keyframes bb-game-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.45); }
+  70% { box-shadow: 0 0 0 14px rgba(99, 102, 241, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bb-game__idle-pulse { animation: none; }
+}
+.bb-game__idle-title {
+  margin: 0 0 8px;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: #0f172a;
+}
+.bb-game__idle-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #64748b;
 }
 /* While waiting: one calm column, the waiting card with the panel under it. */
 .bb-game__grid.is-waiting {

@@ -54,4 +54,5 @@ defineProps<{ title: string, subtitle?: string }>()
 .auth__foot { position: relative; margin-top: 18px; font-size: var(--text-sm); color: var(--muted); }
 .auth form { display: flex; flex-direction: column; gap: 16px; }
 .auth__error { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger-soft-text); font-size: var(--text-sm); }
+.auth__note { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text-soft); font-size: var(--text-sm); line-height: 1.5; }
 </style>

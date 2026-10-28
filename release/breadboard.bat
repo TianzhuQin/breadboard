@@ -40,7 +40,7 @@ REM started by mistake still stops: the first one holds the port.)
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
 
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.)
-"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m %JAVA_OPTS% -cp "lib\*" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf %* play.core.server.NettyServer "%CD%\."
+"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m %JAVA_OPTS% -cp "lib\*" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\."
 REM Keep the window open after a failure, so the message can be read. (Play stops with -1, which
 REM IF ERRORLEVEL 1 doesn't catch.)
 SET "EXIT_CODE=%ERRORLEVEL%"

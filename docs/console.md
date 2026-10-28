@@ -66,7 +66,7 @@ mode…**) and **Delete…**.
 
 | Action | |
 |---|---|
-| **New experiment** | Starts from **Breadboard's template** (the steps OnJoinStep, OnLeaveStep and InitStep, and the standard participant page) or from **A copy of an experiment** (its steps, content, translations, parameters, images and participant page, without sessions or data). Names must be unique and can't contain `/` or `\`. |
+| **New experiment** | Starts from **Breadboard's template** (the empty steps OnJoinStep, OnLeaveStep and InitStep, and the standard participant page), from **Example: network game**, or from **A copy of an experiment** (its steps, content, translations, parameters, images and participant page, without sessions or data). Names must be unique and can't contain `/` or `\`. |
 | **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment; nothing you have is changed. |
 | **Export .zip** | Downloads the experiment, to move it to another server or keep a copy. |
 | **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm. Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
@@ -80,6 +80,15 @@ follow the files, and a step file saved in `Steps/` runs at once. **Edit in the 
 replaces the experiment's steps, content, parameters, images, participant page and style in the
 database with what is in the folder, which stays on the server. Neither works while a session is
 running.
+
+**Example: network game** is a complete experiment that runs from start to finish by itself, to try
+Breadboard out or to build on. People wait in a waiting room until at least 2 are there; computer
+players then fill the network up to 8. Each round everyone picks Blue or Orange and scores a point
+when their pick matches most of their neighbors'; the network shows what each neighbor picked last
+round and the ties among their neighbors, and during a round everyone may cut one of their own ties
+by clicking it. The number of rounds and their length are launch parameters. Picks and scores are
+recorded as `ColourPick` and `RoundResult` events. Open a session and sign in from two browser
+windows (or turn on the autopilot) to watch it run.
 
 ### Steps
 

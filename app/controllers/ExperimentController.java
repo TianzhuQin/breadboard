@@ -38,12 +38,15 @@ public class ExperimentController extends Controller {
   public static Result createExperiment() {
     String newExperimentName;
     Long copyExperimentId;
+    String example;
     JsonNode json = request().body().asJson();
     if(json == null) {
       return badRequest("Expecting Json data");
     } else {
       newExperimentName = json.findPath("newExperimentName").textValue();
       copyExperimentId = json.findPath("copyExperimentId").asLong();
+      // One of the ready-to-run examples in conf/examples, e.g. "network-game"
+      example = json.findPath("example").textValue();
     }
 
     if (newExperimentName == null) {
@@ -63,6 +66,15 @@ public class ExperimentController extends Controller {
 
     if (copyExperiment != null) {
       experiment = new Experiment(copyExperiment);
+    } else if (example != null && !example.isEmpty()) {
+      try {
+        experiment = exampleExperiment(user, example);
+      } catch (IOException e) {
+        Logger.error("Unable to read the example " + example, e);
+      }
+      if (experiment == null) {
+        return badRequest("There is no example called \"" + example + "\".");
+      }
     }
 
     if (experiment == null) {
@@ -732,21 +744,25 @@ public class ExperimentController extends Controller {
   }
 
   public static ArrayList<Parameter> getParametersFromFile(File parameterFile) throws IOException {
-    ArrayList<Parameter> returnParameters = new ArrayList<>();
-    CSVFormat format = CSVFormat.DEFAULT.withHeader("Name", "Type", "Min.", "Max.", "Default", "Short Description").withFirstRecordAsHeader();
     // try-with-resources so the underlying file handle is always released (an unclosed
     // FileReader here leaked a handle and, on Windows, left parameters.csv locked).
     try (Reader in = new FileReader(parameterFile)) {
-      for (CSVRecord record : format.parse(in)) {
-        Parameter parameter = new Parameter();
-        parameter.name = record.get("Name");
-        parameter.type = record.get("Type");
-        parameter.minVal = record.get("Min.");
-        parameter.maxVal = record.get("Max.");
-        parameter.defaultVal = record.get("Default");
-        parameter.description = record.get("Short Description");
-        returnParameters.add(parameter);
-      }
+      return getParameters(in);
+    }
+  }
+
+  private static ArrayList<Parameter> getParameters(Reader in) throws IOException {
+    ArrayList<Parameter> returnParameters = new ArrayList<>();
+    CSVFormat format = CSVFormat.DEFAULT.withHeader("Name", "Type", "Min.", "Max.", "Default", "Short Description").withFirstRecordAsHeader();
+    for (CSVRecord record : format.parse(in)) {
+      Parameter parameter = new Parameter();
+      parameter.name = record.get("Name");
+      parameter.type = record.get("Type");
+      parameter.minVal = record.get("Min.");
+      parameter.maxVal = record.get("Max.");
+      parameter.defaultVal = record.get("Default");
+      parameter.description = record.get("Short Description");
+      returnParameters.add(parameter);
     }
     return returnParameters;
   }
@@ -778,6 +794,49 @@ public class ExperimentController extends Controller {
       }
     }
     return returnSteps;
+  }
+
+  /**
+   * A new experiment made from one of the ready-to-run examples in conf/examples/{name}/ (on the
+   * classpath as examples/{name}/): example.json lists its steps in order ("steps"), which are in
+   * Steps/{step}.groovy, and parameters.csv holds its launch parameters, as in an export. Examples
+   * get the current participant page. Null when there is no such example.
+   */
+  public static Experiment exampleExperiment(User user, String name) throws IOException {
+    if (!name.matches("[a-z0-9-]+")) {
+      return null;
+    }
+    String root = "examples/" + name + "/";
+    String manifest = resourceText(root + "example.json");
+    if (manifest == null) {
+      return null;
+    }
+    Experiment experiment = new Experiment();
+    experiment.fileMode = false;
+    for (JsonNode stepName : Json.parse(manifest).path("steps")) {
+      String source = resourceText(root + "Steps/" + stepName.asText() + ".groovy");
+      if (source == null) {
+        throw new IOException("The example " + name + " has no step " + stepName.asText());
+      }
+      Step step = new Step();
+      step.name = stepName.asText();
+      step.source = source;
+      experiment.addStep(step);
+    }
+    String parameters = resourceText(root + "parameters.csv");
+    if (parameters != null) {
+      experiment.parameters.addAll(getParameters(new StringReader(parameters)));
+    }
+    experiment.setClientHtml(Experiment.defaultClientHTML());
+    experiment.setClientGraph(Experiment.defaultClientGraph());
+    experiment.addLanguage(user.defaultLanguage);
+    return experiment;
+  }
+
+  private static String resourceText(String path) throws IOException {
+    try (InputStream in = play.Play.application().resourceAsStream(path)) {
+      return in == null ? null : org.apache.commons.io.IOUtils.toString(in, StandardCharsets.UTF_8);
+    }
   }
 
   private static Experiment newExperiment(User user, Boolean isNewExperiment){

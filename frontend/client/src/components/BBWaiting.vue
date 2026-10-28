@@ -22,7 +22,12 @@
     <template v-if="state === 'waiting'">
       <p class="bb-waiting__count">
         <strong>{{ here }}</strong> {{ here === 1 ? 'person is' : 'people are' }} here.
-        The session starts when {{ target }} {{ maxIsOne ? 'person is' : 'people are' }} here.
+        <template v-if="enough">
+          That's enough to begin: the session starts shortly<template v-if="max && here < max">, or as soon as {{ max }} are here</template>.
+        </template>
+        <template v-else>
+          The session starts when {{ target }} {{ maxIsOne ? 'person is' : 'people are' }} here.
+        </template>
       </p>
       <div class="bb-waiting__bar" :aria-label="`${here} of ${min}`">
         <span :style="{ width: `${progress}%` }" />
@@ -78,6 +83,8 @@ export default Vue.extend({
       return this.max && this.max !== this.min ? `${this.min}–${this.max}` : String(this.min)
     },
     maxIsOne (): boolean { return (this.max || this.min) === 1 },
+    // The minimum is here: the autopilot waits a little longer for more, then starts.
+    enough (): boolean { return this.min > 0 && this.here >= this.min },
     progress (): number {
       return this.min ? Math.min(100, Math.round((100 * this.here) / this.min)) : 0
     },
@@ -89,7 +96,7 @@ export default Vue.extend({
       switch (this.state) {
         case 'starting': return this.remaining > 0 ? `Starting in ${this.remaining}…` : 'Starting…'
         case 'cancelled': return 'This session could not start'
-        default: return 'Waiting for the others'
+        default: return this.enough ? 'Starting soon' : 'Waiting for the others'
       }
     },
     showText (): boolean {

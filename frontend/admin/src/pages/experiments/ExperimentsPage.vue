@@ -216,8 +216,9 @@ const exportingId = ref<number | null>(null)
 
 async function select (e: Experiment) {
   if (running.value) {
-    notify.warning('Stop the running session first',
-      'Switching experiments restarts the script engine, which disconnects everyone in the session.')
+    toast('warning', 'Stop the running session first',
+      'Switching experiments restarts the script engine, which disconnects everyone in the session.',
+      { action: { label: 'Go to the session', run: () => { void router.push('/session') } } })
     return
   }
   if (selectingId.value != null || !ensureConnected()) return

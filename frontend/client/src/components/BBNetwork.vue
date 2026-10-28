@@ -125,7 +125,8 @@
 
     <!-- The same changes as a list: for keyboards, screen readers, and when tapping the picture is
          hard. Folded away by default, so a long list never pushes the picture around. -->
-    <div v-if="showMoveList && (movesReserved || reserveEditing)" class="bb-network__moves">
+    <!-- (Kept, but out of sight, while editing is off: the picture doesn't jump when it comes back.) -->
+    <div v-if="showMoveList && (movesReserved || reserveEditing)" class="bb-network__moves" :class="{ 'is-off': !edits.enabled }" :aria-hidden="edits.enabled ? null : 'true'">
       <button
         ref="movesToggle"
         type="button"
@@ -159,7 +160,7 @@ type Point = { x: number, y: number }
 type AnyNode = { id: string, data: any, [key: string]: any }
 type AnyEdge = { id: number | string, source: AnyNode, target: AnyNode, data: any }
 type Candidate = { op: 'add' | 'remove', a: string, b: string, available?: boolean, reason?: string }
-type Move = { op: 'add' | 'remove', a: string, b: string }
+type Move = { op: 'add' | 'remove', a: string, b: string, turn?: number }
 
 const PALETTE: Record<string, [string, string]> = {
   ego: ['#8b8df8', '#4f46e5'],
@@ -577,13 +578,11 @@ export default Vue.extend({
     },
     layoutKey () { this.relayout() },
     editingKey () { this.dropStaleSelection() },
+    // A new turn (e.g. the next round) or no editing at all: a question still open is about a
+    // turn that is over.
+    'edits.turn' () { this.dropProposal() },
     'edits.enabled' (enabled: boolean) {
-      if (!enabled) {
-        const hadFocus = this.focusInConfirm()
-        this.proposal = null
-        this.clearSelection()
-        if (hadFocus) this.returnFocus()
-      }
+      if (!enabled) this.dropProposal()
     },
     tooSmallToTap (small: boolean) { this.openListIfNeeded(small) },
     hint (text: string) { if (text) this.barReserved = true },
@@ -1006,7 +1005,7 @@ export default Vue.extend({
       if (this.isPending(op, a, b)) return
       this.opener = (typeof document !== 'undefined' ? document.activeElement : null) as any
       this.clearSelection()
-      this.proposal = { op, a, b }
+      this.proposal = { op, a, b, turn: this.edits.turn }
       if (this.edits.confirm === false) {
         this.confirmProposal()
       } else {
@@ -1052,6 +1051,13 @@ export default Vue.extend({
       this.proposal = null
       this.returnFocus()
     },
+    dropProposal () {
+      if (!this.proposal && !this.selectedNode) return
+      const hadFocus = this.focusInConfirm()
+      this.proposal = null
+      this.clearSelection()
+      if (hadFocus) this.returnFocus()
+    },
     confirmProposal () {
       const p = this.proposal
       if (!p) return
@@ -1064,7 +1070,10 @@ export default Vue.extend({
       setTimeout(() => { if (this.pending[key] === stamp) this.$delete(this.pending, key) }, PENDING_MS)
       this.$emit('edit', p)
       const bb = (window as any).Breadboard
-      if (bb && bb.sendEdgeEdit) bb.sendEdgeEdit(p.op, p.a, p.b)
+      if (bb && bb.sendEdgeEdit) {
+        if (p.turn == null) bb.sendEdgeEdit(p.op, p.a, p.b)
+        else bb.sendEdgeEdit(p.op, p.a, p.b, p.turn)
+      }
       this.returnFocus()
     },
     showToast (ok: boolean, text: string) {
@@ -1208,7 +1217,12 @@ function lighten (color: string): string {
   stroke: #64748b;
   stroke-width: 3.5;
 }
-.bb-network__edge.is-removable .bb-network__edge-line {
+/* Ties that can be cut stand out, and keep their own colour family: the participant's own in
+   their (indigo) colour, ties between others darker slate. */
+.bb-network__edge.is-own.is-removable .bb-network__edge-line {
+  stroke: #a5b4fc;
+}
+.bb-network__edge.is-among.is-removable .bb-network__edge-line {
   stroke: #475569;
 }
 .bb-network__edge.is-blocked .bb-network__edge-line {
@@ -1410,6 +1424,9 @@ function lighten (color: string): string {
 .bb-network__toast--error {
   background: #fff1f2;
   color: #9f1239;
+}
+.bb-network__moves.is-off {
+  visibility: hidden;
 }
 .bb-network__moves {
   flex: none;

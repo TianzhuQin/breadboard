@@ -336,6 +336,22 @@ describe('BBNetwork editing', () => {
     expect(w.find('.bb-network__hint').text()).toBe('There is no change you can make right now.')
   })
 
+  it('sends the turn the change was offered in', async () => {
+    const w = mountNetwork({ enabled: true, remove: true, scope: 'own', confirm: false, turn: 7 })
+    await edgeBetween(w, 'me', 'nx').find('.bb-network__edge-hit').trigger('click')
+    expect(sendEdgeEdit).toHaveBeenCalledWith('remove', 'me', 'nx', 7)
+  })
+
+  it('withdraws an open question when the experiment moves on to another turn', async () => {
+    const edits = { enabled: true, remove: true, scope: 'own', turn: 1 }
+    const w = mountNetwork(edits)
+    await edgeBetween(w, 'me', 'nx').find('.bb-network__edge-hit').trigger('click')
+    expect((w.vm as any).proposal).not.toBe(null)
+    await w.setProps({ player: { id: 'me', edgeEdits: { ...edits, turn: 2 } } })
+    expect((w.vm as any).proposal).toBe(null)
+    expect(sendEdgeEdit).not.toHaveBeenCalled()
+  })
+
   it('sends at once when the experiment turns confirmation off', async () => {
     const w = mountNetwork({ enabled: true, remove: true, scope: 'own', confirm: false })
     await edgeBetween(w, 'me', 'nx').find('.bb-network__edge-hit').trigger('click')

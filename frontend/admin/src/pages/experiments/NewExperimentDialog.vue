@@ -2,7 +2,7 @@
   <BDialog
     :open="open"
     title="New experiment"
-    subtitle="Start from Breadboard's template or from a copy of one of yours."
+    subtitle="Start from a template, a ready-to-run example, or a copy of one of yours."
     :dismissable="!busy"
     :closable="!busy"
     @update:open="v => !v && close()"
@@ -17,7 +17,15 @@
           <span class="xnew__choice-icon" aria-hidden="true"><Sparkles :size="17" /></span>
           <span class="xnew__choice-text">
             <span class="xnew__choice-title">Breadboard's template</span>
-            <span class="xnew__choice-hint">Three starter steps (OnJoinStep, OnLeaveStep, InitStep) and the standard participant page.</span>
+            <span class="xnew__choice-hint">Three empty starter steps (OnJoinStep, OnLeaveStep, InitStep) and the standard participant page.</span>
+          </span>
+        </label>
+        <label class="xnew__choice" :class="{ 'is-on': from === 'example' }">
+          <input v-model="from" type="radio" name="xnew-from" value="example" class="xnew__radio">
+          <span class="xnew__choice-icon" aria-hidden="true"><Share2 :size="17" /></span>
+          <span class="xnew__choice-text">
+            <span class="xnew__choice-title">Example: network game <span class="xnew__tag">Ready to run</span></span>
+            <span class="xnew__choice-hint">A complete networked game to try out or build on: a waiting room, ties among neighbors on the network, cutting ties by clicking them, timed rounds and a score. It runs from start to finish by itself.</span>
           </span>
         </label>
         <label class="xnew__choice" :class="{ 'is-on': from === 'copy', 'is-disabled': !experiments.length }">
@@ -71,7 +79,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Copy, Sparkles } from 'lucide-vue-next'
+import { Copy, Share2, Sparkles } from 'lucide-vue-next'
 import { BButton, BCheckbox, BDialog, BField, BInput, BSelect, notify } from '@/ui'
 import { uid } from '@/ui/uid'
 import { http } from '@/lib/http'
@@ -84,7 +92,8 @@ const props = defineProps<{ open: boolean, copyFrom?: number | null }>()
 const emit = defineEmits<{ 'update:open': [v: boolean], created: [exp: Experiment] }>()
 
 const formId = uid('xnew')
-const from = ref<'template' | 'copy'>('template')
+const from = ref<'template' | 'example' | 'copy'>('template')
+const EXAMPLE_NAME = 'Network game'
 const copyId = ref<number | null>(null)
 const name = ref('')
 const touched = ref(false)
@@ -112,10 +121,20 @@ watch(() => props.open, (open) => {
   busy.value = false
 }, { immediate: true })
 
-function suggestCopyName (base: string) {
+// Picking the example names it, unless the researcher has typed a name of their own.
+watch(from, (now, before) => {
+  const suggested = before === 'example' ? suggestCopyName(EXAMPLE_NAME, '') : ''
+  if (now === 'example' && (!name.value.trim() || !touched.value)) {
+    name.value = suggestCopyName(EXAMPLE_NAME, '')
+  } else if (before === 'example' && name.value === suggested) {
+    name.value = ''
+  }
+})
+
+function suggestCopyName (base: string, suffix = ' copy') {
   const taken = new Set(experiments.value.map(e => e.name.trim().toLowerCase()))
-  let candidate = `${base} copy`
-  for (let n = 2; taken.has(candidate.toLowerCase()); n++) candidate = `${base} copy ${n}`
+  let candidate = `${base}${suffix}`
+  for (let n = 2; taken.has(candidate.toLowerCase()); n++) candidate = `${base}${suffix} ${n}`
   return candidate
 }
 
@@ -138,6 +157,7 @@ async function submit () {
     const created = await http.put<Experiment>('/experiment', {
       newExperimentName: finalName,
       copyExperimentId: from.value === 'copy' ? copyId.value : -1,
+      ...(from.value === 'example' ? { example: 'network-game' } : {}),
     })
     // PUT /experiment doesn't push the researcher's state, so ask for it
     await actions.refresh()
@@ -184,4 +204,5 @@ async function submit () {
 .xnew__choice-title { font-weight: 600; color: var(--text); }
 .xnew__choice-hint { font-size: var(--text-sm); color: var(--muted); line-height: 1.45; }
 .xnew__note { margin-top: -10px; font-size: var(--text-xs); color: var(--muted); }
+.xnew__tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--success-soft); color: var(--success-soft-text); font-size: var(--text-xs); font-weight: 600; vertical-align: 1px; }
 </style>

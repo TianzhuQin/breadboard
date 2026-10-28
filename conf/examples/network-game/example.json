@@ -1,0 +1,4 @@
+{
+  "title": "Network game",
+  "steps": ["OnJoinStep", "OnLeaveStep", "InitStep", "RoundStep", "FinishStep"]
+}

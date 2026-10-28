@@ -110,6 +110,22 @@ describe('BBGame', () => {
     expect(w.find('.network-stub').exists()).toBe(true)
   })
 
+  it('never shows a blank page: says the participant is in until the experiment shows something', async () => {
+    const player: any = { id: 'me', _system: {} }
+    const w = mountGame(player)
+    expect(w.find('.bb-game__idle-title').text()).toBe('You\'re in')
+    await w.setProps({ player: { ...player, text: '<p>Round 1</p>' } })
+    expect(w.find('.bb-game__idle').exists()).toBe(false)
+    // between two screens
+    await w.setProps({ player: { ...player, text: '' } })
+    expect(w.find('.bb-game__idle-title').text()).toBe('Please wait')
+  })
+
+  it('shows no waiting card while the experiment shows choices or a network', () => {
+    expect(mountGame({ id: 'me', choices: [{ name: 'A' }], _system: {} }).find('.bb-game__idle').exists()).toBe(false)
+    expect(mountGame({ id: 'me', edgeEdits: { enabled: true }, _system: {} }).find('.bb-game__idle').exists()).toBe(false)
+  })
+
   it('keeps the network after the player loses their last tie', async () => {
     const graph = { nodes: [me, ana], edges: [{ id: 1, source: me, target: ana, data: {} }] }
     const w = mount(BBGame, { propsData: { player: { id: 'me', _system: {} }, graph }, stubs })
@@ -128,6 +144,12 @@ describe('BBWaiting', () => {
     expect(w.find('.bb-waiting__title').text()).toBe('Waiting for the others')
     expect(w.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. The session starts when 3–5 people are here.')
     expect(w.findAll('.bb-waiting__dot.is-here').length).toBe(2)
+  })
+
+  it('says the session starts soon once enough people are here', () => {
+    const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 3, min: 3, max: 5 } } } } })
+    expect(w.find('.bb-waiting__title').text()).toBe('Starting soon')
+    expect(w.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('3 people are here. That\'s enough to begin: the session starts shortly, or as soon as 5 are here.')
   })
 
   it('counts down before the start', () => {

@@ -66,7 +66,10 @@ edgeEdits.disallow(player)
 edgeEdits.adminEdit("add" | "remove", id1, id2)   // researcher edits
 ```
 
-The client sees its rules in `player.edgeEdits` and sends `Breadboard.sendEdgeEdit(op, a, b)`.
+The client sees its rules in `player.edgeEdits` and sends `Breadboard.sendEdgeEdit(op, a, b, turn)`.
+Every `allow()` starts a new turn (`player.edgeEdits.turn`); a change sent with an older turn, such
+as one confirmed just as a round ended and the next one called `allow()` again, is refused rather
+than made in (and counted against) the new turn.
 The answer (`bb:edge-edit-result`) says whether the edit was accepted (`ok`). It also says whether
 the network changed (`applied`), which is false when `onEdit` only collects it. Every edit,
 accepted or not, is logged as an `edgeEdit` event naming the actor.

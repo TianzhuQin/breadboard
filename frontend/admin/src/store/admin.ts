@@ -3,6 +3,7 @@ import { AdminConnection } from '@/lib/connection'
 import { http, HttpError, onUnauthorized } from '@/lib/http'
 import { LiveGraph } from '@/lib/graph'
 import { notify } from '@/ui/toast'
+import { settleConfirm } from '@/ui/confirm'
 import type {
   AuthState, EngineInfo, EngineState, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
 } from './types'
@@ -25,6 +26,12 @@ const state = reactive({
   auth: 'checking' as AuthState,
   email: '',
   uid: '',
+  /**
+   * Why the sign-in page is showing, when this console didn't sign out itself: 'ended' when the
+   * server ended this browser's session (the account signed in or out somewhere else, or its
+   * password changed). Cleared by the next sign-in.
+   */
+  signOutReason: null as null | 'ended',
   /** The newest User JSON (null until the first one arrives after sign-in). */
   user: null as User | null,
   experiment: null as Experiment | null,
@@ -351,7 +358,10 @@ function resetState () {
 /** The session is gone: show the sign-in page (or the first-account form). */
 function signedOut (body?: any) {
   conn.stop()
+  // a question asked on a page that is gone now
+  settleConfirm(false)
   resetState()
+  state.signOutReason = body && body.reason === 'ended' ? 'ended' : null
   state.auth = body && body.status === 'create-first-user' ? 'firstUser' : 'signedOut'
 }
 
@@ -370,6 +380,7 @@ async function boot () {
     if (state.email && cfg.email !== state.email) resetState()
     state.uid = cfg.uid
     state.email = cfg.email
+    state.signOutReason = null
     state.auth = 'signedIn'
     state.ready = false
     socketSetting = cfg.connectSocket

@@ -77,6 +77,8 @@
 .bb-app .bb-prose td { border-bottom: 1px solid var(--bb-border); padding: 8px 10px; text-align: left; }
 .bb-app .bb-prose th { color: var(--bb-muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
 .bb-app .bb-prose img { max-width: 100%; border-radius: var(--bb-radius-sm); }
+/* secondary text, e.g. <p class="bb-muted">Your score so far: 3</p> */
+.bb-app .bb-prose .bb-muted { color: var(--bb-muted); font-size: 14.5px; }
 
 /* choices */
 .bb-app .player-choices {

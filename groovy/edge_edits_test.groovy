@@ -212,3 +212,21 @@ test("the page is told when it cannot see the ties among neighbors") {
     edgeEdits.disallow(n.me)
   }
 }
+
+test("a change offered in an earlier turn is refused, and doesn't use up the new turn's") {
+  def n = triangle('ee-turn')
+  edgeEdits.allow(n.me, [add: false, remove: true, scope: "own", maxRemoves: 1])
+  def offeredIn = n.me.private.edgeEdits.turn
+  assert offeredIn != null
+  // the round ends and the next one allows a cut again before the click arrives
+  edgeEdits.disallow(n.me)
+  edgeEdits.allow(n.me, [add: false, remove: true, scope: "own", maxRemoves: 1])
+  assert n.me.private.edgeEdits.turn != offeredIn
+  edgeEdits.handle(n.me, [op: "remove", a: n.me.id.toString(), b: g.clientIdOf(n.x), turn: offeredIn])
+  assert g.hasEdge(n.me, n.x)
+  assert n.me.private.edgeEdits.remainingRemoves == 1
+  // in the current turn it goes through
+  edgeEdits.handle(n.me, [op: "remove", a: n.me.id.toString(), b: g.clientIdOf(n.x), turn: n.me.private.edgeEdits.turn])
+  assert !g.hasEdge(n.me, n.x)
+  edgeEdits.disallow(n.me)
+}

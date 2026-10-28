@@ -36,7 +36,7 @@ On first start the launcher creates:
 |---|---|
 | `db/breadboard.h2.db` | The database. On a new install its tables are created at first start. |
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
-| `logs/application.log` | The server's log. |
+| `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
 
 ## Settings
 

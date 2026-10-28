@@ -246,10 +246,11 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   /**
    * Ask the server to add or cut the tie between two people in this player's view, using the
    * node ids from the graph. What is allowed is in player.edgeEdits; the server answers with an
-   * EDGE_EDIT_RESULT_EVENT ({ ok, op, a, b, reason }).
+   * EDGE_EDIT_RESULT_EVENT ({ ok, op, a, b, reason }). `turn` is player.edgeEdits.turn when the
+   * change was offered: the server refuses it once the experiment has moved on to another turn.
    */
-  sendEdgeEdit (op: 'add' | 'remove', a: string, b: string) {
-    return this.send(EDGE_EDIT_EVENT, { op, a, b })
+  sendEdgeEdit (op: 'add' | 'remove', a: string, b: string, turn?: number) {
+    return this.send(EDGE_EDIT_EVENT, turn == null ? { op, a, b } : { op, a, b, turn })
   }
 
   getCustomParams () {

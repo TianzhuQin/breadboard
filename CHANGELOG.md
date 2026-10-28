@@ -27,6 +27,9 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
 - Prolific entry (`/game/{e}/{i}/prolific?PROLIFIC_PID=...`) with pseudonymous ids and the
   completion screen.
 - Steps with a time limit (`step.duration`).
+- **Example: network game**, offered by New experiment: a complete experiment that runs by itself
+  (waiting room, ties among neighbors, cutting ties on the network, timed rounds, a score and
+  recorded picks), to try Breadboard out or build on.
 - Release packaging (`bin/make-dist`, `bin/smoke-dist`), continuous integration, and
   documentation in `docs/`, including a Chinese quick start.
 
@@ -43,6 +46,13 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
   plainly, with what to do next; only Mechanical Turk workers are asked to return the HIT.
 - CSV exports are in true UTC and keep values exactly.
 - Login events no longer store IP address, user agent or referer.
+- A participant page never stays blank: until the experiment shows something (and between two
+  screens) it says the participant is in and to keep the page open. The waiting room says when
+  enough people are there and the session starts soon.
+- Releases log at INFO level to a daily `logs/application.log` (30 days kept), set in
+  `conf/logger.xml`; Play ignored the levels in the settings file, so releases logged debug output.
+- The console says why it signed out when the account signed in, out or changed its password in
+  another browser.
 
 #### Fixed
 - Anyone who knew a participant's page address could take over their seat. Every way in now
@@ -51,6 +61,9 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
   a token for that player only. Sign-out and Mechanical Turk approval take a POST.
 - A step without choices ended at once; idle and drop timers dropped players who had answered.
 - Removing tracked ties threw an error after logging the removal.
+- A tie cut confirmed just as a round ended was made in the next round and used up its allowance;
+  each `edgeEdits.allow()` is now a turn of its own.
+- Debug logging wrote researchers' session tokens to the log.
 - OnLeaveStep never ran; `ReadyUpSequence` ignored its options.
 - Simultaneous joins could fail with ConcurrentModificationException.
 - Groovy interpolated strings reached browsers as objects instead of text.

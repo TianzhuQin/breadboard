@@ -64,6 +64,7 @@ if ls "$APP"/groovy/*_test.groovy >/dev/null 2>&1; then fail "the zip carries te
 [ "$(wc -l < "$APP/lib/classpath.txt")" -eq "$(find "$APP/lib" -name '*.jar' | wc -l)" ] \
   || fail "lib/classpath.txt doesn't list every jar in lib/"
 [ -f "$APP/docs/install.md" ] || fail "the zip has no docs/"
+[ -f "$APP/conf/logger.xml" ] || fail "the zip has no conf/logger.xml"
 grep -q "$(printf '\r')$" "$APP/breadboard.bat" || fail "breadboard.bat doesn't have Windows line endings"
 pass "release layout"
 if [ -n "$OLD_DB" ]; then
@@ -172,4 +173,9 @@ if { sed "s/${ESC}\[[0-9;]*m//g" "$WORK/server.log"; cat "$APP"/logs/*.log 2>/de
   fail "the server logged errors"
 fi
 pass "no errors in the server's output"
+# Debug output would log researchers' session tokens.
+if grep -q '\[DEBUG\]' "$APP"/logs/*.log 2>/dev/null; then
+  fail "the server logged debug output (conf/logger.xml is not in effect)"
+fi
+pass "no debug output in the logs"
 echo "The release in $(basename "$ZIP") works."

@@ -66,7 +66,7 @@ CP="$(sed 's#^#lib/#' lib/classpath.txt | paste -s -d: -)"
 # shellcheck disable=SC2086 # JAVA_OPTS is a list of options
 exec "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m $JAVA_OPTS \
   -Duser.timezone=UTC \
-  -Dconfig.file=conf/application-prod.conf \
+  -Dconfig.file=conf/application-prod.conf -Dlogger.file=conf/logger.xml \
   -cp "$CP" \
   "$@" \
   play.core.server.NettyServer "$HERE"

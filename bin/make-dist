@@ -65,6 +65,7 @@ done < "$R/lib/classpath.txt"
 rm -rf "$R/conf" "$R/share" "$R/bin"
 mkdir -p "$R/conf" "$R/db" "$R/logs" "$R/groovy"
 cp conf/application-prod.conf "$R/conf/"
+cp release/logger.xml "$R/conf/logger.xml"
 # The engine's Groovy scripts are read from <install>/groovy (tests excluded).
 find groovy -maxdepth 1 -name '*.groovy' ! -name '*_test.groovy' -exec cp {} "$R/groovy/" \;
 cp release/breadboard.sh "$R/"

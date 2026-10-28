@@ -44,6 +44,9 @@ class EdgeEdits {
   String resultEvent
   Map<String, Map> rules = new ConcurrentHashMap<String, Map>()
   boolean warnedTiesHidden = false
+  // Each allow() is a new turn. The page sends the turn it offered a change in, so a change
+  // confirmed just as a round ended isn't made in (and counted against) the next one.
+  java.util.concurrent.atomic.AtomicLong turns = new java.util.concurrent.atomic.AtomicLong()
 
   def allow(Vertex player, Map opts = [:]) {
     def rule = [
@@ -56,6 +59,7 @@ class EdgeEdits {
       candidates: opts.candidates,
       validate  : opts.validate,
       onEdit    : opts.onEdit,
+      turn      : turns.incrementAndGet(),
     ]
     if (!(rule.scope in ["amongNeighbors", "own", "visible"])) {
       throw new IllegalArgumentException("edgeEdits scope must be amongNeighbors, own or visible, not ${rule.scope}")
@@ -126,6 +130,7 @@ class EdgeEdits {
       remainingAdds   : rule.remainingAdds,
       remainingRemoves: rule.remainingRemoves,
       confirm         : rule.confirm,
+      turn            : rule.turn,
       // The participant can't see the ties among their neighbors, so the page doesn't offer to
       // connect two of them (it can't tell who is tied already, and refusals would give it away).
       tiesHidden      : models.ClientView.getVisibility() == models.ClientView.Visibility.EGO,
@@ -156,6 +161,10 @@ class EdgeEdits {
     def v2 = data?.b == null ? null : g.fromClientId(data.b.toString())
     def rule = rules[player.id.toString()]
     def reason = check(player, op, v1, v2)
+    // (Pages from before turns were sent send none, and are taken at their word.)
+    if (reason == null && data?.turn != null && data.turn.toString() != rule.turn.toString()) {
+      reason = "Time was up for that change, so it wasn't made."
+    }
     if (reason == null) {
       if (rule.onEdit != null) {
         rule.onEdit(player, op, v1, v2)
