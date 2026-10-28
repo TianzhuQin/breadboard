@@ -12,7 +12,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { MoreHorizontal, Sun, Moon, Monitor, History, LogOut } from 'lucide-vue-next'
+import { MoreHorizontal, Sun, Moon, Monitor, History, LogOut, BookOpen, Languages, LifeBuoy } from 'lucide-vue-next'
 import { BMenu, type MenuItem } from '@/ui'
 import { admin, logout } from '@/store/admin'
 import { theme, setTheme } from '@/lib/theme'
@@ -22,13 +22,21 @@ const initial = computed(() => (admin.email || '?').trim().charAt(0).toUpperCase
 async function signOut () {
   if (await confirmSignOut()) await logout()
 }
+const DOCS = 'https://github.com/TianzhuQin/breadboard/blob/main/docs/'
+const open = (url: string) => { window.open(url, '_blank', 'noopener') }
 const items = computed<MenuItem[]>(() => [
+  { heading: 'Help' },
+  { label: 'The console’s guide', icon: BookOpen, run: () => open(`${DOCS}console.md`) },
+  { label: '中文快速上手 (Chinese)', icon: Languages, run: () => open(`${DOCS}zh-CN.md`) },
+  { label: 'Troubleshooting', icon: LifeBuoy, run: () => open(`${DOCS}install.md#troubleshooting`) },
+  { divider: true },
   { heading: 'Appearance' },
   { label: 'System', icon: Monitor, active: theme.value === 'system', run: () => setTheme('system') },
   { label: 'Light', icon: Sun, active: theme.value === 'light', run: () => setTheme('light') },
   { label: 'Dark', icon: Moon, active: theme.value === 'dark', run: () => setTheme('dark') },
   { divider: true },
-  { label: 'Open the previous console', icon: History, run: () => { window.location.href = '/legacy-admin' } },
+  // (in a new tab: the previous console has no way back to this one)
+  { label: 'Open the previous console', icon: History, run: () => open('/legacy-admin') },
   { label: 'Sign out', icon: LogOut, run: signOut },
 ])
 </script>

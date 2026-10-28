@@ -105,4 +105,28 @@ const playerCount = computed(() => { void graph.version.value; return graph.node
 @keyframes b-live { 50% { box-shadow: 0 0 0 5px transparent; } }
 .sidenav__count { font-size: 11px; font-weight: 650; color: var(--muted); background: var(--bg-subtle); padding: 0 7px; border-radius: 999px; line-height: 18px; }
 .sidenav__footer { border-top: 1px solid var(--border); padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+
+/* When the list doesn't fit, a shadow at the edge says there is more to scroll to (macOS hides
+   scroll bars). The covers scroll with the list; the shadows stay put. */
+.sidenav__scroll {
+  background:
+    linear-gradient(var(--surface) 30%, transparent) top / 100% 28px no-repeat local,
+    linear-gradient(transparent, var(--surface) 70%) bottom / 100% 28px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(15, 23, 42, 0.16), transparent) top / 100% 10px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(15, 23, 42, 0.16), transparent) bottom / 100% 10px no-repeat scroll;
+}
+/* Laptop screens: everything fits without scrolling down to Sessions & data. */
+@media (max-height: 880px) {
+  .sidenav__brand { padding: 10px 18px 6px; }
+  .sidenav__switcher { margin: 2px 12px 6px; }
+  .sidenav__group + .sidenav__group { margin-top: 8px; }
+  .sidenav__heading { padding: 4px 10px; }
+  .sidenav__link { height: 30px; }
+  .sidenav__footer { padding: 6px 10px; }
+}
+@media (max-height: 720px) {
+  .sidenav__link { height: 27px; font-size: var(--text-sm); }
+  .sidenav__heading { padding: 3px 10px; font-size: 10px; }
+  .sidenav__scroll { padding-top: 0; padding-bottom: 6px; }
+}
 </style>

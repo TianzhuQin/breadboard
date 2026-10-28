@@ -8,7 +8,7 @@ import type { Experiment, Instance } from '@/store/types'
 import { STOP_PAUSES_AUTOPILOT, autopilotNow, stopPausesAutopilot } from '../autopilot/autopilot'
 import { canDelete, canResume, canStop, csvDataRows, describeError, safeFileName, waitUntil } from './sessionData'
 
-type Job = 'resume' | 'stop' | 'delete' | 'data' | 'list'
+type Job = 'resume' | 'stop' | 'delete' | 'data' | 'list' | 'all'
 
 /**
  * What the Sessions page can do to a session, each with its confirmation, progress and outcome.
@@ -189,5 +189,25 @@ export function useSessionActions () {
     })
   }
 
-  return { isBusy, lifecycleBusy, resume, stop, remove, downloadData, downloadList }
+  /**
+   * Every listed session's events in one file (GET /csv/experiment/:id/data): each row starts with
+   * the session's id, name, status and launch parameters, then the columns of a session's own file.
+   */
+  async function downloadAllData (exp: Pick<Experiment, 'id' | 'name'>, sessionIds: number[]): Promise<boolean> {
+    return !!await run('all', exp.id, async () => {
+      try {
+        const text = await http.get<string>(`/csv/experiment/${exp.id}/data?ids=${sessionIds.join(',')}`, { raw: true })
+        const file = `${safeFileName(exp.name, 'experiment')}_data.csv`
+        saveText(file, text)
+        const rows = csvDataRows(text)
+        notify.success(`Downloaded ${file}`, `${sessionIds.length.toLocaleString()} ${sessionIds.length === 1 ? 'session' : 'sessions'}, ${(rows || 0).toLocaleString()} data ${rows === 1 ? 'row' : 'rows'}.`)
+        return true
+      } catch (e) {
+        notify.error('Could not download the data', describeError(e))
+        return false
+      }
+    })
+  }
+
+  return { isBusy, lifecycleBusy, resume, stop, remove, downloadData, downloadList, downloadAllData }
 }

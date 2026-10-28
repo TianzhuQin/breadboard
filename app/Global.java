@@ -200,6 +200,8 @@ public class Global extends GlobalSettings {
 
     resetPasswordIfAsked();
 
+    markInterruptedSessions();
+
     // Open a session of the configured experiment so participants can join without an admin.
     models.Autopilot.start();
 
@@ -251,6 +253,34 @@ public class Global extends GlobalSettings {
       throw new IllegalStateException("The database could not be brought up to date: " + e.getMessage()
           + ". If this is a new install, stop the server, delete the db folder and start again; "
           + "otherwise restore the database from a backup and report the problem.", e);
+    }
+  }
+
+  /**
+   * Sessions that were running when the server stopped (a restart, a crash, a power cut) can't go
+   * on: their game lived in the server's memory. They are marked stopped, with a sessionInterrupted
+   * event, so the console shows them as stopped (Resume starts their game again, as for a session a
+   * researcher stopped) and nothing takes them for running.
+   */
+  static void markInterruptedSessions() {
+    try {
+      List<ExperimentInstance> stale = ExperimentInstance.find.where()
+          .in("status", ExperimentInstance.Status.RUNNING, ExperimentInstance.Status.TESTING).findList();
+      for (ExperimentInstance instance : stale) {
+        instance.status = ExperimentInstance.Status.STOPPED;
+        instance.update();
+        Event event = new Event();
+        event.name = "sessionInterrupted";
+        event.experimentInstance = instance;
+        EventData why = new EventData();
+        why.name = "reason";
+        why.value = "The server stopped while this session ran; its game could not go on.";
+        event.addEventData(why);
+        event.save();
+        Logger.warn("Session " + instance.id + " (\"" + instance.name + "\") was running when the server stopped: it is marked stopped");
+      }
+    } catch (Exception e) {
+      Logger.error("Could not mark the sessions that were running when the server stopped", e);
     }
   }
 

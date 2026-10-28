@@ -116,6 +116,7 @@
                   >
                     {{ e.name }}
                   </button>
+                  <span v-if="describeEvent(e.name)" class="sev__plain">{{ describeEvent(e.name) }}</span>
                 </td>
                 <td class="sev__data">
                   <span v-for="(d, j) in e.data" :key="j" class="sev__kv">
@@ -201,6 +202,7 @@ import {
   groupEvents, liveEventOf, mergeEvents, normalizeEvent, safeFileName, sameDay, sortEvents, type EventGroup, type SessionEvent,
 } from './sessionData'
 import { loadSessionEvents } from './eventsLoader'
+import { describeEvent } from '../session/events'
 
 const props = defineProps<{ open: boolean, session: Instance | null }>()
 const emit = defineEmits<{ 'update:open': [value: boolean], download: [session: Instance] }>()
@@ -428,6 +430,7 @@ async function exportGroup (name: string) {
 .sev__col-name { width: 1%; }
 .sev__time { white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--text-soft); }
 .sev__day { color: var(--muted); margin-right: 6px; font-family: var(--font); }
+.sev__plain { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--muted); line-height: 1.35; }
 .sev__name {
   max-width: 220px;
   padding: 1px 7px;

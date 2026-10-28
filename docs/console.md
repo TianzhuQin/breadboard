@@ -96,9 +96,11 @@ Breadboard out or to build on. People wait in a waiting room until at least 2 ar
 players then fill the network up to 8. Each round everyone picks Blue or Orange and scores a point
 when their pick matches most of their neighbors'; the network shows what each neighbor picked last
 round and the ties among their neighbors, and during a round everyone may cut one of their own ties
-by clicking it. The number of rounds and their length are launch parameters. Picks and scores are
-recorded as `ColourPick` and `RoundResult` events. Open a session and sign in from two browser
-windows (or turn on the autopilot) to watch it run.
+by clicking it. The size of the network, the waiting room's minimum and wait, and the number and
+length of rounds are launch parameters, so they change on the Parameters page. Picks and scores are
+recorded as `ColourPick` and `RoundResult` events. Open a session (or turn on the autopilot) and
+open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
+to continue as the first person or **Join as someone else**.
 
 ### Steps
 
@@ -281,6 +283,12 @@ its links lead nowhere until you press **Resume** on this page. After its one se
 the next session when one finishes** off, the button reads **Open another session**. Both work when
 `application.conf` is in charge too, and a pause survives a server restart.
 
+**A mistake in a step pauses it too.** When the steps of a session it opens don't load (a typo, a
+name that isn't defined), the autopilot stops that session before anyone can join, records
+`stepsFailedToLoad` in it, and pauses, saying which step and line failed. Fix the step on the Steps
+page, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
+next session it opens uses what you save there.
+
 Settings saved on this page take precedence over `application.conf`. Until some are saved, a
 `breadboard.autopilot.experiment` line in `application.conf` turns the autopilot on, and the page
 only shows the settings
@@ -333,6 +341,7 @@ of event with a column per data name.
 | Download | Where | Contents |
 |---|---|---|
 | **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`. |
+| **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
 | **Export all**, **Export filtered** | A session's events | The same columns as the session's file, with times in standard ISO 8601 (`2026-10-28T13:24:23.757Z`). Events without data keep a row. |
 | **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |

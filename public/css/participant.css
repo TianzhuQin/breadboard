@@ -126,6 +126,10 @@ body.bb-page { margin: 0; }
 }
 .bb-page .bb-button:hover { background: var(--bb-accent-hover); }
 .bb-page .bb-button:active { transform: translateY(1px); }
+/* a link that looks like the button (participantSeat) */
+.bb-page a.bb-button { text-align: center; text-decoration: none; box-sizing: border-box; }
+.bb-page .bb-panel .bb-alt { margin-top: 16px; text-align: center; font-size: 15px; }
+.bb-page .bb-alt a { color: var(--bb-accent); font-weight: 600; }
 
 /* (.bb-panel in the selectors: ".bb-page .bb-panel p" would otherwise win and turn them grey) */
 .bb-page .bb-panel .bb-alert {

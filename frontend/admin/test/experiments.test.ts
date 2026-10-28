@@ -388,6 +388,19 @@ describe('New experiment dialog', () => {
     document.body.innerHTML = ''
   })
 
+  it('offers the ready-to-run example first when there is no experiment yet', async () => {
+    store.exps.splice(0, store.exps.length)
+    http.put.mockResolvedValue({ id: 6, name: 'Network game' })
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    expect(http.put).toHaveBeenCalledWith('/experiment', expect.objectContaining({ newExperimentName: 'Network game', example: 'network-game' }))
+    w.unmount()
+  })
+
   it('creates from the template with copyExperimentId -1 and asks for the new list', async () => {
     http.put.mockResolvedValue({ id: 6, name: 'Fresh' })
     const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })

@@ -24,7 +24,16 @@
         </p>
         <BButton size="sm" @click="router.push('/experiments')">Switch off file mode…</BButton>
       </div>
-      <div v-else-if="admin.engine === 'stale'" class="steps__banner is-stale" role="status">
+      <div v-if="!fileMode && unattended" class="steps__banner is-unattended" role="note">
+        <Bot :size="17" aria-hidden="true" class="steps__banner-icon" />
+        <p class="steps__banner-text">
+          <strong>“{{ admin.experiment?.name }}” runs unattended.</strong> The next session the autopilot opens uses
+          the steps saved here. If a step doesn't load, the autopilot stops that session before anyone joins and
+          pauses until you fix the step and press Resume.
+        </p>
+        <BButton size="sm" @click="router.push('/autopilot')">Autopilot</BButton>
+      </div>
+      <div v-if="!fileMode && admin.engine === 'stale' && (sessionLive || admin.engineProblem)" class="steps__banner is-stale" role="status">
         <RotateCw :size="16" aria-hidden="true" class="steps__banner-icon" />
         <p class="steps__banner-text">
           <strong>The engine isn't running your latest steps.</strong> Reload it to load everything that is saved,
@@ -227,6 +236,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import {
+  Bot,
   ArrowLeft, CircleAlert, CircleCheck, Copy, CopyPlus, Ellipsis, FolderOpen, Hourglass, Info, ListOrdered, Lock,
   PanelBottom, Pencil, Play, Plus, RotateCw, Save, Trash2, TriangleAlert, Undo2, WifiOff, X,
 } from 'lucide-vue-next'
@@ -238,6 +248,7 @@ import { actions, admin, ensureConnected } from '@/store/admin'
 import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
+import { useAutopilotStatus } from '../session/autopilot'
 import { goToLine, viewIn } from '../console/editorView'
 import { parseGroovyError } from '../console/groovyError'
 import StepList from './StepList.vue'
@@ -252,6 +263,14 @@ import {
 } from './stepsStore'
 
 const router = useRouter()
+// A session of this experiment is running: saved steps reach it only through a reload or Run.
+const sessionLive = computed(() => {
+  const s = admin.instance?.status
+  return s === 'RUNNING' || s === 'TESTING'
+})
+// The autopilot runs this experiment: what is saved here is what its next session loads.
+const autopilot = useAutopilotStatus()
+const unattended = computed(() => !!autopilot.value?.on && !!admin.experiment && autopilot.value.experimentId === admin.experiment.id)
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 const modKey = isMac ? 'Cmd' : 'Ctrl'
 const modSymbol = isMac ? '⌘' : 'Ctrl+'
@@ -474,7 +493,7 @@ async function saveCurrent () {
     refreshStore()
     if (d.engineBehind) actions.markEngineStale()
     announce.value = `Saved ${d.name}.`
-    notify.success(`Saved “${d.name}”`)
+    notify.success(`Saved “${d.name}”`, d.engineBehind && !sessionLive.value ? 'The next session you open uses it.' : undefined)
   } else {
     notify.error(`Couldn't save “${d.name}”`, d.error || undefined)
   }
@@ -560,7 +579,9 @@ async function saveAll (): Promise<boolean> {
   if (saved) {
     refreshStore()
     if (behind) actions.markEngineStale()
-    notify.success(`Saved ${saved} step${saved === 1 ? '' : 's'}`, behind ? 'Reload the engine, or Run a step, to use the new versions now.' : undefined)
+    notify.success(`Saved ${saved} step${saved === 1 ? '' : 's'}`, !behind
+      ? undefined
+      : sessionLive.value ? 'Reload the engine, or Run a step, to use the new versions in the running session.' : 'The next session you open uses them.')
   }
   if (failed.length) {
     notify.error(`Couldn't save ${failed.length} step${failed.length === 1 ? '' : 's'}`, failed.map(d => `${d.name}: ${d.error}`).join('\n'))
@@ -753,6 +774,7 @@ function clock (t: number) {
 .steps__banner-text strong { font-weight: 650; }
 .steps__banner.is-file { background: var(--warning-soft); color: var(--warning-soft-text); }
 .steps__banner.is-stale { background: var(--info-soft); color: var(--info-soft-text); }
+.steps__banner.is-unattended { background: var(--accent-soft); color: var(--accent-soft-text); }
 .steps__state { flex: 1; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--muted); padding: 24px; }
 .steps__head {
   display: flex;

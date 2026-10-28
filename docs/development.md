@@ -28,7 +28,7 @@ see [install.md](install.md).
 | `frontend/` | The front end, a pnpm workspace (below). |
 | `public/` | Static files, served under `/assets`. The front-end builds write `public/admin/` and `public/bundles/`, which are not committed. |
 | `project/` | The sbt build: `Build.scala` (version, dependencies), `plugins.sbt`, `sbt-repositories`. |
-| `bin/` | `sbt8`, `run-local`, `make-dist`, `smoke-dist` (all described below). |
+| `bin/` | `sbt8`, `run-local`, `make-dist`, `bundle-java`, `smoke-dist`, `smoke-dist.ps1` (all described below). |
 | `release/` | The launchers (`breadboard.sh`, `breadboard.bat`) and the `README.md` that go into the release zip. |
 | `docs/` | This documentation. |
 
@@ -178,7 +178,9 @@ new push cancels the run still going for the same branch or pull request.
 |---|---|
 | Front end | Installs with `pnpm install --frozen-lockfile` on Node 22, runs `build:all`, type-checks the console and runs `test:all`. Keeps `public/admin` and `public/bundles` as the `frontend-build` artifact for 3 days. |
 | Server tests | Runs `bin/sbt8 test` on Zulu Java 8, with the sbt and Ivy caches kept between runs. |
-| Release package | After both pass: builds the release from the `frontend-build` artifact (`SKIP_FRONTEND=1 bin/make-dist`), then runs `bin/smoke-dist`. Keeps the zip and its `.sha256` as the `breadboard-release` artifact for 7 days. |
+| Release package | After both pass: builds the release from the `frontend-build` artifact (`SKIP_FRONTEND=1 bin/make-dist`) and runs `bin/smoke-dist` on it, then makes the downloads that carry their own Java (`bin/bundle-java`) and runs `bin/smoke-dist` on the Linux one. Keeps the zips and their `.sha256` files as the `breadboard-release` artifact for 7 days. |
+| macOS package | Runs `bin/smoke-dist` on the `-macos-arm64` zip, on its own Java. |
+| Windows package | Runs `bin/smoke-dist.ps1` on the `-windows-x64` zip: `breadboard.bat` on its own Java, the first account, a backup, and the message when the port is taken. |
 
 ## Making a release
 
@@ -203,10 +205,21 @@ new push cancels the run still going for the same branch or pull request.
    `logs/`, `release/README.md` as `README.md`, `LICENSE.md`, `CHANGELOG.md` and `docs/`. It writes
    `breadboard-<version>.zip` and `breadboard-<version>.zip.sha256` next to it. The output is
    not in `dist/` because Play copies whatever is in `dist/` into the package it builds.
-4. Check it:
+4. Make the downloads that carry their own Java (Azul Zulu 8 JRE, from Azul's metadata API,
+   checked against its SHA-256 and cached in `target/jre-cache`):
 
    ```bash
-   bin/smoke-dist                                           # the newest zip in target/release/
+   bin/bundle-java                       # macos-arm64, macos-x64, linux-x64, windows-x64
+   ```
+
+   It writes `breadboard-<version>-<platform>.zip` (and `.sha256`) next to the plain zip: the
+   same files plus the runtime in `jre/`, without the launchers of the other systems.
+   `JRE_MACOS_ARM64=/path/to/archive` (and so on) uses an archive already on disk.
+5. Check them:
+
+   ```bash
+   bin/smoke-dist target/release/breadboard-vX.Y.Z.zip      # with JAVA8_HOME set
+   bin/smoke-dist target/release/breadboard-vX.Y.Z-macos-arm64.zip   # on its own Java
    bin/smoke-dist --db /path/to/old/db/breadboard.h2.db     # on a copy of an older database
    ```
 
@@ -216,13 +229,15 @@ new push cancels the run still going for the same branch or pull request.
    loads both consoles, the bundles and a participant
    page, creates the first account and signs in, then restarts on the same database and checks
    again. It fails if the server logs an error. With `--db` it starts on a copy of an older
-   release's database instead; when that database already has accounts, it only checks that
-   the server starts and serves its pages.
-5. Commit, tag and publish:
+   release's database instead (and checks that it was backed up first); when that database
+   already has accounts, it only checks that the server starts and serves its pages. CI runs the
+   Windows zip through `bin/smoke-dist.ps1`.
+6. Commit, tag and publish (the platform zips can be taken from CI's `breadboard-release`
+   artifact):
 
    ```bash
    git tag vX.Y.Z && git push origin vX.Y.Z
-   gh release create vX.Y.Z target/release/breadboard-vX.Y.Z.zip target/release/breadboard-vX.Y.Z.zip.sha256
+   gh release create vX.Y.Z target/release/breadboard-vX.Y.Z*.zip target/release/breadboard-vX.Y.Z*.zip.sha256
    ```
 
    Use the version's `CHANGELOG.md` section as the release notes.

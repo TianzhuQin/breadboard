@@ -133,6 +133,39 @@ public class AutopilotSessionTest extends BaseTest {
     }
 
     @Test
+    public void aSessionWhoseStepsDontLoadIsStoppedAndTheAutopilotPausesSayingWhere() throws Exception {
+        final User researcher = user("typo");
+        final Experiment experiment = createExperiment("Has a typo");
+        // valid Groovy, but "five" is not defined: it fails as the step loads
+        createStep(experiment, "InitStep", "NETWORK_SIZE = 3\nSEATS = five\nautopilot.waitingRoom([minPlayers: 2])");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        Result saved = post(researcher, settings(experiment, 2));
+        assertEquals(contentAsString(saved), OK, status(saved));
+        await("the session to be opened and stopped", () -> sessions(experiment).size() == 1
+            && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED);
+        Thread.sleep(500);
+        assertEquals("no other session opened in its place", 1, sessions(experiment).size());
+
+        JsonNode status = state(researcher).get("status");
+        assertTrue(status.toString(), status.get("paused").asBoolean());
+        String problem = status.get("problem").asText();
+        assertTrue(problem, problem.contains("InitStep: line 2: No such property: five"));
+        assertTrue(problem, problem.contains("Steps page"));
+        assertTrue("the link leads nowhere now", status.get("instance").isNull()
+            || !"RUNNING".equals(status.get("instance").get("status").asText()));
+        List<Event> events = Event.find.where().eq("experimentInstance.id", sessions(experiment).get(0).id)
+            .eq("name", "stepsFailedToLoad").findList();
+        assertEquals(1, events.size());
+
+        // Not even the watchdog opens another until Resume
+        watchdog();
+        Thread.sleep(500);
+        assertEquals(1, sessions(experiment).size());
+    }
+
+    @Test
     public void theAutopilotKeepsASessionOpenWithTheConsolesWaitingRoom() throws Exception {
         final User researcher = user("pilot");
         final Experiment experiment = createExperiment("Runs by itself");

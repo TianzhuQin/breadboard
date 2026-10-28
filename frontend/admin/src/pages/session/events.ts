@@ -146,7 +146,7 @@ export type EventTone = 'success' | 'warning' | 'danger' | 'accent' | 'neutral'
 /** A colour for the event's dot, so arrivals, departures and milestones stand out. */
 export function eventTone (name: string): EventTone {
   const n = (name || '').toLowerCase()
-  if (n === 'autopilotcancelled' || n.endsWith('error')) return 'danger'
+  if (n === 'autopilotcancelled' || n === 'sessioninterrupted' || n === 'stepsfailedtoload' || n.endsWith('error')) return 'danger'
   // ("Disconnected" itself is a tie being cut, not someone dropping out)
   if (n === 'clientdisconnected' || n === 'aitakeover' || n === 'sessionstopped' || n.endsWith('timeout')) return 'warning'
   if (n === 'clientconnected' || n === 'clientlogin' || n === 'aireturned' || n === 'prolificentry') return 'success'
@@ -169,6 +169,8 @@ const KNOWN: Record<string, string> = {
   disconnected: 'A tie was cut',
   sessionstopped: 'A researcher stopped the session',
   sessionresumed: 'The session was resumed: its game starts again',
+  sessioninterrupted: 'The server stopped while the session ran (a restart or crash)',
+  stepsfailedtoload: 'The steps didn\'t load, so the autopilot stopped the session',
 }
 
 /** A plain-words line for well-known events; '' for the experiment's own. */

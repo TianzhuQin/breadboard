@@ -15,7 +15,10 @@ import java.util.zip.ZipFile;
 import static org.junit.Assert.*;
 import static play.test.Helpers.*;
 
-/** Database backups (models.Backups, Settings → Backups) and GET /health. */
+/**
+ * Database backups (models.Backups, Settings → Backups), GET /health, and what a restart does to
+ * the sessions that were running.
+ */
 public class BackupsAndHealthTest extends BaseTest {
 
     @Test
@@ -70,5 +73,25 @@ public class BackupsAndHealthTest extends BaseTest {
         assertNotNull(Backups.find(folder, Backups.list(folder).get(0).getName()));
         assertNull(Backups.find(folder, "../breadboard.h2.db"));
         assertNull(Backups.find(folder, "breadboard-2026-10-28-120000.zip"));
+    }
+
+    @Test
+    public void sessionsRunningWhenTheServerStoppedAreMarkedStoppedWithAReason() {
+        Experiment experiment = createExperiment("Restarted");
+        ExperimentInstance running = createInstance("live", experiment);
+        running.status = ExperimentInstance.Status.RUNNING;
+        running.update();
+        ExperimentInstance finished = createInstance("done", experiment);
+        finished.status = ExperimentInstance.Status.FINISHED;
+        finished.update();
+
+        Global.markInterruptedSessions();
+
+        assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(running.id).status);
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(finished.id).status);
+        List<Event> events = Event.find.where().eq("experimentInstance.id", running.id).findList();
+        assertEquals(1, events.size());
+        assertEquals("sessionInterrupted", events.get(0).name);
+        assertEquals(0, Event.find.where().eq("experimentInstance.id", finished.id).findRowCount());
     }
 }

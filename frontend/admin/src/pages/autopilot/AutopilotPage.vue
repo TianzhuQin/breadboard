@@ -9,7 +9,7 @@
       <BEmpty
         :icon="ServerCog"
         title="The autopilot needs a server update"
-        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in application.conf (breadboard.autopilot.*)."
+        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file, conf/application-prod.conf (breadboard.autopilot.*)."
       >
         <template #actions>
           <BButton :icon="RefreshCw" :loading="refreshing" @click="load()">Check again</BButton>
@@ -46,7 +46,7 @@
         <div>
           <p class="ap-banner__title">These settings come from the server's configuration file</p>
           <p class="ap-banner__text">
-            <code>application.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
+            <code>conf/application-prod.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
             and changes can't be made here. To manage the autopilot from this page, remove the
             <code>breadboard.autopilot.*</code> lines from the file and restart the server.
           </p>
@@ -99,8 +99,8 @@
               <Info :size="15" aria-hidden="true" />
               <span>
                 Its sessions use each launch parameter's default:
-                <template v-for="(p, i) in launchDefaults" :key="p.name"><code>{{ p.name }}</code> {{ p.value === '' ? '(empty)' : p.value }}{{ i < launchDefaults.length - 1 ? ', ' : '.' }} </template>
-                <template v-if="emptyDefaults.length">Check that {{ emptyDefaults.join(' and ') }} can be empty.</template>
+                <template v-for="(p, i) in launchDefaults" :key="p.name"><code>{{ p.name }}</code>{{ ' ' }}{{ p.value === '' ? '(empty)' : p.value }}{{ i < launchDefaults.length - 1 ? ', ' : '. ' }}</template>
+                <template v-if="emptyDefaults.length">{{ ' ' }}Check that {{ emptyDefaults.join(' and ') }} can be empty.</template>
                 Change them on the <RouterLink to="/parameters">Parameters</RouterLink> page; a session already open keeps the values it opened with.
               </span>
             </p>
@@ -438,9 +438,14 @@ const activity = computed(() => {
 const formExperiment = computed(() => experiments.value.find(e => e.id === form.value.experimentId) ||
   (admin.experiment && admin.experiment.id === form.value.experimentId ? admin.experiment : null))
 const ownRoom = computed(() => stepsCall(formExperiment.value?.steps, 'waitingRoom'))
-const launchDefaults = computed(() => (formExperiment.value?.parameters || []).map(p => ({ name: p.name, value: String(p.defaultVal ?? '') })))
-// (an empty text default is often a completion code someone forgot to fill in)
-const emptyDefaults = computed(() => launchDefaults.value.filter(p => p.value === '').map(p => p.name))
+const launchDefaults = computed(() => (formExperiment.value?.parameters || []).map(p => ({
+  name: p.name,
+  value: String(p.defaultVal ?? ''),
+  optional: /\b(optional|if|leave (it )?empty|may be empty|can be empty)\b/i.test(String(p.description ?? '')),
+})))
+// (an empty text default is often a completion code someone forgot to fill in; not one whose
+// description says it may stay empty)
+const emptyDefaults = computed(() => launchDefaults.value.filter(p => p.value === '' && !p.optional).map(p => p.name))
 const ownLeave = computed(() => stepsCall(formExperiment.value?.steps, 'replaceDisconnected'))
 
 /**
@@ -545,6 +550,9 @@ async function resume () {
   try {
     const now = await resumeAutopilot()
     adopt(now, false)
+    // it opens its session a moment later: show it then, not at the next poll
+    clearTimeout(soon)
+    soon = setTimeout(() => refresh(), 1500)
     const name = now.status.experimentName || savedExperimentName.value || 'the experiment'
     const waitingFor = now.status.engineSession
     if (waitingFor && waitingFor.experimentId !== now.settings.experimentId) {

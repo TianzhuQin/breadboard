@@ -831,6 +831,21 @@ export default Vue.extend({
         const a = e.source.id, b = e.target.id
         if (a !== b && adj[a] && adj[b]) { adj[a].push(b); adj[b].push(a) }
       }
+      // People keep their places once they have one: a tie cut or made between neighbors moves
+      // nobody (participants find people by where they are), someone who leaves the ring leaves a
+      // gap the others close, and a newcomer sits next to someone they are tied to.
+      const kept = previous.filter(id => adj[id])
+      if (kept.length) {
+        const order = kept.slice()
+        for (const id of ids) {
+          if (order.indexOf(id) >= 0) continue
+          const tied = adj[id].filter(x => order.indexOf(x) >= 0)
+          if (tied.length) order.splice(order.indexOf(tied[0]) + 1, 0, id)
+          else order.push(id)
+        }
+        return order
+      }
+      // The first time: neighbors tied to each other next to each other.
       const byRank = ids.slice().sort((a, b) => rank(a) - rank(b))
       const placed: Record<string, boolean> = {}
       const order: string[] = []

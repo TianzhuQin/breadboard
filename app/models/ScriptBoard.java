@@ -546,15 +546,26 @@ public class ScriptBoard extends UntypedActor {
   // no console request is waiting for them.
   static final String STEPS_SOURCE = "Steps";
 
-  private void loadSteps(Experiment experiment, ThrottledWebSocketOut out) {
+  /**
+   * Load the experiment's steps into the engine. Returns "<step>: <what went wrong>" for the first
+   * step that didn't load, or null when they all did.
+   */
+  private String loadSteps(Experiment experiment, ThrottledWebSocketOut out) {
     if (experiment == null) {
-      return;
+      return null;
     }
+    String failed = null;
     for (Step step : experiment.getSteps()) {
-      //should call RunStep?
-      processScript(step.source + ";null;", out, step.name, "source", STEPS_SOURCE, null, true);
+      String problem = processScript(step.source + ";null;", out, step.name, "source", STEPS_SOURCE, null, true);
+      if (problem != null && failed == null) {
+        failed = step.name + ": " + problem;
+      }
     }
     afterStepsLoaded(experiment);
+    if (failed == null) {
+      Autopilot.stepsLoaded(experiment);
+    }
+    return failed;
   }
 
   /**
@@ -1715,9 +1726,21 @@ public class ScriptBoard extends UntypedActor {
 
       // Re-run the Steps, then the autopilot settings over them: here, under the lock, so another
       // account's rebuild can't come between (queued, they used to run in whatever engine was there).
-      loadSteps(experiment, launchGame.out);
+      String failed = loadSteps(experiment, launchGame.out);
       if (byAutopilot) {
         Autopilot.launchCarriedOut();
+        if (failed != null) {
+          // The steps define its waiting room and game: participants would wait for a game that
+          // never starts. The session stops, and the autopilot pauses until the steps are fixed.
+          LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+          data.put("error", failed);
+          eventTracker.track("stepsFailedToLoad", data);
+          stopSession(gameListener);
+          endParticipants(instance.id);
+          cancelEngineTimers();
+          eventTracker.disable();
+          Autopilot.stepsFailed(instance, failed);
+        }
       }
     }
 
@@ -2192,10 +2215,11 @@ public class ScriptBoard extends UntypedActor {
    * Steps page), which defines steps rather than starting the game, even when it mentions
    * initStep.start() (e.g. an OnJoinStep that starts the game once enough people are in). Its text
    * says nothing then: whether the game starts is seen when the init step actually starts
-   * (stepStarting).
+   * (stepStarting). Returns what went wrong, briefly (ScriptBoardSupport.briefError), or null when
+   * the script ran.
    */
-  static void processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
-                            String requestId, boolean stepCode) {
+  static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
+                              String requestId, boolean stepCode) {
     if (scriptName == null) scriptName = "Unnamed Script";
 
     ObjectNode jsonOutput = Json.newObject();
@@ -2214,7 +2238,7 @@ public class ScriptBoard extends UntypedActor {
       if (out != null) {
         out.write(jsonOutput);
       }
-      return;
+      return "the script engine isn't running";
     }
     // The start command itself (what the console's Start, the autopilot and the AMT timer send). It
     // is known before it runs, so a second one is refused and newcomers are turned away first. Other
@@ -2235,7 +2259,7 @@ public class ScriptBoard extends UntypedActor {
           if (out != null) {
             out.write(jsonOutput);
           }
-          return;
+          return "the game has started already";
         }
         running.put("initStep.start()", true);
         initStep = true;
@@ -2273,6 +2297,7 @@ public class ScriptBoard extends UntypedActor {
     } else {
       RESEARCHER_RUN.remove();
     }
+    String failure = null;
     try {
       Object outputObject = running.eval(script);
       // Clear out error
@@ -2303,6 +2328,7 @@ public class ScriptBoard extends UntypedActor {
       ScriptLoader.humanizeStackTrace(cfe);
       Logger.error("Unable to compile the script. " + scriptName, cfe);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(cfe) + "\n");
+      failure = ScriptBoardSupport.briefError(cfe);
       if (initStep) {
         startFailed(running, closedBy, startedBefore);
       }
@@ -2310,6 +2336,7 @@ public class ScriptBoard extends UntypedActor {
       ScriptLoader.humanizeStackTrace(se);
       Logger.error("Script Error. " + scriptName, se);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(se) + "\n");
+      failure = ScriptBoardSupport.briefError(se);
       if (initStep) {
         startFailed(running, closedBy, startedBefore);
       }
@@ -2317,6 +2344,7 @@ public class ScriptBoard extends UntypedActor {
       ScriptLoader.humanizeStackTrace(e);
       Logger.error("Failed to process the script. " + scriptName, e);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
+      failure = ScriptBoardSupport.briefError(e);
       if (initStep) {
         startFailed(running, closedBy, startedBefore);
       }
@@ -2330,6 +2358,7 @@ public class ScriptBoard extends UntypedActor {
         out.write(jsonOutput);
       }
     }
+    return failure;
   }
 
   /** The script that starts the game. */

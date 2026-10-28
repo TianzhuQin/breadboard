@@ -4,6 +4,15 @@
       <BButton :icon="Plus" @click="newOpen = true">New session</BButton>
     </template>
 
+    <!-- while the server can't be reached, what is shown may be out of date -->
+    <p v-if="offline" class="live-offline" role="status">
+      <WifiOff :size="16" aria-hidden="true" />
+      <span>
+        <strong>Not connected to the server.</strong> This shows what was last known; the buttons work again once
+        the console reconnects, which it does by itself.
+      </span>
+    </p>
+
     <!-- the newest engine error, so a broken step doesn't go unnoticed -->
     <section v-if="latestError" class="live-err" aria-labelledby="live-err-title">
       <CircleAlert class="live-err__icon" :size="18" aria-hidden="true" />
@@ -12,7 +21,7 @@
           The experiment's scripts reported an error
           <span class="live-err__time">at {{ clock(latestError.at) }}</span>
         </p>
-        <pre class="live-err__text">{{ errorPreview }}</pre>
+        <EngineError class="live-err__text" :error="latestError.text" own-name="a step" />
       </div>
       <div class="live-err__actions">
         <BButton size="sm" :icon="PanelBottom" @click="openOutput = true">Open output</BButton>
@@ -160,12 +169,14 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  WifiOff,
   ArrowRight, Bot, CircleAlert, CircleCheck, CircleStop, Download, Hourglass, PanelBottom, Play, Plus, Share2, Timer, Users, Wifi,
 } from 'lucide-vue-next'
 import { BBadge, BButton, BPage, BSpinner } from '@/ui'
-import { admin, engineElsewhere, graph, isResearcherRun } from '@/store/admin'
+import { admin, connectionState, engineElsewhere, graph, isResearcherRun } from '@/store/admin'
 import { stepsCall } from '../autopilot/autopilot'
 import { openOutput } from '@/shell/output'
+import EngineError from '../console/EngineError.vue'
 import NewSessionDialog from './NewSessionDialog.vue'
 import NoSession from './NoSession.vue'
 import EventFeed from './EventFeed.vue'
@@ -174,7 +185,7 @@ import NetworkPreview from './NetworkPreview.vue'
 import SessionParams from './SessionParams.vue'
 import { FEED_CAP, fromLive, fromSeed, mergeFeed, parseServerTime, participantsSeen } from './events'
 import {
-  cleanError, detectGameStarted, engineElsewhereText, engineGameFlag, formatDuration, formatWhen, networkStats, waitingRoom,
+  detectGameStarted, engineElsewhereText, engineGameFlag, formatDuration, formatWhen, networkStats, waitingRoom,
 } from './live'
 import { busy, dismissedErrorId, downloadData, resumeSession, startGame, stopSession } from './controls'
 import { autopilotRuns, useAutopilotStatus } from './autopilot'
@@ -348,6 +359,9 @@ const lastEventAt = computed(() => allEvents.value.length ? allEvents.value[0].a
 const ranFor = computed(() => createdAt.value && lastEventAt.value >= createdAt.value ? formatDuration(lastEventAt.value - createdAt.value) : '—')
 const joinedCount = computed(() => Math.max(participantsSeen(allEvents.value).size, stats.value.people))
 
+// Once the first state has arrived: before that, the page shows its own loading state.
+const offline = computed(() => admin.ready && connectionState.value !== 'open')
+
 // ---- latest error -----------------------------------------------------------------------------
 
 // errors from before the scripts last reloaded are about code that is no longer running
@@ -359,13 +373,6 @@ const latestError = computed(() => {
     if (e.kind === 'error' && !isResearcherRun(e.source)) return e.id > dismissedErrorId.value ? e : null
   }
   return null
-})
-const errorPreview = computed(() => {
-  const e = latestError.value
-  if (!e) return ''
-  const lines = e.text.trim().split('\n')
-  lines[0] = cleanError(lines[0]) || lines[0]
-  return lines.slice(0, 6).join('\n') + (lines.length > 6 ? '\n…' : '')
 })
 
 function clock (at: number) {
@@ -511,4 +518,16 @@ function clock (at: number) {
   .live-err__actions { width: 100%; justify-content: flex-end; }
   .live-done__more { margin-left: 0; }
 }
+.live-offline {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning-soft-text);
+  font-size: var(--text-sm);
+}
+.live-offline svg { flex: none; margin-top: 2px; }
 </style>

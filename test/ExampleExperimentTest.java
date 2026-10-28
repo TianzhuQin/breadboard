@@ -48,7 +48,7 @@ public class ExampleExperimentTest extends BaseTest {
         java.util.Collections.sort(expected);
         java.util.Collections.sort(names);
         assertEquals(expected, names);
-        assertEquals(3, saved.getParameters().size());
+        assertEquals(6, saved.getParameters().size());
         assertEquals(Experiment.defaultClientHTML(), saved.getClientHtml());
         assertEquals(1, saved.languages.size());
 
@@ -61,6 +61,9 @@ public class ExampleExperimentTest extends BaseTest {
         // the scripts a release loads (an experimental-only script missing there used to break the end)
         harness = new ScriptTestHarness(false);
         // launch parameters, as a session would bind them
+        harness.put("networkSize", 5);
+        harness.put("minPlayers", 2);
+        harness.put("waitSeconds", 20);
         harness.put("rounds", 2);
         harness.put("roundSeconds", 1);
         harness.put("prolificCode", "C0DE1234");
@@ -75,7 +78,7 @@ public class ExampleExperimentTest extends BaseTest {
             + "  poll = {\n"
             + "    if (!gameListener.finished()) { timers.newTimer().runAfter(100) { poll() }; return }\n"
             + "    done {\n"
-            + "      assert g.V.count() == 8\n"
+            + "      assert g.V.count() == 5\n"
             + "      ['p1', 'p2'].each { id ->\n"
             + "        def p = g.getVertex(id)\n"
             + "        assert p.text.contains('Thank you')\n"
@@ -90,6 +93,18 @@ public class ExampleExperimentTest extends BaseTest {
             + "  }\n"
             + "  poll()\n"
             + "}", 20000);
+    }
+
+    @Test
+    public void itsStepsLoadWithoutASessionUsingTheDefaults() throws Exception {
+        // a reload of the engine with no session open: no launch parameters are bound
+        harness = new ScriptTestHarness(false);
+        for (String name : stepNames()) {
+            harness.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
+        }
+        assertEquals(8, ((Number) harness.eval("NETWORK_SIZE")).intValue());
+        assertEquals(2, ((Number) harness.eval("autopilot.room.minPlayers")).intValue());
+        assertEquals(20, ((Number) harness.eval("autopilot.room.waitSeconds")).intValue());
     }
 
     private static List<String> stepNames() throws Exception {

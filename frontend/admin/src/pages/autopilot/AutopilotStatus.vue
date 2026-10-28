@@ -25,7 +25,7 @@
         {{ halt === 'paused' ? 'Resume' : 'Open another session' }}
       </BButton>
       <div class="apst__badges">
-        <BBadge v-if="source === 'config'" tone="info"><Lock :size="12" aria-hidden="true" /> application.conf</BBadge>
+        <BBadge v-if="source === 'config'" tone="info"><Lock :size="12" aria-hidden="true" /> settings file</BBadge>
         <BBadge :tone="badge.tone" :dot="true" :pulse="badge.pulse">{{ badge.label }}</BBadge>
       </div>
     </header>
@@ -34,7 +34,11 @@
       <TriangleAlert :size="16" aria-hidden="true" />
       <div>
         <p class="apst__problem-title">{{ status.on ? 'The autopilot has a problem' : 'Why it isn’t running' }}</p>
-        <p class="apst__problem-text">{{ status.problem }}</p>
+        <template v-if="problemError">
+          <p v-if="problemError.lead" class="apst__problem-text">{{ problemError.lead }}</p>
+          <EngineError class="apst__problem-err" :error="problemError.error" own-name="a step" />
+        </template>
+        <p v-else class="apst__problem-text">{{ status.problem }}</p>
       </div>
     </div>
     <div v-else-if="status.problem" class="apst__problem is-info" role="status">
@@ -67,6 +71,7 @@
     <div v-if="links && (status.on || status.instance)" class="apst__block">
       <h3 class="apst__label">Participant links</h3>
       <p class="apst__muted">They always lead to the session that is open at the moment, so the same links keep working from one session to the next.</p>
+      <LocalOnlyNote class="apst__local" />
       <div class="apst__links">
         <CopyLink label="Sign-in link" :url="links.login" hint="Participants enter an ID, then join." />
         <CopyLink
@@ -102,6 +107,8 @@ import { computed } from 'vue'
 import { ArrowRight, Bot, CirclePause, CircleX, Hourglass, Info, Lock, Play, RefreshCw, Timer, TriangleAlert } from 'lucide-vue-next'
 import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
+import LocalOnlyNote from '../session/LocalOnlyNote.vue'
+import EngineError from '../console/EngineError.vue'
 import { describeEngineSession, haltOf, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
 
 const props = defineProps<{
@@ -125,6 +132,13 @@ const source = computed(() => props.state.source)
 const expName = computed(() => status.value.experimentName || props.experimentName || null)
 /** switched on in the settings, yet the server says it isn't running */
 const stalled = computed(() => props.state.settings.enabled && !status.value.on)
+/** A problem quoting an engine error ("... reported an error: Caught error: ..."), split for EngineError. */
+const problemError = computed(() => {
+  const p = props.state.status.problem || ''
+  const i = p.indexOf('Caught error: ')
+  return i < 0 ? null : { lead: p.slice(0, i).trim(), error: p.slice(i + 'Caught error: '.length) }
+})
+
 /** what status.problem is about: a fault, or the autopilot waiting by design */
 const kind = computed(() => problemKind(props.state))
 /** paused or done: it opens nothing until Resume */
@@ -232,7 +246,9 @@ function timeOf (iso: string) {
 .apst__problem svg { flex: none; margin-top: 2px; }
 .apst__problem-title { font-weight: 650; }
 .apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.apst__problem-err { margin-top: 6px; }
 .apst__live { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-soft-text); font-size: var(--text-sm); }
+.apst__local { margin: 6px 0 8px; }
 .apst__links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 4px; }
 @media (max-width: 760px) { .apst__links { grid-template-columns: minmax(0, 1fr); } }
 .apst__activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

@@ -70,9 +70,9 @@
       </li>
     </ul>
 
+    <!-- (the editor beside the list explains texts and has the New text button) -->
     <div v-else-if="!s.items.value.length" class="ct-list__empty">
       <p>No texts yet.</p>
-      <BButton v-if="!s.readOnly.value" size="sm" :icon="Plus" @click="emit('create')">New text</BButton>
     </div>
     <div v-else class="ct-list__empty">
       <p v-if="query">No text matches “{{ query }}”.</p>

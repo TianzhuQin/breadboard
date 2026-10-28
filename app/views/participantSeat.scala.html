@@ -1,0 +1,20 @@
+@(clientId: String, continueUrl: String, otherUrl: String)
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>You're already taking part</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
+    <link rel="stylesheet" href="/assets/css/participant.css?v=@models.AssetVersion.VALUE">
+  </head>
+  <body class="bb-page">
+    <main class="bb-panel">
+      @participantMark()
+      <h1>You're already taking part</h1>
+      <p class="bb-lead">This browser has a seat in the session as <strong>@clientId</strong>.</p>
+      <a class="bb-button" href="@continueUrl">Continue as @clientId</a>
+      <p class="bb-alt"><a href="@otherUrl">Join as someone else</a></p>
+    </main>
+  </body>
+</html>

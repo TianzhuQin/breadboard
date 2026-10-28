@@ -42,7 +42,7 @@ public class AutopilotController extends Controller {
     }
     Autopilot.Effective current = Autopilot.effective();
     if (Autopilot.CONFIG.equals(current.source)) {
-      return status(CONFLICT, message("The autopilot is set in the server's application.conf (breadboard.autopilot.*), "
+      return status(CONFLICT, message("The autopilot is set in the server's settings file, conf/application-prod.conf (breadboard.autopilot.*), "
           + "so it can't be changed here. Remove those lines and restart the server to manage it from the console."));
     }
     AutopilotSettings next;

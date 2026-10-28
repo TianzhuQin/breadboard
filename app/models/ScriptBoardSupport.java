@@ -28,6 +28,50 @@ public final class ScriptBoardSupport {
         return sb.toString();
     }
 
+    /**
+     * What went wrong in a step, in one line a researcher can act on, e.g. "line 13: No such
+     * property: five" (the innermost cause's message, without Groovy's generated class names, and the
+     * line of the step it happened on, when known).
+     */
+    public static String briefError(Throwable t) {
+        if (t == null) {
+            return "unknown error";
+        }
+        Throwable inner = t;
+        Set<Throwable> seen = new HashSet<Throwable>();
+        while (inner.getCause() != null && seen.add(inner) && inner.getCause().getMessage() != null) {
+            inner = inner.getCause();
+        }
+        String message = inner.getMessage() == null ? inner.getClass().getSimpleName() : inner.getMessage();
+        // "startup failed:\nScript1205.groovy: 1: unexpected token: @ line 1, column 21.\n1 error"
+        java.util.regex.Matcher compile = java.util.regex.Pattern
+            .compile("Script\\d+\\.groovy: (\\d+): ([^\\n]*?)(?: @ line \\d+, column \\d+\\.)?\\s*(?:\\n|$)").matcher(message);
+        if (compile.find()) {
+            return "line " + compile.group(1) + ": " + compile.group(2).trim();
+        }
+        message = message.replaceAll("\\s+for class: Script\\d+", "").replaceAll("\\s+", " ").trim();
+        if (message.startsWith("javax.script.ScriptException: ")) {
+            message = message.substring("javax.script.ScriptException: ".length());
+        }
+        message = message.replaceFirst("^[a-z][\\w.]*\\.(\\w+(Exception|Error)): ", "");
+        Integer line = null;
+        for (Throwable cur = t; cur != null && line == null; cur = cur.getCause()) {
+            for (StackTraceElement f : cur.getStackTrace()) {
+                if (f.getFileName() != null && f.getFileName().matches("Script\\d+\\.groovy") && f.getLineNumber() > 0) {
+                    line = f.getLineNumber();
+                    break;
+                }
+            }
+            if (cur.getCause() == cur) {
+                break;
+            }
+        }
+        if (message.length() > 300) {
+            message = message.substring(0, 300) + "…";
+        }
+        return line == null ? message : "line " + line + ": " + message;
+    }
+
     private static String headline(Throwable t) {
         String type = t.getClass().getSimpleName();
         if (type == null || type.isEmpty()) {

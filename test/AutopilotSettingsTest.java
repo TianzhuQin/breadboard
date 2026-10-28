@@ -349,25 +349,23 @@ public class AutopilotSettingsTest extends BaseTest {
     }
 
     @Test
-    public void onlyYourOwnExperimentCanBeChosenButTheChosenOneCanBeSwitchedOffByAnyone() throws Exception {
+    public void anyResearcherCanChooseAnyExperimentAndSessionsOpenAsWhoeverChoseIt() throws Exception {
         User owner = user("owner");
         User other = user("other");
-        Experiment experiment = createExperiment("Owned");
+        Experiment experiment = createExperiment("Shared");
         own(owner, experiment);
 
-        Result refused = post(other, settings(experiment.id, true));
-        assertEquals(BAD_REQUEST, status(refused));
-        assertTrue(json(refused).get("message").asText().contains("isn't one of your experiments"));
-        assertNull(AutopilotSettings.load());
-
-        assertEquals(OK, status(post(owner, settings(experiment.id, true))));
+        // Every researcher works on every experiment, so also on one another account made.
+        Result chosen = post(other, settings(experiment.id, true));
+        assertEquals(contentAsString(chosen), OK, status(chosen));
         awaitOpens(opened, 1);
-        // Another researcher can still turn it off (or change the waiting room); sessions stay the owner's.
-        Result off = post(other, Json.parse("{\"enabled\": false}"));
+        assertEquals(other.email, AutopilotSettings.load().operatorEmail);
+        // Another researcher can turn it off (or change the waiting room); sessions stay the chooser's.
+        Result off = post(owner, Json.parse("{\"enabled\": false}"));
         assertEquals(contentAsString(off), OK, status(off));
         AutopilotSettings saved = AutopilotSettings.load();
         assertFalse(saved.enabled);
-        assertEquals(owner.email, saved.operatorEmail);
+        assertEquals(other.email, saved.operatorEmail);
     }
 
     @Test

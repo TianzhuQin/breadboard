@@ -111,7 +111,8 @@ const nameError = computed(() => (tried.value || (touched.value && name.value.tr
 watch(() => props.open, (open) => {
   if (!open) return
   const source = props.copyFrom != null ? experiments.value.find(e => e.id === props.copyFrom) : null
-  from.value = source ? 'copy' : 'template'
+  // (A first experiment: the ready-to-run example is the quickest way to see Breadboard work.)
+  from.value = source ? 'copy' : experiments.value.length ? 'template' : 'example'
   copyId.value = source ? source.id : (admin.experiment?.id ?? experiments.value[0]?.id ?? null)
   name.value = source ? suggestCopyName(source.name) : ''
   touched.value = false

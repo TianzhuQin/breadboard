@@ -182,10 +182,15 @@ public class ParticipantAuthTest extends BaseTest {
         assertEquals("/play/" + e, seat.path());
         instance.setHasStarted(Boolean.TRUE);
         instance.save();
-        // the game started, so no session is open to newcomers; this browser goes back to its seat
+        // the game started, so no session is open to newcomers; this browser is offered its seat back
         Result back = route(fakeRequest(GET, "/play/" + e + "/login").withCookies(seat));
-        assertEquals(SEE_OTHER, status(back));
-        assertEquals("/game/" + e + "/" + i + "/P7/connected", header(LOCATION, back));
+        assertEquals(OK, status(back));
+        assertTrue(contentAsString(back).contains("Continue as P7"));
+        assertTrue(contentAsString(back).contains("href=\"/game/" + e + "/" + i + "/P7/connected\""));
+        assertTrue(contentAsString(back).contains("/play/" + e + "/login?another=1"));
+        // or a new seat: here none is open to newcomers any more
+        Result another = route(fakeRequest(GET, "/play/" + e + "/login?another=1").withCookies(seat));
+        assertTrue(contentAsString(another).contains("No session is open"));
         // anyone else is told no session is open
         Result other = route(fakeRequest(GET, "/play/" + e + "/login"));
         assertEquals(OK, status(other));

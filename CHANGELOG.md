@@ -1,5 +1,33 @@
 # Changelog
 
+### [v3.1.0] - 2026-10-28
+Easier to install, safer to leave running, and ready for a lab of several researchers.
+
+#### Added
+- Downloads for macOS (Apple silicon and Intel), Windows and Linux that carry their own Java 8:
+  nothing else to install. On a Mac, `Start Breadboard.command` starts it with a double-click; the
+  launchers open the console in the browser once the server is up.
+- Researcher accounts: Settings → Researchers adds, removes and gives new passwords to the lab's
+  accounts (passwords are shown once, to pass on). Every account works on every experiment on the
+  server.
+- Automatic backups of the database while the server runs: every day and before an upgrade, the
+  newest 14 kept in `backups/`. Settings → Backups lists them, backs up on request and downloads
+  them; [docs/install.md](docs/install.md#backups) says how to go back to one.
+- `GET /health` for uptime monitors and service managers; examples for starting Breadboard again by
+  itself with systemd, launchd (macOS) and Task Scheduler (Windows).
+
+#### Changed
+- Sessions that were running when the server stopped are marked Stopped when it starts again, with a
+  `sessionInterrupted` event; Resume starts their game again.
+- Experiment names are unique on the server, and every open console updates its experiment list
+  when anyone makes, imports, renames or deletes an experiment.
+- The participant's network keeps everyone in their place when ties change; a newcomer sits next to
+  someone they are tied to.
+- The launchers say when the port is taken (and by Breadboard itself, if so) instead of printing a
+  stack trace; the Windows launcher keeps the jars in the build's order.
+- The events drawer says in plain words what the well-known events mean.
+- Participant pages no longer print Vue's notices for developers in the browser console.
+
 ### [v3.0.0] - 2026-10-28
 The first release of this fork ([TianzhuQin/breadboard](https://github.com/TianzhuQin/breadboard)),
 based on Breadboard v2.4.0. Existing experiments keep working, and a v2 database can be copied

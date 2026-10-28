@@ -712,25 +712,24 @@ describe('StepsPage', () => {
     w.unmount()
   })
 
-  it('reloads the engine from the banner, asking only while someone is using it', async () => {
+  it('asks for a reload only while a session runs (the next session loads the saved steps anyway), and asks first', async () => {
     const { w } = await open()
+    const calls = (actions.reloadEngine as any).mock.calls.length
     admin.engine = 'stale'
     await nextTick()
-    const reload = () => w.findAll('.steps__banner button').find(b => b.text() === 'Reload engine')!.trigger('click')
-    await reload()
-    await flushPromises()
-    expect(confirmState.open).toBe(false)
-    expect(actions.reloadEngine).toHaveBeenCalledTimes(1)
+    const reloadButton = () => w.findAll('.steps__banner button').find(b => b.text() === 'Reload engine')
+    expect(reloadButton()).toBeUndefined()
 
     admin.instance = { id: 5, name: 'Pilot', status: 'RUNNING' }
-    await reload()
+    await nextTick()
+    await reloadButton()!.trigger('click')
     await flushPromises()
     expect(confirmState.open).toBe(true)
     expect(confirmState.req).toMatchObject({ danger: true, title: 'Reload the script engine?' })
     expect(confirmState.req!.message).toContain('Your session “Pilot” is running.')
     settleConfirm(false)
     await flushPromises()
-    expect(actions.reloadEngine).toHaveBeenCalledTimes(1)
+    expect((actions.reloadEngine as any).mock.calls.length).toBe(calls)
     admin.instance = null
     admin.engine = 'ready'
     w.unmount()

@@ -86,14 +86,24 @@ const sessionTitle = computed(() => admin.instance ? `Session "${admin.instance.
 
 // (With no experiment chosen yet, e.g. right after creating the first account, the engine's loading
 // means nothing to the researcher: it just says Engine.)
-const engineState = computed(() => admin.experiment ? admin.engine : 'ready')
-const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', stale: 'Reload needed' }[engineState.value]))
-const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, stale: TriangleAlert }[engineState.value]))
-const engineTitle = computed(() => admin.engine === 'stale'
-  ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')
-  : 'The script engine that runs the experiment')
+// Steps saved since the last load matter only to a running session (and to the Script console):
+// the next session loads what is saved, so with none running the chip just says they are saved.
+const engineState = computed(() => {
+  if (!admin.experiment) return 'ready'
+  const live = admin.instance?.status === 'RUNNING' || admin.instance?.status === 'TESTING'
+  if (admin.engine === 'stale' && !admin.engineProblem && !live) return 'saved'
+  return admin.engine
+})
+const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', saved: 'Steps saved', stale: 'Reload needed' }[engineState.value]))
+const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, saved: CircleCheck, stale: TriangleAlert }[engineState.value]))
+const engineTitle = computed(() => engineState.value === 'saved'
+  ? 'The next session you open uses the saved steps. Reload the engine only to try them now (Script console, Preview).'
+  : admin.engine === 'stale'
+    ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')
+    : 'The script engine that runs the experiment')
 const engineHeading = computed(() => {
   if (admin.engine !== 'stale') return 'Script engine'
+  if (engineState.value === 'saved') return 'Steps saved since the last load'
   return admin.engineProblem ? 'The last reload may not have finished' : 'Steps changed since the last load'
 })
 

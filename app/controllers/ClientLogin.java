@@ -336,18 +336,27 @@ public class ClientLogin extends Controller {
 
   private static Result toOpenSession(String experimentId, String entry) {
     String query = request().uri().contains("?") ? request().uri().substring(request().uri().indexOf('?')) : "";
+    // "Join as someone else" (participantSeat): a new seat, whatever this browser has already.
+    boolean another = "login".equals(entry) && "1".equals(request().getQueryString("another"));
     // Coming back to a session this browser has a seat in, while the engine still runs it (its game
     // may have started, so it is no longer open to newcomers).
     Http.Cookie back = request().cookie(PLAY_COOKIE + experimentId);
-    if (back != null && back.value() != null && back.value().contains("/")) {
+    if (!another && back != null && back.value() != null && back.value().contains("/")) {
       String instanceId = back.value().substring(0, back.value().indexOf('/'));
       String clientId = urlDecode(back.value().substring(back.value().indexOf('/') + 1));
       if (!clientId.isEmpty() && ScriptBoard.runsSession(experimentId, instanceId)
           && ParticipantAuth.isClaimed(instanceId, clientId)) {
-        return "prolific".equals(entry)
-            ? redirect("/game/" + experimentId + "/" + instanceId + "/prolific" + query)
-            : redirect(routes.ClientController.index(experimentId, instanceId, clientId, null).url());
+        if ("prolific".equals(entry)) {
+          return redirect("/game/" + experimentId + "/" + instanceId + "/prolific" + query);
+        }
+        // Asked, not sent straight back: a researcher trying the study in several tabs of one
+        // browser would otherwise land in the first tab's seat every time, and the tabs fight over it.
+        return ok(participantSeat.render(clientId, routes.ClientController.index(experimentId, instanceId, clientId, null).url(),
+            "/play/" + urlEncode(experimentId) + "/login?another=1"));
       }
+    }
+    if (another) {
+      query = "";
     }
     ExperimentInstance open = null;
     Experiment experiment = null;

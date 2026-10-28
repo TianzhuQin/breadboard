@@ -40,7 +40,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
 - **Preview**（页面标题是 Participant preview）：开场后，在这里按选中参与者的视角看页面，可选 **Desktop** 或 **Phone**。**预览是真的**：在预览里点一个选项，就等于那位参与者做了这个选择，会记进数据。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），用两个浏览器窗口登录，就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。轮数和每轮时长是启动参数（Parameters）。每次选择和每轮得分会记成 `ColourPick`、`RoundResult` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，在 **Parameters** 页面就能改，不用改代码。每次选择和每轮得分会记成 `ColourPick`、`RoundResult` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 
@@ -99,6 +99,7 @@ recruitment.completeProlific(player, [completionCode: "C1A2B3C4"])
 | 下载 | 在哪里 | 内容 |
 |---|---|---|
 | **Download data** | Live session、Sessions & data | 一场的事件，文件 `<session>_<id>.csv`。每个事件的每项数据一行（没有数据的事件不出现），列是 `id`、`event`、`event_date`、`data_name`、`data_value`。 |
+| **Download all data** | Sessions & data | 列出的所有场次的事件放在一个文件 `<experiment>_data.csv` 里，每行前面是场次的 ID、名字、状态和启动参数，后面是和单场文件一样的列，可以直接合在一起分析。 |
 | **Download list** | Sessions & data | 所有场次 `<experiment>.csv`，每场一行：ID、名字、状态、创建时间和启动参数。 |
 | **Export as table** | View events 的 **By event** 视图 | 某一类事件，每个事件一行，每项数据一列。 |
 | **Download CSV** | Players | 当前列出的参与者和他们的全部属性。 |
@@ -117,7 +118,7 @@ breadboard.example.org {
 
 ## 常见问题
 
-**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。要让服务器意外退出后自己重新启动（以及开机自动启动），见 [install.md](install.md#putting-it-on-a-server)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
+**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。要让服务器意外退出后自己重新启动（以及开机自动启动），见 [install.md](install.md#putting-it-on-a-server)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
 
 **启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`。
 

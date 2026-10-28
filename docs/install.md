@@ -193,9 +193,11 @@ For an upgrade: unzip the new release next to the old one and `chown` it the sam
 point the `/opt/breadboard` link at the new folder, and `sudo systemctl start breadboard`.
 
 **A restart ends running sessions.** The game state of a session lives in the server's memory,
-so stopping the server ends any session in progress. Participants who come back are told the
-session isn't running, and are asked to open the study's link again: with the autopilot on, that
-link leads to the session it opens after the restart. Restart between sessions.
+so stopping the server ends any session in progress. When it starts again, such a session is
+marked Stopped, with a `sessionInterrupted` event in its data; **Resume** (Sessions & data) starts
+its game again from the beginning, as for a session a researcher stopped. Participants who come
+back are told the session isn't running, and are asked to open the study's link again: with the
+autopilot on, that link leads to the session it opens after the restart. Restart between sessions.
 
 ## Backups
 

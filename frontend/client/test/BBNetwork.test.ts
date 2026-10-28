@@ -143,6 +143,40 @@ describe('BBNetwork layout', () => {
     expect((w.vm as any).targets).toEqual(before)
   })
 
+  it('keeps everyone where they are when a tie between neighbors is cut', async () => {
+    const node = (id: string) => ({ id, x: 0, y: 0, data: {} })
+    const me = node('me'), a = node('a'), b = node('b'), c = node('c'), d = node('d')
+    const edge = (id: number, s: any, t: any) => ({ id, source: s, target: t, data: {} })
+    const graph = { nodes: [me, a, b, c, d], edges: [edge(1, me, a), edge(2, me, b), edge(3, me, c), edge(4, me, d), edge(5, a, c), edge(6, b, d)] }
+    const w = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph } })
+    const before = { ...(w.vm as any).targets }
+    graph.edges.splice(4, 1)
+    await w.vm.$nextTick()
+    expect((w.vm as any).targets).toEqual(before)
+  })
+
+  it('closes the gap when someone leaves, keeping the order, and seats a newcomer next to whom they are tied to', async () => {
+    const node = (id: string) => ({ id, x: 0, y: 0, data: {} })
+    const me = node('me'), a = node('a'), b = node('b'), c = node('c'), d = node('d'), e = node('e')
+    const edge = (id: number, s: any, t: any) => ({ id, source: s, target: t, data: {} })
+    const graph = { nodes: [me, a, b, c, d], edges: [edge(1, me, a), edge(2, me, b), edge(3, me, c), edge(4, me, d)] }
+    const w = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph } })
+    const first: string[] = (w.vm as any).ring.slice()
+    // the participant cuts their tie to the second person around the ring, who leaves their view
+    const gone = first[1]
+    graph.nodes = graph.nodes.filter(n => n.id !== gone)
+    graph.edges = graph.edges.filter(x => x.target.id !== gone)
+    await w.vm.$nextTick()
+    expect((w.vm as any).ring).toEqual(first.filter(id => id !== gone))
+    // someone new, tied to the last person around the ring
+    const last = first[3]
+    graph.nodes.push(e)
+    graph.edges.push(edge(7, me, e), edge(8, e, graph.nodes.find(n => n.id === last)!))
+    await w.vm.$nextTick()
+    const ring: string[] = (w.vm as any).ring
+    expect(ring.indexOf('e')).toBe(ring.indexOf(last) + 1)
+  })
+
   it('curves a tie between neighbors who are not next to each other around the outside', () => {
     // a ring of five neighbors where a and c are tied but b sits between them
     const node = (id: string) => ({ id, x: 0, y: 0, data: {} })

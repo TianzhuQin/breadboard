@@ -376,6 +376,44 @@ public final class Autopilot {
   }
 
   /**
+   * The steps of the session it just opened didn't load (a mistake in a step): ScriptBoard stopped
+   * that session, since its waiting room and game come from the steps, and the autopilot pauses until
+   * someone fixes them and presses Resume, instead of sending participants into a game that never
+   * starts. {@code failed} is "<step>: <what went wrong>".
+   */
+  static void stepsFailed(ExperimentInstance instance, String failed) {
+    if (instance == null || instance.experiment == null) {
+      return;
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long experimentId = instance.experiment.id;
+    String name = instance.name;
+    setHalt(experimentId, "the steps of its session \"" + name + "\" didn't load (" + failed
+        + "), so that session was stopped before anyone could join. Fix the step on the Steps page first", doneBecause);
+    lastProblem = null;
+    Logger.warn("Autopilot: the steps of session " + name + " didn't load (" + failed + "); the session was stopped and the autopilot paused");
+  }
+
+  /**
+   * An experiment's steps loaded without an error (a launch, a reload, a session selected): an error
+   * the autopilot kept from an earlier load of its experiment is out of date.
+   */
+  static void stepsLoaded(Experiment experiment) {
+    Long id = experiment == null ? null : experiment.id;
+    if (id == null || lastProblem == null) {
+      return;
+    }
+    try {
+      Effective e = effective();
+      if (e.isOn() && id.equals(e.settings.experimentId)) {
+        lastProblem = null;
+      }
+    } catch (Exception ex) {
+      Logger.debug("Autopilot: could not read its settings: " + ex);
+    }
+  }
+
+  /**
    * New settings were saved in the console. A session of the experiment that is running now gets the
    * new waiting-room and takeover values at once; with the autopilot on, a session opens now if
    * none of this experiment is open and the engine runs no other session. A session of another
@@ -817,7 +855,7 @@ public final class Autopilot {
     }
     if (e.settings.experimentId == null) {
       return new Problem("error", CONFIG.equals(e.source)
-          ? "application.conf names the experiment \"" + configuredExperimentName()
+          ? "The server's settings file (conf/application-prod.conf) names the experiment \"" + configuredExperimentName()
               + "\" (breadboard.autopilot.experiment), but there is no experiment with that name."
           : "No experiment is chosen.");
     }

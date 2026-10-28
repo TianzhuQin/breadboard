@@ -41,6 +41,12 @@ for built in public/admin/admin.js public/bundles/client.js public/bundles/desig
   fi
 done
 
+# Play's Assets serves file.gz instead of file, in production, to browsers that accept gzip: the
+# console and the participant page then download a third or less. (The front-end builds empty
+# public/admin and public/bundles, so these never outlive the files they were made from.)
+find public/admin public/bundles -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.json' \) \
+  -size +1k -print0 | xargs -0 gzip -kf9n
+
 echo "== Server"
 "$ROOT/bin/sbt8" dist
 

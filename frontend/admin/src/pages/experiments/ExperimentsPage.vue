@@ -220,9 +220,18 @@ const exportingId = ref<number | null>(null)
 
 async function select (e: Experiment) {
   if (running.value) {
-    toast('warning', 'Stop the running session first',
-      'Switching experiments restarts the script engine, which disconnects everyone in the session.',
-      { action: { label: 'Go to the session', run: () => { void router.push('/session') } } })
+    // The engine is shared: it runs one experiment's session at a time.
+    const ap = await autopilotNow(2000)
+    const unattended = !!ap && ap.status.on && ap.status.experimentId != null && ap.status.experimentId === admin.experiment?.id
+    if (unattended) {
+      toast('warning', `The autopilot is running “${admin.experiment?.name}”`,
+        'Switching experiments restarts the script engine, which ends its session and disconnects everyone in it. Pause the autopilot first (stopping its session pauses it), or edit the other experiment once this study is over.',
+        { action: { label: 'Autopilot', run: () => { void router.push('/autopilot') } } })
+    } else {
+      toast('warning', 'Stop the running session first',
+        'Switching experiments restarts the script engine, which disconnects everyone in the session.',
+        { action: { label: 'Go to the session', run: () => { void router.push('/session') } } })
+    }
     return
   }
   if (selectingId.value != null || !ensureConnected()) return

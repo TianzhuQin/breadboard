@@ -139,12 +139,12 @@ public class ResearchersTest extends BaseTest {
 
         ObjectNode body = Json.newObject();
         body.put("newExperimentName", "  main STUDY ");
-        Result same = route(fakeRequest(PUT, "/experiment").withSession("uid", ra.uid).withJsonBody(body));
+        Result same = route(fakeRequest(PUT, "/experiment").withSession("uid", ra.uid).withJsonBody(body, PUT));
         assertEquals(BAD_REQUEST, status(same));
         assertTrue(contentAsString(same).contains("already an experiment"));
 
         body.put("newExperimentName", " RA pilot ");
-        Result made = route(fakeRequest(PUT, "/experiment").withSession("uid", ra.uid).withJsonBody(body));
+        Result made = route(fakeRequest(PUT, "/experiment").withSession("uid", ra.uid).withJsonBody(body, PUT));
         assertEquals(contentAsString(made), OK, status(made));
         assertEquals("RA pilot", Json.parse(contentAsString(made)).get("name").asText());
         assertEquals("the other account sees it too", 2, me.toJson().get("user").get("experiments").size());

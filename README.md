@@ -26,15 +26,12 @@ This is a maintained fork of [human-nature-lab/breadboard](https://github.com/hu
 
 ## Getting started
 
-Download the zip from the [latest release](https://github.com/TianzhuQin/breadboard/releases/latest),
-unzip it, and with Java 8 installed:
-
-```bash
-./breadboard.sh          # Windows: breadboard.bat
-```
-
-Open <http://localhost:9000> and create the researcher account. [docs/install.md](docs/install.md)
-covers putting it on a server, HTTPS, backups and upgrading from v2.
+From the [latest release](https://github.com/TianzhuQin/breadboard/releases/latest), download the
+zip for your computer (`-macos-arm64`, `-macos-x64`, `-windows-x64` or `-linux-x64`: they include
+Java) and unzip it. Then double-click `Start Breadboard.command` (macOS) or `breadboard.bat`
+(Windows), or run `./breadboard.sh` (Linux). The console opens in your browser: create your
+researcher account, and add your colleagues' in Settings. [docs/install.md](docs/install.md) covers
+putting it on a server, HTTPS, backups, starting it again by itself, and upgrading from v2.
 
 ## Documentation
 

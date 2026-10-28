@@ -10,6 +10,17 @@
       >
         Download list
       </BButton>
+      <BButton
+        :icon="Download"
+        :loading="sessionActions.isBusy('all', exp.id)"
+        :disabled="!filtered.length"
+        :title="filtered.length === all.length
+          ? 'Every session’s events in one file, each row with its session and launch parameters'
+          : `The events of the ${filtered.length} sessions listed, in one file`"
+        @click="sessionActions.downloadAllData(exp, filtered.map(s => s.id))"
+      >
+        {{ filtered.length === all.length ? 'Download all data' : `Download data (${filtered.length})` }}
+      </BButton>
       <BButton variant="primary" :icon="Plus" @click="router.push('/session?new=1')">New session</BButton>
     </template>
 
@@ -161,7 +172,7 @@
       <div class="ss__foot">
         <span>{{ footText }}</span>
         <BButton v-if="filtered.length > limit" size="sm" @click="limit += PAGE">Show {{ Math.min(PAGE, filtered.length - limit) }} more</BButton>
-        <span class="ss__foot-note">Times are the server’s local time; the CSV files use UTC.</span>
+        <span class="ss__foot-note">Times are in your computer’s time zone; the CSV files use UTC.</span>
       </div>
     </BPanel>
 
@@ -416,9 +427,11 @@ watch(eventsOpen, (open) => {
 .ss__chev:hover { background: var(--surface-hover); color: var(--text); }
 .ss__chev svg { transition: transform var(--duration) var(--ease); }
 .ss__row.is-open .ss__chev svg { transform: rotate(90deg); }
-.ss__name { min-width: 160px; max-width: 360px; }
-.ss__name-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ss__name-text { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Long names (the autopilot's "Autopilot · Oct 28, 22:42:41 UTC") wrap rather than widen the
+   table past the page at laptop widths. */
+.ss__name { min-width: 160px; max-width: 300px; }
+.ss__name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
+.ss__name-text { font-weight: 600; color: var(--text); overflow-wrap: anywhere; min-width: 0; }
 .ss__current { flex: none; }
 .ss__sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 1px; font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
 .ss__sub .mono { font-size: 11px; }
@@ -432,6 +445,9 @@ watch(eventsOpen, (open) => {
 .ss__quick { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .ss__quick-gap { display: inline-block; width: 28px; }
 .ss__details > td { padding: 0 !important; background: var(--surface-sunken); border-bottom: 1px solid var(--border); }
+/* the details stay in view when the table scrolls sideways */
+.ss__details > td > * { position: sticky; left: 0; max-width: calc(100vw - var(--sidebar-width) - 64px); }
+@media (max-width: 900px) { .ss__details > td > * { max-width: calc(100vw - 32px); } }
 .ss__row.is-current + .ss__details > td { box-shadow: inset 3px 0 0 var(--accent); }
 
 .ss__foot {

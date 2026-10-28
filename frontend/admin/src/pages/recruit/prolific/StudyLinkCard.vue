@@ -7,6 +7,7 @@
         </code>
         <CopyButton :text="url" variant="primary" label="Copy URL" />
       </div>
+      <LocalOnlyNote what="This URL uses" />
       <p class="rc-sub">
         In Prolific, choose to record Prolific IDs with URL parameters and keep the parts like
         <code>{{ PID_PLACEHOLDER }}</code> exactly as they are: Prolific fills them in for each participant.
@@ -51,6 +52,7 @@ import { CircleCheck, ExternalLink, TriangleAlert } from 'lucide-vue-next'
 import { BButton, BPanel } from '@/ui'
 import type { Experiment, Instance } from '@/store/types'
 import CopyButton from '../CopyButton.vue'
+import LocalOnlyNote from '../../session/LocalOnlyNote.vue'
 import { prolificStudyUrl, prolificTestUrl, randomToken } from './prolific'
 
 const props = defineProps<{

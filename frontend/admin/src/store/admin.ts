@@ -32,6 +32,8 @@ const state = reactive({
    * changed), 'removed' when another researcher removed the account. Cleared by the next sign-in.
    */
   signOutReason: null as null | 'ended' | 'removed',
+  /** Where computers on the same network reach this server (GET /state), e.g. "http://192.168.1.23:9000". */
+  lanAddresses: [] as string[],
   /** The newest User JSON (null until the first one arrives after sign-in). */
   user: null as User | null,
   experiment: null as Experiment | null,
@@ -391,7 +393,7 @@ function signedOut (body?: any) {
 
 onUnauthorized((body) => signedOut(body))
 
-type StateReply = { uid: string, email: string, connectSocket: string }
+type StateReply = { uid: string, email: string, connectSocket: string, lanAddresses?: string[] }
 /** The socket address /state gave (see connection.socketUrl), to reconnect with. */
 let socketSetting: string | undefined
 
@@ -404,6 +406,7 @@ async function boot () {
     if (state.email && cfg.email !== state.email) resetState()
     state.uid = cfg.uid
     state.email = cfg.email
+    state.lanAddresses = Array.isArray(cfg.lanAddresses) ? cfg.lanAddresses.filter(a => typeof a === 'string') : []
     state.signOutReason = null
     state.auth = 'signedIn'
     state.ready = false
