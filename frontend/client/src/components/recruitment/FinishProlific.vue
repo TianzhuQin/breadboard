@@ -96,7 +96,10 @@ function submit() {
   font-weight: 700;
   letter-spacing: 0.06em;
   color: #312e81;
-  background: none;
+  /* (over Vuetify's grey box for code) */
+  background: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
   user-select: all;
 }
 .bb-finish__feedback { display: block; margin: 0 0 18px; text-align: left; }
