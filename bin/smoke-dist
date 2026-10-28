@@ -117,8 +117,8 @@ pages () {
   [ "$client" -lt 2000000 ] || fail "client.js is $client bytes"
   pass "consoles, participant bundles and stylesheets"
   get /game/999/999/someone/connected
-  grep -q 'running right now' "$WORK/body" || fail "a session that doesn't exist isn't reported as not running"
-  pass "participant page of a session that isn't running"
+  grep -q "link isn" "$WORK/body" || fail "a link to a session that doesn't exist isn't reported as invalid"
+  pass "participant page of a session that doesn't exist"
 }
 
 json () { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print($1)" "$WORK/body"; }
@@ -150,7 +150,7 @@ SIGN_IN=1
 if [ "$code" = "200" ]; then
   pass "first account created"
   sign_in
-elif [ -n "$OLD_DB" ] && grep -q "not empty" "$WORK/body"; then
+elif [ -n "$OLD_DB" ] && grep -q "already exists" "$WORK/body"; then
   SIGN_IN=""
   pass "the older database has accounts: pages load, sign-in still required"
 else

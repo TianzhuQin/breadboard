@@ -29,7 +29,9 @@
   <logger name="play" level="INFO" />
   <logger name="application" level="INFO" />
 
-  <!-- Noise from libraries that configure themselves -->
+  <!-- Noise from libraries that configure themselves (the connection pool warns about settings
+       H2 doesn't need) -->
+  <logger name="com.jolbox.bonecp" level="ERROR" />
   <logger name="com.avaje.ebean.config.PropertyMapLoader" level="OFF" />
   <logger name="com.avaje.ebeaninternal.server.core.XmlConfigLoader" level="OFF" />
   <logger name="com.avaje.ebeaninternal.server.lib.BackgroundThread" level="OFF" />
