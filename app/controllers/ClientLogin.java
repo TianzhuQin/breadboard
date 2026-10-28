@@ -271,7 +271,8 @@ public class ClientLogin extends Controller {
    * other participants. The PID, study and session ids are written to the researcher's event log
    * (prolificEntry) and to the player's own _system.recruitment for payment and the completion
    * screen. The same browser coming back returns to its seat; anyone else using the same link
-   * is refused.
+   * is refused. Someone who already took part in the experiment, in this session or an earlier
+   * one, is given their completion code again instead of a seat.
    */
   public static Result prolificEntry(String experimentId, String experimentInstanceId) {
     String pid = request().getQueryString("PROLIFIC_PID");
@@ -281,20 +282,28 @@ public class ClientLogin extends Controller {
       return badRequest(participantMessage.render("Missing Prolific ID",
           "This link must be opened from Prolific. Please return to Prolific and start the study again."));
     }
+    pid = pid.trim();
     ExperimentInstance instance = null;
     try {
       instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
     } catch (NumberFormatException ignored) {}
-    // (The test session, 0, has no row, so it is refused here too.)
-    if (instance == null || instance.status != ExperimentInstance.Status.RUNNING) {
-      return ok(participantMessage.render("This study is not running",
-          "There is no session running at the moment. Please return the study on Prolific."));
-    }
+    // (The test session, 0, has no row, so it is refused below too.)
+    boolean running = instance != null && instance.status == ExperimentInstance.Status.RUNNING;
 
-    String clientId = ParticipantAuth.prolificClientId(experimentInstanceId, pid.trim());
-    if (ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
+    String clientId = ParticipantAuth.prolificClientId(experimentInstanceId, pid);
+    if (running && ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
       // The same browser coming back: it already holds this seat.
       return redirect(routes.ClientController.index(experimentId, experimentInstanceId, clientId, null).url());
+    }
+    // Someone who already took part (e.g. back for their code after a server restart, which forgets
+    // seats and end screens) gets the code again: not a seat in this session, nor "return the study".
+    play.api.templates.Html takenPart = takenPartPage(experimentId, pid);
+    if (takenPart != null) {
+      return ok(takenPart);
+    }
+    if (!running) {
+      return ok(participantMessage.render("This study is not running",
+          "There is no session running at the moment. Please return the study on Prolific."));
     }
     if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
       // The engine runs another session (or none since a restart): this one's game is not there to join.
@@ -310,10 +319,10 @@ public class ClientLogin extends Controller {
       return forbidden(participantMessage.render("Already joined",
           "You have already joined this study in another browser or tab. Please continue there."));
     }
-    Recruitment.prolificEntry(clientId, pid.trim(), studyId, sessionId);
+    Recruitment.prolificEntry(clientId, pid, studyId, sessionId);
     java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
     data.put("clientId", clientId);
-    data.put("prolificPid", pid.trim());
+    data.put("prolificPid", pid);
     data.put("studyId", studyId);
     data.put("sessionId", sessionId);
     ScriptBoard.trackEvent("prolificEntry", data);
@@ -369,6 +378,13 @@ public class ClientLogin extends Controller {
     }
     if (open == null) {
       if ("prolific".equals(entry)) {
+        // Someone who already took part is given their code again, not asked to return the study.
+        // (With a session open, prolificEntry checks, after the redirect below.)
+        String pid = request().getQueryString("PROLIFIC_PID");
+        play.api.templates.Html takenPart = pid == null ? null : takenPartPage(experimentId, pid.trim());
+        if (takenPart != null) {
+          return ok(takenPart);
+        }
         // A Prolific study's places are timed: waiting makes no sense, returning lets someone else in.
         return ok(participantMessage.render("No session is open right now",
             "There is no session taking participants at the moment. Please return the study on Prolific."));
@@ -380,6 +396,26 @@ public class ClientLogin extends Controller {
   }
 
   private static final String PLAY_COOKIE = "bb_seat_";
+
+  /**
+   * The page for a Prolific participant who already took part in this experiment (see
+   * Recruitment.prolificCompletion): their completion code, if one was recorded, and the way back to
+   * Prolific, as the participant page's own end card has. Null when they haven't: they may join.
+   */
+  private static play.api.templates.Html takenPartPage(String experimentId, String pid) {
+    Recruitment.Completion completion;
+    try {
+      completion = Recruitment.prolificCompletion(Long.valueOf(experimentId), pid);
+    } catch (NumberFormatException notAnId) {
+      return null;
+    }
+    if (completion == null) {
+      return null;
+    }
+    String prolific = completion.completionCode == null ? "https://app.prolific.com/"
+        : "https://app.prolific.com/submissions/complete?cc=" + urlEncode(completion.completionCode);
+    return participantTakenPart.render(completion.completionCode, prolific);
+  }
 
   private static String urlEncode(String s) {
     try {
