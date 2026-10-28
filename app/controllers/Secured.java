@@ -34,7 +34,9 @@ public class Secured extends Security.Authenticator {
       // its password), which ended this session: the console says so.
       String uid = ctx.session().get("uid");
       if (uid != null && !uid.trim().isEmpty()) {
-        result.put("reason", "ended");
+        // ... or another researcher removed the account.
+        String email = ctx.session().get("email");
+        result.put("reason", email != null && User.findByEmail(email) == null ? "removed" : "ended");
       }
     }
     result.put("message", "please login");

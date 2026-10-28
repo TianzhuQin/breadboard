@@ -6,20 +6,27 @@
 
 Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和自己相连的人，并做出选择；实验允许的话，还能加上或切断连接。研究者在网页控制台（console）里搭建实验、开场、观察网络、下载数据。也可以打开自动运行（Autopilot），没人值守时实验一场接一场地自己跑。
 
-## 安装 Java 8 并启动
+## 下载并启动
 
-1. 安装 Java 8 的 JDK，例如 [Azul Zulu 8](https://www.azul.com/downloads/?version=java-8-lts&package=jdk) 或 [Eclipse Temurin 8](https://adoptium.net/temurin/releases/?version=8)。**只能用 Java 8**，Java 9 及更新的版本启动不了。电脑上已经有别的 Java 也没关系：把环境变量 `JAVA8_HOME` 设为 Java 8 的安装文件夹，启动脚本就会用它。
-2. 从 [releases 页面](https://github.com/TianzhuQin/breadboard/releases) 下载 `breadboard-<version>.zip`，解压。
-3. macOS 和 Linux：在终端里进入解压后的文件夹，运行 `./breadboard.sh`。Windows：双击 `breadboard.bat`。
+1. 从 [releases 页面](https://github.com/TianzhuQin/breadboard/releases) 下载适合你电脑的 zip，解压。这些下载**已经带了 Java 8**，不用另外安装：
 
-```bash
-cd breadboard-v3.0.0
-./breadboard.sh                        # Windows: breadboard.bat
-JAVA8_HOME=/opt/zulu8 ./breadboard.sh  # 指定 Java 8 的位置
-```
+| 下载 | 适用于 |
+|---|---|
+| `breadboard-<version>-macos-arm64.zip` | Apple 芯片（M1 及以后）的 Mac |
+| `breadboard-<version>-macos-x64.zip` | Intel 处理器的 Mac |
+| `breadboard-<version>-windows-x64.zip` | Windows |
+| `breadboard-<version>-linux-x64.zip` | Linux |
+| `breadboard-<version>.zip` | 任何系统，但要自己装 Java 8（**只能用 Java 8**），并把 `JAVA8_HOME` 设为它的安装文件夹 |
 
-4. 在浏览器打开 <http://localhost:9000>。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
-5. 停止服务器：在它的窗口里按 Ctrl+C。
+2. 启动：
+   - **macOS**：双击 `Start Breadboard.command`。第一次 macOS 可能提示"无法验证开发者"：右键点这个文件，选 **打开**（较新的 macOS 要到 系统设置 → 隐私与安全性 里点 **仍要打开**）。也可以在终端里进入文件夹，运行 `./breadboard.sh`。
+   - **Windows**：双击 `breadboard.bat`。如果 SmartScreen 拦截，点 **更多信息** → **仍要运行**。
+   - **Linux**：在文件夹里运行 `./breadboard.sh`。
+3. 服务器启动好后，浏览器会自动打开控制台（也可以手动打开 <http://localhost:9000>）。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
+4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。所有研究者都能看到和修改这台服务器上的每个实验。
+5. 停止服务器：在它的窗口里按 Ctrl+C，或直接关掉窗口。
+
+如果提示端口被占用（"Port 9000 is in use" 或 "Breadboard is already running"），通常是 Breadboard 已经在运行，直接打开那个网址就行；要再开一个，用 `./breadboard.sh -Dhttp.port=9001`。
 
 更多见 [install.md](install.md)。
 
@@ -110,9 +117,9 @@ breadboard.example.org {
 
 ## 常见问题
 
-**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。
+**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。要让服务器意外退出后自己重新启动（以及开机自动启动），见 [install.md](install.md#putting-it-on-a-server)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
 
-**启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。它按顺序找 `JAVA8_HOME`、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`。安装 Java 8，并把 `JAVA8_HOME` 设为它的安装文件夹。
+**启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`。
 
 **参与者看到 "This session isn't running right now"**：这一场已经结束，或服务器重启过，或控制台把引擎换到了另一场。新开一场，或打开自动运行，再把研究链接发给参与者。
 
@@ -122,6 +129,8 @@ breadboard.example.org {
 
 **参与者关了网页还能回来吗？** 能。用同一个浏览器重新打开研究链接（或登录页再输入一次自己的 ID），就会回到原来的座位，即使游戏已经开始；离开超过设定时间时由电脑代玩，回来后交还给本人。换了浏览器或设备就不行，这是为了防止别人冒用 ID。
 
-**数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。先停止服务器，再复制这个文件，就是备份。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传，从 3.x 升级时和数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
+**数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），保留最近 14 份，不用停服务器。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：停止服务器，把备份 zip 解压到 `db` 文件夹（替换里面的 `breadboard.h2.db`），再启动。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传，从 3.x 升级时和数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
+
+**实验室几个人怎么一起用？** 每人一个账号：在 **Settings → Researchers** 里添加、删除，或给别人重置密码。所有研究者共用这台服务器上的全部实验（谁都能打开、修改、运行）。要和别的课题组分开，就各用一台服务器。
 
 **旧版控制台还能用吗？** 能。它在 `/legacy-admin`，例如 <http://localhost:9000/legacy-admin>，也可以从 **Settings** 里 **Previous console** 下的 **Open it** 进入。新旧两个控制台用的是同样的实验、场次和引擎，可以同时打开。

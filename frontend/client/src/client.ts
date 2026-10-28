@@ -4,11 +4,18 @@ import {
   BreadboardClass,
   VueLoadOpts,
 } from '@human-nature-lab/breadboard-core'
+import Vue from 'vue'
 import DefaultView from './mixins/DefaultView'
 import { vuetifyOptionsFor } from './theme/vuetify'
 import './client.sass'
 export { themeColors } from './theme/vuetify'
 window.Breadboard = Breadboard
+
+// Vue is its development build on purpose (see webpack.config.js), but the notices it prints for
+// developers ("You are running Vue in development mode", the devtools tip) are noise in every
+// participant's browser console. Set here, before the timer Vue prints them from has run.
+Vue.config.productionTip = false
+Vue.config.devtools = false
 
 // The server adds ?v=<version> to this script's URL (models.AssetVersion); pass it on to the
 // stylesheets loaded below so they are refreshed together with the script after an update.

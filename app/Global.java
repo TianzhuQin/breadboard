@@ -38,6 +38,7 @@ public class Global extends GlobalSettings {
   @Override
   public void onStart(Application app) {
 
+    backUpBeforeUpgrade(app);
     applyNewEvolutions(app);
     // Before anything reads Experiment, which maps this column: a database built from evolutions
     // 1-29 (v2.3) lacks it, and so does a v2.2 one, which the migration below reads.
@@ -189,6 +190,9 @@ public class Global extends GlobalSettings {
     String version = app.configuration().getString("application.version");
     if (version != null && tableRows("breadboard_version") == 0) {
       Ebean.createSqlUpdate("insert into breadboard_version values (:version)").setParameter("version", version).execute();
+    } else if (version != null) {
+      // the release this database is up to date with (backUpBeforeUpgrade compares with it)
+      Ebean.createSqlUpdate("update breadboard_version set version = :version").setParameter("version", version).execute();
     }
 
     // Interpolated Groovy strings must reach browsers as text.
@@ -198,6 +202,8 @@ public class Global extends GlobalSettings {
 
     // Open a session of the configured experiment so participants can join without an admin.
     models.Autopilot.start();
+
+    models.Backups.start();
   }
 
   /**
@@ -248,6 +254,31 @@ public class Global extends GlobalSettings {
     }
   }
 
+  /**
+   * Before a newer release changes a database an older one used, keep a copy of it as it was
+   * (models.Backups, named "...-upgrade.zip"): going back to the older release then takes that copy.
+   */
+  private static void backUpBeforeUpgrade(Application app) {
+    String version = app.configuration().getString("application.version");
+    if (version == null || !models.Backups.enabled() || !tableExists("experiments")) {
+      return;
+    }
+    try {
+      String recorded = null;
+      if (tableExists("breadboard_version")) {
+        SqlRow row = Ebean.createSqlQuery("select version from breadboard_version limit 1").findUnique();
+        recorded = row == null ? null : row.getString("version");
+      }
+      if (!version.equals(recorded)) {
+        Logger.info("This database was last used by " + (recorded == null ? "an older release" : recorded)
+            + ": backing it up before bringing it up to date");
+        models.Backups.backUp("upgrade");
+      }
+    } catch (Exception e) {
+      Logger.error("Could not back up the database before bringing it up to date", e);
+    }
+  }
+
   /** The last evolution whose tables older releases also made by hand (see applyNewEvolutions). */
   private static final int HAND_MADE_UNTIL = 29;
 
@@ -272,6 +303,7 @@ public class Global extends GlobalSettings {
     if(process != null){
       process.destroy();
     }
+    models.Backups.stop();
     // Its periodic check would otherwise outlive this application (in dev mode, a reload) and open
     // sessions through it beside the new one's.
     try {

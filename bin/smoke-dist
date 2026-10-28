@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Check a release the way someone installing it would use it: unzip it into a temporary directory,
 # start it on an empty database, create the first account, sign in, load the consoles and the
-# participant pages, then restart it on the same database and sign in again.
+# participant pages, back up the database, then restart it on the same database and sign in again.
+# A release that carries its own Java (bin/bundle-java) is started on that Java.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -65,7 +66,18 @@ if ls "$APP"/groovy/*_test.groovy >/dev/null 2>&1; then fail "the zip carries te
   || fail "lib/classpath.txt doesn't list every jar in lib/"
 [ -f "$APP/docs/install.md" ] || fail "the zip has no docs/"
 [ -f "$APP/conf/logger.xml" ] || fail "the zip has no conf/logger.xml"
-grep -q "$(printf '\r')$" "$APP/breadboard.bat" || fail "breadboard.bat doesn't have Windows line endings"
+if [ -f "$APP/breadboard.bat" ]; then
+  grep -q "$(printf '\r')$" "$APP/breadboard.bat" || fail "breadboard.bat doesn't have Windows line endings"
+fi
+case "$(basename "$ZIP")" in
+  *-linux-*) ;;
+  *) [ -x "$APP/Start Breadboard.command" ] || fail "the zip has no Start Breadboard.command" ;;
+esac
+if [ -d "$APP/jre" ]; then
+  [ -x "$APP/jre/bin/java" ] || fail "the zip's jre/ has no bin/java"
+  # the launcher must find it by itself
+  unset JAVA8_HOME JAVA_HOME
+fi
 pass "release layout"
 if [ -n "$OLD_DB" ]; then
   cp "$OLD_DB" "$APP/db/breadboard.h2.db"
@@ -78,6 +90,11 @@ start () {
     if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi
     if [ "$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' "$BASE/" || true)" = "200" ]; then
       pass "server started ($1)"
+      if [ -d "$APP/jre" ]; then
+        ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF "$APP/jre/bin/java" \
+          || fail "the server doesn't run on the Java in jre/"
+        pass "it runs on the Java that comes with it"
+      fi
       # The secret goes to the server in its environment, never on its command line.
       if [ -s "$APP/conf/application.secret" ] \
         && ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF "$(cat "$APP/conf/application.secret")"; then
@@ -105,6 +122,8 @@ get () {
 }
 
 pages () {
+  get /health
+  grep -q '"status":"ok"' "$WORK/body" || fail "/health doesn't say ok: $(cat "$WORK/body")"
   get /
   grep -q 'admin/admin.js' "$WORK/body" || fail "the console page doesn't load admin.js"
   get /legacy-admin
@@ -132,11 +151,28 @@ sign_in () {
   get /state
   [ "$(json "d.get('email')")" = "$EMAIL" ] || fail "/state doesn't name the signed-in account"
   get /autopilot
-  pass "signed in; account state and autopilot settings load"
+  get /researchers
+  [ "$(json "[r['email'] for r in d['researchers'] if r['you']][0]")" = "$EMAIL" ] || fail "/researchers doesn't list the account"
+  pass "signed in; account state, autopilot settings and accounts load"
+}
+
+backups () {
+  local code name
+  code="$(curl -s --max-time 60 -o "$WORK/body" -w '%{http_code}' -b "$WORK/cookies" -X POST "$BASE/backups")"
+  [ "$code" = "200" ] || fail "backing up answered $code: $(cat "$WORK/body")"
+  name="$(json "[b['name'] for b in d['backups'] if b['name'].endswith('-manual.zip')][0]")"
+  [ -f "$APP/backups/$name" ] || fail "the backup $name isn't in backups/"
+  get "/backups/$name"
+  unzip -l "$WORK/body" | grep -q 'breadboard.h2.db' || fail "the downloaded backup doesn't hold breadboard.h2.db"
+  pass "a backup made in the console downloads as a zip of the database"
 }
 
 if [ -n "$OLD_DB" ]; then start "an older release's database"; else start "empty database"; fi
 [ -s "$APP/conf/application.secret" ] || fail "no conf/application.secret was generated"
+if [ -n "$OLD_DB" ]; then
+  ls "$APP"/backups/breadboard-*-upgrade.zip >/dev/null 2>&1 || fail "no backup was made before upgrading the older database"
+  pass "the older database was backed up before it was brought up to date"
+fi
 pages
 
 get /autopilot 401
@@ -150,6 +186,7 @@ SIGN_IN=1
 if [ "$code" = "200" ]; then
   pass "first account created"
   sign_in
+  backups
 elif [ -n "$OLD_DB" ] && grep -q "already exists" "$WORK/body"; then
   SIGN_IN=""
   pass "the older database has accounts: pages load, sign-in still required"

@@ -49,8 +49,13 @@ public class ExperimentController extends Controller {
       example = json.findPath("example").textValue();
     }
 
-    if (newExperimentName == null) {
+    if (newExperimentName == null || newExperimentName.trim().isEmpty()) {
       return badRequest("Please provide a name for the new experiment.");
+    }
+    newExperimentName = newExperimentName.trim();
+    String taken = nameTaken(newExperimentName, null);
+    if (taken != null) {
+      return badRequest("There is already an experiment called \"" + taken + "\".");
     }
 
     String uid = session().get("uid");
@@ -91,7 +96,23 @@ public class ExperimentController extends Controller {
     user.update();
     user.saveManyToManyAssociations("ownedExperiments");
 
+    ScriptBoard.experimentsChanged();
     return ok(experiment.toJson());
+  }
+
+  /**
+   * The name of the experiment already called {@code name} (ignoring case and outer spaces), other
+   * than the one with id {@code exceptId}; null when there is none. Names are unique on a server:
+   * every researcher works on every experiment, and some tools find experiments by name.
+   */
+  static String nameTaken(String name, Long exceptId) {
+    for (Experiment other : Experiment.findAll()) {
+      if ((exceptId == null || !other.id.equals(exceptId)) && other.name != null
+          && other.name.trim().equalsIgnoreCase(name.trim())) {
+        return other.name;
+      }
+    }
+    return null;
   }
 
   /**
@@ -103,7 +124,7 @@ public class ExperimentController extends Controller {
   public static Result renameExperiment(Long experimentId) {
     User user = User.findByUID(session().get("uid"));
     Experiment experiment = Experiment.findById(experimentId);
-    if (user == null || experiment == null || !user.ownedExperiments.contains(experiment)) {
+    if (user == null || experiment == null) {
       return notFound("There is no such experiment.");
     }
     JsonNode json = request().body().asJson();
@@ -121,13 +142,13 @@ public class ExperimentController extends Controller {
     if (Boolean.TRUE.equals(experiment.fileMode)) {
       return badRequest("Leave file mode first: in file mode, the experiment's folder is named after it.");
     }
-    for (Experiment other : Experiment.findAll()) {
-      if (!other.id.equals(experiment.id) && other.name != null && other.name.trim().equalsIgnoreCase(name)) {
-        return badRequest("There is already an experiment called \"" + other.name + "\".");
-      }
+    String taken = nameTaken(name, experiment.id);
+    if (taken != null) {
+      return badRequest("There is already an experiment called \"" + taken + "\".");
     }
     experiment.name = name;
     experiment.save();
+    ScriptBoard.experimentsChanged();
     return ok(experiment.toJson());
   }
 
@@ -147,6 +168,10 @@ public class ExperimentController extends Controller {
     String name = experimentName == null ? "" : experimentName.trim();
     if (name.isEmpty()) {
       return badRequest("Please provide a name for the imported experiment.");
+    }
+    String taken = nameTaken(name, null);
+    if (taken != null) {
+      return badRequest("There is already an experiment called \"" + taken + "\".");
     }
 
     Http.MultipartFormData body = request().body().asMultipartFormData();
@@ -241,6 +266,7 @@ public class ExperimentController extends Controller {
         }
         return badRequest("The experiment could not be imported: " + e.getMessage());
       }
+      ScriptBoard.experimentsChanged();
       return ok(experiment.toJson());
     } finally {
       FileUtils.deleteQuietly(rootOutputFolder);

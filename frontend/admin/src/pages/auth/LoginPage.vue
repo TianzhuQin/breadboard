@@ -2,8 +2,12 @@
   <AuthCard title="Sign in to Breadboard" subtitle="The researcher's console">
     <form novalidate @submit.prevent="submit">
       <p v-if="error" class="auth__error" role="alert">{{ error }}</p>
+      <p v-else-if="admin.signOutReason === 'removed'" class="auth__note" role="status">
+        You were signed out because another researcher removed this account. Ask them to add it
+        again if you still need it.
+      </p>
       <p v-else-if="admin.signOutReason === 'ended'" class="auth__note" role="status">
-        You were signed out because this account signed out, or changed its password, in another
+        You were signed out because this account signed out, or its password was changed, in another
         browser or tab. Sign in again to continue here.
       </p>
       <BField label="Email">

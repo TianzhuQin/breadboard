@@ -10,19 +10,25 @@ Chinese.
 
 ## What you need
 
-- **Java 8.** Newer versions of Java don't run this server. Install a Java 8 JDK, for example
-  [Azul Zulu 8](https://www.azul.com/downloads/?version=java-8-lts&package=jdk) or
-  [Eclipse Temurin 8](https://adoptium.net/temurin/releases/?version=8). If another Java is your
-  default, point `JAVA8_HOME` at the Java 8 one.
 - macOS, Linux or Windows, and a modern browser.
+- **Java 8**, which comes with the downloads whose names end in `-macos-arm64` (Apple silicon
+  Macs), `-macos-x64` (Intel Macs), `-linux-x64` or `-windows-x64`: nothing to install. The
+  download without a platform in its name needs a Java 8 JDK of your own (newer versions of Java
+  don't run this server), for example
+  [Azul Zulu 8](https://www.azul.com/downloads/?version=java-8-lts&package=jdk); if another Java is
+  your default, point `JAVA8_HOME` at the Java 8 one.
 
 ## Start it
 
-- macOS and Linux: open a terminal in this folder and run `./breadboard.sh`
-- Windows: double-click `breadboard.bat`
+- **macOS**: double-click `Start Breadboard.command`. The first time, macOS may say it can't check
+  who made it: right-click the file and choose **Open** (on newer macOS, click **Open Anyway** in
+  System Settings → Privacy & Security). Or open Terminal in this folder and run `./breadboard.sh`.
+- **Windows**: double-click `breadboard.bat`.
+- **Linux**: run `./breadboard.sh` in this folder.
 
-Then open <http://localhost:9000>. The first time, it asks you to create the researcher account.
-Stop the server with Ctrl+C in its window.
+The console opens in your browser once the server is up (or open <http://localhost:9000>). The
+first time, it asks you to create your researcher account; add your colleagues' accounts in
+Settings → Researchers. Stop the server with Ctrl+C in its window, or by closing the window.
 
 Another port: `./breadboard.sh -Dhttp.port=8080` (or `breadboard.bat -Dhttp.port=8080`).
 
@@ -49,11 +55,19 @@ Then set `breadboard.secureCookies=true` and `session.secure=true` in
 
 | Path | What |
 |---|---|
-| `db/breadboard.h2.db` | The database: experiments, sessions, accounts and data. Back it up by copying it while the server is stopped. |
+| `db/breadboard.h2.db` | The database: experiments, sessions, accounts and data. |
+| `backups/` | Copies of the database, made every day and before an upgrade; the newest 14 are kept. Settings → Backups lists them. |
 | `conf/application-prod.conf` | The settings |
 | `conf/application.secret` | Generated at first start; signs sign-ins and invitation links. Keep it private. |
 | `logs/application.log` | The server's log (a new one every day; 30 days are kept; set in `conf/logger.xml`) |
 | `groovy/` | The engine's scripts (part of Breadboard; don't edit) |
+
+## Backups
+
+The server copies its database into `backups/` once a day, and before a newer release changes it;
+the newest 14 copies are kept. The console's Settings → Backups shows them, makes one when you ask,
+and downloads them. Copy them to another disk now and then. To go back to one: stop Breadboard,
+unzip the copy into `db/` (replacing `breadboard.h2.db`), and start Breadboard again.
 
 ## Upgrading from an earlier release
 

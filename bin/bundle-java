@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Make the releases that carry their own Java 8, so that researchers don't have to install one:
+# target/release/breadboard-<version>-<platform>.zip, each the release zip that bin/make-dist made
+# plus a Java 8 runtime (Azul Zulu 8 JRE) in jre/, which the launchers use first.
+#
+#   bin/bundle-java                         # every platform
+#   bin/bundle-java macos-arm64 linux-x64   # some of them
+#
+# Platforms: macos-arm64, macos-x64, linux-x64, windows-x64. Each JRE comes from Azul's metadata
+# API (api.azul.com, the newest Zulu 8 JRE), is checked against the SHA-256 Azul publishes, and is
+# kept in target/jre-cache for the next run. JRE_<PLATFORM>=<archive> (e.g. JRE_MACOS_ARM64=...)
+# uses a JRE or JDK archive already on disk instead.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+VERSION="$(sed -n 's/.*appVersion *= *"\(.*\)".*/\1/p' project/Build.scala)"
+NAME="breadboard-$VERSION"
+OUT="$ROOT/target/release"
+CACHE="$ROOT/target/jre-cache"
+if [ ! -f "$OUT/$NAME.zip" ]; then
+  echo "bin/bundle-java: $OUT/$NAME.zip is missing; run bin/make-dist first." >&2
+  exit 1
+fi
+PLATFORMS=("$@")
+if [ ${#PLATFORMS[@]} -eq 0 ]; then
+  PLATFORMS=(macos-arm64 macos-x64 linux-x64 windows-x64)
+fi
+mkdir -p "$CACHE"
+
+# os arch archive_type for Azul's API
+azul_query () {
+  case "$1" in
+    macos-arm64) echo "macos aarch64 tar.gz" ;;
+    macos-x64) echo "macos x64 tar.gz" ;;
+    linux-x64) echo "linux x64 tar.gz" ;;
+    windows-x64) echo "windows x64 zip" ;;
+    *) echo "bin/bundle-java: unknown platform $1" >&2; return 1 ;;
+  esac
+}
+
+# Prints the path of the platform's JRE archive, downloading it when needed.
+jre_archive () {
+  local platform="$1" var given
+  var="JRE_$(echo "$platform" | tr 'a-z-' 'A-Z_')"
+  given="${!var:-}"
+  if [ -n "$given" ]; then
+    echo "$given"
+    return
+  fi
+  local os arch type
+  read -r os arch type <<< "$(azul_query "$platform")"
+  local api="https://api.azul.com/metadata/v1/zulu/packages"
+  local listing
+  listing="$(curl -fsSL "$api/?java_version=8&os=$os&arch=$arch&archive_type=$type&java_package_type=jre&javafx_bundled=false&release_status=ga&availability_types=CA&latest=true&page=1&page_size=1")"
+  local uuid url file
+  uuid="$(printf '%s' "$listing" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["package_uuid"])')"
+  url="$(printf '%s' "$listing" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["download_url"])')"
+  file="$CACHE/$(basename "$url")"
+  if [ ! -s "$file" ]; then
+    echo "   downloading $url" >&2
+    curl -fsSL -o "$file.part" "$url"
+    mv "$file.part" "$file"
+  fi
+  local want got
+  want="$(curl -fsSL "$api/$uuid" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha256_hash"])')"
+  got="$( (command -v sha256sum >/dev/null && sha256sum "$file" || shasum -a 256 "$file") | cut -d' ' -f1)"
+  if [ "$want" != "$got" ]; then
+    rm -f "$file"
+    echo "bin/bundle-java: $(basename "$url") doesn't match the SHA-256 Azul publishes." >&2
+    return 1
+  fi
+  echo "$file"
+}
+
+for platform in "${PLATFORMS[@]}"; do
+  echo "== $NAME-$platform"
+  archive="$(jre_archive "$platform")"
+  work="$OUT/bundle-$platform"
+  rm -rf "$work"
+  mkdir -p "$work/unpacked"
+  case "$archive" in
+    *.zip) unzip -q "$archive" -d "$work/unpacked" ;;
+    *) tar -xzf "$archive" -C "$work/unpacked" ;;
+  esac
+  # The folder holding bin/java (java.exe on Windows) and lib/rt.jar: the runtime itself, wherever
+  # the archive keeps it (zulu-8.jre/Contents/Home on macOS; inside a JDK archive, its jre/).
+  home=""
+  while IFS= read -r rt; do
+    dir="$(dirname "$(dirname "$rt")")"
+    if [ -f "$dir/bin/java" ] || [ -f "$dir/bin/java.exe" ]; then
+      home="$dir"
+      break
+    fi
+  done < <(find "$work/unpacked" -path '*/lib/rt.jar' | awk '{ print length, $0 }' | sort -n | cut -d' ' -f2-)
+  if [ -z "$home" ]; then
+    echo "bin/bundle-java: no Java runtime (bin/java and lib/rt.jar) in $archive" >&2
+    exit 1
+  fi
+  unzip -q "$OUT/$NAME.zip" -d "$work"
+  cp -R "$home" "$work/$NAME/jre"
+  # Not needed to run Breadboard, and large.
+  rm -rf "$work/$NAME/jre/man" "$work/$NAME/jre/demo" "$work/$NAME/jre/sample" "$work/$NAME/jre/src.zip"
+  if [ "${platform%%-*}" = windows ]; then
+    rm -f "$work/$NAME/breadboard.sh" "$work/$NAME/Start Breadboard.command"
+  else
+    rm -f "$work/$NAME/breadboard.bat"
+    [ "${platform%%-*}" = macos ] || rm -f "$work/$NAME/Start Breadboard.command"
+  fi
+  rm -f "$OUT/$NAME-$platform.zip"
+  (cd "$work" && zip -qrX "$OUT/$NAME-$platform.zip" "$NAME")
+  rm -rf "$work"
+  echo "Built $OUT/$NAME-$platform.zip ($(du -h "$OUT/$NAME-$platform.zip" | cut -f1))"
+  if command -v shasum >/dev/null 2>&1; then
+    (cd "$OUT" && shasum -a 256 "$NAME-$platform.zip" > "$NAME-$platform.zip.sha256")
+  fi
+done

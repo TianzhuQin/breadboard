@@ -351,7 +351,7 @@ describe('Import dialog', () => {
     submit().click()
     await flushPromises()
     expect(http.post).not.toHaveBeenCalled()
-    expect(document.body.textContent).toMatch(/already have an experiment called/)
+    expect(document.body.textContent).toMatch(/already an experiment called/)
     w.unmount()
   })
 

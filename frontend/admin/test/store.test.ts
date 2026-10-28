@@ -544,3 +544,18 @@ describe('what the engine runs', () => {
     expect(engineElsewhere.value).toMatchObject({ experimentId: 2 })
   })
 })
+
+describe('another researcher changing the experiments', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
+  it('asks once for the newest list after a burst of changes', () => {
+    vi.useFakeTimers()
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    __receive({ experimentsChanged: true })
+    __receive({ experimentsChanged: true })
+    expect(send).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(300)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send.mock.calls[0][0]).toBe('Update')
+  })
+})

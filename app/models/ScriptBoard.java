@@ -706,6 +706,12 @@ public class ScriptBoard extends UntypedActor {
    * the current token, or shows the sign-in page.
    */
   public static void closeAdminsOf(String email, String currentUid, ThrottledWebSocketOut except) {
+    closeAdminsOf(email, currentUid, except,
+        "You are not signed in any more: this account signed out or its password was changed. Sign in again.");
+  }
+
+  /** closeAdminsOf, telling the closed consoles {@code why}. */
+  public static void closeAdminsOf(String email, String currentUid, ThrottledWebSocketOut except, String why) {
     if (email == null) {
       return;
     }
@@ -725,7 +731,7 @@ public class ScriptBoard extends UntypedActor {
       }
     }
     ObjectNode signedOut = Json.newObject();
-    signedOut.put("error", "You are not signed in any more: this account signed out or its password was changed. Sign in again.");
+    signedOut.put("error", why);
     signedOut.put("status", "unauthorized");
     for (Admin admin : closing) {
       ThrottledWebSocketOut out = admin.getOut();
@@ -747,6 +753,17 @@ public class ScriptBoard extends UntypedActor {
 
   static boolean hasAdmins() {
     return !admins.isEmpty();
+  }
+
+  /**
+   * Tell every console that the server's experiments changed (one was made, imported, renamed or
+   * deleted, maybe by another researcher): {"experimentsChanged": true}, and they ask for the
+   * newest list.
+   */
+  public static void experimentsChanged() {
+    ObjectNode frame = Json.newObject();
+    frame.put("experimentsChanged", true);
+    toAllAdmins(frame);
   }
 
   /** Write a frame to every open console socket. */
@@ -1871,16 +1888,12 @@ public class ScriptBoard extends UntypedActor {
     // By id when the console sends one; the name is only unique per account, and not even then.
     Experiment toBeDeleteExperiment = null;
     if (deleteExperiment.experimentId != null) {
-      for (Experiment e : requester.ownedExperiments) {
-        if (deleteExperiment.experimentId.equals(e.id)) {
-          toBeDeleteExperiment = e;
-        }
-      }
+      toBeDeleteExperiment = Experiment.findById(deleteExperiment.experimentId);
     } else if (deleteExperiment.experimentName != null) {
       toBeDeleteExperiment = requester.getExperimentByName(deleteExperiment.experimentName);
     }
     if (toBeDeleteExperiment == null) {
-      Breadboard.replyError(deleteExperiment.out, "DeleteExperiment", "None of your experiments is "
+      Breadboard.replyError(deleteExperiment.out, "DeleteExperiment", "There is no experiment "
           + (deleteExperiment.experimentId != null ? "number " + deleteExperiment.experimentId : "called \"" + deleteExperiment.experimentName + "\"") + ".");
       return;
     }
@@ -1933,6 +1946,7 @@ public class ScriptBoard extends UntypedActor {
     Autopilot.experimentDeleted(deletedId);
 
     Breadboard.breadboardController.tell(new Breadboard.Update(requester, deleteExperiment.out, true), null);
+    experimentsChanged();
   }
 
   /**

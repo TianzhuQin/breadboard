@@ -282,16 +282,12 @@ public class Breadboard extends UntypedActor {
       Experiment experiment = null;
       if (jsonInput.get("experimentId") != null) {
         Long experimentId = requiredLong(jsonInput, "experimentId");
-        for (Experiment e : user.ownedExperiments) {
-          if (experimentId.equals(e.id)) {
-            experiment = e;
-          }
-        }
+        experiment = Experiment.findById(experimentId);
       } else {
         experiment = user.getExperimentByName(required(jsonInput, "selectedExperiment"));
       }
       if (experiment == null) {
-        throw new BadRequest("None of your experiments matches.");
+        throw new BadRequest("No experiment matches.");
       }
       ObjectNode jsonOutput = Json.newObject();
       try {

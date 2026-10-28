@@ -29,9 +29,9 @@ const state = reactive({
   /**
    * Why the sign-in page is showing, when this console didn't sign out itself: 'ended' when the
    * server ended this browser's session (the account signed out somewhere else, or its password
-   * changed). Cleared by the next sign-in.
+   * changed), 'removed' when another researcher removed the account. Cleared by the next sign-in.
    */
-  signOutReason: null as null | 'ended',
+  signOutReason: null as null | 'ended' | 'removed',
   /** The newest User JSON (null until the first one arrives after sign-in). */
   user: null as User | null,
   experiment: null as Experiment | null,
@@ -160,10 +160,23 @@ function handle (m: any) {
   if (m.tieEdit) {
     state.lastTieEdit = { ...m.tieEdit, at: Date.now() }
   }
+  // An experiment was made, imported, renamed or deleted, maybe by another researcher: every
+  // researcher works on every experiment, so ask for the newest list.
+  if (m.experimentsChanged === true) experimentsChanged()
   if (m.event && typeof m.event === 'object' && isSelectedSessionEvent(m.event)) {
     state.events.push({ ...m.event, receivedAt: Date.now() })
     if (state.events.length > EVENTS_CAP) state.events.splice(0, state.events.length - EVENTS_CAP)
   }
+}
+
+let experimentsTimer: ReturnType<typeof setTimeout> | null = null
+/** Ask for the newest User JSON once, a moment after the last of a burst of changes. */
+function experimentsChanged () {
+  if (experimentsTimer) clearTimeout(experimentsTimer)
+  experimentsTimer = setTimeout(() => {
+    experimentsTimer = null
+    send('Update')
+  }, 250)
 }
 
 /**
@@ -372,7 +385,7 @@ function signedOut (body?: any) {
   // a question asked on a page that is gone now
   settleConfirm(false)
   resetState()
-  state.signOutReason = body && body.reason === 'ended' ? 'ended' : null
+  state.signOutReason = body && (body.reason === 'ended' || body.reason === 'removed') ? body.reason : null
   state.auth = body && body.status === 'create-first-user' ? 'firstUser' : 'signedOut'
 }
 

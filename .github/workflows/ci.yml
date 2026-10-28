@@ -1,6 +1,7 @@
 # Every push to main and every pull request: build the front end and run its unit tests, run the
-# server's tests, then package a release and start it on an empty database (bin/smoke-dist).
-# The release zip is kept as a build artifact for a week.
+# server's tests, then package a release and start it on an empty database (bin/smoke-dist). The
+# releases that carry their own Java (bin/bundle-java) are started the same way on Linux, macOS and
+# Windows (bin/smoke-dist.ps1). The zips are kept as a build artifact for a week.
 name: CI
 
 on:
@@ -96,7 +97,11 @@ jobs:
       - name: Package
         run: SKIP_FRONTEND=1 JAVA8_HOME="$JAVA_HOME" bin/make-dist
       - name: Start it on an empty database
-        run: JAVA8_HOME="$JAVA_HOME" bin/smoke-dist
+        run: JAVA8_HOME="$JAVA_HOME" bin/smoke-dist "target/release/breadboard-$(sed -n 's/.*appVersion *= *"\(.*\)".*/\1/p' project/Build.scala).zip"
+      - name: Add Java for each platform
+        run: bin/bundle-java
+      - name: Start the Linux one on its own Java
+        run: bin/smoke-dist target/release/breadboard-*-linux-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: breadboard-release
@@ -104,3 +109,34 @@ jobs:
             target/release/breadboard-*.zip
             target/release/breadboard-*.zip.sha256
           retention-days: 7
+
+  macos:
+    name: macOS package
+    needs: release
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: breadboard-release
+          path: target/release
+      - name: Start it on its own Java
+        run: bin/smoke-dist target/release/breadboard-*-macos-arm64.zip
+
+  windows:
+    name: Windows package
+    needs: release
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: breadboard-release
+          path: target/release
+      - name: Start it with breadboard.bat on its own Java
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem target/release/breadboard-*-windows-x64.zip | Select-Object -First 1
+          ./bin/smoke-dist.ps1 -Zip $zip.FullName

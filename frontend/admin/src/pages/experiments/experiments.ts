@@ -56,7 +56,7 @@ export function validateExperimentName (raw: string, existing: string[] = []): s
   if (/^\.+$/.test(name)) return 'Use letters or numbers in the name.'
   const lower = name.toLowerCase()
   if (existing.some(n => (n || '').trim().toLowerCase() === lower)) {
-    return `You already have an experiment called “${name}”. Pick another name, because some tools find experiments by name.`
+    return `There is already an experiment called “${name}” on this server. Pick another name, because some tools find experiments by name.`
   }
   return null
 }

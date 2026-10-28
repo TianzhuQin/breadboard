@@ -1,14 +1,16 @@
 # Contributing
 
 Contributions to Breadboard are welcome: bug reports, fixes, documentation and example
-experiments. This fork's issues and pull requests are at
+experiments. This fork's code and pull requests are at
 [github.com/TianzhuQin/breadboard](https://github.com/TianzhuQin/breadboard).
 
 ## Reporting a problem
 
-Open an issue at <https://github.com/TianzhuQin/breadboard/issues>. Say:
+Check [Troubleshooting](docs/install.md#troubleshooting) first. To report a problem, open a pull
+request whose description explains it (with a failing test, if you can), or write to the
+maintainer. Say:
 
-- which release you run (its folder is named after it, e.g. `breadboard-v3.0.0`), your
+- which release you run (its folder is named after it, e.g. `breadboard-v3.1.0`), your
   operating system and your Java version (`java -version`);
 - what you did, what you expected, and what happened instead;
 - the relevant lines of `logs/application.log`, or of the server's output.

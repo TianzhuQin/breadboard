@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build a release: target/release/breadboard-<version>.zip, which runs on any machine with Java 8.
+# bin/bundle-java then makes the ones that carry their own Java.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/make-dist
 #
@@ -68,8 +69,8 @@ cp conf/application-prod.conf "$R/conf/"
 cp release/logger.xml "$R/conf/logger.xml"
 # The engine's Groovy scripts are read from <install>/groovy (tests excluded).
 find groovy -maxdepth 1 -name '*.groovy' ! -name '*_test.groovy' -exec cp {} "$R/groovy/" \;
-cp release/breadboard.sh "$R/"
-chmod +x "$R/breadboard.sh"
+cp release/breadboard.sh "release/Start Breadboard.command" "$R/"
+chmod +x "$R/breadboard.sh" "$R/Start Breadboard.command"
 # Windows line endings for cmd.exe, whatever the checkout has.
 perl -pe 's/\r?\n/\r\n/' release/breadboard.bat > "$R/breadboard.bat"
 cp release/README.md "$R/README.md"

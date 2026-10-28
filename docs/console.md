@@ -20,6 +20,11 @@ sidebar, or Settings: this signs the account out on every browser, as changing i
 Signing out doesn't stop a running session; participants keep playing. With unsaved changes, it
 asks first.
 
+Each researcher can have an account of their own: add them in Settings → Researchers. Every
+account works on every experiment on the server: the experiment list, sessions and data are the
+same for all of them. (An account can run any code on the server from the script console, so
+separate lists would not keep studies apart; run separate servers for that.)
+
 ## Finding your way around
 
 The console opens on Live session. Every page works on one experiment: the one in the experiment
@@ -42,7 +47,7 @@ switcher at the top of the sidebar. Click it to find an experiment and switch to
 | | **Recruitment** | Prolific and Mechanical Turk |
 | | **Sessions & data** | Every session, its events and CSV downloads |
 | (bottom) | **Experiments** | Create, import, export, duplicate and delete experiments; file mode |
-| | **Settings** | Password, appearance, the previous console |
+| | **Settings** | Password, researchers' accounts, backups, appearance |
 
 On a narrow screen the sidebar opens from the menu button at the top left. The top bar shows:
 
@@ -349,6 +354,8 @@ participants could type such values.
 |---|---|
 | **Account** | The email you are signed in with, **Sign out**, and the **Default language** new content is written in. |
 | **Password** | **Current password**, **New password** (at least 8 characters) and **Repeat the new password**, then **Change password**. You stay signed in; other browsers signed in to this account are signed out, and previews must be opened again. |
+| **Researchers** | The server's accounts. **Add a researcher** takes an email address and shows the new account's password once (**Copy sign-in details** copies the address, email and password to pass on); they change it in Settings after signing in. **New password** gives another account a new password (shown once) and signs it out everywhere; **Remove** deletes another account and signs it out (its experiments and data stay). You can't remove your own account. |
+| **Backups** | The copies of the database the server makes in `backups/` (every day, and before an upgrade; the newest 14 are kept). **Back up now** makes one; **Download** saves one. To go back to a backup, see [install.md](install.md#backups). |
 | **Appearance** | **System** (follows your computer), **Light** or **Dark**, saved in this browser only. The menu under your email has the same choice. |
 | **Previous console** | **Open it** goes to `/legacy-admin`. |
 | **About** | The console's version, the server, the connection and the number of experiments, for when you ask for help. |

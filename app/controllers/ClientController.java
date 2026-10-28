@@ -217,17 +217,9 @@ public class ClientController extends Controller
         return ok(result);
     }
 
-    // The account's own experiments, and the one it has selected.
+    // Every researcher works on every experiment on the server (User.experiments).
     private static boolean canSee(User user, Experiment experiment) {
-        if (user.selectedExperiment != null && experiment.id.equals(user.selectedExperiment.id)) {
-            return true;
-        }
-        for (Experiment owned : user.ownedExperiments) {
-            if (experiment.id.equals(owned.id)) {
-                return true;
-            }
-        }
-        return false;
+        return user != null && experiment != null;
     }
 
     /** A JSON whole number, or one written as text ("12"); else null. */

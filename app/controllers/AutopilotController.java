@@ -65,13 +65,9 @@ public class AutopilotController extends Controller {
       if (experiment == null) {
         return badRequest(message("There is no experiment with id " + next.experimentId + "."));
       }
-      // Choosing an experiment takes owning it; the one already chosen (maybe by another researcher)
-      // can still be turned on or off, or have its waiting room changed.
-      if (!sameExperiment && !owns(user, experiment)) {
-        return badRequest(message("\"" + experiment.name + "\" isn't one of your experiments."));
-      }
-      // Sessions open as the account that chose the experiment, or as whoever saves when they own it.
-      if (!sameExperiment || owns(user, experiment) || current.settings.operatorEmail == null) {
+      // Sessions open as the account that chose the experiment (any researcher may: they all work on
+      // every experiment), or as whoever saves when none is recorded.
+      if (!sameExperiment || current.settings.operatorEmail == null || User.findByEmail(current.settings.operatorEmail) == null) {
         next.operatorEmail = user.email;
       }
     } else {
@@ -105,14 +101,6 @@ public class AutopilotController extends Controller {
     return ok(Autopilot.stateJson());
   }
 
-  private static boolean owns(User user, Experiment experiment) {
-    for (Experiment owned : user.ownedExperiments) {
-      if (experiment.id.equals(owned.id)) {
-        return true;
-      }
-    }
-    return false;
-  }
 
   private static ObjectNode message(String text) {
     ObjectNode json = Json.newObject();

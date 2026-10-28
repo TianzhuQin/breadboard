@@ -145,11 +145,21 @@ public class User extends Model {
   }
 
   public Experiment getExperimentByName(String name) {
-    for (Experiment e : ownedExperiments) {
+    for (Experiment e : experiments()) {
       if (e.name.equals(name))
         return e;
     }
     return null;
+  }
+
+  /**
+   * The experiments this account works on: every experiment on the server. Researchers on one
+   * server work together (a lab's PI and assistants): any account can run any code on the server
+   * from the script console, so separate lists never kept one account's studies from another's.
+   * Run separate servers to keep studies apart. (ownedExperiments is still kept up to date.)
+   */
+  public List<Experiment> experiments() {
+    return Experiment.findAll();
   }
 
   @JsonValue
@@ -165,7 +175,7 @@ public class User extends Model {
 
     //user.put("experiments", Json.toJson(experimentNames));
     ArrayNode experiments = user.putArray("experiments");
-    for (Experiment experiment: ownedExperiments) {
+    for (Experiment experiment: experiments()) {
       experiments.add(experiment.toJson());
     }
 

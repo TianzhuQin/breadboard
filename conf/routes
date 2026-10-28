@@ -105,6 +105,20 @@ POST        /login                                                              
 POST        /createFirstUser                                                     controllers.Application.addFirstUser()
 POST        /logout                                                              controllers.Application.logout()
 
+# For uptime monitors and service managers
+GET         /health                                                              controllers.HealthController.health()
+
+# Database backups (Settings → Backups)
+GET         /backups                                                             controllers.BackupsController.list()
+POST        /backups                                                             controllers.BackupsController.backUp()
+GET         /backups/:name                                                       controllers.BackupsController.download(name: String)
+
+# Researcher accounts (Settings → Researchers)
+GET         /researchers                                                         controllers.ResearchersController.list()
+POST        /researchers                                                         controllers.ResearchersController.add()
+POST        /researchers/remove                                                  controllers.ResearchersController.remove()
+POST        /researchers/password                                                controllers.ResearchersController.resetPassword()
+
 POST        /defaultLanguage                                                     controllers.Application.saveDefaultLanguage()
 POST        /saveUserSettings                                                    controllers.Application.saveUserSettings()
 
