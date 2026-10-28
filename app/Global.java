@@ -149,9 +149,11 @@ public class Global extends GlobalSettings {
           File experimentDirectory = new File(Play.application().path().toString() + "/experiments/" + experiment.name + "_v2.2");
           FileUtils.writeStringToFile(new File(experimentDirectory, "client.html"), experiment.clientHtml);
           FileUtils.writeStringToFile(new File(experimentDirectory, "client-graph.js"), experiment.clientGraph);
-          experiment.clientGraph = Experiment.defaultClientGraph();
+          // Through the setters: plain writes to these fields from here were never saved, so
+          // upgraded experiments kept their v2.2 page.
+          experiment.setClientGraph(Experiment.defaultClientGraph());
           // The client HTML this upgrade always gave them, not the newer participant page.
-          experiment.clientHtml = Experiment.legacyClientHTML();
+          experiment.setClientHtml(Experiment.legacyClientHTML());
         } catch (IOException ioe) {
           Logger.error("Error backing up v2.2 client.html and client.js to experiments directory");
         }
@@ -199,18 +201,26 @@ public class Global extends GlobalSettings {
   /**
    * Releases run with evolutions off (conf/application-prod.conf), so that Play never rewrites a
    * database copied over from an older release. This does their work where that is safe: an empty
-   * database (a new install) gets its tables from the evolution scripts, and a database whose
-   * evolutions Play recorded (play_evolutions) gets the ones it lacks, e.g. one an older release
-   * built from evolutions 1-29, or a first start that was interrupted. Only new evolutions are ever
-   * run: when the recorded ones differ from this version's, nothing is, since Play would run their
-   * Downs first. An older database without that record is brought up to date by onStart instead.
+   * database (a new install) gets its tables from the evolution scripts, and one whose recorded
+   * evolutions (play_evolutions) reach {@link #HAND_MADE_UNTIL}, e.g. one an older release built
+   * from evolutions 1-29, gets the ones it lacks, which all tolerate what is there already. Below
+   * that, onStart's own upgrade code is in charge: v2.2 databases record 1-23, and v2.3 and v2.4
+   * made what 24-29 make by hand when they upgraded one. Only new evolutions are ever run: when the
+   * recorded ones differ from this version's, nothing is, since Play would run their Downs first.
    * With evolutions on, Play has applied them already and nothing is left to run.
    */
   @SuppressWarnings("unchecked")
   private static void applyNewEvolutions(Application app) {
     boolean empty = !tableExists("experiments");
-    if (!empty && (!tableExists("play_evolutions") || tableRows("play_evolutions") == 0)) {
-      return;
+    if (!empty) {
+      if (!tableExists("play_evolutions")) {
+        return;
+      }
+      Integer applied = Ebean.createSqlQuery("select max(id) as max_id from play_evolutions where state = 'applied'")
+          .findUnique().getInteger("max_id");
+      if (applied == null || applied < HAND_MADE_UNTIL) {
+        return;
+      }
     }
     DBApi api = app.plugin(DBPlugin.class).api();
     try {
@@ -232,9 +242,12 @@ public class Global extends GlobalSettings {
     } catch (PlayException e) {
       throw new IllegalStateException("The database could not be brought up to date: " + e.getMessage()
           + ". If this is a new install, stop the server, delete the db folder and start again; "
-          + "otherwise restore the database from a backup.", e);
+          + "otherwise restore the database from a backup and report the problem.", e);
     }
   }
+
+  /** The last evolution whose tables older releases also made by hand (see applyNewEvolutions). */
+  private static final int HAND_MADE_UNTIL = 29;
 
   private static boolean tableExists(String name) {
     SqlRow row = Ebean.createSqlQuery("select count(*) as table_count from information_schema.tables "

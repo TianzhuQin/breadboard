@@ -240,11 +240,12 @@ Which one a database gets depends on how it is run:
 
 | Database | What creates or changes its tables |
 |---|---|
-| A new, empty one, with evolutions off (a release, `application-dev.conf`) | `Global.createTablesIfEmpty` (`app/Global.java`): when there is no `experiments` table, it applies every evolution and records them in `play_evolutions`. |
+| A new, empty one, with evolutions off (a release, `application-dev.conf`) | `Global.applyNewEvolutions` (`app/Global.java`): when there is no `experiments` table, it applies every evolution and records them in `play_evolutions`. |
 | `bin/run-local` and the server tests | Play applies the evolutions (`applyEvolutions.default=true`). |
-| An existing one, with evolutions off | Nothing from the evolutions: releases run with `evolutionplugin=disabled`, so Play never rewrites a database copied over from an older release. Breadboard's own code has to make the change. |
+| An existing one whose `play_evolutions` reaches 29, with evolutions off (e.g. a v2.4 release's or a v3 one) | `Global.applyNewEvolutions` applies the evolutions it lacks, unless its recorded ones differ from this version's (Play would run their Downs first; then nothing is applied). |
+| An older one (no `play_evolutions`, or records below 29: v2.2, or v2.2 upgraded by hand by v2.3/v2.4) | Nothing from the evolutions: Breadboard's own code has to make the change. |
 
-For the third case, make the change at startup in `Global.onStart`, or the first time the code
+For the last case, make the change at startup in `Global.onStart`, or the first time the code
 needs it. `models.AutopilotSettings` does the latter: before its first read or write it runs
 `create table if not exists autopilot_settings (...)`, the same definition as evolution 31.
 Columns are added the way `Global` adds them, with `alter table ... add column if not exists`.

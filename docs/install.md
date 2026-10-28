@@ -119,6 +119,8 @@ User=breadboard
 WorkingDirectory=/opt/breadboard
 Environment=JAVA8_HOME=/opt/zulu8
 ExecStart=/opt/breadboard/breadboard.sh
+# Java ends with 143 when systemd stops it: a normal stop, not a failure.
+SuccessExitStatus=143
 Restart=on-failure
 
 [Install]
@@ -129,9 +131,9 @@ WantedBy=multi-user.target
 sudo systemctl enable --now breadboard
 ```
 
-For an upgrade, unzip the new release next to the old one, `chown` it the same way, copy the
-database and settings over (see [Upgrading](#upgrading)) and point the `/opt/breadboard` link at
-it before restarting the service.
+For an upgrade: unzip the new release next to the old one and `chown` it the same way, then
+`sudo systemctl stop breadboard`, copy the database and settings over (see [Upgrading](#upgrading)),
+point the `/opt/breadboard` link at the new folder, and `sudo systemctl start breadboard`.
 
 **A restart ends running sessions.** The game state of a session lives in the server's memory,
 so stopping the server ends any session in progress. Participants who come back are told the
@@ -160,7 +162,7 @@ data.
 
 The same steps, with the database from the 2.x install (its `application.secret` was a published
 default, so don't copy that). The new release adds what its tables need at first start; this is
-tested with databases from 2.3 and 2.4. Then:
+tested with databases from 2.2, 2.3 and 2.4. Then:
 
 - Researchers sign in again.
 - Experiments keep their own participant pages, so their participants see what they saw
@@ -168,6 +170,10 @@ tested with databases from 2.3 and 2.4. Then:
   explains how to move an older one over.
 - The previous console is still at `/legacy-admin` if you need it.
 - If you used file mode, copy the `dev/` folder over too: it holds those experiments' files.
+- The 2.x launchers also served HTTPS on port 9443, with a self-signed certificate. These don't:
+  put a reverse proxy in front (see [Putting it on a server](#putting-it-on-a-server)), or start
+  with `./breadboard.sh -Dhttps.port=9443` plus your certificate's `-Dhttps.keyStore=...` and
+  `-Dhttps.keyStorePassword=...`. Update `breadboard.rootUrl` if it named port 9443.
 
 Keep a copy of the old database until you have checked your experiments in the new version.
 
@@ -176,6 +182,9 @@ Keep a copy of the old database until you have checked your experiments in the n
 **"Breadboard needs Java 8"**: the launcher found no Java, or another version. It looks in
 `JAVA8_HOME`, then (on macOS) for any Java 8 installed, then `JAVA_HOME` (on Windows, `JAVA8_HOME`
 first, then `JAVA_HOME`), then `java` on the PATH. Install Java 8 and set `JAVA8_HOME` to it.
+
+**The first start of a new install stopped halfway** (the server says the database "could not be
+brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.
 
 **"This application is already running"**: a server is running from this folder, or one crashed
 and left `RUNNING_PID` behind. The launchers remove a stale one themselves; if you start the

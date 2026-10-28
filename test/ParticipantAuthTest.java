@@ -190,6 +190,16 @@ public class ParticipantAuthTest extends BaseTest {
     }
 
     @Test
+    public void anInvitationToASessionTheEngineDoesntRunSeatsNoOne() throws Exception {
+        engineSession.set(null, null);
+        String sig = ParticipantAuth.inviteSignature(i, "P3");
+        Result result = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P3/connected?invite=" + sig));
+        assertEquals(OK, status(result));
+        assertTrue(contentAsString(result), contentAsString(result).contains("running right now"));
+        assertFalse(ParticipantAuth.isClaimed(i, "P3"));
+    }
+
+    @Test
     public void anInvitationAfterTheGameStartedSaysSoWithoutMentioningHits() {
         instance.setHasStarted(Boolean.TRUE);
         instance.save();

@@ -55,6 +55,10 @@ public class ClientController extends Controller
             return forbidden(amt ? amtError.render() : participantMessage.render("This link isn't valid",
                 "This invitation link isn't valid. Please check the link you were given, or contact the researcher."));
           }
+          if (!amt && !ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
+            // As at sign-in: a session the engine doesn't run (e.g. since a restart) takes no one.
+            return ok(ClientLogin.notRunning());
+          }
           if (ClientLogin.closedToNewcomers(experimentInstanceId, clientId)) {
             return ok(amt ? amtGameStarted.render() : participantMessage.render("The session has already started",
                 "This session began before you arrived, so it takes no one new. Please contact the researcher."));

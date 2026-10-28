@@ -67,6 +67,8 @@ Then set `breadboard.secureCookies=true` and `session.secure=true` in
 
 Experiments keep their participant pages. The new researcher console opens at the server's
 address; the previous one is still at `/legacy-admin`. Researchers sign in again after the upgrade.
+The 2.x launchers also served HTTPS on port 9443 with a self-signed certificate; these don't, so
+use a reverse proxy as above (or see `docs/install.md`).
 
 ## More
 

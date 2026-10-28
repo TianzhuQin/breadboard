@@ -180,6 +180,13 @@ public class ResponseFiltersTest extends BaseTest {
         instance.status = ExperimentInstance.Status.RUNNING;
         instance.save();
         String i = instance.id.toString();
+        // As if the engine ran this session: an invitation seats no one in a session it doesn't run.
+        java.lang.reflect.Field engineSession = models.ScriptBoard.class.getDeclaredField("engineGameListener");
+        engineSession.setAccessible(true);
+        Object previousEngineSession = engineSession.get(null);
+        models.GameListener running = new models.GameListener();
+        running.experimentInstance = instance;
+        engineSession.set(null, running);
         try {
             SimpleResult seat = simple(route(fakeRequest(GET, "/game/" + experiment.id + "/" + i + "/P1/connected?invite="
                 + ParticipantAuth.inviteSignature(i, "P1"))));
@@ -189,6 +196,7 @@ public class ResponseFiltersTest extends BaseTest {
             assertFalse(sentCookies(seat).toString().contains("SameSite"));
         } finally {
             ParticipantAuth.reset();
+            engineSession.set(null, previousEngineSession);
         }
         SimpleResult page = simple(route(fakeRequest(GET, "/assets/css/codemirror.css")));
         assertSame(page, sameSite(page));

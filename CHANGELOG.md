@@ -54,7 +54,9 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
 - OnLeaveStep never ran; `ReadyUpSequence` ignored its options.
 - Simultaneous joins could fail with ConcurrentModificationException.
 - Groovy interpolated strings reached browsers as objects instead of text.
-- A fresh database built from the evolutions lacked `experiments.file_mode`.
+- A fresh database built from the evolutions lacked `experiments.file_mode`, and so did v2.3
+  databases copied over; upgrading a v2.2 database crashed on it, and never actually gave its
+  experiments the then-default participant page.
 
 ### [v2.3.0] - 2018-02-26
 #### Added

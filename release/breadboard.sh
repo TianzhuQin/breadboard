@@ -48,10 +48,14 @@ if [ -z "$APPLICATION_SECRET" ]; then
 fi
 export APPLICATION_SECRET
 
+# The real folder, not a symbolic link to it (e.g. /opt/breadboard), which may be moved to the next
+# release while this one runs.
+HERE="$(pwd -P)"
+
 # Play refuses to start while RUNNING_PID exists, and a crash or power cut leaves it behind: remove
-# it unless it names a running Java process.
+# it unless it names a Breadboard running from this folder.
 if [ -f RUNNING_PID ]; then
-  if ! ps -p "$(cat RUNNING_PID)" -o comm= 2>/dev/null | grep -q java; then
+  if ! ps -ww -p "$(cat RUNNING_PID)" -o args= 2>/dev/null | grep -qF "NettyServer $HERE"; then
     rm -f RUNNING_PID
   fi
 fi
@@ -60,9 +64,9 @@ fi
 CP="$(sed 's#^#lib/#' lib/classpath.txt | paste -s -d: -)"
 
 # shellcheck disable=SC2086 # JAVA_OPTS is a list of options
-exec "$JAVA" -Xms512m -Xmx1024m -XX:ReservedCodeCacheSize=128m $JAVA_OPTS \
+exec "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m $JAVA_OPTS \
   -Duser.timezone=UTC \
   -Dconfig.file=conf/application-prod.conf \
   -cp "$CP" \
   "$@" \
-  play.core.server.NettyServer "$(pwd)"
+  play.core.server.NettyServer "$HERE"
