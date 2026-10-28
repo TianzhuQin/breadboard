@@ -219,7 +219,7 @@ async function askToDisplace (list: PlayerLike[]): Promise<boolean> {
   const one = list.length === 1
   return confirm({
     title: one ? `${list[0].id} is connected right now` : `${list.length} of these players are connected right now`,
-    message: `${one ? 'Their' : 'These players’'} own browser is open. A preview takes over the player’s connection: their page is disconnected and keeps reconnecting, taking the seat back from your preview, for as long as the preview is open.\n\nPreview ${one ? 'them' : 'them too'} anyway?`,
+    message: `${one ? 'Their' : 'These players’'} own browser is open. A preview takes over the player’s connection: their page is disconnected and keeps reconnecting, taking the seat back from your preview, for as long as the preview is open. Choices made in the preview count as theirs.\n\nPreview ${one ? 'them' : 'them too'} anyway?`,
     confirmLabel: one ? 'Preview anyway' : 'Include them',
     cancelLabel: one ? 'Cancel' : 'Leave them out',
     danger: true,
@@ -312,6 +312,13 @@ function step (delta: number) {
 function closeFocus () {
   const id = focusId.value
   focusId.value = null
+  if (id && oneLook.has(id)) {
+    // a look at a connected participant's screen ends here, so their own page gets its seat back
+    oneLook.delete(id)
+    remove(id)
+    notify.info(`Stopped previewing ${id}`, 'Their own page has their seat back.')
+    return
+  }
   // the tile connects again in place of the full-size page
   if (id) reload(id)
 }
@@ -366,12 +373,20 @@ watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
   }
 }, { immediate: true })
 
+// Connected participants shown for one look from the player panel: the preview ends with that look.
+const oneLook = new Set<string>()
+
 // "Preview their screen" from the player panel links here with ?player=<id>: show that player full size.
 watch(() => [route.query.player, players.value.length] as const, async ([q]) => {
   const id = typeof q === 'string' ? q : ''
-  if (!id || !players.value.some(p => p.id === id)) return
+  const p = players.value.find(x => x.id === id)
+  if (!id || !p) return
   router.replace({ query: { ...route.query, player: undefined } })
-  if (!selected.value.has(id)) await toggle(id, true)
+  if (!selected.value.has(id)) {
+    const connected = isConnected(p)
+    await toggle(id, true)
+    if (connected && selected.value.has(id)) oneLook.add(id)
+  }
   if (selected.value.has(id)) focusId.value = id
 }, { immediate: true })
 

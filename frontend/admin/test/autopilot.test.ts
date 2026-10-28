@@ -23,6 +23,7 @@ import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
   participantLinks, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
+  stepsCall,
 } from '../src/pages/autopilot/autopilot'
 import { HttpError } from '../src/lib/http'
 import { unsavedTotal } from '../src/shell/unsaved'
@@ -417,7 +418,8 @@ describe('Autopilot page', () => {
     expect(w.find('.apst__badges').text()).toMatch(/Paused/)
     expect(w.find('.apst__problem').classes()).toContain('is-info')
     expect(w.find('.apst__problem').attributes('role')).toBe('status')
-    expect(w.text()).toMatch(/Press Resume below to start again/)
+    // the way out is right in the status card
+    expect(w.find('.apst__resume').text()).toBe('Resume')
     // paused, it opens nothing when that timer runs out
     expect(w.text()).not.toMatch(/The next session opens at/)
     // without edits, the button resumes it as it is: no settings are sent
@@ -465,7 +467,7 @@ describe('Autopilot page', () => {
     expect(w.find('.apst__problem').text()).toMatch(/Its one session has finished/)
     expect(w.find('.apst__title').text()).toBe('The autopilot is done')
     expect(w.find('.apst__badges').text()).toBe('Done')
-    expect(w.find('.apst__sub').text()).toMatch(/Press Open another session below/)
+    expect(w.find('.apst__resume').text()).toBe('Open another session')
     expect(w.text()).not.toMatch(/The next session opens at/)
     expect(w.find('.ap-savebar').text()).toMatch(/Its one session has finished/)
     const submit = w.find('.ap-savebar button[type="submit"]')
@@ -525,7 +527,7 @@ describe('Autopilot page', () => {
       expect(w.findAll('input.b-input__el').every(i => (i.element as HTMLInputElement).disabled)).toBe(true)
       expect(w.find('.ap-savebar').text()).not.toMatch(/Discard|Unsaved/)
       // the status says which button to press, and never to save
-      expect(w.find('.apst__sub').text()).toContain(`Press ${label} below`)
+      expect(w.find(".apst__resume").text()).toBe(label)
       expect(w.find('.apst').text()).not.toMatch(/\bsav(e|ed|ing)\b/i)
       const submit = w.find('.ap-savebar button[type="submit"]')
       expect(submit.text()).toBe(label)
@@ -675,5 +677,17 @@ describe('Autopilot page', () => {
     await flushPromises()
     expect(w.find('.ap-error').text()).toMatch(/maxPlayers must be at least minPlayers/)
     w.unmount()
+  })
+})
+
+describe('the experiment\'s own autopilot calls', () => {
+  it('finds a call in the steps, as written, and skips commented-out ones', () => {
+    const steps = [
+      { source: 'x = 1\n// autopilot.waitingRoom([minPlayers: 9])\n' },
+      { source: 'autopilot.waitingRoom([minPlayers: 2, maxPlayers: NETWORK_SIZE,\n   waitSeconds: 20])\nautopilot.replaceDisconnected([afterSeconds: 30])' },
+    ]
+    expect(stepsCall(steps, 'waitingRoom')).toBe('autopilot.waitingRoom([minPlayers: 2, maxPlayers: NETWORK_SIZE, waitSeconds: 20])')
+    expect(stepsCall(steps, 'replaceDisconnected')).toBe('autopilot.replaceDisconnected([afterSeconds: 30])')
+    expect(stepsCall([{ source: 'nothing here' }], 'waitingRoom')).toBeNull()
   })
 })

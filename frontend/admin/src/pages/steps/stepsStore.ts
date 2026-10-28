@@ -7,7 +7,7 @@ import { registerUnsaved } from '@/shell/unsaved'
 import { notify, toast } from '@/ui'
 import { expectReply, lastOutputId } from '../console/engineReplies'
 import {
-  copyName, isDirty, isNew, mergeServerSteps, newDraft, uniqueName, validateName,
+  copyName, isDirty, isNew, mergeServerSteps, newDraft, renameInSource, uniqueName, validateName,
   type Builtin, type StepDraft, type TemplateKind,
 } from './stepsModel'
 
@@ -103,7 +103,8 @@ export function createBuiltin (b: StepsBucket, builtin: Builtin) {
 }
 
 export function duplicate (b: StepsBucket, from: StepDraft) {
-  const d = newDraft(copyName(from.name, b.drafts), 'empty', from.source)
+  const name = copyName(from.name, b.drafts)
+  const d = newDraft(name, 'empty', renameInSource(from.source, from.name, name))
   d.template = null
   return addDraft(b, d)
 }
@@ -197,7 +198,9 @@ export function runDraft (d: StepDraft): boolean {
       return
     }
     run.status = reply.ok ? 'ok' : 'error'
-    run.values = reply.values
+    // (a step's code ends with an assignment of a closure, which comes back as "Script12$_run_closure2@6d06d69c":
+    // not worth showing)
+    run.values = reply.values.filter((v: string) => !/^Script\d+\$_[\w$]*@[0-9a-f]+$/.test(String(v).trim()))
     run.error = reply.error
     if (reply.ok && d.source === source) {
       d.engineBehind = false

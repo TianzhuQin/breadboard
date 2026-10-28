@@ -212,7 +212,9 @@ function fillOf (id: string, s: ColorScale | null, t: RenderTheme): string {
   return t.accent
 }
 function nameOf (id: string): string {
-  return labelFor(props.graph.nodes.get(id) || { id, data: {} }, props.labelBy, degreeOf)
+  const label = labelFor(props.graph.nodes.get(id) || { id, data: {} }, props.labelBy, degreeOf)
+  // computer players (g.addAI's _1, _2, ...) read as "AI 1" where they would show their bare id
+  return label === id && /^_\d+$/.test(id) ? `AI ${id.slice(1)}` : label
 }
 const colorTitle = propertyTitle
 

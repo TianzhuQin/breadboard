@@ -9,9 +9,9 @@
         <!-- The way out of a pause is the same button whoever is in charge (POST /autopilot/resume),
              so this never asks for a save: application.conf autopilots have nothing to save. -->
         <p class="apst__sub">
-          <template v-if="halt === 'paused'">Its session was stopped, so it opens no new one for now. Press Resume below to start again.</template>
+          <template v-if="halt === 'paused'">Its session was stopped, so it opens no new one for now.</template>
           <template v-else-if="halt === 'done'">
-            Its one session{{ expName ? ` of “${expName}”` : '' }} has finished, so it opens no new one for now. Press Open another session below when you want one.
+            Its one session{{ expName ? ` of “${expName}”` : '' }} has finished, so it opens no new one for now.
           </template>
           <template v-else-if="status.on && expName">Running “{{ expName }}” unattended.</template>
           <template v-else-if="status.on">Running an experiment unattended.</template>
@@ -20,6 +20,10 @@
           <template v-else>Nothing opens sessions by itself. Turn it on below to run an experiment unattended.</template>
         </p>
       </div>
+      <!-- the way out of a pause, right where it is described -->
+      <BButton v-if="halt && resumable" class="apst__resume" variant="primary" size="sm" :icon="Play" :loading="resuming" @click="emit('resume')">
+        {{ halt === 'paused' ? 'Resume' : 'Open another session' }}
+      </BButton>
       <div class="apst__badges">
         <BBadge v-if="source === 'config'" tone="info"><Lock :size="12" aria-hidden="true" /> application.conf</BBadge>
         <BBadge :tone="badge.tone" :dot="true" :pulse="badge.pulse">{{ badge.label }}</BBadge>
@@ -95,7 +99,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowRight, Bot, CirclePause, CircleX, Hourglass, Info, Lock, RefreshCw, Timer, TriangleAlert } from 'lucide-vue-next'
+import { ArrowRight, Bot, CirclePause, CircleX, Hourglass, Info, Lock, Play, RefreshCw, Timer, TriangleAlert } from 'lucide-vue-next'
 import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
 import { describeEngineSession, haltOf, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
@@ -110,8 +114,11 @@ const props = defineProps<{
   refreshing?: boolean
   error?: string
   experimentName?: string | null
+  /** Resume can be pressed now (no unsaved edits in the form below) */
+  resumable?: boolean
+  resuming?: boolean
 }>()
-const emit = defineEmits<{ refresh: [] }>()
+const emit = defineEmits<{ refresh: [], resume: [] }>()
 
 const status = computed(() => props.state.status)
 const source = computed(() => props.state.source)
@@ -202,6 +209,7 @@ function timeOf (iso: string) {
 .apst__title { font-size: var(--text-lg); font-weight: 650; }
 .apst__sub { margin-top: 2px; color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .apst__badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.apst__resume { align-self: center; }
 .apst__badges .b-badge svg { margin-left: -2px; }
 .apst__block { display: flex; flex-direction: column; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
 .apst__label { font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }

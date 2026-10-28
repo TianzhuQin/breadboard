@@ -47,8 +47,8 @@
             <BEmpty
               v-if="!admin.instance"
               :icon="Share2"
-              title="No session yet"
-              text="The network shows who is in a session and how they are tied. Start a session and it fills up as people join."
+              title="No session is open"
+              text="The network shows who is in a session and how they are tied. Start a session (or resume a stopped one) and it fills up as people join."
             >
               <template #actions><BButton variant="primary" href="#/session">Go to Live session</BButton></template>
             </BEmpty>

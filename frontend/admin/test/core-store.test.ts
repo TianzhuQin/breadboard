@@ -221,6 +221,15 @@ describe('asking before an engine rebuild', () => {
     await tick()
   })
 
+  it('does not warn about the people a finished session left in the network', async () => {
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    __receive({ action: 'addNode', id: 'p1' })
+    get.mockResolvedValue({ status: { on: false, instance: { id: 9, name: 'Earlier', status: 'FINISHED' } } })
+    expect(await confirmEngineRebuild({ title: 'New session?', action: 'Creating a session' })).toBe(true)
+    expect(confirmState.open).toBe(false)
+    graph.clear()
+  })
+
   it('says the autopilot pauses when the rebuild ends its live session', async () => {
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
     graph.clear()

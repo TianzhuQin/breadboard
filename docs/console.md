@@ -62,17 +62,19 @@ controls do nothing until you switch. When that experiment is yours, the notice 
 
 ### Experiments
 
-The top of the page shows the experiment you're working on, with **Export .zip** and
+The top of the page shows the experiment you're working on, with **Export .zip**, **Rename** and
 **Duplicate**. **All experiments** lists every experiment as a card: **Work on this** switches to
-it, and its menu has **Export as .zip**, **Duplicate…**, **Use file mode…** (or **Leave file
-mode…**) and **Delete…**.
+it, and its menu has **Export as .zip**, **Rename…**, **Duplicate…**, **Use file mode…** (or
+**Leave file mode…**) and **Delete…**. Renaming keeps the experiment's sessions, data and links;
+it isn't possible in file mode, whose folder is named after the experiment, and an autopilot set
+up by name in `application.conf` needs the new name there too.
 
 | Action | |
 |---|---|
 | **New experiment** | Starts from **Breadboard's template** (the empty steps OnJoinStep, OnLeaveStep and InitStep, and the standard participant page), from **Example: network game**, or from **A copy of an experiment** (its steps, content, translations, parameters, images and participant page, without sessions or data). Names must be unique and can't contain `/` or `\`. |
 | **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment; nothing you have is changed. |
 | **Export .zip** | Downloads the experiment, to move it to another server or keep a copy. |
-| **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm. Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
+| **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm (capital letters, spaces and kinds of dash don't matter). Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
 
 **File mode** lets you edit an experiment with your own code editor, or keep it in version control.
 Breadboard then reads it from `dev/<name>_<id>/` in the server's folder (spaces in the name become
@@ -164,7 +166,7 @@ people can join with its links. If a session is running, the button reads **Stop
 |---|---|---|
 | **Start the game** | The session runs and its game hasn't started | Runs `initStep.start()`: everyone waiting is let in and the experiment begins. Later arrivals are turned away, and a waiting room is cut short. Once started, it does nothing more until the engine is reloaded. |
 | **Stop session** | The session runs | Nobody new can join. People on the page are not sent away, but the launch parameters are unset, so the game may stop working for them. |
-| **Resume session** | The session is stopped | Restarts the experiment's scripts: the network is emptied and everyone is disconnected, then people can join again with its links. The data so far is kept. |
+| **Resume session** | The session is stopped | Restarts the experiment's scripts: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
 | **Download data** | The session has finished | Its events as CSV. A finished session can't be resumed; start a new one. |
 
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
@@ -236,20 +238,23 @@ through a fixed link, starts the game once enough have arrived, and opens the ne
 ends. Saved settings are kept in the database and take effect at once. While the autopilot runs an
 experiment, the waiting room and the takeover of seats, each when switched on here, replace the
 experiment's own `autopilot.waitingRoom(…)` and `autopilot.replaceDisconnected(…)` calls; callbacks
-such as `onCancel` are kept from the experiment's call.
+such as `onCancel` are kept from the experiment's call. Switched off, the experiment's own calls
+apply; the page shows them, and when the steps set no waiting room it says that sessions will then
+wait for someone to press Start the game. Set up for the first time, the page suggests the
+experiment you're working on and leaves to its steps whatever they already set.
 
 | Setting | Suggested | |
 |---|---|---|
 | **Run this experiment unattended** | off | Keeps a session of the chosen **Experiment** open: right after saving, when the server starts, and after each session ends. Turned off, it opens no new session; an open one keeps running. |
 | **Open the next session when one finishes** | on | Also after a session is called off. |
 | **Pause before the next session** | 10 seconds | 0 opens it at once. |
-| **Start the game automatically when enough people are here** | on | The waiting room: people who arrive early see a waiting page. |
+| **Use the waiting room set here** | on (off when the steps set one) | The waiting room: people who arrive early see a waiting page, and the game starts by itself. |
 | **Minimum players** | 2 | The game can start once this many people are here. |
 | **Maximum players** | none | When this many are here, the countdown starts at once. |
 | **Wait for more people** | 60 seconds | Once the minimum is here, how long to wait for latecomers. |
 | **Give up after** | never | Counted from the first arrival. If the minimum isn't reached by then, the session is called off and everyone waiting is told. |
 | **Countdown** | 5 seconds | Participants see "Starting in … seconds" before the game begins. |
-| **Let the computer play for people who leave** | on | The computer plays the seat of someone who closes their page during the game. |
+| **Let the computer play for people who leave, as set here** | on (off when the steps set it) | The computer plays the seat of someone who closes their page during the game. |
 | **Take over after** | 30 seconds | A grace period, so a page reload or a short network drop doesn't hand the seat over. |
 | **Give the seat back when they return** | on | They take over from the computer and play on. |
 
@@ -322,7 +327,7 @@ of event with a column per data name.
 
 | Download | Where | Contents |
 |---|---|---|
-| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event, with the columns `id`, `event`, `event_date`, `data_name`, `data_value`. |
+| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
 | **Export all**, **Export filtered** | A session's events | The same columns as the session's file. Events without data keep a row. |
 | **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |

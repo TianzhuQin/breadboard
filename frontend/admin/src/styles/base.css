@@ -10,6 +10,12 @@ body {
   margin: 0;
   height: 100%;
 }
+/* In the console the pages scroll inside the shell; the window itself never does (a focused
+   hidden input or an open dialog used to scroll the whole shell off screen). */
+html:has(.shell),
+html:has(.shell) body {
+  overflow: hidden;
+}
 
 body {
   font-family: var(--font);

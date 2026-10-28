@@ -295,6 +295,9 @@ public class ClientController extends Controller
         // Checked here, during the handshake request; the callbacks below run later on another
         // thread without access to the request.
         final boolean authorized = isAuthorized(experimentId, experimentInstanceId, clientId);
+        // A researcher looking through the player's eyes, not the participant: the data says so.
+        final boolean byResearcher = authorized && !ParticipantAuth.verify(experimentInstanceId, clientId,
+            ParticipantAuth.presentedToken(request(), experimentInstanceId));
         return new WebSocket<JsonNode>() 
         {
             // Called when the Websocket Handshake is done.
@@ -308,7 +311,7 @@ public class ClientController extends Controller
                 }
                 try
                 {
-                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE));
+                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE), byResearcher);
                 }
                 catch (Exception ex)
                 {

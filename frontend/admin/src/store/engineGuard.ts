@@ -23,16 +23,16 @@ type EngineSession = Named & { experimentName: string | null, owner: string | nu
  * console last heard what the engine runs (admin.user.engine is asked for once the engine says it
  * rebuilt, which can be before the session that rebuild is for has started).
  */
-async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null, autopilotLive: boolean }> {
+async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null, autopilotLive: boolean, known: boolean }> {
   try {
     const answer = http.get<any>('/autopilot', { quiet401: true })
     const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))
     const s = await Promise.race([answer, timeout])
     const status = s && s.status && typeof s.status === 'object' ? s.status : null
     const auto = autopilotSession(status)
-    return { auto, other: otherSession(status), autopilotLive: !!auto && status.on === true && status.paused !== true }
+    return { auto, other: otherSession(status), autopilotLive: !!auto && status.on === true && status.paused !== true, known: !!status }
   } catch (e) {
-    return { auto: null, other: null, autopilotLive: false }
+    return { auto: null, other: null, autopilotLive: false, known: false }
   }
 }
 
@@ -92,7 +92,7 @@ export async function engineUse (keeping?: number): Promise<{ who: string, pause
     lines.push(`Your session “${own.name}” is running.`)
     named.add(own.id)
   }
-  const { auto, other, autopilotLive } = await engineSessions()
+  const { auto, other, autopilotLive, known } = await engineSessions()
   if (auto && !named.has(auto.id)) {
     lines.push(`The autopilot has session “${auto.name}” open.`)
     named.add(auto.id)
@@ -108,7 +108,9 @@ export async function engineUse (keeping?: number): Promise<{ who: string, pause
   }
   const endsSession = lines.length > 0
   const n = graph.nodes.size
-  if (n) {
+  // When the server says no session is running, people left in the network are what a finished or
+  // stopped session left behind: clearing them disturbs no one, so it isn't worth a warning.
+  if (n && (endsSession || !known)) {
     lines.push(`${n} ${n === 1 ? 'player is' : 'players are'} in the network right now` +
       (own ? '.' : ', perhaps in another researcher\'s session.'))
   }

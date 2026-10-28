@@ -27,6 +27,9 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
 - Prolific entry (`/game/{e}/{i}/prolific?PROLIFIC_PID=...`) with pseudonymous ids and the
   completion screen.
 - Steps with a time limit (`step.duration`).
+- Experiments can be renamed. `-Dbreadboard.resetPassword=<email>` resets a forgotten password.
+- Choices can have a colour (`color:` in `a.add`); `player.private.finished` ends the participant
+  page on its last screen without the network.
 - **Example: network game**, offered by New experiment: a complete experiment that runs by itself
   (waiting room, ties among neighbors, cutting ties on the network, timed rounds, a score and
   recorded picks), to try Breadboard out or build on.
@@ -51,8 +54,20 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
   enough people are there and the session starts soon.
 - Releases log at INFO level to a daily `logs/application.log` (30 days kept), set in
   `conf/logger.xml`; Play ignored the levels in the settings file, so releases logged debug output.
-- The console says why it signed out when the account signed in, out or changed its password in
-  another browser.
+- Researcher sign-in ignores the email's case, and signing in on another browser no longer signs
+  the first one out (signing out or changing the password still signs out every browser, and the
+  console says why). The first account needs a valid email address.
+- A participant who closed the page goes back to their seat through the sign-in page or the
+  study's shared link, also after the game has started; IDs are trimmed. Late arrivals, unknown
+  sessions and cut-off links get clear pages.
+- Stopping a session tells its participants; stopping and resuming are recorded in the data
+  (`sessionStopped`, `sessionResumed`), and the session CSV keeps events that have no data.
+- The Autopilot page shows the experiment's own waiting-room settings and doesn't replace them
+  unless asked to; its Resume is in the status card. The waiting room tells participants and the
+  console how many seconds remain before the start.
+- New sessions start from the last session's launch parameters. Duplicated steps get their own
+  step name. The Recruitment page warns when an experiment never gives Prolific participants a
+  completion code. Uploads that aren't images are refused.
 
 #### Fixed
 - Anyone who knew a participant's page address could take over their seat. Every way in now
@@ -64,6 +79,13 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
 - A tie cut confirmed just as a round ended was made in the next round and used up its allowance;
   each `edgeEdits.allow()` is now a turn of its own.
 - Debug logging wrote researchers' session tokens to the log.
+- The participant's network could be drawn inside out, in a corner, when the game started while
+  the page was still being laid out.
+- The console window itself could scroll away (with a blank area below) on pages with hidden
+  helper text or switches.
+- A Script console typo was reported on Live session as an error in the experiment; tie cuts
+  showed as participants disconnecting; a researcher's preview of a connected participant kept
+  taking their seat after it was closed.
 - OnLeaveStep never ran; `ReadyUpSequence` ignored its options.
 - Simultaneous joins could fail with ConcurrentModificationException.
 - Groovy interpolated strings reached browsers as objects instead of text.

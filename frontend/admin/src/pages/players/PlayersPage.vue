@@ -10,8 +10,8 @@
     <BEmpty
       v-if="!admin.instance"
       :icon="Users"
-      title="No session yet"
-      text="Players appear here once a session is running. Start one from Live session."
+      title="No session is open"
+      text="Players appear here while a session runs. Start one, or resume a stopped one, from Live session."
     >
       <template #actions><BButton variant="primary" href="#/session">Go to Live session</BButton></template>
     </BEmpty>
@@ -145,7 +145,7 @@
                 </td>
                 <td><span v-if="r.status" class="plist__status-text" :class="`is-${r.tone}`">{{ r.status }}</span><span v-else class="plist__none" aria-label="unknown">—</span></td>
                 <td class="is-num">{{ r.ties }}</td>
-                <td><BBadge v-if="r.choices" tone="info" :title="`${r.choices} ${r.choices === 1 ? 'option' : 'options'} on their screen`">Waiting</BBadge></td>
+                <td><BBadge v-if="r.choices" tone="info" :title="`${r.choices} ${r.choices === 1 ? 'option' : 'options'} on their screen, not chosen yet`">Choosing</BBadge></td>
                 <td v-for="c in extraColumns" :key="c.key" class="plist__value" :class="{ 'is-num': r.numeric[c.key] }" :title="r.full[c.key]"><span v-if="isColour(r.cells[c.key])" class="plist__swatch" :style="{ background: r.cells[c.key] }" aria-hidden="true" />{{ r.cells[c.key] }}</td>
               </tr>
             </tbody>
@@ -575,7 +575,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .plist__dot.is-ai { background: transparent; box-shadow: inset 0 0 0 2.5px var(--accent); }
 .plist__status-text { color: var(--text-soft); }
 .plist__status-text.is-off { color: var(--warning-soft-text); }
-.plist__status-text.is-ai { color: var(--accent-soft-text); }
+.plist__status-text.is-ai { color: var(--muted); }
 .plist__none { color: var(--faint); }
 .plist__value { color: var(--text-soft); }
 .plist__pager { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }

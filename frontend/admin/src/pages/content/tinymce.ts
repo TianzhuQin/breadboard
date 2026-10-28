@@ -55,7 +55,9 @@ export function tinymceSettings (o: TinymceOptions): Record<string, any> {
     theme: 'modern',
     skin: 'lightgray',
     plugins: 'image lists link charmap textcolor table paste',
-    toolbar: 'styleselect | bold italic underline | bullist numlist outdent indent | alignleft aligncenter alignright | forecolor backcolor | link unlink image table | charmap removeformat | undo redo',
+    // one row at common widths: indent, highlight colour, unlink and special characters are in the
+    // menus and shortcuts (Tab indents in lists, the link dialog removes a link)
+    toolbar: 'styleselect | bold italic underline | bullist numlist | alignleft aligncenter alignright | forecolor | link image table | removeformat | undo redo',
     menubar: false,
     statusbar: false,
     resize: false,

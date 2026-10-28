@@ -90,8 +90,10 @@
               <template v-if="room.state === 'starting'">
                 Starting in <span class="tabular" aria-hidden="true">{{ countdown }}</span><span class="sr-only">a few</span> seconds
               </template>
-              <template v-else-if="room.min != null && room.here < room.min">Waiting room: {{ room.here }} of the {{ room.min }} people needed are here</template>
-              <template v-else>Waiting room: {{ room.here }} {{ room.here === 1 ? 'person is' : 'people are' }} here, enough to start</template>
+              <template v-else-if="room.min != null && room.here < room.min">Waiting room: {{ room.here }} of the {{ room.min }} people needed {{ room.here === 1 ? 'is' : 'are' }} here</template>
+              <template v-else>
+                Waiting room: {{ room.here }} {{ room.here === 1 ? 'person is' : 'people are' }} here, enough to start<template v-if="room.startsIn">. The game starts in about {{ room.startsIn }} s unless more join</template>
+              </template>
             </p>
             <div
               class="live-wait__bar"
@@ -161,7 +163,7 @@ import {
   ArrowRight, Bot, CircleAlert, CircleCheck, CircleStop, Download, Hourglass, PanelBottom, Play, Plus, Share2, Timer, Users, Wifi,
 } from 'lucide-vue-next'
 import { BBadge, BButton, BPage, BSpinner } from '@/ui'
-import { admin, engineElsewhere, graph } from '@/store/admin'
+import { admin, engineElsewhere, graph, isResearcherRun } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import NewSessionDialog from './NewSessionDialog.vue'
 import NoSession from './NoSession.vue'
@@ -311,6 +313,7 @@ const explanation = computed(() => {
     // only until the next update; an AMT session's entry also closes before its game starts)
     if (started.value.forgotten) return 'The session is closed to newcomers, but its game isn\'t running in the engine: the engine was reloaded since it started (a reload forgets a started game; the session takes people again in a moment), or entry closed before the start, as a Mechanical Turk session\'s does when its HIT\'s time is up. Start the game to run it from the beginning with whoever is in the network now.'
     if (room.value && room.value.state !== 'cancelled') return 'People are gathering in the waiting room, which starts the game by itself.'
+    if (openedByAutopilot.value) return 'The autopilot opened this session: people join with the links below and wait in its waiting room, which starts the game by itself once enough are here. You don\'t need to do anything.'
     return 'People can join with the links below. When everyone you need is here, start the game: everyone waiting is let in and newcomers are turned away.'
   }
   if (i.status === 'STOPPED') return 'This session is stopped, so nobody can join. Resuming it runs its game again from the beginning: its scripts restart, which disconnects anyone still on the page. The data recorded so far is kept.'
@@ -339,7 +342,8 @@ const latestError = computed(() => {
   for (let i = admin.output.length - 1; i >= 0; i--) {
     const e = admin.output[i]
     if (e.at < admin.engineReloadedAt) return null
-    if (e.kind === 'error') return e.id > dismissedErrorId.value ? e : null
+    // a mistake in a snippet run from the Script console isn't the experiment failing
+    if (e.kind === 'error' && !isResearcherRun(e.source)) return e.id > dismissedErrorId.value ? e : null
   }
   return null
 })

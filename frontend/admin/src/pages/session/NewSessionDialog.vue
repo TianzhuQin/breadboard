@@ -38,6 +38,7 @@
             <h3 :id="`${formId}-ph`" class="nsd-params__title">Launch parameters</h3>
             <p class="nsd-params__sub">
               {{ fields.length ? 'Your scripts read these as variables. They are saved with the session and can\'t change while it runs.' : 'This experiment has no launch parameters.' }}
+              <template v-if="fields.length && filledFrom"> Filled in as in “{{ filledFrom }}”, the last session.</template>
             </p>
           </div>
           <BButton v-if="fields.length && changedFromDefaults" size="sm" variant="ghost" :icon="RotateCcw" @click="resetAll">Reset to defaults</BButton>
@@ -127,7 +128,7 @@ import { admin, actions, ensureConnected, instances } from '@/store/admin'
 import { confirmEngineRebuild } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import {
-  TYPE_LABEL, buildFields, buildLaunchParams, checkSessionName, fieldErrors, rangeText, suggestName,
+  TYPE_LABEL, buildFields, buildLaunchParams, checkParam, checkSessionName, fieldErrors, rangeText, suggestName,
   type FieldValue, type ParamField,
 } from './params'
 
@@ -137,6 +138,9 @@ const emit = defineEmits<{ 'update:open': [value: boolean], created: [name: stri
 const formId = uid('nsd')
 const name = ref('')
 const initialName = ref('')
+/** The session whose values the fields started with ('' for the defaults). */
+const filledFrom = ref('')
+const startValues: Record<string, any> = reactive({})
 const fields = ref<ParamField[]>([])
 const values = reactive<Record<string, FieldValue>>({})
 const touched = reactive(new Set<string>())
@@ -163,6 +167,10 @@ function reset () {
   fields.value = buildFields(admin.experiment?.parameters)
   for (const k of Object.keys(values)) delete values[k]
   for (const f of fields.value) values[f.name] = f.initial
+  // back-to-back runs usually keep the same values: start from the last session's
+  filledFrom.value = fillFromLast()
+  for (const k of Object.keys(startValues)) delete startValues[k]
+  for (const f of fields.value) startValues[f.name] = values[f.name]
   touched.clear()
   // a stored default that can't be used is pointed out at once, not after the first submit
   for (const f of fields.value) if (f.defaultProblem) touched.add(f.name)
@@ -198,7 +206,26 @@ function isChanged (f: ParamField) {
   return typeof v === 'string' && typeof f.initial === 'string' ? v.trim() !== f.initial.trim() : v !== f.initial
 }
 const changedFromDefaults = computed(() => fields.value.some(isChanged))
-const dirty = computed(() => name.value !== initialName.value || changedFromDefaults.value)
+// (changed from what the dialog opened with, which may be the last session's values)
+const dirty = computed(() => name.value !== initialName.value || fields.value.some(f => values[f.name] !== startValues[f.name]))
+
+/** Put the last session's values in the fields (those still valid); its name, or '' when none. */
+function fillFromLast (): string {
+  const last = [...instances.value].filter(i => Array.isArray(i.data) && i.data.length)
+    .sort((a, b) => b.id - a.id)[0]
+  if (!last) return ''
+  let used = false
+  for (const f of fields.value) {
+    const d = (last.data || []).find(x => x.name === f.name)
+    if (!d) continue
+    const c = checkParam(f, f.type === 'Boolean' ? String(d.value).trim().toLowerCase() === 'true' : String(d.value ?? ''))
+    if (c.error) continue
+    const v: FieldValue = f.type === 'Boolean' ? c.value === true : String(d.value ?? '')
+    if (v !== values[f.name]) used = true
+    values[f.name] = v
+  }
+  return used ? last.name : ''
+}
 
 function resetAll () {
   for (const f of fields.value) values[f.name] = f.initial

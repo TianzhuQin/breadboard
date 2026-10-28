@@ -52,6 +52,7 @@ import { http, HttpError } from '@/lib/http'
 import {
   BUILTINS, builtinOf, copyName, draftFromStep, formatName, isDirty, isNew, mergeServerSteps, newDraft, renameDraft,
   sortDrafts, templateSource, uniqueName, validateName, type StepDraft,
+  renameInSource,
 } from '../src/pages/steps/stepsModel'
 import { bucketKey, buckets, deleteDraft, errorText, saveDraft, ensureBucket, runDraft, unsavedDrafts } from '../src/pages/steps/stepsStore'
 import { __resetReplies } from '../src/pages/console/engineReplies'
@@ -733,5 +734,17 @@ describe('StepsPage', () => {
     admin.instance = null
     admin.engine = 'ready'
     w.unmount()
+  })
+})
+
+describe('duplicating a step', () => {
+  it('gives the copy its own step variable and name, so it doesn\'t replace the original', () => {
+    const src = 'roundStep = stepFactory.createStep("RoundStep")\nroundStep.run = { roundStepCount++ }\nroundStep.done = { finishStep.start() }'
+    const out = renameInSource(src, 'RoundStep', 'RoundStep copy')
+    expect(out).toContain('roundStepCopy = stepFactory.createStep("RoundStep copy")')
+    expect(out).toContain('roundStepCopy.run')
+    // only whole names: another variable that starts the same way is left alone
+    expect(out).toContain('roundStepCount++')
+    expect(out).toContain('finishStep.start()')
   })
 })

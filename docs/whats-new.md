@@ -193,6 +193,17 @@ New experiments start with a redesigned page (`conf/defaults/default-client-html
 
   - Like `SVGGraph`, it sets `node.isEgo` and emits `nodeClick` and `edgeClick` for clicks on any
     person or tie. `SVGGraph`'s layout props and edge-label slots don't apply.
+- Until the experiment shows anything (and between two screens), the page says the participant is
+  in and should keep it open, rather than staying blank.
+- When the experiment sets `player.private.finished = true` (or `player.finished`) on the last
+  screen, the page shows that screen alone, centred, without the network, and no longer warns
+  about the connection when the next session restarts the engine. Stopping a session from the
+  console shows its participants such a screen too.
+- A choice can have a colour: `a.add(player, [name: "Blue", color: "#2563eb", result: {...}])`.
+- Restyle the page from the Participant page's Style tab through the theme's variables, e.g.
+  `.bb-app { --bb-accent: #c2410c; }` (also `--bb-text`, `--bb-bg`, `--bb-surface`, `--bb-muted`,
+  `--bb-radius`, `--bb-font`), or with selectors that start with `.bb-app .bb-prose`, e.g.
+  `.bb-app .bb-prose h2 { color: #c2410c; }`; plain selectors such as `h2` lose to the theme.
 - Sign-in, message and loading pages use the same look.
 - The new look only applies inside `class="bb-app"`. The page is always light, so what
   participants see doesn't depend on their system's dark mode.

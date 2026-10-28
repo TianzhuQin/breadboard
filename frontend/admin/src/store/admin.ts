@@ -74,7 +74,13 @@ function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, r
   if (requestId) entry.requestId = requestId
   state.output.push(entry)
   if (state.output.length > OUTPUT_CAP) state.output.splice(0, state.output.length - OUTPUT_CAP)
-  if (kind === 'error') state.unseenErrors++
+  // (not for code the researcher ran from the Script console or a step's Run: those pages show it)
+  if (kind === 'error' && !isResearcherRun(source)) state.unseenErrors++
+}
+
+/** Output answering code a researcher ran themselves, rather than the experiment running. */
+export function isResearcherRun (source?: string): boolean {
+  return source === 'SendScript' || source === 'SendStep'
 }
 
 // ---- incoming messages ----------------------------------------------------------------------

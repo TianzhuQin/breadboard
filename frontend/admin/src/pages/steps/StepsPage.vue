@@ -151,7 +151,8 @@
         </p>
         <p v-else-if="isNewStep && cur.template" class="steps__about">
           <Info :size="15" aria-hidden="true" />
-          <span>A new {{ templateLabel }}. Its code follows the name until you change the code. It is added to the experiment when you save it.</span>
+          <span v-if="cur.template === 'empty'">A new empty step. Write its Groovy code below; it is added to the experiment when you save it.</span>
+          <span v-else>A new {{ templateLabel }}. Its code follows the name until you change the code. It is added to the experiment when you save it.</span>
         </p>
 
         <div v-if="cur.error && cur.status === 'error'" class="steps__alert" role="alert">
@@ -332,6 +333,13 @@ const current = computed<StepDraft | null>(() => {
 })
 /** The selected step, for the part of the template shown only when there is one. */
 const cur = computed(() => current.value as StepDraft)
+// A run's result is about the code it ran: once that code is edited, it would point at lines that
+// have changed.
+watch(() => [cur.value?.uid, cur.value?.source] as const, ([uid, source], old) => {
+  if (!old || uid !== old[0] || source === old[1]) return
+  const d = cur.value
+  if (d && d.run && d.run.status !== 'pending') d.run = null
+})
 // keep something selected: InitStep first, as the old console did
 watch(() => [bucket.value?.loaded, bucket.value?.drafts.length, bucket.value?.selected], () => {
   const b = bucket.value
@@ -808,7 +816,7 @@ function clock (t: number) {
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  max-height: 260px;
+  max-height: min(260px, 38vh);
   overflow: auto;
 }
 .srun.is-ok { border-left-color: var(--success); }

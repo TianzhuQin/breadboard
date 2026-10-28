@@ -167,6 +167,8 @@ const PALETTE: Record<string, [string, string]> = {
   ego: ['#8b8df8', '#4f46e5'],
   neutral: ['#ffffff', '#dfe4ee'],
 }
+// A stage smaller than this (px) hasn't been laid out yet.
+const MIN_STAGE = 48
 // gap kept between neighbors on the ring, and room for a name under (or over) a person
 const NODE_GAP = 18
 const LABEL_ROOM = 30
@@ -229,6 +231,7 @@ export default Vue.extend({
       nodeScale: 1,
       fitScale: 1,
       size: { w: 0, h: 0 },
+      destroyed: false,
       resizeObserver: null as any,
       animation: 0 as number,
       fallbackNames: {} as Record<string, string>,
@@ -337,12 +340,16 @@ export default Vue.extend({
       }
       return list
     },
+    // The stage has a real size (see fitRing).
+    measured (): boolean {
+      return this.size.w >= MIN_STAGE && this.size.h >= MIN_STAGE
+    },
     viewBox (): string {
       // Ring with a known size: one unit is one pixel, so text and people stay the same size on
       // every screen and the ring fits itself to the space (fitRing); fitScale shrinks it all only
       // when even the smallest ring doesn't fit. Labels hang below the bottom row, so the picture
       // sits a little high.
-      if (this.isRing && this.size.w && this.size.h) {
+      if (this.isRing && this.measured && this.fitScale > 0) {
         const w = this.size.w / this.fitScale
         const h = this.size.h / this.fitScale
         return `${-w / 2} ${-h / 2 + 8} ${w} ${h}`
@@ -624,16 +631,15 @@ export default Vue.extend({
     if (stage && typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(entries => {
         const box = entries[0].contentRect
-        const w = Math.round(box.width), h = Math.round(box.height)
-        if (Math.abs(w - this.size.w) > 1 || Math.abs(h - this.size.h) > 1) {
-          this.size = { w, h }
-          this.relayout()
-        }
+        this.setSize(Math.round(box.width), Math.round(box.height))
       })
       this.resizeObserver.observe(stage)
+      // and once more after the page has settled (a transition may still be sizing it now)
+      this.remeasureSoon()
     }
   },
   beforeDestroy () {
+    this.destroyed = true
     if (this.resizeObserver) this.resizeObserver.disconnect()
     cancelAnimationFrame(this.animation)
     clearTimeout(this.toastTimer)
@@ -742,7 +748,9 @@ export default Vue.extend({
       let R = this.idealRingRadius
       let scale = 1
       let fit = 1
-      if (this.size.w && this.size.h && n) {
+      // (A stage measured while the page swaps the waiting screen for the game can be a pixel or
+      // two across: fitting to that drew the picture inside out, into a corner.)
+      if (this.measured && n) {
         let steps = 0
         for (const e of this.edges) {
           const k = this.ringSteps(e.source.id, e.target.id)
@@ -763,12 +771,35 @@ export default Vue.extend({
         // use most of a large screen, but never less than keeps people apart
         R = Math.max(minR, Math.min(Math.max(R, 0.8 * room), room))
         const needed = R + outside(r)
-        fit = needed > half ? half / needed : 1
+        fit = needed > half ? Math.max(0.05, half / needed) : 1
         this.tooSmallToTap = 2 * r * fit < 24
       }
       this.ringR = Math.round(R)
       this.nodeScale = scale
       this.fitScale = fit
+    },
+    setSize (w: number, h: number) {
+      if (Math.abs(w - this.size.w) > 1 || Math.abs(h - this.size.h) > 1) {
+        this.size = { w, h }
+        this.relayout()
+      }
+    },
+    measure () {
+      const stage = this.$refs.stage as HTMLElement | undefined
+      if (!stage || typeof stage.getBoundingClientRect !== 'function') return
+      const box = stage.getBoundingClientRect()
+      this.setSize(Math.round(box.width), Math.round(box.height))
+    },
+    // Measure again over the next moments, until the stage has a real size.
+    remeasureSoon () {
+      let tries = 0
+      const again = () => {
+        if (this.destroyed) return
+        this.measure()
+        if (!this.measured && ++tries < 20) setTimeout(again, 150)
+      }
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(again)
+      else setTimeout(again, 0)
     },
     // When people are drawn too small to tap, offer the list instead, once.
     openListIfNeeded (small: boolean) {

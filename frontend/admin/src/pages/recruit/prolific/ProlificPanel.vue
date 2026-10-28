@@ -3,6 +3,19 @@
 
   <div v-else class="pl">
     <div class="pl__main">
+      <!-- A study whose participants never get a code can't be submitted on Prolific: say so first. -->
+      <div v-if="!givesCode" class="pl-nocode" role="note">
+        <TriangleAlert :size="17" aria-hidden="true" />
+        <div>
+          <p class="pl-nocode__title">“{{ admin.experiment.name }}” never gives Prolific participants a completion code</p>
+          <p class="pl-nocode__text">
+            None of its steps calls <code>recruitment.completeProlific</code>, so people who come from Prolific
+            finish without a code and can't submit the study. Add it to your last step, as shown under
+            “When a participant finishes”.
+          </p>
+        </div>
+      </div>
+
       <StudyLinkCard :experiment="admin.experiment" :target="target.open" :started="target.started" />
 
       <BPanel title="When a participant arrives" subtitle="What Breadboard does with each person Prolific sends.">
@@ -42,6 +55,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { TriangleAlert } from 'lucide-vue-next'
 import { BPanel } from '@/ui'
 import { admin, instances } from '@/store/admin'
 import NeedsExperiment from '@/shell/NeedsExperiment.vue'
@@ -51,6 +65,13 @@ import AutopilotCard from './AutopilotCard.vue'
 import ProlificPlayers from './ProlificPlayers.vue'
 import { prolificTarget } from './prolific'
 
+// (a call that is commented out doesn't count)
+const givesCode = computed(() => (admin.experiment?.steps || []).some(st =>
+  (st.source || '').split('\n').some(line => {
+    const at = line.indexOf('completeProlific')
+    return at >= 0 && !line.slice(0, at).includes('//')
+  })))
+
 /** Where /play/<e>/prolific leads: the engine's session, while its game hasn't started. */
 const target = computed(() => {
   const engine = admin.user?.engine
@@ -59,6 +80,11 @@ const target = computed(() => {
 </script>
 
 <style>
+.pl-nocode { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: var(--radius); background: var(--warning-soft); color: var(--warning-soft-text); border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent); }
+.pl-nocode > svg { flex: none; margin-top: 2px; }
+.pl-nocode__title { font-weight: 650; }
+.pl-nocode__text { margin-top: 3px; font-size: var(--text-sm); line-height: 1.5; }
+.pl-nocode code { color: inherit; }
 .pl { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
 .pl__main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .pl__side { display: flex; flex-direction: column; gap: 16px; min-width: 0; position: sticky; top: 0; }

@@ -898,6 +898,11 @@ public class ScriptBoard extends UntypedActor {
   }
 
   public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId, final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out) throws Exception {
+    addClient(experimentIdString, experimentInstanceIdString, clientId, in, out, false);
+  }
+
+  /** @param byResearcher a researcher's preview of this player (its sign-in is recorded as such) */
+  public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId, final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out, final boolean byResearcher) throws Exception {
     try {
       Long experimentId = Long.parseLong(experimentIdString);
       Long experimentInstanceId = Long.parseLong(experimentInstanceIdString);
@@ -1007,6 +1012,9 @@ public class ScriptBoard extends UntypedActor {
               if (eventTracker != null) {
                 LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
                 data.put("clientId", clientId);
+                if (byResearcher) {
+                  data.put("preview", "true");
+                }
                 eventTracker.track("clientLogIn", data);
               }
             } else if (action.equals("MakeChoice")) {

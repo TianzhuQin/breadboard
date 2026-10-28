@@ -46,6 +46,8 @@ export interface WaitingRoom {
   max: number | null
   /** Seconds left in the countdown, as the server last told the participants. */
   seconds: number | null
+  /** Seconds until the waiting room starts the game unless more people come (enough are here). */
+  startsIn?: number | null
 }
 
 function num (v: unknown): number | null {
@@ -73,6 +75,8 @@ export function waitingRoom (nodes: Iterable<GraphNode>): WaitingRoom | null {
       min: num(ap.min),
       max: num(ap.max),
       seconds: state === 'starting' ? num(ap.seconds) : null,
+      // once enough are here: seconds until the start unless more come (newer servers send it)
+      startsIn: state === 'waiting' ? num(ap.startsIn) : null,
     }
     if (!best || rank[state] > rank[best.state]) {
       best = cur
@@ -82,6 +86,7 @@ export function waitingRoom (nodes: Iterable<GraphNode>): WaitingRoom | null {
       best.max = best.max ?? cur.max
       // the player told most recently has the fewest seconds left
       if (cur.seconds != null && (best.seconds == null || cur.seconds < best.seconds)) best.seconds = cur.seconds
+      if (cur.startsIn != null && (best.startsIn == null || cur.startsIn < best.startsIn)) best.startsIn = cur.startsIn
     }
   }
   return best

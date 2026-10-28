@@ -19,7 +19,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 </script>
 
 <style>
-.b-switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.b-switch { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
 .b-switch.is-disabled { opacity: 0.55; cursor: not-allowed; }
 .b-switch__input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .b-switch__track {

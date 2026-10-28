@@ -87,7 +87,7 @@
                 </td>
                 <td class="ss__c-created tabular" :title="`As the server recorded it: ${s.creationTime}`">{{ createdText(s) }}</td>
                 <td class="ss__c-params tabular" :title="paramsTitle(s)">
-                  <span v-if="s.data?.length">{{ s.data.length }}</span>
+                  <span v-if="s.data?.length" class="ss__params">{{ paramsShort(s) }}</span>
                   <span v-else class="ss__none">none</span>
                 </td>
                 <td class="ss__c-actions">
@@ -305,6 +305,12 @@ function onRowClick (e: MouseEvent, id: number) {
 }
 
 const createdText = (s: Instance) => formatDateTime(parseServerTime(s.creationTime))
+/** "rounds 3 · roundSeconds 40", cut short when long (the full list is in the title). */
+function paramsShort (s: Instance) {
+  const text = (s.data || []).map(x => `${x.name} ${x.value === '' ? '“”' : x.value}`).join(' · ')
+  return text.length > 42 ? text.slice(0, 41) + '…' : text
+}
+
 function paramsTitle (s: Instance) {
   const d = s.data || []
   if (!d.length) return 'Started without launch parameters'
@@ -419,7 +425,8 @@ watch(eventsOpen, (open) => {
 .ss__sub-narrow { display: none !important; }
 .ss__c-status { width: 1%; white-space: nowrap; }
 .ss__c-created { white-space: nowrap; color: var(--text-soft); font-size: var(--text-sm); }
-.ss__c-params { width: 1%; white-space: nowrap; text-align: right !important; color: var(--text-soft); font-size: var(--text-sm); padding-right: 24px !important; }
+.ss__c-params { width: 1%; white-space: nowrap; text-align: left !important; color: var(--text-soft); font-size: var(--text-sm); padding-right: 24px !important; }
+.ss__params { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-xs); }
 .ss__none { color: var(--faint); }
 .ss__c-actions { width: 1%; white-space: nowrap; padding-right: 14px !important; }
 .ss__quick { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }

@@ -118,7 +118,9 @@ watch(() => route.path, () => { if (mainEl.value) mainEl.value.scrollTop = 0 })
 .shell__skip:focus { left: 8px; }
 .shell__nav { min-height: 0; }
 .shell__main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.shell__content { flex: 1; min-height: 0; overflow: auto; outline: none; }
+/* (position: relative: absolutely placed things inside, like screen-reader text, are placed in
+   the scroll pane, not against <body>, where they made the whole window scroll) */
+.shell__content { position: relative; flex: 1; min-height: 0; overflow: auto; outline: none; overscroll-behavior: contain; }
 .shell__content:not(.is-bleed) > * { max-width: 1280px; margin-left: auto; margin-right: auto; }
 .shell__content.is-bleed { overflow: hidden; display: flex; flex-direction: column; }
 .shell__content.is-bleed > * { flex: 1; min-height: 0; }

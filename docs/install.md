@@ -196,3 +196,13 @@ Breadboard doesn't pass websockets. See the nginx settings above.
 **Participants see "This session isn't running right now"**: the session finished, the server
 restarted, or the console moved the engine to another session. Open a new session, or turn the
 autopilot on, and give participants the study's link again.
+
+**A forgotten password**: stop the server and start it once with the account's email:
+
+```
+./breadboard.sh -Dbreadboard.resetPassword=you@lab.org
+```
+
+(`breadboard.bat -Dbreadboard.resetPassword=you@lab.org` on Windows). The server prints a new
+password on its console (not in the log) and signs the account out everywhere. Sign in with it,
+change it in Settings, and start the server without the option from then on.

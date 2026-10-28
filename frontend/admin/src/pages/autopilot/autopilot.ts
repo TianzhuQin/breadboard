@@ -480,3 +480,33 @@ export function autopilotActivity (events: { name: string, datetime: string, dat
   }
   return out
 }
+
+/**
+ * The experiment's own `autopilot.<method>(…)` call in its steps (e.g. "waitingRoom"), as written,
+ * up to its closing parenthesis and cut to `max` characters; null when its steps make none.
+ */
+export function stepsCall (steps: { source: string }[] | undefined, method: string, max = 220): string | null {
+  const needle = `autopilot.${method}(`
+  for (const step of steps || []) {
+    const src = step.source || ''
+    // (skipping commented-out lines)
+    const lines = src.split('\n')
+    let offset = 0
+    for (const line of lines) {
+      const at = line.indexOf(needle)
+      if (at >= 0 && !line.slice(0, at).includes('//')) {
+        const start = offset + at
+        let depth = 0
+        let end = src.length
+        for (let i = start + needle.length - 1; i < src.length; i++) {
+          if (src[i] === '(') depth++
+          else if (src[i] === ')' && --depth === 0) { end = i + 1; break }
+        }
+        const call = src.slice(start, end).replace(/\s+/g, ' ').trim()
+        return call.length > max ? call.slice(0, max - 1) + '…' : call
+      }
+      offset += line.length + 1
+    }
+  }
+  return null
+}

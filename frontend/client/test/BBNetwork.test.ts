@@ -89,6 +89,20 @@ describe('BBNetwork looks', () => {
 })
 
 describe('BBNetwork layout', () => {
+  it('never draws inside out when the stage is measured before it has a size', async () => {
+    const w = mountNetwork()
+    const vm = w.vm as any
+    for (const [sw, sh] of [[1, 1], [364, 10], [364, 400]]) {
+      vm.setSize(sw, sh)
+      await w.vm.$nextTick()
+      const [, , vw, vh] = vm.viewBox.split(' ').map(Number)
+      expect(vw).toBeGreaterThan(0)
+      expect(vh).toBeGreaterThan(0)
+      expect(vm.fitScale).toBeGreaterThan(0)
+    }
+    expect(vm.tooSmallToTap).toBe(false)
+  })
+
   it('puts the participant in the middle and their neighbors on a circle', () => {
     const w = mountNetwork()
     const targets = (w.vm as any).targets

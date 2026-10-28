@@ -37,7 +37,7 @@ export const BUILTINS: Builtin[] = [
     name: 'OnLeaveStep',
     when: 'Runs when someone leaves',
     detail: 'Runs every time a participant is taken out of the network, with their player id (onLeaveStep.start(playerId)). What it prints appears in the Output panel.',
-    source: 'onLeaveStep = stepFactory.createNoUserActionStep()\n\nonLeaveStep.run = {\n  println "onLeaveStep.run"\n}\nonLeaveStep.done = {\n  println "onLeaveStep.done"\n}',
+    source: 'onLeaveStep = stepFactory.createNoUserActionStep()\n\nonLeaveStep.run = { playerId ->\n  println "onLeaveStep.run"\n}\nonLeaveStep.done = {\n  println "onLeaveStep.done"\n}',
   },
 ]
 
@@ -219,6 +219,21 @@ export function uniqueName (base: string, all: { name: string }[]) {
 /** A copy's name: "Payoff copy", "Payoff copy 2" … */
 export function copyName (name: string, all: { name: string }[]) {
   return uniqueName(`${name} copy`, all)
+}
+
+/**
+ * A copy's code, with the original's step variable and step name changed to the copy's, so saving
+ * or running the copy doesn't redefine the original in the engine. (Only the step's own name and
+ * variable, as the templates write them; other code is copied as it is.)
+ */
+export function renameInSource (source: string, fromName: string, toName: string): string {
+  const fromVar = formatName(fromName)
+  const toVar = formatName(toName)
+  let out = source.split(`"${fromName}"`).join(`"${toName}"`)
+  if (fromVar && toVar && fromVar !== toVar) {
+    out = out.replace(new RegExp(`\\b${fromVar.replace(/[$]/g, '\\$&')}\\b`, 'g'), toVar)
+  }
+  return out
 }
 
 /**

@@ -7,7 +7,7 @@
         :id="menuId"
         ref="list"
         class="b-menu__list"
-        :class="[`b-menu__list--${align}`, { 'is-up': up }]"
+        :class="[`b-menu__list--${side || align}`, { 'is-up': up || flipUp }]"
         role="menu"
         :style="{ minWidth: width ? `${width}px` : undefined }"
       >
@@ -50,7 +50,10 @@ export interface MenuItem {
   heading?: string
   run?: () => void
 }
-withDefaults(defineProps<{ items: MenuItem[], align?: 'left' | 'right', up?: boolean, width?: number }>(), { align: 'left' })
+const props = withDefaults(defineProps<{ items: MenuItem[], align?: 'left' | 'right', up?: boolean, width?: number }>(), { align: 'left' })
+/** The side and direction actually used: flipped when the asked-for one would leave the page's view. */
+const side = ref<'left' | 'right' | null>(null)
+const flipUp = ref(false)
 
 const open = ref(false)
 const root = ref<HTMLElement>()
@@ -96,10 +99,36 @@ function onKey (e: KeyboardEvent) {
 function onDocDown (e: MouseEvent) {
   if (root.value && !root.value.contains(e.target as Node)) close()
 }
+/** The box a menu must stay in: the scrolling area it is in (the page, not under the sidebar), or the window. */
+function bounds (): { left: number, right: number, bottom: number } {
+  let el = root.value?.parentElement || null
+  while (el && el !== document.body) {
+    const o = getComputedStyle(el).overflowY
+    if (o === 'auto' || o === 'scroll' || o === 'hidden') {
+      const r = el.getBoundingClientRect()
+      if (r.width > 0) return { left: r.left, right: r.right, bottom: Math.min(r.bottom, window.innerHeight) }
+    }
+    el = el.parentElement
+  }
+  return { left: 0, right: window.innerWidth, bottom: window.innerHeight }
+}
+function keepInView () {
+  const el = list.value
+  if (!el || typeof el.getBoundingClientRect !== 'function') return
+  const r = el.getBoundingClientRect()
+  if (!r.width) return
+  const b = bounds()
+  if (r.left < b.left + 4 && props.align === 'right') side.value = 'left'
+  else if (r.right > b.right - 4 && props.align === 'left') side.value = 'right'
+  if (!props.up && r.bottom > b.bottom - 4 && r.top - r.height - 12 > 0) flipUp.value = true
+}
 watch(open, async (v) => {
   if (v) {
+    side.value = null
+    flipUp.value = false
     document.addEventListener('mousedown', onDocDown)
     await nextTick()
+    keepInView()
     itemEls()[0]?.focus()
   } else {
     document.removeEventListener('mousedown', onDocDown)

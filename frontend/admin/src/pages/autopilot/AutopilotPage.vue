@@ -35,7 +35,10 @@
         :refreshing="refreshing"
         :error="refreshError"
         :experiment-name="savedExperimentName"
+        :resumable="!dirty"
+        :resuming="saving"
         @refresh="refresh(true)"
+        @resume="resume"
       />
 
       <div v-if="readOnly" class="ap-banner" role="note">
@@ -151,13 +154,22 @@
             <div>
               <h2 id="ap-sec-room" class="ap-sec__title">Waiting room</h2>
               <p class="ap-sec__desc">
-                People who arrive early see a waiting page until enough have joined. This replaces any
-                <code>autopilot.waitingRoom(…)</code> call in the experiment's steps.
+                People who arrive early see a waiting page until enough have joined, and the game starts by
+                itself. Switched on, the settings below are used; switched off, the experiment's steps decide.
               </p>
             </div>
           </div>
           <div class="ap-sec__body">
-            <BSwitch v-model="form.waitingRoom.enabled" :disabled="readOnly">Start the game automatically when enough people are here</BSwitch>
+            <p v-if="ownRoom" class="ap-own">
+              <Info :size="15" aria-hidden="true" />
+              <span>This experiment's steps set their own waiting room: <code>{{ ownRoom }}</code>.
+                {{ form.waitingRoom.enabled ? 'The settings below replace it.' : 'It is used as long as the switch is off.' }}</span>
+            </p>
+            <p v-else-if="!form.waitingRoom.enabled" class="ap-own is-warn">
+              <TriangleAlert :size="15" aria-hidden="true" />
+              <span>This experiment's steps set no waiting room, so with the switch off its sessions wait for someone to press Start the game.</span>
+            </p>
+            <BSwitch v-model="form.waitingRoom.enabled" :disabled="readOnly">Use the waiting room set here</BSwitch>
             <div class="ap-grid">
               <BField label="Minimum players" :error="errors['waitingRoom.minPlayers']" hint="The game can start once this many people are here.">
                 <template #default="{ id, describedby }">
@@ -261,13 +273,18 @@
             <div>
               <h2 id="ap-sec-leave" class="ap-sec__title">People who leave during the game</h2>
               <p class="ap-sec__desc">
-                Keep the game going when someone closes their page: the computer plays their seat. This replaces any
-                <code>autopilot.replaceDisconnected(…)</code> call in the experiment's steps.
+                Keep the game going when someone closes their page: the computer plays their seat. Switched
+                on, the settings below are used; switched off, the experiment's steps decide.
               </p>
             </div>
           </div>
           <div class="ap-sec__body">
-            <BSwitch v-model="form.replaceDisconnected.enabled" :disabled="readOnly">Let the computer play for people who leave</BSwitch>
+            <p v-if="ownLeave" class="ap-own">
+              <Info :size="15" aria-hidden="true" />
+              <span>This experiment's steps set it themselves: <code>{{ ownLeave }}</code>.
+                {{ form.replaceDisconnected.enabled ? 'The settings below replace it.' : 'It is used as long as the switch is off.' }}</span>
+            </p>
+            <BSwitch v-model="form.replaceDisconnected.enabled" :disabled="readOnly">Let the computer play for people who leave, as set here</BSwitch>
             <div class="ap-grid">
               <BField label="Take over after" :error="errors['replaceDisconnected.afterSeconds']" :hint="secondsHint(form.replaceDisconnected.afterSeconds, 'A grace period, so a page reload or a short network drop doesn\'t hand the seat over.')">
                 <template #default="{ id, describedby }">
@@ -326,7 +343,7 @@ import { useUnsavedGuard } from './useUnsavedGuard'
 import {
   autopilotActivity, describeEngineSession, describeWaitingRoom, fetchAutopilot, haltOf, humanSeconds, participantLinks,
   resumeAutopilot, resumeLabel, sameForm, saveAutopilot, takeOverTarget, DEFAULTS, toForm, toSettings, validateAutopilot,
-  waitingRoomLive, type AutopilotForm, type AutopilotState, type EngineSession,
+  stepsCall, waitingRoomLive, type AutopilotForm, type AutopilotState, type EngineSession,
 } from './autopilot'
 
 type Phase = 'loading' | 'ready' | 'unavailable' | 'error'
@@ -407,11 +424,31 @@ const activity = computed(() => {
 
 // ---- loading -----------------------------------------------------------------------------------
 
+// The chosen experiment's own autopilot calls, from its steps (null: none).
+const formExperiment = computed(() => experiments.value.find(e => e.id === form.value.experimentId) ||
+  (admin.experiment && admin.experiment.id === form.value.experimentId ? admin.experiment : null))
+const ownRoom = computed(() => stepsCall(formExperiment.value?.steps, 'waitingRoom'))
+const ownLeave = computed(() => stepsCall(formExperiment.value?.steps, 'replaceDisconnected'))
+
+/**
+ * Never set up yet: suggest the experiment being worked on, and leave to its steps what they
+ * already set (a saved waiting room would silently replace theirs).
+ */
+function suggested (s: AutopilotState): AutopilotForm {
+  const f = toForm(s.settings)
+  if (s.source !== 'off' || f.experimentId != null || !admin.experiment) return f
+  f.experimentId = admin.experiment.id
+  if (stepsCall(admin.experiment.steps, 'waitingRoom')) f.waitingRoom.enabled = false
+  if (stepsCall(admin.experiment.steps, 'replaceDisconnected')) f.replaceDisconnected.enabled = false
+  return f
+}
+
 function adopt (s: AutopilotState, resetForm: boolean) {
   state.value = s
   if (resetForm) {
-    form.value = toForm(s.settings)
-    baseline.value = toForm(s.settings)
+    // (never set up: the suggestion is the starting point, not an edit; Save still saves it)
+    form.value = suggested(s)
+    baseline.value = suggested(s)
   } else if (!dirty.value && !sameForm(baseline.value, toForm(s.settings))) {
     // changed elsewhere (another admin, or the config) while nothing was being edited here
     form.value = toForm(s.settings)
@@ -660,6 +697,20 @@ useUnsavedGuard(dirty, {
 }
 .ap-preview svg { flex: none; margin-top: 2px; color: var(--info); }
 .ap-holder__btn { margin-top: 8px; }
+.ap-own {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+  color: var(--info-soft-text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.ap-own code { overflow-wrap: anywhere; color: inherit; }
+.ap-own svg { flex: none; margin-top: 2px; }
+.ap-own.is-warn { background: var(--warning-soft); color: var(--warning-soft-text); }
 
 .ap-savebar {
   position: relative;

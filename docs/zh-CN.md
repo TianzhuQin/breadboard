@@ -116,6 +116,12 @@ breadboard.example.org {
 
 **参与者看到 "This session isn't running right now"**：这一场已经结束，或服务器重启过，或控制台把引擎换到了另一场。新开一场，或打开自动运行，再把研究链接发给参与者。
 
+**忘记了登录密码怎么办？** 先停止服务器，再用这个账号的邮箱启动一次：`./breadboard.sh -Dbreadboard.resetPassword=你的邮箱`（Windows 上是 `breadboard.bat -Dbreadboard.resetPassword=你的邮箱`）。服务器会在它的窗口里打印一个新密码（不会写进日志），并让这个账号在所有浏览器里退出。用新密码登录后，在 **Settings** 里改成你自己的密码，以后正常启动、不要再带这个参数。登录时邮箱不区分大小写；同一个账号可以同时在几个浏览器里登录（比如笔记本和实验室的电脑）。
+
+**实验名字写错了能改吗？** 能。在 **Experiments** 页，实验卡片的菜单里有 **Rename…**，当前实验旁边也有 **Rename**。改名不影响它的场次、数据和链接。文件模式下不能改名（它的文件夹是按名字起的），先退出文件模式再改。
+
+**参与者关了网页还能回来吗？** 能。用同一个浏览器重新打开研究链接（或登录页再输入一次自己的 ID），就会回到原来的座位，即使游戏已经开始；离开超过设定时间时由电脑代玩，回来后交还给本人。换了浏览器或设备就不行，这是为了防止别人冒用 ID。
+
 **数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。先停止服务器，再复制这个文件，就是备份。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传，从 3.x 升级时和数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
 
 **旧版控制台还能用吗？** 能。它在 `/legacy-admin`，例如 <http://localhost:9000/legacy-admin>，也可以从 **Settings** 里 **Previous console** 下的 **Open it** 进入。新旧两个控制台用的是同样的实验、场次和引擎，可以同时打开。

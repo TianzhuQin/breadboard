@@ -147,9 +147,10 @@ export type EventTone = 'success' | 'warning' | 'danger' | 'accent' | 'neutral'
 export function eventTone (name: string): EventTone {
   const n = (name || '').toLowerCase()
   if (n === 'autopilotcancelled' || n.endsWith('error')) return 'danger'
-  if (n.includes('disconnect') || n === 'aitakeover' || n.endsWith('timeout')) return 'warning'
+  // ("Disconnected" itself is a tie being cut, not someone dropping out)
+  if (n === 'clientdisconnected' || n === 'aitakeover' || n === 'sessionstopped' || n.endsWith('timeout')) return 'warning'
   if (n === 'clientconnected' || n === 'clientlogin' || n === 'aireturned' || n === 'prolificentry') return 'success'
-  if (n.endsWith('start') || n === 'finished') return 'accent'
+  if (n.endsWith('start') || n === 'finished' || n === 'sessionresumed') return 'accent'
   return 'neutral'
 }
 
@@ -165,6 +166,9 @@ const KNOWN: Record<string, string> = {
   finished: 'The session finished',
   edgeedit: 'A tie was changed',
   connected: 'Two people were tied',
+  disconnected: 'A tie was cut',
+  sessionstopped: 'A researcher stopped the session',
+  sessionresumed: 'The session was resumed: its game starts again',
 }
 
 /** A plain-words line for well-known events; '' for the experiment's own. */

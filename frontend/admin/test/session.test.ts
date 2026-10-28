@@ -43,6 +43,7 @@ vi.mock('@/store/admin', async () => {
     ensureConnected: store.ensureConnected,
     engineElsewhere: ref(null),
     NOT_CONNECTED: 'Not connected to the server',
+    isResearcherRun: (source?: string) => source === 'SendScript' || source === 'SendStep',
     graph: { nodes: new Map(), links: new Map(), version: { value: 0 } },
   }
 })
@@ -325,13 +326,13 @@ describe('live session state', () => {
     expect(waitingRoom([
       node('p1', { _system: { autopilot: { state: 'waiting', here: 2, min: 4, max: 8 } } }),
       node('p2', { _system: { autopilot: { state: 'waiting', here: 3, min: 4, max: 8 } } }),
-    ])).toEqual({ state: 'waiting', here: 3, min: 4, max: 8, seconds: null })
+    ])).toEqual({ state: 'waiting', here: 3, min: 4, max: 8, seconds: null, startsIn: null })
     // a countdown wins, with the fewest seconds left
     expect(waitingRoom([
       node('p1', { _system: { autopilot: { state: 'waiting', here: 3, min: 4 } } }),
       node('p2', { _system: { autopilot: { state: 'starting', here: 4, min: 4, seconds: 10 } } }),
       node('p3', { _system: { autopilot: { state: 'starting', here: 4, min: 4, seconds: 6 } } }),
-    ])).toEqual({ state: 'starting', here: 4, min: 4, max: null, seconds: 6 })
+    ])).toEqual({ state: 'starting', here: 4, min: 4, max: null, seconds: 6, startsIn: null })
     expect(waitingRoom([node('p1', { _system: { autopilot: { state: 'cancelled' } } })])?.state).toBe('cancelled')
   })
 
@@ -850,6 +851,17 @@ describe('NewSessionDialog', () => {
     expect(text()).toContain('How many rounds')
     expect(text()).toContain('1 to 10')
     expect(numberInput().attributes('aria-invalid')).toBe('true')
+  })
+
+  it('starts from the last session\'s values, and says so', async () => {
+    admin.experiment.instances = [
+      { id: 3, name: 'Session 1', status: 'FINISHED', data: [{ name: 'nRounds', value: '2' }] },
+      { id: 4, name: 'Session 2', status: 'FINISHED', data: [{ name: 'nRounds', value: '4' }, { name: 'label', value: 'red' }, { name: 'chat', value: 'false' }] },
+    ]
+    await open()
+    expect((numberInput().element as HTMLInputElement).value).toBe('4')
+    expect(page().findAll('input').some(i => (i.element as HTMLInputElement).value === 'red')).toBe(true)
+    expect(text()).toContain('Filled in as in “Session 2”, the last session.')
   })
 
   it('refuses to send an empty number, and sends typed values once fixed', async () => {

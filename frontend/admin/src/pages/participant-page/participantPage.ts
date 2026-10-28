@@ -40,7 +40,7 @@ export const PARTS: PartInfo[] = [
     tech: 'CSS',
     language: 'css',
     file: 'style.css',
-    what: 'CSS for the participant page. It applies to participants only, never to this console.',
+    what: 'CSS for the participant page. It applies to participants only, never to this console. On the new page (class="bb-app"), change the theme through its variables, e.g. .bb-app { --bb-accent: #c2410c; --bb-text: #1f2937; } (also --bb-bg, --bb-surface, --bb-muted, --bb-radius, --bb-font), or start selectors with .bb-app .bb-prose to restyle the experiment\'s text, e.g. .bb-app .bb-prose h2 { color: #c2410c; }.',
   },
 ]
 export const partInfo = (k: PartKey) => PARTS.find(p => p.key === k)!
