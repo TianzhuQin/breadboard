@@ -164,6 +164,7 @@ import {
 } from 'lucide-vue-next'
 import { BBadge, BButton, BPage, BSpinner } from '@/ui'
 import { admin, engineElsewhere, graph, isResearcherRun } from '@/store/admin'
+import { stepsCall } from '../autopilot/autopilot'
 import { openOutput } from '@/shell/output'
 import NewSessionDialog from './NewSessionDialog.vue'
 import NoSession from './NoSession.vue'
@@ -313,6 +314,7 @@ const explanation = computed(() => {
     // only until the next update; an AMT session's entry also closes before its game starts)
     if (started.value.forgotten) return 'The session is closed to newcomers, but its game isn\'t running in the engine: the engine was reloaded since it started (a reload forgets a started game; the session takes people again in a moment), or entry closed before the start, as a Mechanical Turk session\'s does when its HIT\'s time is up. Start the game to run it from the beginning with whoever is in the network now.'
     if (room.value && room.value.state !== 'cancelled') return 'People are gathering in the waiting room, which starts the game by itself.'
+    if (stepsCall(admin.experiment?.steps, 'waitingRoom')) return 'People can join with the links below. This experiment has a waiting room: once enough people are here, the game starts by itself (you can also start it yourself).'
     if (openedByAutopilot.value) return 'The autopilot opened this session: people join with the links below and wait in its waiting room, which starts the game by itself once enough are here. You don\'t need to do anything.'
     return 'People can join with the links below. When everyone you need is here, start the game: everyone waiting is let in and newcomers are turned away.'
   }
