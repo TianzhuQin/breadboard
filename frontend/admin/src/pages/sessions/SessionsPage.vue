@@ -88,7 +88,7 @@
                     <BBadge v-if="isCurrent(s)" tone="accent" class="ss__current">Current</BBadge>
                   </div>
                   <div class="ss__sub">
-                    <span class="mono">#{{ s.id }}</span>
+                    <span class="mono" title="The session's ID in the data (IDs are given out in blocks, so they skip numbers)">ID {{ s.id }}</span>
                     <span class="ss__sub-narrow">{{ createdText(s) }}</span>
                     <BBadge class="ss__sub-narrow" :tone="statusMeta(s.status).tone" dot :pulse="statusMeta(s.status).pulse">{{ statusMeta(s.status).label }}</BBadge>
                   </div>

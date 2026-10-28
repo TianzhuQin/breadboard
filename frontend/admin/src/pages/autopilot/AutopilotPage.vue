@@ -170,17 +170,24 @@
             </div>
           </div>
           <div class="ap-sec__body">
-            <p v-if="ownRoom" class="ap-own">
+            <div v-if="ownRoom" class="ap-own">
               <Info :size="15" aria-hidden="true" />
-              <span>This experiment's steps set their own waiting room: <code>{{ ownRoom }}</code>.
-                {{ form.waitingRoom.enabled ? 'The settings below replace it.' : 'It is used as long as the switch is off.' }}</span>
-            </p>
+              <span>
+                This experiment's steps set their own waiting room.
+                {{ form.waitingRoom.enabled ? 'The settings below replace it.' : 'It is used as long as this switch is off.' }}
+                <details class="ap-own__code">
+                  <summary>Show what the steps say</summary>
+                  <code>{{ ownRoom }}</code>
+                </details>
+              </span>
+            </div>
             <p v-else-if="!form.waitingRoom.enabled" class="ap-own is-warn">
               <TriangleAlert :size="15" aria-hidden="true" />
               <span>This experiment's steps set no waiting room, so with the switch off its sessions wait for someone to press Start the game.</span>
             </p>
             <BSwitch v-model="form.waitingRoom.enabled" :disabled="readOnly">Use the waiting room set here</BSwitch>
-            <div class="ap-grid">
+            <!-- (hidden while the steps' own waiting room is used: these values would not be in effect) -->
+            <div v-if="form.waitingRoom.enabled || !ownRoom || readOnly" class="ap-grid">
               <BField label="Minimum players" :error="errors['waitingRoom.minPlayers']" hint="The game can start once this many people are here.">
                 <template #default="{ id, describedby }">
                   <BInput
@@ -771,4 +778,7 @@ useUnsavedGuard(dirty, {
 .ap-savebar__text { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--muted); }
 .ap-savebar.is-dirty .ap-savebar__text { color: var(--text); font-weight: 600; }
 .ap-savebar__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+.ap-own__code { margin-top: 4px; }
+.ap-own__code summary { cursor: pointer; font-size: var(--text-xs); color: var(--muted); }
+.ap-own__code code { display: block; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 </style>

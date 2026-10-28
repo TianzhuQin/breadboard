@@ -43,7 +43,7 @@
             </div>
             <h2 id="live-hero-name" class="live-hero__name">{{ inst.name }}</h2>
             <p class="live-hero__meta">
-              <span>{{ inst.id > 0 ? `Session #${inst.id} · created ${createdText}` : `Created ${createdText}` }}</span>
+              <span>{{ inst.id > 0 ? `ID ${inst.id} · created ${createdText}` : `Created ${createdText}` }}</span>
               <span v-if="admin.engine === 'loading'" class="live-hero__loading" role="status">
                 <span aria-hidden="true"><BSpinner :size="12" /></span> Restarting the experiment's scripts…
               </span>
