@@ -36,6 +36,14 @@ public class Application extends Controller {
     }
 
     Language defaultLanguage = Language.findById(defaultLanguageId);
+    if (defaultLanguage == null && email != null && password != null) {
+      // (A language list read while the server was still adding its languages: English will do,
+      // and it can be changed in Settings.)
+      defaultLanguage = Language.findByIso3("eng");
+      if (defaultLanguage == null) {
+        return status(SERVICE_UNAVAILABLE, "The server is still setting up. Try again in a moment.");
+      }
+    }
 
     if (email == null || password == null || defaultLanguage == null) {
       return badRequest("Please provide email, password, and default language.");

@@ -458,8 +458,23 @@ function suggested (s: AutopilotState): AutopilotForm {
   f.experimentId = admin.experiment.id
   if (stepsCall(admin.experiment.steps, 'waitingRoom')) f.waitingRoom.enabled = false
   if (stepsCall(admin.experiment.steps, 'replaceDisconnected')) f.replaceDisconnected.enabled = false
+  // a lone participant is told after ten minutes, rather than waiting for good
+  if (f.waitingRoom.enabled && f.waitingRoom.maxWaitSeconds == null) f.waitingRoom.maxWaitSeconds = 600
   return f
 }
+
+// Choosing another experiment here: its steps' own waiting room and takeover (if they set them)
+// stay in charge, unless the researcher has already changed those fields.
+watch(() => form.value.experimentId, (id) => {
+  // (not when settings are loaded: the form then matches what was saved)
+  if (readOnly.value || id == null || id === baseline.value.experimentId) return
+  const chosen = experiments.value.find(e => e.id === id)
+  if (!chosen) return
+  const untouched = sameForm({ ...form.value, experimentId: baseline.value.experimentId }, baseline.value)
+  if (!untouched) return
+  if (stepsCall(chosen.steps, 'waitingRoom')) form.value.waitingRoom.enabled = false
+  if (stepsCall(chosen.steps, 'replaceDisconnected')) form.value.replaceDisconnected.enabled = false
+})
 
 function adopt (s: AutopilotState, resetForm: boolean) {
   state.value = s
