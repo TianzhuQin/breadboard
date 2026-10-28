@@ -154,6 +154,24 @@ public class Application extends Controller {
     return ok(result);
   }
 
+  /**
+   * The language the signed-in researcher writes new content in: JSON {"languageId": n}. 200, or
+   * 400 when there is no such language.
+   */
+  @Security.Authenticated(Secured.class)
+  public static Result saveDefaultLanguage() {
+    User user = User.findByUID(session("uid"));
+    JsonNode json = request().body().asJson();
+    JsonNode id = json == null ? null : json.get("languageId");
+    Language language = id == null || !id.canConvertToLong() ? null : Language.findById(id.asLong());
+    if (user == null || language == null) {
+      return badRequest("Choose one of the languages.");
+    }
+    user.defaultLanguage = language;
+    user.update();
+    return ok(user.toJson());
+  }
+
   /** Shortest password accepted by the password change. */
   static final int PASSWORD_MIN_LENGTH = User.PASSWORD_MIN_LENGTH;
 

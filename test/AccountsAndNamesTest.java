@@ -78,6 +78,20 @@ public class AccountsAndNamesTest extends BaseTest {
     }
 
     @Test
+    public void theDefaultLanguageCanBeChanged() {
+        Language english = createLanguage("eng", "English");
+        Language german = createLanguage("deu", "German");
+        User user = createUser("lang@test.org", "Lang", "password123", english);
+        ObjectNode body = Json.newObject();
+        body.put("languageId", german.getId());
+        assertEquals(OK, status(route(fakeRequest(POST, "/defaultLanguage").withSession("uid", user.uid).withJsonBody(body))));
+        assertEquals("deu", User.findByEmail("lang@test.org").defaultLanguage.getCode());
+        body.put("languageId", 987654);
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(POST, "/defaultLanguage").withSession("uid", user.uid).withJsonBody(body))));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/defaultLanguage").withJsonBody(body))));
+    }
+
+    @Test
     public void anExperimentCanBeRenamedButNotToAnotherOnesName() {
         Language lang = createLanguage("eng", "English");
         User user = createUser("names@test.org", "Names", "password123", lang);

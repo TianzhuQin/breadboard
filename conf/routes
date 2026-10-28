@@ -105,6 +105,7 @@ POST        /login                                                              
 POST        /createFirstUser                                                     controllers.Application.addFirstUser()
 POST        /logout                                                              controllers.Application.logout()
 
+POST        /defaultLanguage                                                     controllers.Application.saveDefaultLanguage()
 POST        /saveUserSettings                                                    controllers.Application.saveUserSettings()
 
 # Map static resources from the /public folder to the /assets URL path

@@ -345,7 +345,7 @@ participants could type such values.
 
 | Section | |
 |---|---|
-| **Account** | The email you are signed in with, and **Sign out**. |
+| **Account** | The email you are signed in with, **Sign out**, and the **Default language** new content is written in. |
 | **Password** | **Current password**, **New password** (at least 8 characters) and **Repeat the new password**, then **Change password**. You stay signed in; other browsers signed in to this account are signed out, and previews must be opened again. |
 | **Appearance** | **System** (follows your computer), **Light** or **Dark**, saved in this browser only. The menu under your email has the same choice. |
 | **Previous console** | **Open it** goes to `/legacy-admin`. |

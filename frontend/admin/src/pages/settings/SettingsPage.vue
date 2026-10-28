@@ -16,6 +16,18 @@
           <BButton :icon="LogOut" :loading="signingOut" @click="signOut">Sign out</BButton>
         </div>
         <p class="set__note">Signing out doesn't stop a running session; participants keep playing.</p>
+        <BField label="Default language" hint="The language new content is written in. Content already written keeps its languages.">
+          <template #default="{ id, describedby }">
+            <BSelect
+              :id="id"
+              :model-value="languageId"
+              :options="languageOptions"
+              :disabled="!languageOptions.length || savingLanguage"
+              :aria-describedby="describedby"
+              @update:model-value="saveLanguage"
+            />
+          </template>
+        </BField>
       </div>
     </section>
 
@@ -170,8 +182,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ArrowRight, ArrowUpRight, History, KeyRound, LogOut, Monitor, Moon, Sun } from 'lucide-vue-next'
-import { BBadge, BButton, BCheckbox, BField, BInput, BPage, notify } from '@/ui'
-import { admin, adoptUid, connectionState, experiments, logout } from '@/store/admin'
+import { BBadge, BButton, BCheckbox, BField, BInput, BPage, BSelect, notify } from '@/ui'
+import { http } from '@/lib/http'
+import { actions, admin, adoptUid, connectionState, experiments, logout } from '@/store/admin'
 import { confirmSignOut } from '@/shell/unsaved'
 import { theme, setTheme, type ThemeChoice } from '@/lib/theme'
 import { version } from '../../../package.json'
@@ -274,6 +287,30 @@ const themes: { value: ThemeChoice, label: string, hint: string, icon: any }[] =
   { value: 'light', label: 'Light', hint: 'Always light', icon: Sun },
   { value: 'dark', label: 'Dark', hint: 'Always dark', icon: Moon },
 ]
+
+// ---- default language ---------------------------------------------------------------------------
+
+const languages = ref<{ id: number, code: string, name: string }[]>([])
+const savingLanguage = ref(false)
+const languageId = computed(() => admin.user?.defaultLanguage?.id ?? null)
+const languageOptions = computed(() => languages.value.map(l => ({ value: l.id, label: `${l.name} (${l.code})` })))
+Promise.resolve(http.get<{ languages: { id: number, code: string, name: string }[] }>('/languages', { quiet401: true }))
+  .then(res => { languages.value = [...(res?.languages || [])].sort((a, b) => a.name.localeCompare(b.name)) })
+  .catch(() => { /* the list stays empty, and the field disabled */ })
+async function saveLanguage (id: unknown) {
+  const n = Number(id)
+  if (!Number.isFinite(n) || n === languageId.value) return
+  savingLanguage.value = true
+  try {
+    await http.post('/defaultLanguage', { languageId: n })
+    await actions.refresh()
+    notify.success('Default language saved', 'New content is written in it from now on.')
+  } catch (e) {
+    notify.error('Couldn\'t save the default language', describeError(e))
+  } finally {
+    savingLanguage.value = false
+  }
+}
 </script>
 
 <style>

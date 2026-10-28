@@ -27,7 +27,8 @@ over (see [docs/install.md](docs/install.md#upgrading)). Details for experiment 
 - Prolific entry (`/game/{e}/{i}/prolific?PROLIFIC_PID=...`) with pseudonymous ids and the
   completion screen.
 - Steps with a time limit (`step.duration`).
-- Experiments can be renamed. `-Dbreadboard.resetPassword=<email>` resets a forgotten password.
+- Experiments can be renamed, and Settings changes the default language.
+  `-Dbreadboard.resetPassword=<email>` resets a forgotten password.
 - Choices can have a colour (`color:` in `a.add`); `player.private.finished` ends the participant
   page on its last screen without the network.
 - **Example: network game**, offered by New experiment: a complete experiment that runs by itself
