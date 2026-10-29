@@ -165,6 +165,7 @@ import {
 } from 'lucide-vue-next'
 import { BButton, BEmpty, BPage, BPanel, BSpinner, BSwitch, BTabs, notify, type TabItem } from '@/ui'
 import { admin, graph } from '@/store/admin'
+import { playerName } from '@/network/players'
 import { describeError } from '../experiments/experiments'
 import { canResume } from '../sessions/sessionData'
 import { useSessionActions } from '../sessions/useSessionActions'
@@ -227,14 +228,14 @@ function noteReadOnly (list: PlayerLike[]) {
   if (people.length) {
     const one = people.length === 1
     notify.info(
-      one ? `${people[0].id} is connected right now` : `${people.length} of these players are connected right now`,
+      one ? `${playerName(people[0].id)} is connected right now` : `${people.length} of these players are connected right now`,
       `${one ? 'Their preview is' : 'Their previews are'} read-only: you see what they see, but can’t answer for them. Their own page is left alone.`,
     )
   }
   if (computers.length) {
     const one = computers.length === 1
     notify.info(
-      one ? `${computers[0].id} is a computer player` : `${computers.length} of these are computer players`,
+      one ? `${playerName(computers[0].id)} is a computer player` : `${computers.length} of these are computer players`,
       `${one ? 'Its preview is' : 'Their previews are'} read-only: you see what the computer does, and it goes on playing.`,
     )
   }
