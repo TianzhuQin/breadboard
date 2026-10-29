@@ -10,7 +10,8 @@
 # itself, e.g. JAVA_OPTS=-Xmx2g. The database lives in db/ (with copies in backups/), application.secret
 # (which signs sign-ins and invitation links) in conf/application.secret, and the settings you change
 # in conf/local.conf. Run in a terminal, it opens the console in the browser once it is up
-# (BREADBOARD_NO_BROWSER=1 stops that). On macOS it keeps the computer awake while the server runs.
+# (BREADBOARD_NO_BROWSER=1 stops that). On macOS, and on Linux in a desktop session, it keeps the
+# computer awake while the server runs.
 #
 # Keep running: run in a terminal, or with BREADBOARD_KEEP_RUNNING=1 (Start Breadboard.command sets
 # it), a server that stops by itself (it ran out of memory, Java crashed, it was killed) is started
@@ -151,7 +152,11 @@ fi
 ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
 cannot_write() {
   echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
-  echo "  sudo chown -R $ME \"$2\"" >&2
+  if [ -d "$2" ]; then
+    echo "  sudo chown -R $ME \"$2\"" >&2
+  else
+    echo "  sudo chown $ME \"$2\"" >&2
+  fi
   exit 1
 }
 if [ ! -d db ] || [ ! -d logs ] || [ "$(dirname "$PID_FILE")" = . ]; then
@@ -194,6 +199,10 @@ if [ ! -e conf/local.conf ]; then
 # doesn't come with this file: copy it into the new release's conf folder when you upgrade.
 EOF
 fi
+# One the server can't read (made or copied by another account, often root) would be left out
+# without a word, as if there were none: the server would run without those settings (its address,
+# HTTPS-only cookies, AWS keys). Say so instead.
+[ ! -e conf/local.conf ] || [ -r conf/local.conf ] || cannot_write "conf/local.conf" "$HERE/conf/local.conf" read
 
 # Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
 remove_pid_file() {
@@ -259,12 +268,18 @@ if [ -n "$OPENER" ]; then
   OPENER_PID=$!
 fi
 
-# macOS: the computer stays awake while the server runs (a study left to run by itself stopped when
-# it went to sleep). caffeinate holds that until this process ends: Java, which takes it over (exec)
-# below, or this script, which ends with Java. A laptop on battery still sleeps when its lid is
-# closed.
+# The computer stays awake while the server runs (a study left to run by itself stopped when it went
+# to sleep), until this process ends: Java, which takes it over (exec) below, or this script, which
+# ends with Java. On macOS, caffeinate holds that. On Linux, systemd-inhibit does, in a desktop
+# session, where systemd lets anyone logged in at the computer ask without a password; elsewhere
+# (under a service manager, over SSH) it is refused, and nothing is held. A laptop still sleeps when
+# its lid is closed.
 if [ "$(uname)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
   caffeinate -i -s -w $$ >/dev/null 2>&1 &
+elif command -v systemd-inhibit >/dev/null 2>&1; then
+  # (input from /dev/null: it never asks for a password)
+  systemd-inhibit --what=idle:sleep --who=Breadboard --why="Breadboard is running" --mode=block \
+    sh -c 'while kill -0 "$1" 2>/dev/null; do sleep 5; done' breadboard-awake $$ </dev/null >/dev/null 2>&1 &
 fi
 
 # The server's command line, in "$@" (the settings given to this script go before the main class).

@@ -22,7 +22,8 @@
         <strong>Give the keys to Breadboard</strong>, either as environment variables when it starts:
         <pre class="rc-code">AMT_ACCESS_KEY=your-access-key-id
 AMT_SECRET_KEY=your-secret-access-key</pre>
-        or in the server’s configuration file (<code>conf/application-prod.conf</code>):
+        or in the server’s own settings file, <code>conf/local.conf</code> in its Breadboard folder
+        (upgrades keep it, and on macOS and Linux only the server’s account can read it):
         <pre class="rc-code">amt.accessKey = "your-access-key-id"
 amt.secretKey = "your-secret-access-key"</pre>
       </li>

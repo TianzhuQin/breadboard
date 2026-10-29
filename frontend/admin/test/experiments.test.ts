@@ -61,6 +61,7 @@ import {
 import { HttpError } from '../src/lib/http'
 import ImportExperimentDialog from '../src/pages/experiments/ImportExperimentDialog.vue'
 import NewExperimentDialog from '../src/pages/experiments/NewExperimentDialog.vue'
+import RenameExperimentDialog from '../src/pages/experiments/RenameExperimentDialog.vue'
 import { switchToNew } from '../src/pages/experiments/switchTo'
 import { toasts } from '../src/ui/toast'
 
@@ -530,6 +531,24 @@ describe('New experiment dialog', () => {
   })
 })
 
+
+describe('Rename dialog', () => {
+  beforeEach(() => {
+    store.exps.splice(0, store.exps.length, { id: 7, name: 'Trust game', instances: [], steps: [], languages: [] })
+    document.body.innerHTML = ''
+  })
+
+  it('names the settings file an autopilot set up by name is in', async () => {
+    const w = mount(RenameExperimentDialog, { props: { open: false, exp: store.exps[0] }, attachTo: document.body })
+    await w.setProps({ open: true })
+    await flushPromises()
+    const said = document.querySelector('.b-dialog')!.textContent!
+    // conf/local.conf, which the researcher keeps; not conf/application-prod.conf, which each release replaces
+    expect(said).toContain('server\'s settings file (conf/local.conf) needs the new name there too')
+    expect(said).not.toContain('application-prod.conf')
+    w.unmount()
+  })
+})
 
 describe('Experiments page', () => {
   const A: any = { id: 300, name: 'Alpha', fileMode: false, instances: [{ id: 1, name: 's1', status: 'FINISHED', creationTime: '2026-10-01 10:00:00,0' }], steps: [{}], content: [], parameters: [], languages: [{ code: 'eng', name: 'English' }] }

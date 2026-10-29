@@ -27,11 +27,14 @@
   </appender>
 
   <!-- The console's lines wait in a queue, and a thread of their own writes them out: a window that
-       stops taking output (a click in a Windows console starts selecting text, which pauses it;
-       Ctrl+S in a terminal) used to hold up everything that logs, participants signing in among
-       them. Once 128 lines wait, which happens only when the console takes none, INFO lines are left
-       out of the console (warnings and errors have the other 384 places); logs/application.log
-       (FILE) still gets every line. -->
+       stops taking output (a click in a Windows console starts selecting text, which pauses it until
+       Esc; Ctrl+S in a terminal, until Ctrl+Q) used to hold up at once everything that logs,
+       participants signing in among them. Once 128 lines wait, which happens only when the console
+       takes none, INFO lines are left out of the console; warnings and errors still wait for it, in
+       the other 384 places, and once those are taken too, whatever logs a warning or an error waits
+       until the window takes output again (logback 1.0.13 has no setting that drops them).
+       logs/application.log (FILE) gets every line all along. docs/install.md tells people to
+       un-pause the window. -->
   <appender name="CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
     <queueSize>512</queueSize>
     <discardingThreshold>384</discardingThreshold>

@@ -83,7 +83,7 @@ The top of the page shows the experiment you're working on, with **Export .zip**
 it, and its menu has **Export as .zip**, **Rename…**, **Duplicate…**, **Use file mode…** (or
 **Leave file mode…**) and **Delete…**. Renaming keeps the experiment's sessions, data and links;
 it isn't possible in file mode, whose folder is named after the experiment, and an autopilot set
-up by name in `application.conf` needs the new name there too.
+up by name in the server's settings file (`conf/local.conf`) needs the new name there too.
 
 | Action | |
 |---|---|
@@ -305,7 +305,8 @@ it, or anything that reloads the engine (creating or resuming another session, r
 another experiment doesn't. The console says so before you do it. A paused autopilot opens no
 session, so its links lead nowhere until you press **Resume** on this page. After its one session
 with **Open the next session when one finishes** off, the button reads **Open another session**.
-Both work when `application.conf` is in charge too, and a pause survives a server restart.
+Both work when the server's settings file (`conf/local.conf`) is in charge too, and a pause
+survives a server restart.
 
 **A mistake in a step pauses it too.** When the steps of a session it opens don't load (a typo, a
 name that isn't defined), the autopilot stops that session before anyone can join, records
@@ -325,9 +326,9 @@ stall, such as a typo after the next round has started, is only recorded and sho
 goes on. In a session you run by hand nothing is ended: a start of the game that didn't get going is
 taken back, so newcomers can join and **Start the game** works again once you fix the step.
 
-Settings saved on this page take precedence over `application.conf`. Until some are saved, a
-`breadboard.autopilot.experiment` line in `application.conf` turns the autopilot on, and the page
-only shows the settings
+Settings saved on this page take precedence over the server's settings file, `conf/local.conf`.
+Until some are saved, a `breadboard.autopilot.experiment` line in `conf/local.conf` turns the
+autopilot on, and the page only shows the settings
 ([whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot) lists them).
 Remove the `breadboard.autopilot.*` lines and restart the server to manage them here.
 

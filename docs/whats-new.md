@@ -24,7 +24,7 @@ sent to other participants. It is logged as a `prolificEntry` event for payment,
 player's own `_system.recruitment`, which drives the built-in Prolific completion screen
 (`recruitment.completeProlific(player, [completionCode: "..."])`).
 
-| Setting | Effect |
+| Setting (in `conf/local.conf`) | Effect |
 |---|---|
 | `breadboard.participantLogin.allowReclaim = true` | Lets a login take over a seat that is already in use. |
 | `breadboard.allowLateJoin = true` | Keeps the game open to newcomers after InitStep starts. |
@@ -104,8 +104,8 @@ study URL.
   that reloads the engine (launching or resuming another session, reloading). Selecting another
   experiment, to edit it, doesn't: the autopilot's session keeps running. Press **Resume** on the
   Autopilot page to let it open sessions again; after a run with **continuous** off, the button
-  reads **Open another session**. Both work when `application.conf` is in charge too, and a pause
-  survives a server restart.
+  reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
+  is in charge too, and a pause survives a server restart.
 - While a researcher has another experiment loaded and a console open, the autopilot leaves the
   engine to them and opens its session once they close the console.
 - While it is on, it opens a session whenever the script engine runs none. The engine is shared
@@ -115,7 +115,8 @@ study URL.
   **Resume**.
 
 Settings saved there take precedence over the ones in the experiment's steps. Alternatively, in
-`application.conf` (or as `-D` options), in which case the Autopilot page only shows them:
+the server's settings file, `conf/local.conf` (or as `-D` options), in which case the Autopilot
+page only shows them:
 
 ```
 breadboard.autopilot.experiment = "My experiment"

@@ -34,6 +34,7 @@ import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 public class Global extends GlobalSettings {
 
@@ -419,10 +420,7 @@ public class Global extends GlobalSettings {
         } catch (InterruptedException e) {
           return;
         }
-        stopNote("Breadboard: shutdown is taking too long (a script may be stuck); stopping now");
-        if (!closeOwnDatabase(config, CLOSE_DATABASE_MS)) {
-          stopNote("Breadboard: the database did not close in time; H2 recovers it at the next start");
-        }
+        cutStopShort(config);
         Runtime.getRuntime().halt(stuckStopExitCode);
       }, "breadboard-shutdown-limit");
       limit.setDaemon(true);
@@ -430,14 +428,33 @@ public class Global extends GlobalSettings {
     }, "breadboard-shutdown-watch"));
   }
 
-  /** For a stop cut short: on the console, and in the log while it still works. */
+  /**
+   * What a stop cut short does before the process ends: says so, and closes the database. When the
+   * database can't be closed, the one line that says why (closeDatabase's) goes to the console too,
+   * as stopNote's do.
+   */
+  static void cutStopShort(Configuration config) {
+    stopNote("Breadboard: shutdown is taking too long (a script may be stuck); stopping now");
+    closeOwnDatabase(config, CLOSE_DATABASE_MS, Global::stopNote);
+  }
+
+  /**
+   * For a stop cut short: on the console, and in the log while it still works. (The log's lines for
+   * the console are written by a thread of their own, conf/logger.xml, which may not get to them
+   * before the process ends.)
+   */
   private static void stopNote(String what) {
     System.out.println(what);
     System.out.flush();
+    logWarning(what);
+  }
+
+  /** A warning in the log, and never an exception: a stop cut short halts the process right after. */
+  private static void logWarning(String what) {
     try {
       Logger.warn(what);
     } catch (Throwable ignored) {
-      // the console has it
+      // nothing more to do
     }
   }
 
@@ -445,16 +462,21 @@ public class Global extends GlobalSettings {
    * Closes the server's database (db.default) when it is an H2 file of its own (not one in memory,
    * nor one on a database server) that is still open: H2 keeps its lock file, db/breadboard.lock.db,
    * while it is, and deletes it when it closes the database. True when it is closed (in time: see
-   * closeDatabase) or was already.
+   * closeDatabase) or was already; otherwise the log says why.
    */
   static boolean closeOwnDatabase(Configuration config, long waitMs) {
+    return closeOwnDatabase(config, waitMs, Global::logWarning);
+  }
+
+  /** {@link #closeOwnDatabase(Configuration, long)}, telling {@code say} why it couldn't close it. */
+  static boolean closeOwnDatabase(Configuration config, long waitMs, Consumer<String> say) {
     String url = config.getString("db.default.url", "");
     File data = models.Backups.databaseFile(config.getString("db.default.driver", ""), url);
     if (data == null || !new File(data.getPath().replaceFirst("\\.h2\\.db$", ".lock.db")).exists()) {
       return true;
     }
     return closeDatabase(url, config.getString("db.default.user", ""),
-        config.getString("db.default.password", config.getString("db.default.pass", "")), waitMs);
+        config.getString("db.default.password", config.getString("db.default.pass", "")), waitMs, say);
   }
 
   /**
@@ -466,6 +488,11 @@ public class Global extends GlobalSettings {
    * isn't closed, the log says why: a statement still running, or what the attempt ran into.
    */
   static boolean closeDatabase(String url, String user, String password, long waitMs) {
+    return closeDatabase(url, user, password, waitMs, Global::logWarning);
+  }
+
+  /** {@link #closeDatabase(String, String, String, long)}, telling {@code say} why it couldn't close it. */
+  static boolean closeDatabase(String url, String user, String password, long waitMs, Consumer<String> say) {
     // IFEXISTS: a database that isn't there is not made, empty, just to be closed. H2 refuses a setting
     // given twice with two values ("Duplicate property"), and then nothing was closed: the URL's own
     // IFEXISTS, user and password, in whatever case, are kept instead.
@@ -501,7 +528,7 @@ public class Global extends GlobalSettings {
     }
     // (never an exception from here: a stop cut short halts the process right after this)
     try {
-      Logger.warn("The database " + why + "; H2 recovers it at the next start");
+      say.accept("The database " + why + "; H2 recovers it at the next start");
     } catch (Throwable ignored) {
       // nothing more to do
     }

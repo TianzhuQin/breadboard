@@ -75,10 +75,13 @@ again itself and never gives up: after 5 restarts in 10 minutes, it tries once a
 
 **Sleep.** While the server runs, the launchers keep the computer from going to sleep by itself
 (on macOS with `caffeinate`, on Windows by asking Windows to stay awake), and let it sleep again
-once the server has stopped. A laptop on battery still sleeps when its lid is closed. For a long
-study that runs by itself, keep the computer plugged in with its lid open; on a Mac, also turn on
-**Prevent automatic sleeping … when the display is off** (System Settings → Battery → Options; on a
-Mac mini or iMac, System Settings → Energy).
+once the server has stopped. On Linux they do the same with `systemd-inhibit` when started in a
+desktop session, by someone logged in at the computer. Started over SSH or as a service they can't
+(systemd doesn't let an ordinary account do it there), and servers seldom sleep anyway. A laptop
+still sleeps when its lid is closed. For a long study that runs by itself, keep the computer
+plugged in with its lid open; on a Mac, also turn on **Prevent automatic sleeping … when the
+display is off** (System Settings → Battery → Options; on a Mac mini or iMac, System Settings →
+Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
@@ -92,7 +95,7 @@ On first start the launcher creates:
 |---|---|
 | `db/breadboard.h2.db` | The database. On a new install its tables are created at first start. |
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
-| `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux only your account can read it, as it may hold keys. |
+| `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux only your account can read it, as it may hold keys. The account the server runs as must be able to read it. |
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
 
@@ -110,6 +113,11 @@ read after `conf/application-prod.conf`, which lists every setting with what it 
 win. Don't change `application-prod.conf` itself: each release brings its own, while
 `conf/local.conf` is yours, and you copy it into the next release when you upgrade. (A setting can
 also be given when starting, e.g. `./breadboard.sh -Dbreadboard.allowLateJoin=true`.)
+
+The account the server runs as must be able to read `conf/local.conf`. Java would take a file it
+can't read for one that isn't there, and the server would run without your settings, so the
+launchers refuse to start instead, and say so. A copy made with `sudo` belongs to root: give it to
+the server's account, e.g. `sudo chown breadboard: /opt/breadboard/conf/local.conf`.
 
 The ones to look at before participants join:
 
@@ -239,11 +247,21 @@ or put `APPLICATION_SECRET=` and a long random text in a file only root can read
 (`sudo install -m 600 /dev/null /etc/breadboard.env`, then add the line) and give it to the service
 with `EnvironmentFile=/etc/breadboard.env`. Not with `Environment=`: anyone can read a unit file,
 and `systemctl show` prints it. Your settings go in `/opt/breadboard/conf/local.conf`, which you
-make there yourself (with `sudo`).
+make there yourself, like the secret: the account must be able to read it, and no one else should,
 
-For an upgrade: unzip the new release next to the old one and `chown` it the same way, then
-`sudo systemctl stop breadboard`, copy the database and settings over (see [Upgrading](#upgrading)),
-point the `/opt/breadboard` link at the new folder, and `sudo systemctl start breadboard`.
+```bash
+sudo install -m 600 /dev/null /opt/breadboard/conf/local.conf
+sudo chown breadboard: /opt/breadboard/conf/local.conf
+```
+
+Then edit it with `sudoedit /opt/breadboard/conf/local.conf`, which keeps its owner.
+
+For an upgrade: unzip the new release next to the old one, `sudo systemctl stop breadboard`, and
+copy the database and settings over (see [Upgrading](#upgrading)). Then `chown` the new folder
+(`sudo chown -R breadboard: /opt/breadboard-v3.2.0`; for a read-only folder, the folders and files
+above): what you copied with `sudo` is root's, and the server couldn't write the database or read
+the secret and `conf/local.conf`. Point the `/opt/breadboard` link at the new folder, and
+`sudo systemctl start breadboard`.
 
 ### macOS (launchd)
 
@@ -265,7 +283,7 @@ place:
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/Users/you/breadboard-v3.1.0/logs/launchd.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
   <key>StandardErrorPath</key><string>/Users/you/breadboard-v3.1.0/logs/launchd.log</string>
 </dict>
 </plist>
@@ -278,11 +296,14 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist
 ```
 
 From then on it also starts whenever you log in. To stop it, and keep it stopped:
-`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist`. What the server prints
-goes to `logs/launchd.log`. It needs you logged in: after a power cut or a restart, a Mac with
-FileVault on waits at the login window for a password (it can't log in by itself), and Breadboard
-is back only once someone logs in. Keeping the Mac awake: see **Sleep** under
-[Starting it](#starting-it).
+`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist`. What the server logs
+is in `logs/application.log`, so the copy it prints for a window (`StandardOutPath`) goes nowhere:
+kept, it would only grow, and with colour codes. `logs/launchd.log` (`StandardErrorPath`) gets what
+goes wrong outside that log, such as why the launcher couldn't start the server, or what Java says
+when it can't start (a crash of Java leaves its report in `hs_err_pid*.log` in the Breadboard
+folder). It needs you logged in: after a power cut or a restart, a Mac with FileVault on waits at
+the login window for a password (it can't log in by itself), and Breadboard is back only once
+someone logs in. Keeping the Mac awake: see **Sleep** under [Starting it](#starting-it).
 
 ### Windows (Task Scheduler)
 
@@ -290,7 +311,8 @@ is back only once someone logs in. Keeping the Mac awake: see **Sleep** under
 computer starts, whether or not anyone signs in. Set it up once:
 
 1. Open `breadboard-task.xml` in Notepad, replace `C:\path\to\your\Breadboard\folder` with the
-   folder that holds `breadboard.bat`, and save.
+   folder that holds `breadboard.bat`, and save. Write an `&` in it as `&amp;` (a folder named
+   `R&D` is `R&amp;D` there): a bare `&` makes the file unreadable to Task Scheduler.
 2. Open Command Prompt as administrator (Start, type `cmd`, right-click Command Prompt, **Run as
    administrator**), go to that folder, and register the task:
 
@@ -307,8 +329,13 @@ The task runs `breadboard.bat` with `BREADBOARD_SERVICE=1` and `BREADBOARD_NO_BR
 window: it never waits for a key after an error, opens no browser, and starts the server again
 whenever it stops by itself (after 5 restarts in 10 minutes, once a minute). The task has no time
 limit, runs on battery too, and if it fails, Task Scheduler tries again every minute. What the
-server says is in `logs/application.log`. `schtasks /End /TN Breadboard` stops it at once (do that
-between sessions); `schtasks /Delete /TN Breadboard /F` removes the task.
+server says is in `logs/application.log`, and so is why `breadboard.bat` couldn't start it (no Java
+8, the port taken, a database it can't write). If that log says nothing, look at the task's
+**Last Run Result** in Task Scheduler (or `schtasks /Query /TN Breadboard /V /FO LIST`): `0x1`
+means `breadboard.bat` refused to start and couldn't write why (its `logs` folder can't be written);
+other codes, such as `0x8007010B` or `0x2331`, mostly mean that the folder in the task is wrong.
+`schtasks /End /TN Breadboard` stops it at once (do that between sessions);
+`schtasks /Delete /TN Breadboard /F` removes the task.
 
 ### Checking that it is up
 
@@ -353,7 +380,10 @@ session's data from Sessions & data.
 3. Copy `db/breadboard.h2.db`, `conf/application.secret` and `conf/local.conf` from the old folder
    into the new one (and `dev/`, if you use file mode, and `backups/`). Coming from 3.0, which had
    no `conf/local.conf`: put the settings you changed in its `conf/application-prod.conf` into the
-   new folder's `conf/local.conf` instead, just those lines, not the whole file.
+   new folder's `conf/local.conf` instead, just those lines, not the whole file. If you copied them
+   as another account than the server's (with `sudo`, say), give them to the server's account
+   afterwards, as when you installed it (e.g. `sudo chown -R breadboard: /opt/breadboard-v3.2.0`):
+   otherwise the server can't write the database or read the secret and `conf/local.conf`.
 4. Start the new release. It backs up the database (`backups/...-upgrade.zip`) before it changes
    anything in it.
 
@@ -395,11 +425,13 @@ a Breadboard started earlier, holds the port. If it is Breadboard, open its addr
 start on another port with `-Dhttp.port=9001`. (A proxy set for the internet, such as
 `http_proxy`, doesn't matter: the launchers check the port directly.)
 
-**The server's window shows nothing new, and the console still works**: output to the window is
-written by a thread of its own, so a window that stops taking it (a click into a Windows console
-starts selecting text and pauses it, until Esc; Ctrl+S in a terminal, until Ctrl+Q) holds up
-nothing. While it is paused, its INFO lines are left out of the window; `logs/application.log`
-has them all.
+**The server's window shows nothing new**: the window is probably paused. A click into a Windows
+console window starts selecting text, which pauses it, and Ctrl+S pauses a terminal. Press Esc (or
+Ctrl+Q in a terminal) to let it go on, and don't leave it paused. The server writes to the window
+from a thread of its own, so at first nothing waits for a paused window, and its INFO lines are
+left out (`logs/application.log` has them all). But warnings and errors are kept for the window,
+and once about 500 wait, the next one holds up whatever logged it (a step of the game, a
+participant's choice, a sign-in) until the window goes on.
 
 **A setting in `conf/local.conf` has a typo**: the server doesn't start, and says which line of
 `conf/local.conf` it couldn't read. Fix that line (text values go in double quotes) and start it
@@ -415,6 +447,9 @@ delete `RUNNING_PID` after checking that no server is running.
 
 **"db/ can't be written by …"**: the folder belongs to another account (often after unzipping with
 `sudo`). Fix its owner as the message says, e.g. `sudo chown -R breadboard: /opt/breadboard`.
+**"conf/local.conf can't be read by …"** is the same for your settings file, often one copied with
+`sudo`: `sudo chown breadboard: /opt/breadboard/conf/local.conf`. (On Windows: right-click the file,
+**Properties**, **Security**, and give the account that runs Breadboard read access.)
 
 **Event values cut short**: values are kept up to 1 MB each; a longer one is cut, ending in
 "…[truncated from N characters]".

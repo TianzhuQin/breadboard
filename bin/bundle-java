@@ -20,12 +20,12 @@ cd "$ROOT"
 LOCK="$ROOT/release/jre.lock"
 ALL_PLATFORMS=(macos-arm64 macos-x64 linux-x64 windows-x64)
 
-# os arch archive_type for Azul's API
+# os arch archive_type for Azul's API (linux_glibc: "linux" also has the JRE for musl, as Alpine has)
 azul_query () {
   case "$1" in
     macos-arm64) echo "macos aarch64 tar.gz" ;;
     macos-x64) echo "macos x64 tar.gz" ;;
-    linux-x64) echo "linux x64 tar.gz" ;;
+    linux-x64) echo "linux_glibc x64 tar.gz" ;;
     windows-x64) echo "windows x64 zip" ;;
     *) echo "bin/bundle-java: unknown platform $1" >&2; return 1 ;;
   esac
@@ -38,8 +38,9 @@ if [ "${1:-}" = --update ]; then
   grep '^#' "$LOCK" > "$new"
   for platform in "${ALL_PLATFORMS[@]}"; do
     read -r os arch type <<< "$(azul_query "$platform")"
-    uuid="$(curl -fsSL "$api/?java_version=8&os=$os&arch=$arch&archive_type=$type&java_package_type=jre&javafx_bundled=false&release_status=ga&availability_types=CA&latest=true&page=1&page_size=1" \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["package_uuid"])')"
+    # (the newest of what it answers, which may be more than one, in no promised order)
+    uuid="$(curl -fsSL "$api/?java_version=8&os=$os&arch=$arch&archive_type=$type&java_package_type=jre&javafx_bundled=false&release_status=ga&availability_types=CA&latest=true&page=1&page_size=20" \
+      | python3 -c 'import json,sys; print(max(json.load(sys.stdin), key=lambda p: p["distro_version"])["package_uuid"])')"
     read -r sha url <<< "$(curl -fsSL "$api/$uuid" \
       | python3 -c 'import json,sys; d = json.load(sys.stdin); print(d["sha256_hash"], d["download_url"])')"
     if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || [[ "$url" != https://* ]]; then

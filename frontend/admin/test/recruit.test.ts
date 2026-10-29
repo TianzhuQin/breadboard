@@ -427,6 +427,10 @@ describe('Recruitment page', () => {
     expect(vi.mocked(http.get)).toHaveBeenCalledWith('/amtadmin/getAccountBalance?sandbox=true')
     expect(w.text()).toContain('Connect Breadboard to Mechanical Turk')
     expect(w.text()).toContain('AMT_ACCESS_KEY')
+    // the keys go in the settings file upgrades keep, which only the server's account reads, not in
+    // conf/application-prod.conf, which each release replaces and anyone can read
+    expect(w.text()).toContain('conf/local.conf')
+    expect(w.text()).not.toContain('application-prod.conf')
     w.unmount()
   })
 })

@@ -26,7 +26,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。所有研究者都能看到和修改这台服务器上的每个实验。
 5. 停止服务器：在它的窗口里按 Ctrl+C，或直接关掉窗口。
 
-服务器运行期间，电脑不会自己进入睡眠。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（用电池时合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里"显示器关闭时防止自动进入睡眠"那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
+服务器运行期间，电脑不会自己进入睡眠。Mac 和 Windows 上都是这样；Linux 上只有在图形桌面里启动时才这样，通过 SSH 或作为服务运行时不会。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里"显示器关闭时防止自动进入睡眠"那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
 
 如果提示端口被占用（"Port 9000 is in use" 或 "Breadboard is already running"），通常是 Breadboard 已经在运行，直接打开那个网址就行；要再开一个，用 `./breadboard.sh -Dhttp.port=9001`。
 
@@ -136,7 +136,7 @@ breadboard.example.org {
 
 **数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），保留最近 14 份，不用停服务器。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：停止服务器，把备份 zip 解压到 `db` 文件夹（替换里面的 `breadboard.h2.db`），再启动。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传。从 3.x 升级时，把它和 `conf/local.conf`（你的设置）跟数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
 
-**设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的"文本编辑"，Windows 上的"记事本"）打开就能改。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。
+**设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的"文本编辑"，Windows 上的"记事本"）打开就能改。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。运行服务器的账号必须能读这个文件：读不了的话（比如用 `sudo` 复制过来的，属于 root），启动脚本会提示 "conf/local.conf can't be read by …" 并拒绝启动，免得服务器不带你的设置就跑起来；按提示把文件的所有者改成那个账号就行。
 
 **实验室几个人怎么一起用？** 每人一个账号：在 **Settings → Researchers** 里添加、删除，或给别人重置密码。所有研究者共用这台服务器上的全部实验（谁都能打开、修改、运行）。要和别的课题组分开，就各用一台服务器。
 

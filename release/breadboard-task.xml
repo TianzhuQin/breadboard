@@ -3,7 +3,8 @@
   Windows: starts Breadboard whenever the computer starts, whether or not anyone signs in, and keeps
   it running (docs/install.md, "Running it for good", says more).
   1. Open this file in Notepad. Below, replace C:\path\to\your\Breadboard\folder with the folder
-     that has breadboard.bat in it, and save.
+     that has breadboard.bat in it, and save. Write an & in it as &amp; (for a folder named
+     R&D, type R&amp;D): a bare & makes this file unreadable to Task Scheduler.
   2. Open Command Prompt as administrator, go to that folder (cd /d "the folder"), and run:
        schtasks /Create /TN Breadboard /XML breadboard-task.xml /RU "%USERDOMAIN%\%USERNAME%" /RP
      Type your Windows password when it asks: the task runs as you.

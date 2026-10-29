@@ -2,11 +2,13 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.typesafe.config.ConfigFactory;
 import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.LoggerFactory;
+import play.Configuration;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -14,6 +16,9 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.junit.Assert.*;
@@ -153,6 +158,39 @@ public class StuckStopTest {
         assertTrue(Global.closeDatabase(url + ";USER=researcher;Password=secret", "", "", 3000));
         assertTrue(pool.isClosed());
         assertFalse(lock.exists());
+    }
+
+    @Test
+    public void aStopCutShortSaysOnceWhyTheDatabaseIsLeftOpen() throws Exception {
+        Connection pool = DriverManager.getConnection(url, "", "");
+        try (Statement s = pool.createStatement()) {
+            s.execute("create alias pause_for for \"java.lang.Thread.sleep\"");
+        }
+        // a statement that holds the database longer than a stop cut short waits for it to close
+        Thread busy = new Thread(() -> {
+            try (Statement s = pool.createStatement()) {
+                s.execute("call pause_for(" + (Global.CLOSE_DATABASE_MS + 1500) + ")");
+            } catch (Exception closedUnderIt) {
+                // the database closes as soon as it is done
+            }
+        });
+        busy.start();
+        Thread.sleep(300);
+
+        watchLog();
+        // what the stop does after Global.SHUTDOWN_LIMIT_MS, before it halts the process
+        Map<String, Object> db = new HashMap<>();
+        db.put("db.default.driver", "org.h2.Driver");
+        db.put("db.default.url", url);
+        Global.cutStopShort(new Configuration(ConfigFactory.parseMap(db)));
+        busy.join(10000);
+
+        // that the stop was cut short, and why the database is left open, once: the precise reason
+        // (the stop used to add a vaguer line of its own, "did not close in time")
+        List<String> lines = logged.list.stream().map(ILoggingEvent::getFormattedMessage).collect(Collectors.toList());
+        assertEquals(said(), 2, lines.size());
+        assertTrue(said(), lines.get(0).contains("shutdown is taking too long"));
+        assertTrue(said(), lines.get(1).contains("did not close within " + Global.CLOSE_DATABASE_MS + " ms (a statement was still running)"));
     }
 
     @Test

@@ -29,8 +29,9 @@
         <TriangleAlert :size="16" aria-hidden="true" />
         <span>
           Workers can’t open this address: MTurk needs a public <strong>https</strong> address. Set
-          <code>breadboard.rootUrl</code> in the server’s configuration to this server’s public
-          address (for example <code>https://study.example.edu</code>) before posting real HITs.
+          <code>breadboard.rootUrl</code> in the server’s settings file (<code>conf/local.conf</code>)
+          to this server’s public address (for example <code>https://study.example.edu</code>) and
+          restart it before posting real HITs.
         </span>
       </div>
 

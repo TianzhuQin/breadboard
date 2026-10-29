@@ -29,12 +29,14 @@ see [install.md](install.md).
 | `public/` | Static files, served under `/assets`. The front-end builds write `public/admin/` and `public/bundles/`, which are not committed. |
 | `project/` | The sbt build: `Build.scala` (version, dependencies), `plugins.sbt`, `sbt-repositories`. |
 | `bin/` | `sbt8`, `run-local`, `make-dist`, `bundle-java`, `smoke-dist`, `smoke-dist.ps1` (all described below). |
-| `release/` | The launchers (`breadboard.sh`, `breadboard.bat`) and the `README.md` that go into the release zip. |
+| `release/` | What goes into the release zip besides the server: the launchers (`breadboard.sh`, `breadboard.bat`, and `Start Breadboard.command` for macOS), `breadboard-task.xml` (the Windows Task Scheduler task that runs it for good), `logger.xml` (its `conf/logger.xml`) and the `README.md`. Also `jre.lock`, the Java runtimes `bin/bundle-java` puts into the downloads that carry their own Java. |
 | `docs/` | This documentation. |
 
 The settings files: `conf/application.conf` is what `bin/sbt8 run` and `bin/run-local` read,
 `conf/application-dev.conf` is for working with the webpack dev server, and
-`conf/application-prod.conf` is the one a release ships.
+`conf/application-prod.conf` is the one a release ships. It reads `conf/local.conf` last, the
+settings a researcher changes, which the launchers make at first start and which no release
+contains.
 
 The front end:
 
@@ -199,22 +201,30 @@ new push cancels the run still going for the same branch or pull request.
    It builds the front end (`pnpm install --frozen-lockfile`, `build:all`; set
    `SKIP_FRONTEND=1` to use what is already in `public/`) and the server (`sbt dist`), then lays
    out `target/release/breadboard-<version>/`: the launchers (the `.bat` with Windows line
-   endings), the server's jars in `lib/` with `lib/classpath.txt` (their order in Play's own start
-   script, which the release leaves out: the launchers run Java themselves),
-   `conf/application-prod.conf`, the engine's Groovy scripts without tests, empty `db/` and
-   `logs/`, `release/README.md` as `README.md`, `LICENSE.md`, `CHANGELOG.md` and `docs/`. It writes
-   `breadboard-<version>.zip` and `breadboard-<version>.zip.sha256` next to it. The output is
-   not in `dist/` because Play copies whatever is in `dist/` into the package it builds.
-4. Make the downloads that carry their own Java (Azul Zulu 8 JRE, from Azul's metadata API,
-   checked against its SHA-256 and cached in `target/jre-cache`):
+   endings), `breadboard-task.xml` (in UTF-16, as Windows saves one), the server's jars in `lib/`
+   with `lib/classpath.txt` (their order in Play's own start script, which the release leaves out:
+   the launchers run Java themselves), `conf/application-prod.conf` and `conf/logger.xml`, the
+   engine's Groovy scripts without tests, empty `db/` and `logs/`, `release/README.md` as
+   `README.md`, `LICENSE.md`, `CHANGELOG.md` and `docs/`. It writes `breadboard-<version>.zip` and
+   `breadboard-<version>.zip.sha256` next to it. The output is not in `dist/` because Play copies
+   whatever is in `dist/` into the package it builds.
+4. Make the downloads that carry their own Java: the Azul Zulu 8 JRE that `release/jre.lock` pins
+   for each platform, so that every build of a release carries the same one. Each is downloaded
+   once into `target/jre-cache` and checked against its SHA-256 in `release/jre.lock`.
 
    ```bash
    bin/bundle-java                       # macos-arm64, macos-x64, linux-x64, windows-x64
    ```
 
    It writes `breadboard-<version>-<platform>.zip` (and `.sha256`) next to the plain zip: the
-   same files plus the runtime in `jre/`, without the launchers of the other systems.
-   `JRE_MACOS_ARM64=/path/to/archive` (and so on) uses an archive already on disk.
+   same files plus the runtime in `jre/` (with its licence files), without the launchers of the
+   other systems. `JRE_MACOS_ARM64=/path/to/archive` (and so on) uses an archive already on disk,
+   unchecked.
+
+   To move to newer JREs, on purpose: `bin/bundle-java --update` looks up the newest Zulu 8 JRE for
+   each platform in Azul's metadata API, with the SHA-256 Azul publishes, and writes them into
+   `release/jre.lock`. Then build the downloads, check them with `bin/smoke-dist`, and commit the
+   new `release/jre.lock`.
 5. Check them:
 
    ```bash
@@ -226,12 +236,14 @@ new push cancels the run still going for the same branch or pull request.
    `bin/smoke-dist` unzips the release into a temporary folder and starts it with
    `breadboard.sh` on an empty database (port 19000, or `PORT`). It checks the release's layout
    and the generated `application.secret` (which must not show on the server's command line),
-   loads both consoles, the bundles and a participant
-   page, creates the first account and signs in, then restarts on the same database and checks
-   again. It fails if the server logs an error. With `--db` it starts on a copy of an older
-   release's database instead (and checks that it was backed up first); when that database
-   already has accounts, it only checks that the server starts and serves its pages. CI runs the
-   Windows zip through `bin/smoke-dist.ps1`.
+   loads both consoles, the bundles and a participant page, creates the first account and signs
+   in, then restarts on the same database, with a `conf/local.conf` and a proxy set, and checks
+   again. It also checks what the launcher says when it can't start (a second copy, the port
+   taken, a folder it can't write to, a `conf/local.conf` it can't read), and on macOS that the
+   computer is kept awake while the server runs. It fails if the server logs an error. With `--db`
+   it starts on a copy of an older release's database instead (and checks that it was backed up
+   first); when that database already has accounts, it only checks that the server starts and
+   serves its pages. CI runs the Windows zip through `bin/smoke-dist.ps1`.
 6. Commit, tag and publish (the platform zips can be taken from CI's `breadboard-release`
    artifact):
 
