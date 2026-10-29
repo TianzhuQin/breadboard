@@ -244,7 +244,7 @@ public class ClientLogin extends Controller {
         loginForm.reject("This ID is too long. Please use the ID you were given (at most 64 characters).");
         return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
       }
-      if (clientId.startsWith("_")) {
+      if (Client.isComputer(clientId)) {
         // Ids starting with "_" are the computer players' (g.addAI makes _1, _2, ...): signing in as
         // one took over its seat.
         loginForm.reject("This ID is reserved. Please use the ID you were given.");

@@ -348,11 +348,6 @@ public class Client extends Model {
     return ownPageHeld ? Presence.AWAY : Presence.PREVIEW;
   }
 
-  /** Whether a researcher's preview holds the seat of someone whose own page has held it: it stands in for them. */
-  public boolean previewStandsIn() {
-    return previewHolds() && ownPageHeld;
-  }
-
   /** Whether a researcher's preview holds the seat, as a player or standing in for them. */
   public boolean previewHolds() {
     Connection holder = seat;
