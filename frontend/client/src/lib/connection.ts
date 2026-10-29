@@ -7,9 +7,11 @@ import { CONNECTION_EVENT } from '@human-nature-lab/breadboard-core'
  * - 'open': send
  * - 'reconnecting': wait, and say so: an answer given now would wait for the connection, and arrive
  *   late or not at all
- * - 'stopped': nothing more on this page (the session is over, or the study is open in another tab)
+ * - 'watching': nothing, and say why: the page is a researcher's preview of a player whose own page
+ *   is connected, which only watches
+ * - 'stopped': nothing more on this page (the session is over, or another page has the seat)
  */
-export type LinkState = 'open' | 'reconnecting' | 'stopped'
+export type LinkState = 'open' | 'reconnecting' | 'watching' | 'stopped'
 
 /** The page's Breadboard, when it says how its connection is (not a stand-in, e.g. in a test) */
 function breadboard (): any {
@@ -21,6 +23,7 @@ function stateOf (bb: any): LinkState {
   if (!bb) return 'open'
   switch (bb.connection) {
     case 'open': return 'open'
+    case 'watching': return 'watching'
     case 'ended':
     case 'elsewhere': return 'stopped'
     default: return 'reconnecting'

@@ -9,10 +9,11 @@ import Timer from '../src/components/Timer.vue'
 // once, and says so when reconnecting is not going to help.
 
 /** Stands in for window.Breadboard: what ConnectionStatus listens to and asks. */
-function fakeBreadboard (connection = 'open') {
+function fakeBreadboard (connection = 'open', preview = false) {
   const listeners: Record<string, Function[]> = {}
   const bb = {
     connection,
+    preview,
     connect: vi.fn(async () => ({})),
     reconnectNow: vi.fn(),
     useHere: vi.fn(),
@@ -128,15 +129,64 @@ describe('ConnectionStatus', () => {
 
   it('gives a page\'s own message what it needs to say why, and to act', async () => {
     const w = await mountStatus({
-      scopedSlots: { default: '<button class="own" @click="props.state === \'elsewhere\' ? props.useHere() : props.tryNow()">{{ props.state }}</button>' },
+      scopedSlots: { default: '<button class="own" @click="props.tryNow()">{{ props.state }}</button>' },
     })
     await become('blocked')
     expect(w.find('.own').text()).toBe('blocked')
     await w.find('.own').trigger('click')
     expect(breadboard.reconnectNow).toHaveBeenCalledTimes(1)
+    await become('lost')
+    expect(w.find('.own').text()).toBe('lost')
+  })
+
+  // A page written for 3.0 put its "Reconnecting…" in the default slot, which then showed in every
+  // state: "reconnecting" for ever once another tab had the seat, without the button to take it back.
+  it('shows a 3.0 page\'s own message only while it reconnects, and its own words otherwise', async () => {
+    const w = await mountStatus({ scopedSlots: { default: '<span class="own">Reconnecting in {{ Math.ceil(props.time / 1000) }} s…</span>' } })
+    await drop(3000)
+    expect(w.text()).toBe('Reconnecting in 3 s…')
+    expect(buttons(w)).toEqual([])
+    await become('elsewhere')
+    expect(w.find('.own').exists()).toBe(false)
+    expect(text(w)).toBe('This study is open in another tab or window.')
+    expect(buttons(w)).toEqual(['Use it here'])
+    await w.find('.bb-connection__btn').trigger('click')
+    expect(breadboard.useHere).toHaveBeenCalledTimes(1)
+    await become('ended')
+    expect(w.find('.own').exists()).toBe(false)
+    expect(text(w)).toBe('This session is over. You can close this page.')
+    await become('watching')
+    expect(w.find('.own').exists()).toBe(false)
+    expect(text(w)).toMatch(/^Watching only/)
+  })
+
+  it('does the same for a 3.0 message without slot props', async () => {
+    const w = await mountStatus({ slots: { default: '<span class="own">Reconnecting…</span>' } })
+    await drop(3000)
+    expect(w.text()).toBe('Reconnecting…')
+    await become('elsewhere')
+    expect(w.find('.own').exists()).toBe(false)
+    expect(buttons(w)).toEqual(['Use it here'])
+  })
+
+  it('lets a page say the other states in its own words', async () => {
+    const w = await mountStatus({
+      scopedSlots: {
+        elsewhere: '<button class="own" @click="props.useHere()">Hier weiter</button>',
+        ended: '<span class="own">Sitzung beendet</span>',
+        watching: '<span class="own">Nur zuschauen</span>',
+      },
+    })
     await become('elsewhere')
     await w.find('.own').trigger('click')
     expect(breadboard.useHere).toHaveBeenCalledTimes(1)
+    await become('ended')
+    expect(w.text()).toBe('Sitzung beendet')
+    await become('watching')
+    expect(w.text()).toBe('Nur zuschauen')
+    // and Breadboard's own words while it reconnects
+    await become('lost')
+    expect(text(w)).toMatch(/^Connection lost/)
   })
 
   it('shows on a page whose connection was already lost', async () => {
@@ -169,6 +219,37 @@ describe('ConnectionStatus', () => {
     expect(buttons(w)).toEqual(['Try now'])
     await become('open')
     expect(w.find('.bb-connection').exists()).toBe(false)
+  })
+
+  it('says so in the researcher\'s words on a preview another preview took the player from', async () => {
+    breadboard = fakeBreadboard('open', true)
+    vi.stubGlobal('Breadboard', breadboard)
+    const w = await mountStatus()
+    await become('elsewhere')
+    expect(text(w)).toBe('This player is open in another preview or tab.')
+    expect(buttons(w)).toEqual(['Use it here'])
+    await w.find('.bb-connection__btn').trigger('click')
+    expect(breadboard.useHere).toHaveBeenCalledTimes(1)
+  })
+
+  it('says a preview only watches a player whose own page is connected, without dimming it', async () => {
+    breadboard = fakeBreadboard('open', true)
+    vi.stubGlobal('Breadboard', breadboard)
+    const w = await mountStatus()
+    await become('watching')
+    expect(text(w)).toBe('Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.')
+    expect(buttons(w)).toEqual([])
+    expect(w.find('.bb-connection').classes()).toContain('bb-connection--watching')
+    // what it shows is live
+    expect(document.documentElement.classList.contains('bb-disconnected')).toBe(false)
+    // a blip, and the server lets it watch again
+    await drop(1000)
+    expect(text(w)).toMatch(/^Connection lost/)
+    expect(w.find('.bb-connection').classes()).not.toContain('bb-connection--watching')
+    expect(document.documentElement.classList.contains('bb-disconnected')).toBe(true)
+    await become('watching')
+    expect(document.documentElement.classList.contains('bb-disconnected')).toBe(false)
+    expect(w.vm.time).toBe(0)
   })
 
   it('says the session is over, without asking to keep the page open, when the page shows no end of its own', async () => {
@@ -217,6 +298,10 @@ describe('ConnectionStatus', () => {
     await become('open')
     expect(root.classList.contains('bb-disconnected')).toBe(false)
     await become('elsewhere')
+    expect(root.classList.contains('bb-disconnected')).toBe(true)
+    await become('watching')
+    expect(root.classList.contains('bb-disconnected')).toBe(false)
+    await become('ended')
     expect(root.classList.contains('bb-disconnected')).toBe(true)
     w.destroy()
     wrapper = null

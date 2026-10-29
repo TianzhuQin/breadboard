@@ -406,4 +406,121 @@ describe('the token kept for a browser that comes back', () => {
     FakeSocket.all[1].frame({ player: { _system: {}, text: 'Round 1' } })
     expect(JSON.parse(localStorage.getItem(KEY)!).token).toBe('tok')
   })
+
+  // Every page of the origin can read local storage: it goes as soon as it is no longer needed.
+  it('is forgotten once the participant is done', async () => {
+    keep()
+    await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame({ player: { _system: {}, text: 'Round 1' } })
+    expect(localStorage.getItem(KEY)).not.toBe(null)
+    FakeSocket.all[0].frame({ player: { _system: {}, finished: true, text: 'Thank you' } })
+    expect(localStorage.getItem(KEY)).toBe(null)
+  })
+
+  it('is forgotten once the participant has their completion code', async () => {
+    keep()
+    await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame({ player: { _system: { recruitment: { source: 'prolific', completed: true, completionCode: 'C0DE' } }, text: 'Thank you' } })
+    expect(localStorage.getItem(KEY)).toBe(null)
+  })
+
+  it('is left alone by a preview of the same player in this browser', async () => {
+    keep()
+    location.search = '?preview=1'
+    location.href = 'http://lab.example' + PAGE + '?preview=1'
+    await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame({ player: { _system: {}, finished: true, text: 'Thank you' } })
+    FakeSocket.all[0].frame(NOT_RUNNING)
+    expect(JSON.parse(localStorage.getItem(KEY)!).token).toBe('tok')
+  })
+})
+
+// A researcher's preview of a player whose own page was connected used to take their seat: the
+// player's page was closed and kept taking the seat back. Now the server lets such a preview only
+// watch: it says so first ({"bbWatching":true}), mirrors what the player's page gets, and ignores
+// what the preview sends, except the heartbeat.
+describe('a researcher\'s preview of a player whose own page is connected', () => {
+  const WATCHING = { bbWatching: true }
+  const PING = '{"action":"Ping"}'
+
+  function asPreview () {
+    location.search = '?preview=1'
+    location.href = 'http://lab.example' + PAGE + '?preview=1'
+  }
+
+  /** Every way the page answers for its player */
+  async function answerForThem (Breadboard: any) {
+    Breadboard.sendChoice('c1')
+    Breadboard.sendGroupChoice('g1')
+    await Breadboard.sendEdgeEdit('add', 'na', 'nb')
+    await Breadboard.send('my-event', { x: 1 })
+    Breadboard.sendCustom({ eventName: 'raw' })
+    Breadboard.sendType('MakeChoice', { choiceUID: 'c2' })
+  }
+
+  it('watches: shows what the player sees, and sends nothing for them but the heartbeat', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    expect(page.Breadboard.preview).toBe(true)
+    expect(page.Breadboard.connection).toBe('open')
+    FakeSocket.all[0].frame(WATCHING)
+    expect(page.Breadboard.connection).toBe('watching')
+    expect(page.Breadboard.watching).toBe(true)
+    expect(page.connections.slice(-1)).toEqual(['watching'])
+    // what the player's page gets
+    FakeSocket.all[0].frame({ player: { _system: {}, text: 'Round 1', choices: [{ uid: 'c1', name: 'Cooperate' }] } })
+    expect(page.players.map(p => p.text)).toEqual(['Round 1'])
+    await answerForThem(page.Breadboard)
+    expect(FakeSocket.all[0].sent).toEqual([])
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(FakeSocket.all[0].sent).toEqual([PING])
+    FakeSocket.all[0].frame({ pong: 1761700000000 })
+    expect(page.Breadboard.connection).toBe('watching')
+  })
+
+  it('starts watching when the player\'s own page comes back and takes the seat from it', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    page.Breadboard.sendChoice('c1')
+    expect(FakeSocket.all[0].sentFrames().map((m: any) => m.choiceUID)).toEqual(['c1'])
+    FakeSocket.all[0].frame(WATCHING)
+    expect(page.Breadboard.connection).toBe('watching')
+    page.Breadboard.sendChoice('c2')
+    expect(FakeSocket.all[0].sentFrames().map((m: any) => m.choiceUID)).toEqual(['c1'])
+    // the connection stays as it is
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(FakeSocket.all.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('watching')
+  })
+
+  it('is asked again on every new connection, and acts for the player once their page has gone', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame(WATCHING)
+    FakeSocket.all[0].drop()
+    expect(page.Breadboard.connection).toBe('lost')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(page.Breadboard.watching).toBe(false)
+    FakeSocket.all[1].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    page.Breadboard.sendChoice('c1')
+    expect(FakeSocket.all[1].sentFrames().map((m: any) => m.choiceUID)).toEqual(['c1'])
+  })
+
+  it('is told when another preview takes the seat for real, like a participant\'s other tab', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame({ bbClosed: 'replaced' })
+    FakeSocket.all[0].drop()
+    expect(page.Breadboard.connection).toBe('elsewhere')
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(FakeSocket.all.length).toBe(1)
+  })
+
+  it('is no preview on a participant\'s page', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    expect(page.Breadboard.preview).toBe(false)
+    expect(page.Breadboard.watching).toBe(false)
+  })
 })

@@ -646,6 +646,31 @@ describe('BBNetwork while the connection is down', () => {
     expect(sendEdgeEdit).toHaveBeenCalledWith('remove', 'nx', 'ny')
   })
 
+  it('offers no change on a researcher\'s preview that only watches the player, and says why', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    expect(w.find('.bb-network__confirm').exists()).toBe(true)
+    // their own page comes back: the question can't be answered here any more
+    await become(w, 'watching')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+    ;(w.vm as any).confirmProposal()
+    expect(sendEdgeEdit).not.toHaveBeenCalled()
+    expect(w.find('.bb-network__hint').text()).toBe('Watching only: their own page is connected, so you can’t change their ties.')
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+    expect((w.vm as any).moves.every((m: any) => !m.available)).toBe(true)
+  })
+
+  it('says nothing of reconnecting once the page is done with (another page has the seat)', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    await become(w, 'elsewhere')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+    expect(w.find('.bb-network__hint').exists()).toBe(false)
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+  })
+
   it('is editable as before where no page connection says otherwise', async () => {
     const w = mountNetwork({ enabled: true, remove: true, scope: 'amongNeighbors' })
     await clickableHit(w, 'nx', 'ny').trigger('click')

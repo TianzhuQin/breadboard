@@ -196,7 +196,8 @@ let instances = 0
  * centerEgo, nodeStroke, ...) and edge label slots don't apply here.
  *
  * While the connection is down nothing can be changed: a change sent then would arrive late, or
- * never. The bar says so, and a confirmation already open waits for the connection.
+ * never. The bar says so, and a confirmation already open waits for the connection. Nor on a
+ * researcher's preview that only watches the player (their own page is connected).
  */
 export default LinkAware.extend({
   name: 'BBNetwork',
@@ -518,7 +519,10 @@ export default LinkAware.extend({
     hint (): string {
       const e = this.edits
       if (!e.enabled) return ''
-      if (!this.canSend) return 'Reconnecting… you can change ties once the connection is back.'
+      if (this.link === 'watching') return 'Watching only: their own page is connected, so you can’t change their ties.'
+      if (this.link === 'reconnecting') return 'Reconnecting… you can change ties once the connection is back.'
+      // (nothing more on this page: the banner says why)
+      if (!this.canSend) return ''
       if (this.selectedNode) return `Now choose who ${this.nameOf(this.selectedNode)} should be connected with.`
       const parts: string[] = []
       const how: string[] = []
@@ -605,6 +609,11 @@ export default LinkAware.extend({
     'edits.turn' () { this.dropProposal() },
     'edits.enabled' (enabled: boolean) {
       if (!enabled) this.dropProposal()
+    },
+    // A question still open can wait for the connection, but not on a page that only watches the
+    // player now, or that is done.
+    link (state: string) {
+      if (state === 'watching' || state === 'stopped') this.dropProposal()
     },
     tooSmallToTap (small: boolean) { this.openListIfNeeded(small) },
     hint (text: string) { if (text) this.barReserved = true },

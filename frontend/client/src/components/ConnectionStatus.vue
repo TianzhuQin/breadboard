@@ -2,18 +2,37 @@
   <!-- Not once the participant is done (the experiment set player.finished, or gave them a completion
        code): the researcher opening the next session restarts the engine, and the banner would cover
        their thank-you screen. -->
-  <v-alert :value="shown" :color="color" :transition="transition" class="bb-connection">
-    <!-- The message to be shown when the client is disconnected. `state` is 'lost' (it is
-         reconnecting), 'blocked' (it has never connected: the network may not let it), 'elsewhere'
-         (the study is open in another tab or window) or 'ended' (the session is over, and the page
-         shows no end of its own). `time` is how long until the next attempt (ms), counting down, and 0
-         while one is under way. `tryNow` and `useHere` do what the buttons do. -->
-    <slot :time="time" :state="state" :tryNow="tryNow" :useHere="useHere">
+  <v-alert
+    :value="shown"
+    :color="color"
+    :transition="transition"
+    class="bb-connection"
+    :class="{ 'bb-connection--watching': state === 'watching' }"
+  >
+    <!-- What a page says while it reconnects: `state` is 'lost', or 'blocked' (it has never
+         connected: the network may not let it). `time` is how long until the next attempt (ms),
+         counting down, and 0 while one is under way; `tryNow` does what the button does. Pages
+         written for 3.0 put their message here: only these states show it. -->
+    <slot v-if="reconnecting" :time="time" :state="state" :tryNow="tryNow">
       <div class="bb-connection__body">
         <span class="bb-connection__text">{{ text }}</span>
-        <button v-if="state === 'elsewhere'" type="button" class="bb-connection__btn" @click="useHere">Use it here</button>
-        <button v-else-if="state !== 'ended'" type="button" class="bb-connection__btn" @click="tryNow">Try now</button>
+        <button type="button" class="bb-connection__btn" @click="tryNow">Try now</button>
       </div>
+    </slot>
+    <!-- The study is open in another tab or window; `useHere` does what the button does -->
+    <slot v-else-if="state === 'elsewhere'" name="elsewhere" :useHere="useHere">
+      <div class="bb-connection__body">
+        <span class="bb-connection__text">{{ text }}</span>
+        <button type="button" class="bb-connection__btn" @click="useHere">Use it here</button>
+      </div>
+    </slot>
+    <!-- The session is over, and the page shows no end of its own -->
+    <slot v-else-if="state === 'ended'" name="ended">
+      <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
+    </slot>
+    <!-- A researcher's preview of a player whose own page is connected, which only watches -->
+    <slot v-else-if="state === 'watching'" name="watching">
+      <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
     </slot>
   </v-alert>
 </template>
@@ -22,7 +41,8 @@
   import Vue from 'vue'
   import { CONNECTION_EVENT } from '@human-nature-lab/breadboard-core'
 
-  // On the page while the banner shows: what the page shows may be out of date, so it is dimmed.
+  // On the page while the connection is down or done with: what the page shows may be out of date,
+  // so it is dimmed. (Not while it watches: what it shows is live.)
   const DISCONNECTED = 'bb-disconnected'
 
   const TEXTS: Record<string, string> = {
@@ -30,6 +50,11 @@
     blocked: 'This page can’t open its live connection to the study; the network may block it. Please try another network (e.g. mobile data) or browser.',
     elsewhere: 'This study is open in another tab or window.',
     ended: 'This session is over. You can close this page.',
+    watching: 'Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.',
+  }
+  // What a researcher's preview says instead
+  const PREVIEW_TEXTS: Record<string, string> = {
+    elsewhere: 'This player is open in another preview or tab.',
   }
 
   /**
@@ -38,7 +63,11 @@
    * reconnect if possible; the participant can also try again at once. It also
    * says when reconnecting won't help: the network blocks the connection, the
    * study is open in another tab (which the participant can take back), or the
-   * session is over.
+   * session is over. On a researcher's preview that only watches its player, it
+   * says so.
+   *
+   * The default slot replaces the message while it reconnects; the slots
+   * `elsewhere`, `ended` and `watching` replace the others.
    */
   export default Vue.extend({
     name: 'ConnectionStatus',
@@ -56,6 +85,7 @@
       return {
         // Breadboard's `connection` (see ConnectionState in breadboard-core)
         state: 'connecting',
+        preview: false,
         time: 0,
         finished: false,
         // when the next attempt starts (Date.now()), and the timer counting down to it
@@ -66,19 +96,26 @@
     },
     computed: {
       shown (): boolean {
-        return !this.finished && ['lost', 'blocked', 'elsewhere', 'ended'].includes(this.state)
+        return !this.finished && ['lost', 'blocked', 'elsewhere', 'ended', 'watching'].includes(this.state)
+      },
+      reconnecting (): boolean {
+        return this.state === 'lost' || this.state === 'blocked'
+      },
+      dimmed (): boolean {
+        return this.shown && this.state !== 'watching'
       },
       text (): string {
-        return TEXTS[this.state] || TEXTS.lost
+        return (this.preview && PREVIEW_TEXTS[this.state]) || TEXTS[this.state] || TEXTS.lost
       }
     },
     watch: {
-      shown (shown: boolean) {
-        document.documentElement.classList.toggle(DISCONNECTED, shown)
+      dimmed (dimmed: boolean) {
+        document.documentElement.classList.toggle(DISCONNECTED, dimmed)
       }
     },
     async created () {
       await window.Breadboard.connect()
+      this.preview = !!window.Breadboard.preview
       this.sync()
       window.Breadboard.on(CONNECTION_EVENT, this.sync)
       window.Breadboard.on('retry', this.onRetry)
@@ -100,8 +137,8 @@
     methods: {
       sync () {
         this.state = window.Breadboard.connection
-        // (no more attempts to count down to)
-        if (this.state === 'open' || this.state === 'elsewhere' || this.state === 'ended') this.stopCountdown()
+        // (no attempt to count down to)
+        if (!this.reconnecting) this.stopCountdown()
       },
       onPlayer (p: any) {
         if (!p || typeof p !== 'object') return

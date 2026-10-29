@@ -1,7 +1,8 @@
 <template>
   <v-col v-if="hasChoices" class="player-choices">
-    <!-- A click while the connection is down would arrive late, or never: the choices wait for it. -->
-    <ReconnectingNote v-if="link === 'reconnecting'" />
+    <!-- A click while the connection is down would arrive late, or never: the choices wait for it.
+         A preview that only watches the player answers nothing for them. -->
+    <LinkNote :link="link" />
     <v-row no-gutters class="choices-container justify-space-between">
       <template v-for="(choice, index) of player.choices">
         <slot name="choice" :choice="choice" :submit="submit" :index="index" :disabled="!canSend">
@@ -15,15 +16,16 @@
 <script lang="ts">
 import { PlayerChoice } from '@human-nature-lab/breadboard-core'
 import Choice from './Choice.vue'
-import ReconnectingNote from './ReconnectingNote.vue'
+import LinkNote from './LinkNote.vue'
 import { LinkAware } from '../lib/connection'
 
 /**
- * A container for all of the player choices. They are disabled while the connection is down.
+ * A container for all of the player choices. They are disabled while the connection is down, and on
+ * a researcher's preview that only watches the player.
  */
 export default LinkAware.extend({
   name: 'PlayerChoices',
-  components: { Choice, ReconnectingNote },
+  components: { Choice, LinkNote },
   props: {
     player: {
       type: Object,

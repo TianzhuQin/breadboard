@@ -31,8 +31,9 @@
         </v-layout>
         <slot />
         <v-divider />
-        <!-- Sent while the connection is down, a page of answers would arrive late, or never: it waits. -->
-        <ReconnectingNote v-if="link === 'reconnecting'" class="mt-3" />
+        <!-- Sent while the connection is down, a page of answers would arrive late, or never: it waits.
+             A preview that only watches the player answers nothing for them. -->
+        <LinkNote :link="link" class="mt-3" />
         <v-layout class="tutorial-foo mt-2">
           <v-btn v-if="form.pages.length > 1" @click="prev" :disabled="!form.location.index || isBusy || !canSend" :loading="isBusy && dir === 'prev'">
             <v-icon>mdi-chevron-left</v-icon> Previous
@@ -60,15 +61,15 @@
   import HtmlBlock from './blocks/HtmlBlock.vue'
   import ChoiceQuestion from './blocks/ChoiceQuestion.vue'
   import TextQuestion from './blocks/TextQuestion.vue'
-  import ReconnectingNote from '../ReconnectingNote.vue'
+  import LinkNote from '../LinkNote.vue'
   import { LinkAware } from '../../lib/connection'
 
   type PlayerForms = { [key: string]: PlayerForm }
   const bb = window.Breadboard
-  // (its buttons and questions are disabled while the connection is down)
+  // (its buttons and questions are disabled while the connection is down, and while the page only watches)
   export default LinkAware.extend({
     name: 'Form',
-    components: { ScaleQuestion, HtmlBlock, ChoiceQuestion, TextQuestion, ReconnectingNote },
+    components: { ScaleQuestion, HtmlBlock, ChoiceQuestion, TextQuestion, LinkNote },
     props: {
       player: {
         type: Object as () => PlayerWithForms,

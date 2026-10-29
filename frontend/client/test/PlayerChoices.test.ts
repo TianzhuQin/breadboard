@@ -52,12 +52,12 @@ describe('PlayerChoices', () => {
   it('waits for the connection, and says so, while it is down', async () => {
     const w = mount(PlayerChoices, { propsData: { player }, stubs })
     expect(enabled(w)).toEqual([true, true])
-    expect(w.find('.bb-reconnecting').exists()).toBe(false)
+    expect(w.find('.bb-link-note').exists()).toBe(false)
 
     bb.become('lost')
     await w.vm.$nextTick()
     expect(enabled(w)).toEqual([false, false])
-    expect(w.find('.bb-reconnecting').text()).toBe('Reconnecting… you can answer once the connection is back.')
+    expect(w.find('.bb-link-note').text()).toBe('Reconnecting… you can answer once the connection is back.')
     await w.findAll('button').at(0).trigger('click')
     // (nor does a click that gets through anyway send anything)
     ;(w.vm as any).submit(player.choices[0])
@@ -66,7 +66,7 @@ describe('PlayerChoices', () => {
     bb.become('open')
     await w.vm.$nextTick()
     expect(enabled(w)).toEqual([true, true])
-    expect(w.find('.bb-reconnecting').exists()).toBe(false)
+    expect(w.find('.bb-link-note').exists()).toBe(false)
     await w.findAll('button').at(1).trigger('click')
     expect(bb.sendChoice).toHaveBeenCalledWith('c2')
   })
@@ -76,7 +76,7 @@ describe('PlayerChoices', () => {
     vi.stubGlobal('Breadboard', bb)
     const w = mount(PlayerChoices, { propsData: { player }, stubs })
     expect(enabled(w)).toEqual([false, false])
-    expect(w.find('.bb-reconnecting').exists()).toBe(true)
+    expect(w.find('.bb-link-note').exists()).toBe(true)
   })
 
   it('says nothing of reconnecting when the page won\'t (another tab has the seat)', async () => {
@@ -84,7 +84,25 @@ describe('PlayerChoices', () => {
     bb.become('elsewhere')
     await w.vm.$nextTick()
     expect(enabled(w)).toEqual([false, false])
-    expect(w.find('.bb-reconnecting').exists()).toBe(false)
+    expect(w.find('.bb-link-note').exists()).toBe(false)
+  })
+
+  it('answers nothing on a researcher\'s preview that only watches the player, and says why', async () => {
+    const w = mount(PlayerChoices, { propsData: { player }, stubs })
+    bb.become('watching')
+    await w.vm.$nextTick()
+    expect(enabled(w)).toEqual([false, false])
+    expect(w.find('.bb-link-note').text()).toBe('Watching only: their own page is connected, so you can’t answer for them.')
+    expect(w.find('.bb-link-note').classes()).toContain('bb-link-note--watching')
+    ;(w.vm as any).submit(player.choices[0])
+    ;(w.vm as any).submit({ uid: 'g1', name: 'Join', _route: 'group' })
+    expect(bb.sendChoice).not.toHaveBeenCalled()
+    expect(bb.sendGroupChoice).not.toHaveBeenCalled()
+    // the server decides again on a new connection: the player's page may have gone
+    bb.become('open')
+    await w.vm.$nextTick()
+    expect(enabled(w)).toEqual([true, true])
+    expect(w.find('.bb-link-note').exists()).toBe(false)
   })
 
   it('tells a page\'s own choices whether to wait', async () => {

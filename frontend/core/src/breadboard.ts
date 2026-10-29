@@ -43,7 +43,9 @@ function isPong (text: any): boolean {
 // not in an opaque origin, where browsers drop it: a reloaded preview has to be opened again).
 // A participant's token is also kept in local storage for a day, as long as the server's cookie
 // lasts, so a browser that was closed or crashed finds the seat again: session storage ends with
-// the tab. Not a preview's, which isn't a participant's to keep.
+// the tab. Every page of the origin can read local storage, so it is forgotten as soon as it is no
+// longer needed: the participant is done, or the session is over. Not a preview's, which isn't a
+// participant's to keep.
 const TOKEN_HEADER = 'X-Breadboard-Token'
 const TOKEN_FRAGMENT_KEY = 'bbt'
 const PREVIEW_QUERY = 'preview'
@@ -148,8 +150,13 @@ function keptToken (storageKey: string): string | null {
   return null
 }
 
-/** Forget the token kept in local storage: the session is over for this page, or the server no longer takes it */
+/**
+ * Forget the token kept in local storage: the participant is done, the session is over for this
+ * page, or the server no longer takes it. Not on a preview, which keeps none, and must leave a
+ * participant's alone.
+ */
 function forgetToken () {
+  if (isPreview()) return
   try {
     window.localStorage.removeItem(tokenKey())
   } catch (e) {}
@@ -239,10 +246,13 @@ export const ENDED_EVENT = 'bb:ended'
  * - 'open'
  * - 'lost': it dropped, or an attempt failed; it is reconnecting
  * - 'blocked': it has never opened, after several attempts: the network may not let it through
- * - 'elsewhere': the study was opened in another tab or window, which took the seat (see useHere)
+ * - 'elsewhere': another page took the seat: the study was opened in another tab or window (or, on
+ *   a preview, the researcher opened another preview of this player); see useHere
  * - 'ended': the session is over for this page; it no longer reconnects
+ * - 'watching': open, but only to watch: a researcher's preview of a player whose own page is
+ *   connected sees what they see, and can't answer for them (see `watching`)
  */
-export type ConnectionState = 'connecting' | 'open' | 'lost' | 'blocked' | 'elsewhere' | 'ended'
+export type ConnectionState = 'connecting' | 'open' | 'lost' | 'blocked' | 'elsewhere' | 'ended' | 'watching'
 
 /** Emitted whenever `connection` may have changed */
 export const CONNECTION_EVENT = 'bb:connection'
@@ -251,7 +261,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /** The session is over for this page (stopped, not running, ...): it no longer reconnects */
   public ended = false
-  /** Another tab or window of this participant took the seat: this one no longer reconnects */
+  /** Another page took the seat (see 'elsewhere' in ConnectionState): this one no longer reconnects */
   public replaced = false
   private socket!: Socket
   private config!: BreadboardConfig | null
@@ -263,6 +273,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private checkingSeat = false
   /** The connection has dropped (or an attempt failed) at least once */
   private dropped = false
+  /** The server said the current connection only watches; every new connection starts without */
+  private watchingNow = false
 
   /** Whether the live connection is open: what the page sends now reaches the server now */
   get isOpen (): boolean {
@@ -273,9 +285,24 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   get connection (): ConnectionState {
     if (this.ended) return 'ended'
     if (this.replaced) return 'elsewhere'
-    if (this.isOpen) return 'open'
+    if (this.isOpen) return this.watchingNow ? 'watching' : 'open'
     if (this.socket && this.socket.blocked) return 'blocked'
     return this.dropped ? 'lost' : 'connecting'
+  }
+
+  /** Whether the researcher console opened this page as a preview, rather than a participant */
+  get preview (): boolean {
+    return typeof window !== 'undefined' && isPreview()
+  }
+
+  /**
+   * Whether this page only watches its player: a researcher's preview of a player whose own page
+   * is connected. The server sends it what the player's page gets, and ignores what it sends; it
+   * sends no choices, tie changes or other messages for them. The server decides again for every
+   * new connection (the player's page may have gone by then).
+   */
+  get watching (): boolean {
+    return this.watchingNow
   }
 
   /**
@@ -318,6 +345,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       // too) would answer the ping with an error.
       this.socket = new Socket(socketUrl(config.connectSocket), undefined, config.clientId ? { ping: PING, isPong } : {})
       this.socket.on('close', () => { this.dropped = true })
+      // (before CONNECTION_EVENT below: a new connection is the player's own until the server says)
+      this.socket.on('connect', () => { this.watchingNow = false })
       // Propagate all socket events out to the Breadboard object
       for (const event of ['connect', 'open', 'close', 'error', 'retry']) {
         this.socket.on(event, (...args: any) => this.emit(event, ...args))
@@ -353,8 +382,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   }
 
   /**
-   * Take the seat back after another tab or window of this participant took it (connection
-   * 'elsewhere'): connect again, once (the other tab is then told so), and go on as before.
+   * Take the seat back after another page took it (connection 'elsewhere'): connect again, once
+   * (the other page is then told so), and go on as before.
    */
   useHere () {
     if (!this.socket || this.ended || !this.replaced) return
@@ -371,6 +400,11 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    * instead of sent; by default it waits as long as it takes
    */
   sendType (action: string, data: SimpleMap<any> = {}, maxAge?: number) {
+    // A page that only watches answers nothing for its player (the server would ignore it anyway).
+    if (this.watchingNow) {
+      console.debug(`Not sent while watching: ${action}`)
+      return
+    }
     const d = Object.assign(data, {
       action
     })
@@ -623,11 +657,22 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       this.emit('message', d)
       const data = JSON.parse(d)
       if (data && data.bbClosed === 'replaced') {
-        // The participant opened the study in another tab or window, which took the seat. Taking it
-        // back by reconnecting would have that tab take it back in turn, for ever: only useHere().
+        // Another page took the seat: the participant's own, in another tab or window, or another
+        // preview of the researcher's. Taking it back by reconnecting would have that page take it
+        // back in turn, for ever: only useHere().
         this.socket.stopReconnecting()
         if (!this.replaced && !this.ended) {
           this.replaced = true
+          this.emit(CONNECTION_EVENT)
+        }
+        return
+      }
+      if (data && data.bbWatching === true) {
+        // A preview of a player whose own page is connected: the server mirrors what that page gets
+        // and leaves it alone. Sent first, or once the player's page comes back and takes the seat
+        // from a preview that had it.
+        if (!this.watchingNow) {
+          this.watchingNow = true
           this.emit(CONNECTION_EVENT)
         }
         return
@@ -656,7 +701,10 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         // Someone who had come to their own end keeps it on the screen, with any completion code.
         if (this.ownEnd) return
       } else if (player && typeof player === 'object') {
-        this.ownEnd = isOwnEnd(player)
+        const ownEnd = isOwnEnd(player)
+        // Done: a browser that comes back has no seat to find (this tab keeps its own copy).
+        if (ownEnd && !this.ownEnd) forgetToken()
+        this.ownEnd = ownEnd
       }
       this.emit('data', data)
       for (const key of ['graph', 'player', 'style']) {

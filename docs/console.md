@@ -159,9 +159,11 @@ Tick players in the list, or pick **Test players** (those your steps marked with
 **AI players**, then choose **Desktop** or **Phone**. **Join as a new participant** opens the
 session's sign-in page in a new tab.
 
-**Previews are live.** Each one signs in as that player, and a click is a real choice, recorded
-with the session's data. If the player's own browser is open, the two keep taking the connection
-from each other, so preview test or computer players, or people who have left.
+**Previews are live.** A player whose own page is connected is shown read-only: you see their
+screen as it changes, but can't answer for them, and their page is left alone. Anyone else's
+preview (a test or computer player, or someone who left) signs in as that player, and a click is a
+real choice, recorded with the session's data. If their own page comes back, it takes over, and
+the preview goes on read-only.
 
 ## Running a session
 

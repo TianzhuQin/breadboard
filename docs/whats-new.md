@@ -223,6 +223,57 @@ A page that reconnects after its session has ended (for example after the autopi
 is not let into the session the server runs now. It gets back the last screen it had, such as its
 completion code, or else a "This session has ended" notice.
 
+## The participant page's connection
+
+The page reconnects by itself, at once when the network or the participant comes back to the tab,
+and notices a connection that died without closing. `<ConnectionStatus />` says what is going on,
+with **Try now** while it reconnects. When the study is opened in another tab or window, the newer
+page takes over and the older one stops, with **Use it here** to take it back.
+
+`Breadboard.connection` says how the connection is, and Breadboard emits `bb:connection` whenever
+it may have changed (`Breadboard.on('bb:connection', () => ...)`):
+
+| Value | |
+|---|---|
+| `connecting` | The first try is under way. |
+| `open` | Connected. |
+| `lost` | It dropped, and is reconnecting. |
+| `blocked` | It has never connected after several tries: the network may not let it. It goes on trying. |
+| `elsewhere` | Another page has the seat, e.g. the study opened in another tab. `Breadboard.useHere()` takes it back. |
+| `ended` | The session is over for this page; it no longer reconnects. |
+| `watching` | A researcher's preview that only watches (below). |
+
+**No answers while disconnected.** While the connection is down, `PlayerChoices`, `Form` and
+`BBNetwork` disable their choices, buttons and tie changes, and say why; a page's own choices in
+`PlayerChoices`'s `choice` slot get a `disabled` slot prop. A choice or tie change sent anyway
+(`Breadboard.sendChoice`, `sendGroupChoice`, `sendEdgeEdit`) waits for the connection for at most
+5 seconds and is then dropped, since the screen may have moved on. Other messages
+(`Breadboard.send`) wait as long as it takes, as before.
+
+**`ConnectionStatus`'s slots.** The default slot replaces the message while the page reconnects
+(`lost` and `blocked`), with the slot props `time` (ms until the next try, counting down, and 0
+while one is under way), `state` and `tryNow()`. A message written for 3.0 stays there, and now
+shows only in those states. The other states have slots of their own, with Breadboard's words
+otherwise: `elsewhere` (slot prop `useHere()`), `ended` and `watching`.
+
+```html
+<ConnectionStatus>
+  <template #default="{ time, tryNow }">
+    Reconnecting in {{ Math.ceil(time / 1000) }} s… <button @click="tryNow">Retry</button>
+  </template>
+  <template #elsewhere="{ useHere }">
+    This study is open elsewhere. <button @click="useHere">Continue here</button>
+  </template>
+</ConnectionStatus>
+```
+
+**Researchers' previews watch connected players.** The console's preview of a player whose own
+page is connected only watches: it shows what their page shows, live, and leaves their page alone.
+Its choices, forms and tie changes are disabled, it sends nothing for them, and
+`Breadboard.connection` is `watching` (`Breadboard.preview` tells a preview from a participant's
+page). A preview of anyone else (a test or computer player, or someone who left) acts for them as
+before, until their own page comes back; from then on it watches.
+
 ## The researcher console
 
 The console is new: open the server's address and sign in. The previous console still works at
