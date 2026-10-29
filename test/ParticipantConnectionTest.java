@@ -725,8 +725,9 @@ public class ParticipantConnectionTest extends BaseTest {
 
         // The computer takes their seat after afterSeconds, as for anyone who leaves. It used to wait
         // for as long as the preview was open.
-        await("the computer's takeover", () -> Integer.valueOf(1).equals(engine().eval("g.getVertex('p1').ai")));
-        assertEquals(1, eventsWith("aiTakeover", "playerId", "p1"));
+        // (the event is recorded right after the seat is handed over: awaited, not the seat)
+        await("the computer's takeover", () -> eventsWith("aiTakeover", "playerId", "p1") == 1);
+        assertEquals(1, engine().eval("g.getVertex('p1').ai"));
         assertEquals(Boolean.FALSE, system("p1").get("connected"));
 
         // Their page comes back: the seat is theirs again, from the computer, and the preview watches.
@@ -736,8 +737,8 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(Boolean.TRUE, system("p1").get("connected"));
         assertNull(system("p1").get("preview"));
         assertEquals(2, events("clientConnected", "p1"));
-        await("the seat given back", () -> engine().eval("g.getVertex('p1').ai") == null);
-        assertEquals(1, eventsWith("aiReturned", "playerId", "p1"));
+        await("the seat given back", () -> eventsWith("aiReturned", "playerId", "p1") == 1);
+        assertNull(engine().eval("g.getVertex('p1').ai"));
         engine().eval("autopilot.stop(); null");
     }
 
