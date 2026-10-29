@@ -472,6 +472,9 @@ public class ClientLogin extends Controller {
     }
   }
 
+  // How long a browser keeps the cookies of the seat it took (seconds).
+  static final int SEAT_COOKIE_SECONDS = 24 * 3600;
+
   /**
    * Finish a successful entry: store the seat token in an HttpOnly cookie scoped to this
    * instance, and redirect to the participant page with the token also in the URL fragment.
@@ -480,12 +483,14 @@ public class ClientLogin extends Controller {
    */
   static Result enterGame(String experimentId, String experimentInstanceId, String clientId, String token, String connectionSpeed) {
     boolean secure = play.Play.application().configuration().getBoolean("breadboard.secureCookies", false);
-    response().setCookie(ParticipantAuth.cookieName(experimentInstanceId), token, null,
+    // For a day, as the cookie below: it used to go when the browser closed, so someone whose browser
+    // was closed or killed (a phone does that) could not get back to their seat.
+    response().setCookie(ParticipantAuth.cookieName(experimentInstanceId), token, SEAT_COOKIE_SECONDS,
         ParticipantAuth.cookiePath(experimentId, experimentInstanceId), null, secure, true);
     // Which seat this browser took, for the study's shared links (/play/...): someone who closes the
     // tab and opens the link again goes back to their seat, also once the game has started. Only
     // where to go: the seat's token stays in the cookie above.
-    response().setCookie(PLAY_COOKIE + experimentId, experimentInstanceId + "/" + urlEncode(clientId), 24 * 3600,
+    response().setCookie(PLAY_COOKIE + experimentId, experimentInstanceId + "/" + urlEncode(clientId), SEAT_COOKIE_SECONDS,
         "/play/" + experimentId, null, secure, true);
     String url = routes.ClientController.index(experimentId, experimentInstanceId, clientId, connectionSpeed).url();
     return redirect(url + "#" + ParticipantAuth.FRAGMENT_KEY + "=" + token);

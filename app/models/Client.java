@@ -20,9 +20,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Client extends Model {
   public String id;
+  // The socket of the page that holds this participant's seat (see connect): what it sends acts for them.
   public WebSocket.In<JsonNode> in;
   public ThrottledWebSocketOut out;
   public ExperimentInstance experimentInstance;
@@ -30,15 +33,270 @@ public class Client extends Model {
   // The last full update this participant got. ScriptBoard keeps it for a while after the session
   // ends, so a page that reconnects later gets its final screen back (see ScriptBoard.addClient).
   public volatile ObjectNode lastFrame;
+  // The session started while they were away, without them (ScriptBoard.addClient): recorded once.
+  public volatile boolean missedStart;
+
+  // The page that holds the seat, and researchers' previews watching it: they get every frame the
+  // seat holder gets and can't act. Watchers stay when the participant's page reconnects.
+  private volatile Connection seat;
+  private final List<Connection> watchers = new CopyOnWriteArrayList<Connection>();
+  // Held while the seat changes hands, so two sockets arriving or closing at once can't both take it.
+  private final Object seatLock = new Object();
+  // Held by ScriptBoard.recordConnection while it records whether the participant is connected, so
+  // those records follow each other in order; and what it recorded last (null before the first).
+  private final Object recordLock = new Object();
+  private Boolean recordedConnected;
+
+  // The frames that tell a page what became of its socket (see connect).
+  private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
+  private static final ObjectNode WATCHING = Json.newObject().put("bbWatching", true);
+
+  /**
+   * One socket of this participant: the page that holds the seat, or a researcher's preview watching
+   * it. It remembers when it was last heard from (ScriptBoard.closeSilentPages), and the last full
+   * view written to it, so the same one isn't sent again.
+   */
+  public static final class Connection {
+    public final WebSocket.In<JsonNode> in;
+    public final ThrottledWebSocketOut out;
+    // A researcher's preview (ClientController: a signed-in researcher, or a preview token), not the
+    // participant's own page.
+    public final boolean preview;
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private volatile long lastHeard = System.currentTimeMillis();
+    private volatile boolean pinged;
+    // The text of the full view written last; null once any other frame has been written since.
+    private String lastView;
+
+    public Connection(WebSocket.In<JsonNode> in, ThrottledWebSocketOut out, boolean preview) {
+      this.in = in;
+      this.out = out;
+      this.preview = preview;
+    }
+
+    public boolean isOpen() {
+      return !closed.get();
+    }
+
+    /** It sent something; {@code ping}: a {"action": "Ping"}. */
+    public void heard(boolean ping) {
+      lastHeard = System.currentTimeMillis();
+      if (ping) {
+        pinged = true;
+      }
+    }
+
+    public long lastHeard() {
+      return lastHeard;
+    }
+
+    /**
+     * Whether it has pinged (pages do every few seconds from 3.1 on) and then sent nothing for more
+     * than {@code limitMs} by {@code now}: its connection is gone, though the socket never closed.
+     * A page that never pings never counts as silent.
+     */
+    public boolean silent(long now, long limitMs) {
+      return pinged && isOpen() && now - lastHeard > limitMs;
+    }
+
+    // True the first time only: its close and the check for silence may both report it.
+    boolean markClosed() {
+      return closed.compareAndSet(false, true);
+    }
+
+    /**
+     * Write a frame with the player's view ({@code view}: the text of the view alone). One that shows
+     * the same as the last frame written is skipped, unless {@code always}: participants get a view
+     * every few hundred milliseconds, often unchanged, and a page on a weak connection fell further
+     * and further behind. Nothing is written to a closed socket.
+     */
+    synchronized void writeView(JsonNode frame, String view, boolean always) {
+      if (!isOpen() || out == null) {
+        return;
+      }
+      if (!always && view.equals(lastView)) {
+        return;
+      }
+      lastView = view;
+      out.write(frame);
+    }
+
+    /** Write any other frame: the next view is sent whatever it shows, as the page may have changed. */
+    synchronized void write(JsonNode frame) {
+      if (!isOpen() || out == null) {
+        return;
+      }
+      lastView = null;
+      out.write(frame);
+    }
+
+    /** Write a frame that changes nothing on the page's screen (e.g. the answer to a ping). */
+    public synchronized void writeAside(JsonNode frame) {
+      if (isOpen() && out != null) {
+        out.write(frame);
+      }
+    }
+
+    // Closed by the server: no frame goes to it any more, except {@code last}, first (under the same
+    // lock as the writes, so none slips in after it).
+    synchronized void close(JsonNode last) {
+      markClosed();
+      if (out == null) {
+        return;
+      }
+      try {
+        if (last != null) {
+          out.write(last);
+        }
+        out.close();
+      } catch (Exception e) {
+        Logger.debug("Could not close a participant's socket: " + e);
+      }
+    }
+  }
+
+  /** What became of a socket that connected for a participant who has a Client already (see connect). */
+  public enum Arrival {
+    /** It holds the seat, which no open page held: the participant (or a preview) comes back. */
+    SEATED,
+    /** It holds the seat, taken from another open page, which was told so and closed. */
+    TOOK_OVER,
+    /** It holds the seat: the participant is back, and the preview that held it watches from now on. */
+    PREVIEW_WATCHES,
+    /** A researcher's preview of a player whose own page holds the seat: it only watches. */
+    WATCHING
+  }
 
   public Client(String id, ExperimentInstance experimentInstance, WebSocket.In<JsonNode> in, ThrottledWebSocketOut out) {
+    this(id, experimentInstance, new Connection(in, out, false));
+  }
+
+  /** A participant's first socket, which holds the seat. */
+  public Client(String id, ExperimentInstance experimentInstance, Connection first) {
     this.id = id;
     this.experimentInstance = experimentInstance;
-    this.in = in;
-    this.out = out;
+    take(first);
+  }
+
+  // (under seatLock, but for the constructor)
+  private void take(Connection holder) {
+    this.seat = holder;
+    this.in = holder.in;
+    this.out = holder.out;
+  }
+
+  /**
+   * Another socket for this participant. It takes the seat, unless it is a researcher's preview and
+   * the participant's own page holds it: a preview never displaces them, and watches instead ({"bbWatching":
+   * true}, then everything their page gets). Whoever held the seat before: when it was another open
+   * page of the participant, or a preview replaced by a preview, it is told ({"bbClosed": "replaced"})
+   * and closed, so it doesn't reconnect and take the seat back, as two tabs used to, for ever; a
+   * preview that held it for a participant who comes back watches from now on ({"bbWatching": true});
+   * a socket that had closed already is just left.
+   */
+  public Arrival connect(Connection incoming) {
+    synchronized (seatLock) {
+      Connection previous = seat;
+      if (previous == null || previous == incoming || !previous.isOpen()) {
+        take(incoming);
+        return Arrival.SEATED;
+      }
+      if (incoming.preview && !previous.preview) {
+        // Told first, before any of the participant's frames reach it.
+        incoming.writeAside(WATCHING);
+        watchers.add(incoming);
+        return Arrival.WATCHING;
+      }
+      take(incoming);
+      if (previous.preview && !incoming.preview) {
+        previous.writeAside(WATCHING);
+        watchers.add(previous);
+        return Arrival.PREVIEW_WATCHES;
+      }
+      previous.close(REPLACED);
+      return Arrival.TOOK_OVER;
+    }
+  }
+
+  /**
+   * A socket of this participant closed, or was closed by the server. True when it was the open
+   * socket that held the seat, which is empty now. A watcher's just goes; one closed already (a
+   * replaced socket, or reported twice) changes nothing.
+   */
+  public boolean closed(Connection connection) {
+    synchronized (seatLock) {
+      if (!connection.markClosed()) {
+        return false;
+      }
+      watchers.remove(connection);
+      return seat == connection;
+    }
+  }
+
+  /** The socket that holds the seat (open or not). */
+  public Connection seat() {
+    return seat;
+  }
+
+  /** Whether an open socket holds the seat: the participant (or a preview standing in) is connected. */
+  public boolean seatOpen() {
+    Connection holder = seat;
+    return holder != null && holder.isOpen();
+  }
+
+  /** Whether this socket holds the seat now, open: what it sends acts for the participant. */
+  public boolean holdsSeat(Connection connection) {
+    return connection != null && connection == seat && connection.isOpen();
+  }
+
+  /** Whether this socket is a researcher's preview watching the seat holder. */
+  public boolean watches(Connection connection) {
+    return watchers.contains(connection);
+  }
+
+  /** The previews watching now. */
+  public List<Connection> watchers() {
+    return new ArrayList<Connection>(watchers);
+  }
+
+  /** Every socket of this participant: the seat holder's (if any), then the watchers'. */
+  public List<Connection> connections() {
+    List<Connection> all = new ArrayList<Connection>();
+    Connection holder = seat;
+    if (holder != null) {
+      all.add(holder);
+    }
+    all.addAll(watchers);
+    return all;
+  }
+
+  Object recordLock() {
+    return recordLock;
+  }
+
+  // Whether {@code connected} differs from what was recorded last; it is now (under recordLock).
+  boolean connectionChanged(boolean connected) {
+    if (recordedConnected != null && recordedConnected == connected) {
+      return false;
+    }
+    recordedConnected = connected;
+    return true;
   }
 
   public synchronized void updateGraph(Vertex me) {
+    EventGraph subGraph = subGraphOf(me);
+    writeGraph(subGraph.getVertex(me.getId()), subGraph);
+  }
+
+  /** Send one socket the player's view as it is now: a preview that starts watching. */
+  public synchronized void showTo(Connection connection, Vertex me) {
+    EventGraph subGraph = subGraphOf(me);
+    ObjectNode view = view(subGraph.getVertex(me.getId()), subGraph);
+    connection.writeView(view, view.toString(), false);
+  }
+
+  // What the participant may see of the network: themselves, their neighbors and their ties.
+  private static EventGraph subGraphOf(Vertex me) {
 
     // Create an in-memory graph to store the sub-graph in. The participant keeps their own id;
     // everyone else is added under ClientView.publicId (a random alias by default), so a browser
@@ -166,10 +424,35 @@ public class Client extends Model {
       }
     }
 
-    writeGraph(m, subGraph);
+    return subGraph;
   }
 
   public void writeGraph(Vertex me, Graph graph) {
+    ObjectNode jsonOutput = view(me, graph);
+    // Each socket is sent it only if its last frame showed something else: a page that just
+    // connected, or a preview that just started watching, gets the whole view.
+    String view = jsonOutput.toString();
+
+    boolean newStyle = false;
+    int hash = experimentInstance.experiment.getStyle().hashCode();
+    if (styleHash != hash) {
+      styleHash = hash;
+      jsonOutput.put("style", experimentInstance.experiment.getStyle());
+      newStyle = true;
+    }
+
+    lastFrame = jsonOutput;
+    Connection holder = seat;
+    if (holder != null) {
+      holder.writeView(jsonOutput, view, newStyle);
+    }
+    for (Connection watcher : watchers) {
+      watcher.writeView(jsonOutput, view, newStyle);
+    }
+  }
+
+  // {"graph": what they see of the network, "player": their own vertex's properties}.
+  private static ObjectNode view(Vertex me, Graph graph) {
     ObjectNode jsonOutput = Json.newObject();
 
     ObjectNode jsonGraph = D3Utils.graphToJsonString(graph);
@@ -183,15 +466,18 @@ public class Client extends Model {
     }
 
     jsonOutput.put("player", client);
+    return jsonOutput;
+  }
 
-    int hash = experimentInstance.experiment.getStyle().hashCode();
-    if (styleHash != hash) {
-      styleHash = hash;
-      jsonOutput.put("style", experimentInstance.experiment.getStyle());
+  /** Write a frame to the page that holds the seat and to every preview watching it. */
+  public void write(JsonNode frame) {
+    Connection holder = seat;
+    if (holder != null) {
+      holder.write(frame);
     }
-
-    lastFrame = jsonOutput;
-    out.write(jsonOutput);
+    for (Connection watcher : watchers) {
+      watcher.write(frame);
+    }
   }
 
   public void graphChanged(Graph wholeGraph) {
@@ -200,7 +486,7 @@ public class Client extends Model {
     ObjectNode graph = D3Utils.graphToJsonString(wholeGraph);
     jsonOutput.put("graph", graph);
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void vertexAdded(Vertex vertex) {
@@ -208,7 +494,7 @@ public class Client extends Model {
 
     jsonOutput.put("action", "addNode");
     jsonOutput.put("id", vertex.getId().toString());
-    out.write(jsonOutput);
+    write(jsonOutput);
 
     for (String key : vertex.getPropertyKeys()) {
       vertexPropertyChanged(vertex, key, vertex.getProperty(key));
@@ -221,7 +507,7 @@ public class Client extends Model {
     jsonOutput.put("action", "removeNode");
     jsonOutput.put("id", vertex.getId().toString());
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void vertexPropertyChanged(Vertex vertex, String key, Object setValue) {
@@ -231,12 +517,12 @@ public class Client extends Model {
     if (key.equals("text")) {
       if (vertex.getId().toString().equals(id)) {
         jsonOutput.put("text", Json.toJson(setValue));
-        out.write(jsonOutput);
+        write(jsonOutput);
       }
     } else if (key.equals("choices")) {
       if (vertex.getId().toString().equals(id)) {
         jsonOutput.put("choices", Json.toJson(setValue));
-        out.write(jsonOutput);
+        write(jsonOutput);
       }
     } else if (key.startsWith("private")) {
       // private key should be sent, without the containing private key, to vertex player only
@@ -246,14 +532,14 @@ public class Client extends Model {
         jsonOutput.put("id", vertex.getId().toString());
         jsonOutput.put("key", privateKey);
         jsonOutput.put("value", Json.toJson(setValue));
-        out.write(jsonOutput);
+        write(jsonOutput);
       }
     } else {
       jsonOutput.put("action", "nodePropertyChanged");
       jsonOutput.put("id", vertex.getId().toString());
       jsonOutput.put("key", key);
       jsonOutput.put("value", Json.toJson(setValue));
-      out.write(jsonOutput);
+      write(jsonOutput);
     }
   }
 
@@ -264,7 +550,7 @@ public class Client extends Model {
     jsonOutput.put("id", vertex.getId().toString());
     jsonOutput.put("key", key);
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void edgeAdded(Edge edge) {
@@ -276,7 +562,7 @@ public class Client extends Model {
     jsonOutput.put("target", edge.getVertex(Direction.IN).getId().toString());
     jsonOutput.put("value", edge.getLabel());
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void edgeRemoved(Edge edge) {
@@ -287,7 +573,7 @@ public class Client extends Model {
     jsonOutput.put("source", edge.getVertex(Direction.OUT).getId().toString());
     jsonOutput.put("target", edge.getVertex(Direction.IN).getId().toString());
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void edgePropertyChanged(Edge edge, String key, Object setValue) {
@@ -298,7 +584,7 @@ public class Client extends Model {
     jsonOutput.put("key", key);
     jsonOutput.put("value", setValue.toString());
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void edgePropertyRemoved(Edge edge, String key) {
@@ -308,7 +594,7 @@ public class Client extends Model {
     jsonOutput.put("id", edge.getId().toString());
     jsonOutput.put("key", key);
 
-    out.write(jsonOutput);
+    write(jsonOutput);
   }
 
   public void send (String eventName, Object ...data) {
@@ -317,7 +603,7 @@ public class Client extends Model {
     json.put("eventName", eventName);
     json.put("data", Json.toJson(data));
     // JsonNode json = mapper.convertValue(data, JsonNode.class);
-    out.write(json);
+    write(json);
   }
 
   public ObjectNode toJson() {
@@ -326,20 +612,20 @@ public class Client extends Model {
     return client;
   }
 
-  public void setIn(WebSocket.In<JsonNode> in) {
-    this.in = in;
-  }
-
-  public void setOut(ThrottledWebSocketOut out) {
-    this.out = out;
-  }
-
   public String toString() {
     return "Client(" + id + ")";
   }
 
+  /** Close every socket of this participant, the previews watching included (their session is over). */
   public void disconnect () {
-    this.out.close();
+    List<Connection> all;
+    synchronized (seatLock) {
+      all = connections();
+      watchers.clear();
+    }
+    for (Connection connection : all) {
+      connection.close(null);
+    }
   }
 
 }

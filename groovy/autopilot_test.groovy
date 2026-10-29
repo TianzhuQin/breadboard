@@ -13,15 +13,20 @@ def pilot(String prefix, Map hooks) {
   return ap
 }
 
+// As ScriptBoard.setConnected records it: connected, and since when someone is away.
 def arrive(Autopilot ap, String id) {
   def v = g.getVertex(id) ?: g.addPlayer(id)
   v._system.connected = true
+  v._system.disconnectedAt = null
   ap.onConnection(id, true)
   return v
 }
 
-def leave(Autopilot ap, String id) {
-  g.getVertex(id)._system.connected = false
+// awayFor: how long ago they left (ms)
+def leave(Autopilot ap, String id, long awayFor = 0) {
+  def v = g.getVertex(id)
+  v._system.connected = false
+  v._system.disconnectedAt = System.currentTimeMillis() - awayFor
   ap.onConnection(id, false)
 }
 
@@ -95,7 +100,7 @@ test.async("with minPlayers here the game starts after waitSeconds", 4000) { don
   }
 }
 
-test.async("dropping below minPlayers cancels a pending start", 4000) { done ->
+test.async("dropping below minPlayers holds a pending start back", 4000) { done ->
   def hooks = [:]
   def ap = pilot('ap-drop-', hooks)
   ap.waitingRoom([minPlayers: 2, waitSeconds: 0.4, countdownSeconds: 0])
@@ -103,6 +108,96 @@ test.async("dropping below minPlayers cancels a pending start", 4000) { done ->
   leave(ap, 'ap-drop-2')
   timers.newTimer().runAfter(900) {
     done { assert hooks.started == null; ap.stop() }
+  }
+}
+
+test("a moment's drop in the waiting room doesn't start the wait again") {
+  def ap = pilot('ap-blip-', [:])
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 30])
+    def v = arrive(ap, 'ap-blip-1')
+    arrive(ap, 'ap-blip-2')
+    def startAt = ap.startAt
+    def startTimer = ap.startTimer
+    assert startAt != null
+    leave(ap, 'ap-blip-2')
+    assert v._system.autopilot.here == 1
+    assert v._system.autopilot.startsIn == null : "too few right now: no countdown to the start"
+    assert ap.startAt == startAt : "the wait was called off at once"
+    arrive(ap, 'ap-blip-2')
+    assert ap.startAt == startAt : "the wait started again from the beginning"
+    assert ap.startTimer.is(startTimer)
+    assert v._system.autopilot.startsIn in 29..30
+    assert ap.graceTimer == null
+  } finally {
+    ap.stop()
+  }
+}
+
+test.async("when the wait ends while someone is away for a moment, the game starts as they come back", 4000) { done ->
+  def hooks = [:]
+  def ap = pilot('ap-due-', hooks)
+  ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 0.2, countdownSeconds: 0])
+  arrive(ap, 'ap-due-1'); arrive(ap, 'ap-due-2')
+  leave(ap, 'ap-due-2')
+  timers.newTimer().runAfter(600) {
+    def heldBack = hooks.started == null && ap.startDue
+    arrive(ap, 'ap-due-2')
+    done {
+      try {
+        assert heldBack : "the game started with too few, or the start was called off"
+        assert hooks.started == 1
+      } finally {
+        ap.stop()
+      }
+    }
+  }
+}
+
+test.async("a departure that lasts departureGraceSeconds calls the start off", 4000) { done ->
+  def hooks = [:]
+  def ap = pilot('ap-gone-', hooks)
+  ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 30, departureGraceSeconds: 0.2])
+  arrive(ap, 'ap-gone-1'); arrive(ap, 'ap-gone-2')
+  def first = ap.startAt
+  leave(ap, 'ap-gone-2')
+  timers.newTimer().runAfter(600) {
+    def calledOff = ap.startAt == null && ap.startTimer == null
+    // enough people again: the wait begins anew
+    arrive(ap, 'ap-gone-3')
+    def fresh = ap.startAt
+    done {
+      try {
+        assert calledOff : "the start was not called off"
+        assert fresh != null && fresh > first
+        assert hooks.started == null
+      } finally {
+        ap.stop()
+      }
+    }
+  }
+}
+
+test.async("the session isn't given up while someone is away for a moment", 4000) { done ->
+  def hooks = [:]
+  def ap = pilot('ap-patience-', hooks)
+  ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 30, maxWaitSeconds: 0.3, departureGraceSeconds: 0.6])
+  arrive(ap, 'ap-patience-1'); arrive(ap, 'ap-patience-2')
+  leave(ap, 'ap-patience-2')
+  timers.newTimer().runAfter(500) {
+    def kept = hooks.finished == null
+    arrive(ap, 'ap-patience-2')
+    timers.newTimer().runAfter(700) {
+      done {
+        try {
+          assert kept : "given up while they were away for a moment"
+          assert hooks.finished == null
+          assert ap.startAt != null
+        } finally {
+          ap.stop()
+        }
+      }
+    }
   }
 }
 
@@ -122,17 +217,83 @@ test.async("too few people within maxWaitSeconds cancels the session", 4000) { d
   }
 }
 
-test("people who left before the start are taken out of the network") {
+test("people who left well before the start are taken out of the network") {
   def hooks = [:]
   def ap = pilot('ap-ghost-', hooks)
   ap.waitingRoom([minPlayers: 2, maxPlayers: 3, countdownSeconds: 0])
   arrive(ap, 'ap-ghost-1'); arrive(ap, 'ap-ghost-2')
-  leave(ap, 'ap-ghost-2')
+  leave(ap, 'ap-ghost-2', 61000)
   arrive(ap, 'ap-ghost-3'); arrive(ap, 'ap-ghost-4')
   assert hooks.started == 1
   assert g.getVertex('ap-ghost-2') == null : "an empty seat was left in the network"
   assert g.getVertex('ap-ghost-1') != null
   ap.stop()
+}
+
+test("someone away for a moment at the start keeps their seat") {
+  def hooks = [:]
+  def started = []
+  def ap = pilot('ap-seat-', hooks)
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 4, countdownSeconds: 0, onStart: { players -> started.addAll(players*.id) }])
+    arrive(ap, 'ap-seat-1'); arrive(ap, 'ap-seat-2'); arrive(ap, 'ap-seat-3')
+    leave(ap, 'ap-seat-3', 5000)
+    // a player whose page never connected (e.g. one a script added) still goes
+    g.addPlayer('ap-seat-ghost')
+    arrive(ap, 'ap-seat-4'); arrive(ap, 'ap-seat-5')
+    assert hooks.started == 1
+    assert g.getVertex('ap-seat-3') != null : "their seat was taken away as their page reconnected"
+    assert g.getVertex('ap-seat-ghost') == null
+    assert started.toSet() == ['ap-seat-1', 'ap-seat-2', 'ap-seat-3', 'ap-seat-4', 'ap-seat-5'].toSet()
+    // without replaceDisconnected the seat waits for them
+    assert ap.takeoverTimers.isEmpty()
+  } finally {
+    ap.stop()
+  }
+}
+
+test("a seat is kept for as long as replaceDisconnected waits, when that is longer than a minute") {
+  def hooks = [:]
+  def ap = pilot('ap-long-', hooks)
+  try {
+    ap.waitingRoom([minPlayers: 1, maxPlayers: 3, countdownSeconds: 0])
+    ap.replaceDisconnected([afterSeconds: 120])
+    arrive(ap, 'ap-long-1'); arrive(ap, 'ap-long-2')
+    leave(ap, 'ap-long-2', 90000)
+    leave(ap, 'ap-long-1', 125000)
+    arrive(ap, 'ap-long-3'); arrive(ap, 'ap-long-4'); arrive(ap, 'ap-long-5')
+    assert hooks.started == 1
+    assert g.getVertex('ap-long-2') != null
+    assert g.getVertex('ap-long-1') == null
+  } finally {
+    ap.stop()
+  }
+}
+
+test.async("the computer plays a seat kept at the start until its player is back", 5000) { done ->
+  def hooks = [:]
+  def ap = pilot('ap-stand-', hooks)
+  ap.waitingRoom([minPlayers: 2, maxPlayers: 4, countdownSeconds: 0])
+  ap.replaceDisconnected([afterSeconds: 0.3])
+  arrive(ap, 'ap-stand-1'); arrive(ap, 'ap-stand-2'); arrive(ap, 'ap-stand-3')
+  leave(ap, 'ap-stand-3', 2000)
+  arrive(ap, 'ap-stand-4'); arrive(ap, 'ap-stand-5')
+  def v = g.getVertex('ap-stand-3')
+  timers.newTimer().runAfter(800) {
+    def tookOver = v.getProperty("ai") == 1
+    arrive(ap, 'ap-stand-3')
+    def returned = v.getProperty("ai") != 1
+    a.ai.remove(v)
+    done {
+      try {
+        assert hooks.started == 1
+        assert tookOver : "the computer did not play the kept seat"
+        assert returned : "the seat was not given back"
+      } finally {
+        ap.stop()
+      }
+    }
+  }
 }
 
 test.async("a player who leaves mid-game is replaced by the computer, and gets the seat back on return", 5000) { done ->
@@ -292,7 +453,8 @@ test("a game started some other way (bb:game-start) ends the waiting room for ev
     ap.waitingRoom([minPlayers: 2, maxPlayers: 3, waitSeconds: 60, countdownSeconds: 0])
     def v = arrive(ap, 'ap-other-1')
     def away = arrive(ap, 'ap-other-2')
-    leave(ap, 'ap-other-2')
+    // (long enough ago that launch() would take them out)
+    leave(ap, 'ap-other-2', 61000)
     assert v._system.autopilot.state == "waiting"
     assert away._system.autopilot.state == "waiting"
     events.emit("bb:game-start", [:])
