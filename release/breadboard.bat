@@ -1,5 +1,6 @@
 @ECHO OFF
-SETLOCAL
+REM (Without delayed expansion, a "!" in the folder's path is just a character.)
+SETLOCAL EnableExtensions DisableDelayedExpansion
 REM Start Breadboard: double-click it. The console opens in the browser once the server is up
 REM (SET BREADBOARD_NO_BROWSER=1 stops that); close the window or press Ctrl+C to stop it.
 REM Other settings go to the server as -D options, e.g.  breadboard.bat -Dhttp.port=8080
@@ -71,13 +72,10 @@ IF EXIST "db\write-check.tmp" DEL "db\write-check.tmp"
 IF EXIST "db\breadboard.h2.db" (
   (TYPE NUL >>"db\breadboard.h2.db") 2>NUL || SET "UNWRITABLE=db\breadboard.h2.db"
 )
-IF DEFINED UNWRITABLE (
-  ECHO %UNWRITABLE% can't be written by %USERNAME%, so Breadboard can't start. Move the Breadboard folder
-  ECHO somewhere your account can write to ^(such as Documents^), or give %USERNAME% write access to
-  ECHO %CD% ^(right-click it, Properties, Security^).
-  PAUSE
-  EXIT /B 1
-)
+REM (Its message is under a label: cmd reads a parenthesized block whole, with the folder's path and
+REM the account's name put in, and a ")" in them, as in "...\breadboard-v3.1.0-windows-x64 (1)",
+REM would end it early. They are shown in quotes, which keep a "&" in them from starting a command.)
+IF DEFINED UNWRITABLE GOTO unwritable
 
 REM application.secret must not be a published value. Use APPLICATION_SECRET if set; otherwise
 REM generate one on first start and keep it in conf\application.secret. The server reads it from
@@ -132,7 +130,8 @@ SET "R5=-100000"
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.)
 "%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\."
 SET "EXIT_CODE=%ERRORLEVEL%"
-REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143).
+REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
+REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
 IF "%EXIT_CODE%"=="0" EXIT /B 0
 IF "%EXIT_CODE%"=="130" EXIT /B 130
 IF "%EXIT_CODE%"=="143" EXIT /B 143
@@ -174,6 +173,13 @@ REM Keep the window open after a failure, so the message can be read. (Play stop
 REM IF ERRORLEVEL 1 doesn't catch.)
 PAUSE
 EXIT /B %EXIT_CODE%
+
+:unwritable
+ECHO %UNWRITABLE% can't be written by the account "%USERNAME%", so Breadboard can't start. Move the
+ECHO Breadboard folder somewhere your account can write to (such as Documents), or give that account
+ECHO write access to "%CD%" (right-click it, Properties, Security).
+PAUSE
+EXIT /B 1
 
 :addjar
 IF DEFINED CP (SET "CP=%CP%;lib\%~1") ELSE (SET "CP=lib\%~1")

@@ -5,6 +5,7 @@ import models.*;
 import org.apache.commons.io.FileUtils;
 import play.Play;
 import play.Application;
+import play.Configuration;
 import play.GlobalSettings;
 import play.Logger;
 import play.db.DB;
@@ -23,6 +24,7 @@ import play.mvc.Http;
 import java.io.*;
 import java.lang.reflect.Method;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -30,6 +32,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 
 public class Global extends GlobalSettings {
 
@@ -41,7 +45,7 @@ public class Global extends GlobalSettings {
     // For the server's own process (a release, bin/run-local), not the tests' or sbt's.
     if (app.isProd()) {
       logUncaughtErrors();
-      stopIfShutdownHangs();
+      stopIfShutdownHangs(app.configuration());
       exitIfActorsStop();
       keepEbeanThroughTheStop();
     }
@@ -375,21 +379,38 @@ public class Global extends GlobalSettings {
 
   /** How long a stop may take before the process ends anyway (see stopIfShutdownHangs). */
   static final long SHUTDOWN_LIMIT_MS = 20000;
+  /** How long a stop cut short then waits for the database to close (see closeDatabase). */
+  static final long CLOSE_DATABASE_MS = 3000;
+  /**
+   * What a stop cut short (stopIfShutdownHangs) exits with: 143, as Java does for SIGTERM, so that the
+   * launchers (BREADBOARD_KEEP_RUNNING) and service managers take it for the stop that was asked for
+   * and don't start the server again; 1 for the server's own stop after a failure (exitIfActorsStop),
+   * which is to be started again.
+   */
+  private static volatile int stuckStopExitCode = 143;
   private static boolean shutdownLimitSet = false;
 
   /**
    * SIGTERM and Ctrl+C run Play's stop, which waits, with no time limit, for every actor to finish:
    * a script that never ends (while (true) in the Script console or a step) held it up for good,
    * with the server still answering and RUNNING_PID already deleted, so the next start couldn't
-   * bind. When a stop is still going after SHUTDOWN_LIMIT_MS, the process ends anyway (exit code 1).
-   * Once per process: the timer starts with the stop and dies with the process when the stop ends in
-   * time (a daemon thread).
+   * bind. When a stop is still going after SHUTDOWN_LIMIT_MS, the database is closed (Play's
+   * connection pool, which closes it otherwise, stops after the actors: the file was left open, for
+   * H2 to recover at the next start) and the process ends anyway, with stuckStopExitCode. Once per
+   * process: the timer starts with the stop and dies with the process when the stop ends in time (a
+   * daemon thread).
    */
-  static synchronized void stopIfShutdownHangs() {
+  static synchronized void stopIfShutdownHangs(Configuration config) {
     if (shutdownLimitSet) {
       return;
     }
     shutdownLimitSet = true;
+    String driver = config.getString("db.default.driver", "");
+    String url = config.getString("db.default.url", "");
+    String user = config.getString("db.default.user", "");
+    String password = config.getString("db.default.password", config.getString("db.default.pass", ""));
+    // (an H2 file of its own: not one in memory, nor one another server holds)
+    boolean ownFile = models.Backups.databaseFile(driver, url) != null;
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       Thread limit = new Thread(() -> {
         try {
@@ -397,19 +418,52 @@ public class Global extends GlobalSettings {
         } catch (InterruptedException e) {
           return;
         }
-        String why = "Breadboard: shutdown is taking too long (a script may be stuck); stopping now";
-        System.out.println(why);
-        System.out.flush();
-        try {
-          Logger.warn(why);
-        } catch (Throwable ignored) {
-          // the console has it
+        stopNote("Breadboard: shutdown is taking too long (a script may be stuck); stopping now");
+        if (ownFile && !closeDatabase(url, user, password, CLOSE_DATABASE_MS)) {
+          stopNote("Breadboard: the database did not close in time; H2 recovers it at the next start");
         }
-        Runtime.getRuntime().halt(1);
+        Runtime.getRuntime().halt(stuckStopExitCode);
       }, "breadboard-shutdown-limit");
       limit.setDaemon(true);
       limit.start();
     }, "breadboard-shutdown-watch"));
+  }
+
+  /** For a stop cut short: on the console, and in the log while it still works. */
+  private static void stopNote(String what) {
+    System.out.println(what);
+    System.out.flush();
+    try {
+      Logger.warn(what);
+    } catch (Throwable ignored) {
+      // the console has it
+    }
+  }
+
+  /**
+   * Closes the H2 database at {@code url} for every connection to it (SHUTDOWN, on one of its own),
+   * waiting at most {@code waitMs}: true when it was closed in time. A statement running meanwhile
+   * holds it up, and one that never ends would for good, hence the limit (the attempt goes on, on its
+   * own daemon thread).
+   */
+  static boolean closeDatabase(String url, String user, String password, long waitMs) {
+    // (IFEXISTS: a database that isn't there is not made, empty, just to be closed)
+    String existing = url.replaceAll(";+$", "") + ";IFEXISTS=TRUE";
+    FutureTask<Boolean> close = new FutureTask<>(() -> {
+      try (Connection connection = DriverManager.getConnection(existing, user, password);
+           Statement statement = connection.createStatement()) {
+        statement.execute("shutdown");
+      }
+      return true;
+    });
+    Thread closer = new Thread(close, "breadboard-close-database");
+    closer.setDaemon(true);
+    closer.start();
+    try {
+      return close.get(waitMs, TimeUnit.MILLISECONDS);
+    } catch (Exception e) {
+      return false;
+    }
   }
 
   /**
@@ -436,8 +490,9 @@ public class Global extends GlobalSettings {
    * the actors): what a stop records (serverStopping, participants disconnecting) was saved, but each
    * save logged "NotifyOfCommit failed ... Pool is stopping". Play never stops Ebean otherwise, so the
    * hook is taken back and Ebean ends with the process. (The database itself is closed by Play's
-   * connection pool, last: DB_CLOSE_ON_EXIT=FALSE in conf/application-prod.conf.) Ebean is the one
-   * Play 2.2 comes with (3.2.2); with any other, nothing is changed.
+   * connection pool, last, or by stopIfShutdownHangs when the stop is cut short: DB_CLOSE_ON_EXIT=FALSE
+   * in conf/application-prod.conf.) Ebean is the one Play 2.2 comes with (3.2.2); with any other,
+   * nothing is changed.
    */
   static void keepEbeanThroughTheStop() {
     try {
@@ -467,6 +522,8 @@ public class Global extends GlobalSettings {
       }
       Logger.error("The actor system that runs the engine and the console has stopped after an error (above): "
           + "stopping the server so that it can be started again");
+      // a failure, also if this stop is cut short in turn
+      stuckStopExitCode = 1;
       // (not on this thread: the actor system finishes stopping only once this returns)
       new Thread(() -> System.exit(1), "breadboard-exit").start();
     });

@@ -1,8 +1,13 @@
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.avaje.ebean.Ebean;
 import com.avaje.ebean.SqlRow;
 import com.fasterxml.jackson.databind.JsonNode;
 import models.*;
 import org.junit.Test;
+import org.slf4j.LoggerFactory;
 import play.libs.Json;
 import play.mvc.Result;
 
@@ -12,6 +17,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.zip.ZipFile;
 
 import static org.junit.Assert.*;
@@ -57,6 +63,14 @@ public class BackupsAndHealthTest extends BaseTest {
     public void healthFailsWhileTheDatabaseKeepsTheAccountsLocked() throws Exception {
         Language lang = createLanguage("eng", "English");
         createUser("pi@lab.org", "PI", "password123", lang);
+        // well first, so that the failure below is a change, which the log notes
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        Logger log = (Logger) LoggerFactory.getLogger("application");
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        log.addAppender(logged);
+        Level level = log.getLevel();
+        log.setLevel(Level.INFO);
         try (Connection stuck = DriverManager.getConnection("jdbc:h2:mem:breadboard-test;MODE=MYSQL;DB_CLOSE_DELAY=-1", "", "")) {
             stuck.setAutoCommit(false);
             try (Statement s = stuck.createStatement()) {
@@ -69,10 +83,17 @@ public class BackupsAndHealthTest extends BaseTest {
             JsonNode body = Json.parse(contentAsString(health));
             assertEquals("failing", body.get("status").asText());
             assertEquals("failing", body.get("database").asText());
-            assertTrue(body.toString(), body.get("reason").asText().contains("the database is failing"));
-            assertTrue(body.toString(), body.get("reason").asText().toLowerCase().contains("lock"));
+            // Fixed words: /health needs no sign-in, and the database's own message names its tables
+            // (and, on a full disk, its file's path).
+            assertEquals(body.toString(), "the database could not be written", body.get("reason").asText());
+            String said = logged.list.stream().map(ILoggingEvent::getFormattedMessage).collect(Collectors.joining("\n"));
+            assertTrue(said, said.contains("Health check: failing"));
+            assertTrue("the details are in the log: " + said, said.toLowerCase().contains("lock"));
             assertTrue("it doesn't hang: " + took + " ms", took < 8000);
             stuck.rollback();
+        } finally {
+            log.detachAppender(logged);
+            log.setLevel(level);
         }
         Result again = route(fakeRequest(GET, "/health"));
         assertEquals(contentAsString(again), OK, status(again));

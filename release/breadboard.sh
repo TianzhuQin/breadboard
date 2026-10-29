@@ -61,11 +61,16 @@ if ! "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
   MEMORY_OPTS=""
 fi
 
-# The port: 9000, or the one given with -Dhttp.port=...
+# The port: 9000, or the one given with -Dhttp.port=...; and the file the server writes its process
+# id to: RUNNING_PID in this folder, or the one given with -Dpidfile.path=... (/dev/null: none). (Also
+# from JAVA_OPTS, which go to Java before the settings given here.)
 PORT=9000
-for arg in "$@"; do
+PID_FILE=RUNNING_PID
+# shellcheck disable=SC2086 # JAVA_OPTS is a list of options
+for arg in $JAVA_OPTS "$@"; do
   case "$arg" in
     -Dhttp.port=*) PORT="${arg#-Dhttp.port=}" ;;
+    -Dpidfile.path=*) PID_FILE="${arg#-Dpidfile.path=}" ;;
   esac
 done
 URL="http://localhost:$PORT"
@@ -74,13 +79,13 @@ URL="http://localhost:$PORT"
 # release while this one runs.
 HERE="$(pwd -P)"
 
-# Whether a Breadboard runs from this folder now: RUNNING_PID names it (its process id, written by
+# Whether a Breadboard runs from this folder now: the pid file names it (its process id, written by
 # Play), and a crash or power cut leaves the file behind, naming a process that is gone or another
 # program. Sets RUNNING to the process id.
 running_here() {
   RUNNING=""
-  [ -f RUNNING_PID ] || return 1
-  RUNNING="$(tr -cd '0-9' < RUNNING_PID 2>/dev/null)"
+  [ -f "$PID_FILE" ] || return 1
+  RUNNING="$(tr -cd '0-9' < "$PID_FILE" 2>/dev/null)"
   [ -n "$RUNNING" ] || return 1
   case "$(ps -ww -p "$RUNNING" -o args= 2>/dev/null | sed 's/[[:space:]]*$//')" in
     *"NettyServer $HERE") return 0 ;;
@@ -115,14 +120,19 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 # A folder unpacked, or run once, by another account (often root) can't be written, and the
-# database then fails with a stack trace: say how to fix it instead.
+# database then fails with a stack trace: say how to fix it instead. The folder itself is written
+# only to make db/ and logs/ and for RUNNING_PID: one kept read-only (root's, under /opt) runs with
+# -Dpidfile.path elsewhere and a db/ and logs/ (and, for backups and images, backups/ and dev/) that
+# the server's account can write.
 ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
 cannot_write() {
-  echo "$1 can't be written by $ME; fix its owner (or permissions), e.g.:" >&2
+  echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
   echo "  sudo chown -R $ME \"$2\"" >&2
   exit 1
 }
-[ -w . ] || cannot_write "The Breadboard folder ($HERE)" "$HERE"
+if [ ! -d db ] || [ ! -d logs ] || [ "$(dirname "$PID_FILE")" = . ]; then
+  [ -w . ] || cannot_write "The Breadboard folder ($HERE)" "$HERE"
+fi
 mkdir -p db logs 2>/dev/null || cannot_write "The Breadboard folder ($HERE)" "$HERE"
 for f in db db/*.db; do
   if [ -e "$f" ] && [ ! -w "$f" ]; then
@@ -144,13 +154,16 @@ if [ -z "$APPLICATION_SECRET" ]; then
     [ -w conf ] || cannot_write "conf/" "$HERE/conf"
     (umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > conf/application.secret)
   fi
-  [ -r conf/application.secret ] || cannot_write "conf/application.secret" "$HERE/conf"
+  [ -r conf/application.secret ] || cannot_write "conf/application.secret" "$HERE/conf" read
   APPLICATION_SECRET="$(cat conf/application.secret)"
 fi
 export APPLICATION_SECRET
 
-# Play refuses to start while RUNNING_PID exists: one left behind by a crash or a power cut goes.
-rm -f RUNNING_PID
+# Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
+remove_pid_file() {
+  [ "$PID_FILE" = /dev/null ] || rm -f "$PID_FILE"
+}
+remove_pid_file
 
 # The jars in the order the build lists them (lib/classpath.txt): a few classes are in two of them.
 CP="$(sed 's#^#lib/#' lib/classpath.txt | paste -s -d: -)"
@@ -236,36 +249,57 @@ stop_reason() {
 }
 
 JAVA_PID=""
+TOLD=""   # the Java that was asked to stop
 STOPPING=""
+STOP_CODE=""
 SIGNALLED=""
 KILLER=""
+# Ask the Java that runs to stop (SIGTERM), once, and kill it if it is still there after 40 seconds:
+# the server ends itself within 25 even with a script stuck (Global.stopIfShutdownHangs: 20, then up
+# to 3 to close the database), so only a Java that is stuck itself is killed.
+stop_java() {
+  [ -n "$JAVA_PID" ] && [ "$TOLD" != "$JAVA_PID" ] || return 0
+  TOLD="$JAVA_PID"
+  echo "Stopping Breadboard..." >&2
+  kill -TERM "$JAVA_PID" 2>/dev/null
+  (
+    i=0
+    while [ $i -lt 40 ]; do
+      sleep 1
+      i=$((i + 1))
+    done
+    kill -KILL "$TOLD" 2>/dev/null
+  ) &
+  KILLER=$!
+}
+# A signal for this script stops the server for good. One that comes while no Java runs (waiting to
+# start it again, or just starting it) is not lost: no Java is started after it, and one started
+# just then is asked to stop as soon as its process id is known.
 stop_server() {
   SIGNALLED=1
-  [ -z "$STOPPING" ] || return 0
-  STOPPING=1
-  if [ -n "$JAVA_PID" ]; then
-    echo "Stopping Breadboard..." >&2
-    kill -TERM "$JAVA_PID" 2>/dev/null
-    # The server ends itself within 20 seconds even with a script stuck (Global.stopIfShutdownHangs);
-    # Java itself stuck is ended after 40.
-    (
-      i=0
-      while [ $i -lt 40 ]; do
-        sleep 1
-        i=$((i + 1))
-      done
-      kill -KILL "$JAVA_PID" 2>/dev/null
-    ) &
-    KILLER=$!
+  if [ -z "$STOPPING" ]; then
+    STOPPING=1
+    STOP_CODE=$1
   fi
+  stop_java
 }
-trap stop_server INT TERM HUP
+trap 'stop_server 130' INT
+trap 'stop_server 143' TERM
+trap 'stop_server 129' HUP
 trap '[ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null' EXIT
 
 RESTARTS=""   # when the server was started again (in seconds), within the last 10 minutes
+CODE=""       # how the last Java ended (none yet)
 while :; do
+  # (asked to stop while no Java ran: none is started)
+  if [ -n "$STOPPING" ]; then
+    exit "${CODE:-$STOP_CODE}"
+  fi
+  [ -z "$CODE" ] || echo "Starting Breadboard again."
   "$@" &
   JAVA_PID=$!
+  # (asked to stop just as it started, before stop_server could know its process id)
+  [ -z "$STOPPING" ] || stop_java
   # A signal cuts wait short (stop_server ran): then wait again for Java, which is stopping. (Its
   # stderr: bash would add a line of its own when Java is killed.)
   while :; do
@@ -279,7 +313,8 @@ while :; do
     exit "$CODE"
   fi
   case "$CODE" in
-    # stopped on purpose: Ctrl+C or SIGTERM sent to Java itself, or a hangup
+    # Stopped on purpose: Ctrl+C or SIGTERM sent to Java itself, or a hangup. (143 also when such a
+    # stop took too long and the server cut it short: Global.stopIfShutdownHangs.)
     0|129|130|143) exit "$CODE" ;;
   esac
 
@@ -313,10 +348,9 @@ while :; do
     echo "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one." >&2
     exit "$CODE"
   fi
-  rm -f RUNNING_PID
+  remove_pid_file
   RESTARTS="$RESTARTS $NOW"
   # (the server doesn't redo what -Dbreadboard.resetPassword asked for: see Global)
   BREADBOARD_RESTARTED=$((${BREADBOARD_RESTARTED:-0} + 1))
   export BREADBOARD_RESTARTED
-  echo "Starting Breadboard again."
 done

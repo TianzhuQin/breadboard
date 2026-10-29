@@ -79,7 +79,8 @@ public final class Backups {
         Play.application().configuration().getString("db.default.url", ""));
   }
 
-  static File databaseFile(String driver, String url) {
+  /** {@link #databaseFile()} for the database settings {@code driver} and {@code url}. */
+  public static File databaseFile(String driver, String url) {
     if (!driver.contains("h2") || !url.startsWith("jdbc:h2:")) {
       return null;
     }
