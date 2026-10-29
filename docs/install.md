@@ -75,13 +75,15 @@ again itself and never gives up: after 5 restarts in 10 minutes, it tries once a
 
 **Sleep.** While the server runs, the launchers keep the computer from going to sleep by itself
 (on macOS with `caffeinate`, on Windows by asking Windows to stay awake), and let it sleep again
-once the server has stopped. On Linux they do the same with `systemd-inhibit` when started in a
-desktop session, by someone logged in at the computer. Started over SSH or as a service they can't
-(systemd doesn't let an ordinary account do it there), and servers seldom sleep anyway. A laptop
-still sleeps when its lid is closed. For a long study that runs by itself, keep the computer
-plugged in with its lid open; on a Mac, also turn on **Prevent automatic sleeping … when the
-display is off** (System Settings → Battery → Options; on a Mac mini or iMac, System Settings →
-Energy).
+once the server has stopped. On Linux, started in a desktop session by someone logged in at the
+computer, the launcher asks the desktop and systemd to keep the computer awake (with
+`gnome-session-inhibit` on GNOME, and `systemd-inhibit`); if the computer still suspends (some
+older desktops), turn off automatic suspend in the power settings. Started over SSH or as a
+service it can't (systemd doesn't let an ordinary account do it there), and servers seldom sleep
+anyway. A laptop still sleeps when its lid is closed. For a long study that runs by itself, keep
+the computer plugged in with its lid open; on a Mac, also turn on **Prevent automatic sleeping …
+when the display is off** (System Settings → Battery → Options; on a Mac mini or iMac, System
+Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
@@ -95,7 +97,7 @@ On first start the launcher creates:
 |---|---|
 | `db/breadboard.h2.db` | The database. On a new install its tables are created at first start. |
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
-| `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux only your account can read it, as it may hold keys. The account the server runs as must be able to read it. |
+| `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux the launcher lets only its owner read it, as it may hold keys. The account the server runs as must be able to read it. |
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
 
@@ -114,10 +116,18 @@ win. Don't change `application-prod.conf` itself: each release brings its own, w
 `conf/local.conf` is yours, and you copy it into the next release when you upgrade. (A setting can
 also be given when starting, e.g. `./breadboard.sh -Dbreadboard.allowLateJoin=true`.)
 
+Text values go in double quotes, where a backslash starts an escape, as in JSON. So on Windows,
+write a path with forward slashes, `breadboard.backup.dir="D:/Breadboard backups"`, or with each
+backslash doubled, `"D:\\Breadboard backups"`. A single backslash either stops the server from
+starting or, as `\b` in `"D:\backups"` does, quietly changes the path.
+
 The account the server runs as must be able to read `conf/local.conf`. Java would take a file it
 can't read for one that isn't there, and the server would run without your settings, so the
 launchers refuse to start instead, and say so. A copy made with `sudo` belongs to root: give it to
-the server's account, e.g. `sudo chown breadboard: /opt/breadboard/conf/local.conf`.
+the server's account, e.g. `sudo chown breadboard: /opt/breadboard/conf/local.conf`. As the file
+may hold keys, `breadboard.sh` (macOS and Linux) lets only its owner read it: at every start, if
+the file belongs to the account it runs as, it takes the group's and others' access away
+(`chmod go-rwx`), so a copy from an earlier release is private too.
 
 The ones to look at before participants join:
 
@@ -296,14 +306,19 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist
 ```
 
 From then on it also starts whenever you log in. To stop it, and keep it stopped:
-`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist`. What the server logs
-is in `logs/application.log`, so the copy it prints for a window (`StandardOutPath`) goes nowhere:
-kept, it would only grow, and with colour codes. `logs/launchd.log` (`StandardErrorPath`) gets what
-goes wrong outside that log, such as why the launcher couldn't start the server, or what Java says
-when it can't start (a crash of Java leaves its report in `hs_err_pid*.log` in the Breadboard
-folder). It needs you logged in: after a power cut or a restart, a Mac with FileVault on waits at
-the login window for a password (it can't log in by itself), and Breadboard is back only once
-someone logs in. Keeping the Mac awake: see **Sleep** under [Starting it](#starting-it).
+`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist`.
+
+What the server prints for a window (`StandardOutPath`) goes nowhere: what it logs is in
+`logs/application.log` anyway, and this copy, kept, would only grow, with colour codes. That also
+throws away what experiments print (`println`), and the line Java prints when the server runs out
+of memory: `logs/out-of-memory.hprof` shows that it did (and launchd starts it again).
+`logs/launchd.log` (`StandardErrorPath`) gets what goes wrong outside the server's log, such as why
+the launcher couldn't start the server, or what Java says when it can't start (a crash of Java
+leaves its report in `hs_err_pid*.log` in the Breadboard folder).
+
+It needs you logged in: after a power cut or a restart, a Mac with FileVault on waits at the
+login window for a password (it can't log in by itself), and Breadboard is back only once someone
+logs in. Keeping the Mac awake: see **Sleep** under [Starting it](#starting-it).
 
 ### Windows (Task Scheduler)
 
@@ -328,14 +343,23 @@ computer starts, whether or not anyone signs in. Set it up once:
 The task runs `breadboard.bat` with `BREADBOARD_SERVICE=1` and `BREADBOARD_NO_BROWSER=1`, without a
 window: it never waits for a key after an error, opens no browser, and starts the server again
 whenever it stops by itself (after 5 restarts in 10 minutes, once a minute). The task has no time
-limit, runs on battery too, and if it fails, Task Scheduler tries again every minute. What the
-server says is in `logs/application.log`, and so is why `breadboard.bat` couldn't start it (no Java
-8, the port taken, a database it can't write). If that log says nothing, look at the task's
-**Last Run Result** in Task Scheduler (or `schtasks /Query /TN Breadboard /V /FO LIST`): `0x1`
-means `breadboard.bat` refused to start and couldn't write why (its `logs` folder can't be written);
-other codes, such as `0x8007010B` or `0x2331`, mostly mean that the folder in the task is wrong.
+limit, runs on battery too, and if it fails, Task Scheduler tries again every minute.
 `schtasks /End /TN Breadboard` stops it at once (do that between sessions);
 `schtasks /Delete /TN Breadboard /F` removes the task.
+
+What the server says is in `logs/application.log`, and so is why `breadboard.bat` couldn't start it
+(no Java 8, the port taken, a database it can't write). What Java prints as errors itself, outside
+that log, is in `logs/service-errors.log`: a mistake in `conf/local.conf`, for one, which it finds
+before the server's log starts. Look there when `logs/application.log` only says, again and again,
+that Breadboard stopped by itself (exit code -1): the task shows as running meanwhile, since
+`breadboard.bat` keeps trying.
+
+If neither log says anything, look at the task's **Last Run Result** in Task Scheduler, or at its
+**Last Result** in what `schtasks /Query /TN Breadboard /V /FO LIST` prints, which gives the same
+code in decimal. `0x41301` (267009) means that it is running. `0x1` (1) means that
+`breadboard.bat` refused to start and couldn't write why (its `logs` folder can't be written).
+Other codes, such as `0x8007010B` (-2147024629) or `0x2331` (9009), mostly mean that the folder in
+the task is wrong.
 
 ### Checking that it is up
 
@@ -425,17 +449,18 @@ a Breadboard started earlier, holds the port. If it is Breadboard, open its addr
 start on another port with `-Dhttp.port=9001`. (A proxy set for the internet, such as
 `http_proxy`, doesn't matter: the launchers check the port directly.)
 
-**The server's window shows nothing new**: the window is probably paused. A click into a Windows
-console window starts selecting text, which pauses it, and Ctrl+S pauses a terminal. Press Esc (or
-Ctrl+Q in a terminal) to let it go on, and don't leave it paused. The server writes to the window
-from a thread of its own, so at first nothing waits for a paused window, and its INFO lines are
-left out (`logs/application.log` has them all). But warnings and errors are kept for the window,
-and once about 500 wait, the next one holds up whatever logged it (a step of the game, a
-participant's choice, a sign-in) until the window goes on.
+**The server's window shows nothing new**: the window is probably paused, and a paused window can
+hold the server up. A click into a Windows console window starts selecting text, which pauses it,
+and Ctrl+S pauses a terminal. What the server logs doesn't wait at first, and its routine lines are
+left out (`logs/application.log` has them all); but what experiment scripts print (`println`, chat
+messages) waits for the window at once, and warnings and errors do once about 500 are waiting.
+Whatever waits holds up what printed or logged it (a step of the game, a participant's choice, a
+sign-in). Press Esc (or Ctrl+Q in a terminal) to let it go on, and don't leave it paused.
 
 **A setting in `conf/local.conf` has a typo**: the server doesn't start, and says which line of
-`conf/local.conf` it couldn't read. Fix that line (text values go in double quotes) and start it
-again.
+`conf/local.conf` it couldn't read (as a service: in `logs/service-errors.log` on Windows,
+`logs/launchd.log` on a Mac, `journalctl -u breadboard` with systemd). Fix that line (text values go
+in double quotes; for a path on Windows, see [Settings](#settings)) and start it again.
 
 **The first start of a new install stopped halfway** (the server says the database "could not be
 brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.

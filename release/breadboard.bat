@@ -17,8 +17,9 @@ REM when its input is redirected (a script). SET BREADBOARD_KEEP_RUNNING=1 or 0 
 REM
 REM As a service (SET BREADBOARD_SERVICE=1, as breadboard-task.xml has Task Scheduler do), nobody
 REM reads the window: it never waits for a key (PAUSE), no browser is opened, keep running is on and
-REM never gives up (after 5 restarts in 10 minutes it goes on, once a minute), and why it can't start,
-REM if it can't, goes into logs\application.log too.
+REM never gives up (after 5 restarts in 10 minutes it goes on, once a minute), why it can't start, if
+REM it can't, goes into logs\application.log too, and what Java prints as errors (such as a mistake
+REM in conf\local.conf, found before the server's log starts) goes into logs\service-errors.log.
 CD /D "%~dp0"
 REM (set below for the server when this script starts it again)
 SET "BREADBOARD_RESTARTED="
@@ -191,12 +192,24 @@ SET "R5=-100000"
 SET "TO_STOP=close this window to leave it stopped"
 IF DEFINED SERVICE SET "TO_STOP=end its task in Task Scheduler to leave it stopped"
 
+REM As a service, what Java prints as errors (stderr) goes into logs\service-errors.log: a mistake in
+REM conf\local.conf is said only there, before the server's log starts, and nobody reads the window.
+REM (Not into logs\application.log: the server renames that every day, which Windows doesn't allow
+REM while Java has it open as its stderr.) Kept in a variable, the redirection works as if it were
+REM written where the variable is put in below: cmd puts in variables before it looks for
+REM redirections.
+SET "JAVA_ERRORS="
+IF DEFINED SERVICE SET "JAVA_ERRORS=2>>logs\service-errors.log"
+
 :start
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.) MaxMetaspaceSize:
 REM the classes made for the experiments' scripts (anew at every engine reload) may take that much
 REM memory besides the heap, so that a leak of them ends in a restart (out of memory) instead of
-REM taking all the computer's memory.
-"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\."
+REM taking all the computer's memory. ERRORLEVEL is 1 until Java sets it: if cmd can't open
+REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
+REM purpose (0).
+CMD /D /C EXIT 1
+"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\." %JAVA_ERRORS%
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
@@ -206,6 +219,7 @@ IF "%EXIT_CODE%"=="143" EXIT /B 143
 IF NOT DEFINED KEEP_RUNNING GOTO failed
 
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
+IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
 IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. SET JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
 CALL :now
 SET /A "SINCE=NOW-(R1)"

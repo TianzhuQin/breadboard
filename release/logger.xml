@@ -33,8 +33,10 @@
        takes none, INFO lines are left out of the console; warnings and errors still wait for it, in
        the other 384 places, and once those are taken too, whatever logs a warning or an error waits
        until the window takes output again (logback 1.0.13 has no setting that drops them).
-       logs/application.log (FILE) gets every line all along. docs/install.md tells people to
-       un-pause the window. -->
+       logs/application.log (FILE) gets every line all along. This is only what is logged: what
+       experiment scripts print (println, and groovy/chat.groovy's line for each chat message) goes
+       to the window directly, not through here, and waits for a paused one at once.
+       docs/install.md tells people to un-pause the window. -->
   <appender name="CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
     <queueSize>512</queueSize>
     <discardingThreshold>384</discardingThreshold>

@@ -237,13 +237,14 @@ new push cancels the run still going for the same branch or pull request.
    `breadboard.sh` on an empty database (port 19000, or `PORT`). It checks the release's layout
    and the generated `application.secret` (which must not show on the server's command line),
    loads both consoles, the bundles and a participant page, creates the first account and signs
-   in, then restarts on the same database, with a `conf/local.conf` and a proxy set, and checks
-   again. It also checks what the launcher says when it can't start (a second copy, the port
-   taken, a folder it can't write to, a `conf/local.conf` it can't read), and on macOS that the
-   computer is kept awake while the server runs. It fails if the server logs an error. With `--db`
-   it starts on a copy of an older release's database instead (and checks that it was backed up
-   first); when that database already has accounts, it only checks that the server starts and
-   serves its pages. CI runs the Windows zip through `bin/smoke-dist.ps1`.
+   in, then restarts on the same database, with a `conf/local.conf` (which the launcher must make
+   private) and a proxy set, and checks again. It also checks what the launcher says when it can't
+   start (a second copy, the port taken, a folder it can't write to, a `conf/local.conf` it can't
+   read), and on macOS that the computer is kept awake while the server runs. It fails if the
+   server logs an error. With `--db` it starts on a copy of an older release's database instead
+   (and checks that it was backed up first); when that database already has accounts, it only
+   checks that the server starts and serves its pages. CI runs the Windows zip through
+   `bin/smoke-dist.ps1`.
 6. Commit, tag and publish (the platform zips can be taken from CI's `breadboard-release`
    artifact):
 

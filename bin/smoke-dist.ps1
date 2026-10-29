@@ -2,8 +2,9 @@
 # on macOS and Linux): unzip it, start breadboard.bat, wait until it answers, create the first
 # account, sign in, back up the database, check what a second start says (from the same folder:
 # that Breadboard runs from it already, and where; from another copy, on the same port: that the
-# port is in use, and as a service, in its logs\application.log too), then stop it and look for
-# errors in its log. While it runs, a helper must keep the computer awake.
+# port is in use, and as a service, in its logs\application.log too), check that as a service a
+# mistake in conf\local.conf is in logs\service-errors.log, then stop it and look for errors in its
+# log. While it runs, a helper must keep the computer awake.
 #
 # It is unzipped into a folder whose path has spaces, parentheses and an "&" (as Explorer's Extract
 # All of a second download, "... (1)", or a lab's "R&D" folder has), and the other copy into one
@@ -164,6 +165,31 @@ if ($fourth.ExitCode -ne 1 -or -not $logged.Contains("Port $Port is in use") -or
   Fail "as a service, a start turned away didn't say why in logs\application.log (exit code $($fourth.ExitCode)): $logged"
 }
 Pass 'as a service, why a start was turned away is in logs\application.log'
+
+# As a service, what Java prints as errors itself goes into logs\service-errors.log: a mistake in
+# conf\local.conf (here a Windows path with single backslashes) is said only there, before the
+# server's log starts, and the restart note in logs\application.log names that file. breadboard.bat
+# keeps trying, so it is stopped here.
+$localConf = Join-Path $other 'conf\local.conf'
+Set-Content -LiteralPath $localConf -Value 'breadboard.backup.dir="C:\Breadboard backups"'
+$env:BREADBOARD_SERVICE = '1'
+$fifth = Start-Breadboard $other ($Port + 2) 'fifth.log' 'fifth-err.log'
+Remove-Item Env:BREADBOARD_SERVICE
+$errorsLog = Join-Path $other 'logs\service-errors.log'
+$deadline = (Get-Date).AddSeconds(120)
+$said = ''
+$logged = ''
+while (-not ($said.Contains('local.conf') -and $logged.Contains('logs\service-errors.log may say why'))) {
+  if ($fifth.HasExited) { Fail "as a service, breadboard.bat stopped instead of starting the server again (exit code $($fifth.ExitCode))" }
+  if ((Get-Date) -gt $deadline) {
+    Fail "as a service, a mistake in conf\local.conf wasn't in logs\service-errors.log, or the restart note didn't name it: $said / $logged"
+  }
+  Start-Sleep -Seconds 2
+  if (Test-Path -LiteralPath $errorsLog) { $said = [string](Get-Content -LiteralPath $errorsLog -Raw) }
+  if (Test-Path -LiteralPath $otherLog) { $logged = [string](Get-Content -LiteralPath $otherLog -Raw) }
+}
+Stop-Process -Id $fifth.Id -Force -ErrorAction SilentlyContinue
+Pass 'as a service, a mistake in conf\local.conf is in logs\service-errors.log, which the restart note names'
 
 Stop-Breadboard
 Start-Sleep -Seconds 3
