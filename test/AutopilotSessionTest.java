@@ -120,6 +120,17 @@ public class AutopilotSessionTest extends BaseTest {
         return Json.parse(contentAsString(route(fakeRequest(GET, "/autopilot").withSession("uid", user.uid))));
     }
 
+    /**
+     * The experiment's running session other than {@code first}: the next one. Not the second in id
+     * order: Ebean can hand out ids out of order in one JVM (seen: 140, then 121).
+     */
+    private static ExperimentInstance runningBesides(Experiment experiment, ExperimentInstance first) {
+        for (ExperimentInstance s : sessions(experiment)) {
+            if (!s.id.equals(first.id) && s.status == ExperimentInstance.Status.RUNNING) return s;
+        }
+        return null;
+    }
+
     private static List<ExperimentInstance> sessions(Experiment experiment) {
         return ExperimentInstance.find.where().eq("experiment.id", experiment.id).orderBy("id asc").findList();
     }
@@ -1346,13 +1357,12 @@ public class AutopilotSessionTest extends BaseTest {
         done.status = ExperimentInstance.Status.FINISHED;
         done.save();
         Autopilot.sessionFinished(done);
-        await("the next session", () -> sessions(experiment).size() == 2
-            && sessions(experiment).get(1).status == ExperimentInstance.Status.RUNNING);
+        await("the next session", () -> sessions(experiment).size() == 2 && runningBesides(experiment, first) != null);
         await("the waiting room again", () -> Integer.valueOf(4).equals(engineValue("autopilot.room?.minPlayers")));
 
         // Turned off, nothing new opens; the open session keeps running.
         assertEquals(OK, status(post(researcher, Json.parse("{\"enabled\": false}"))));
-        ExperimentInstance second = sessions(experiment).get(1);
+        ExperimentInstance second = runningBesides(experiment, first);
         ExperimentInstance finished = ExperimentInstance.findById(second.id);
         finished.status = ExperimentInstance.Status.FINISHED;
         finished.save();

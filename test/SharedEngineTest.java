@@ -100,6 +100,10 @@ public class SharedEngineTest extends BaseTest {
         return last;
     }
 
+    private static ExperimentInstance named(Experiment experiment, String name) {
+        return ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", name).findUnique();
+    }
+
     private static List<ExperimentInstance> sessions(Experiment experiment) {
         return ExperimentInstance.find.where().eq("experiment.id", experiment.id).orderBy("id asc").findList();
     }
@@ -515,8 +519,10 @@ public class SharedEngineTest extends BaseTest {
 
         // Alice opens another session: Bob hears that one.
         a.send("LaunchGame", "name", "S2", "parameters", Json.newObject());
-        await("S2 running", () -> sessions(hers).size() == 2 && sessions(hers).get(1).status == ExperimentInstance.Status.RUNNING);
-        final ExperimentInstance s2 = sessions(hers).get(1);
+        // (by its name: Ebean can hand out ids out of order, so it needn't be the second by id)
+        await("S2 running", () -> sessions(hers).size() == 2 && named(hers, "S2") != null
+            && named(hers, "S2").status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance s2 = named(hers, "S2");
         await("Bob hears of S2", () -> !lastEngineNews(b).get("sessionId").isNull()
             && lastEngineNews(b).get("sessionId").asLong() == s2.id);
 
@@ -632,8 +638,10 @@ public class SharedEngineTest extends BaseTest {
 
         // She opens another one: Bob follows it.
         a.send("LaunchGame", "name", "S2", "parameters", Json.newObject());
-        await("S2 running", () -> sessions(hers).size() == 2 && sessions(hers).get(1).status == ExperimentInstance.Status.RUNNING);
-        final ExperimentInstance s2 = sessions(hers).get(1);
+        // (by its name: Ebean can hand out ids out of order, so it needn't be the second by id)
+        await("S2 running", () -> sessions(hers).size() == 2 && named(hers, "S2") != null
+            && named(hers, "S2").status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance s2 = named(hers, "S2");
         await("Bob's tab shows S2", () -> (s2.id + " RUNNING").equals(shown(b)));
         assertEquals(s2.id, User.findByEmail(bob.email).experimentInstanceId);
 

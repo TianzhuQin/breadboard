@@ -170,6 +170,10 @@ public class AutopilotGuardTest extends BaseTest {
         return ExperimentInstance.find.where().eq("experiment.id", experiment.id).orderBy("id asc").findList();
     }
 
+    private static ExperimentInstance named(Experiment experiment, String name) {
+        return ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", name).findUnique();
+    }
+
     private static int running(Experiment experiment) {
         int n = 0;
         for (ExperimentInstance i : sessions(experiment)) if (i.status == ExperimentInstance.Status.RUNNING) n++;
@@ -299,15 +303,18 @@ public class AutopilotGuardTest extends BaseTest {
         return tab;
     }
 
-    /** The autopilot's next session: open, its steps loaded, its waiting room set. */
+    /**
+     * The autopilot's next session, its experiment's n-th: open, its steps loaded, its waiting room set.
+     * The one it has open, not the last in id order: Ebean can hand out ids out of order in one JVM
+     * (seen: 140, then 121).
+     */
     private static ExperimentInstance nextSession(final Experiment experiment, final int n) throws Exception {
+        final ExperimentInstance[] next = new ExperimentInstance[1];
         await("session " + n, () -> {
-            List<ExperimentInstance> all = sessions(experiment);
-            ExperimentInstance open = Autopilot.openInstance(experiment.id);
-            return all.size() == n && open != null && open.id.equals(all.get(n - 1).id)
-                && engineValue("autopilot.room?.minPlayers") != null;
+            next[0] = Autopilot.openInstance(experiment.id);
+            return sessions(experiment).size() == n && next[0] != null && engineValue("autopilot.room?.minPlayers") != null;
         });
-        return sessions(experiment).get(n - 1);
+        return next[0];
     }
 
     // ---- the longest session ------------------------------------------------------------------------
@@ -559,9 +566,10 @@ public class AutopilotGuardTest extends BaseTest {
         // The researcher takes over with a session of their own (the autopilot pauses).
         final AdminSocketsTest.Tab tab = console(researcher, experiment);
         tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
+        // (by its name: Ebean can hand out ids out of order, so it needn't be the second by id)
         await("their session", () -> sessions(experiment).size() == 2 && running(experiment) == 1
-            && sessions(experiment).get(1).status == ExperimentInstance.Status.RUNNING);
-        final ExperimentInstance byHand = sessions(experiment).get(1);
+            && named(experiment, "by hand") != null && named(experiment, "by hand").status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance byHand = named(experiment, "by hand");
         engine().eval("g.addPlayer('hand-1'); null");
         tab.send("RunGame");
         await("their game", () -> engineValue("a.actions.size()") != null && ((Number) engineValue("a.actions.size()")).intValue() == 1);
