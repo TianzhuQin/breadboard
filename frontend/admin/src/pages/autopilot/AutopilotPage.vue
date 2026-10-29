@@ -9,7 +9,7 @@
       <BEmpty
         :icon="ServerCog"
         title="The autopilot needs a server update"
-        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file, conf/application-prod.conf (breadboard.autopilot.*)."
+        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file, conf/local.conf (breadboard.autopilot.*), which is kept across upgrades."
       >
         <template #actions>
           <BButton :icon="RefreshCw" :loading="refreshing" @click="load()">Check again</BButton>
@@ -46,7 +46,7 @@
         <div>
           <p class="ap-banner__title">These settings come from the server's configuration file</p>
           <p class="ap-banner__text">
-            <code>conf/application-prod.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
+            <code>conf/local.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
             and changes can't be made here. To manage the autopilot from this page, remove the
             <code>breadboard.autopilot.*</code> lines from the file and restart the server.
           </p>
@@ -130,7 +130,7 @@
             <span class="ap-sec__icon" aria-hidden="true"><Repeat :size="17" /></span>
             <div>
               <h2 id="ap-sec-sessions" class="ap-sec__title">One session after another</h2>
-              <p class="ap-sec__desc">Keep recruiting without you: when a session finishes (or is called off), the next one opens.</p>
+              <p class="ap-sec__desc">Keep recruiting without you: when a session finishes, is called off or runs out of time, the next one opens.</p>
             </div>
           </div>
           <div class="ap-sec__body">
@@ -150,6 +150,25 @@
                     :aria-invalid="errors.nextSessionDelaySeconds ? 'true' : undefined"
                   >
                     <template #suffix><span class="ap-unit">seconds</span></template>
+                  </BInput>
+                </template>
+              </BField>
+              <BField label="Longest session" optional :error="errors.maxSessionMinutes" :hint="minutesHint(form.maxSessionMinutes, 'A game that runs longer is ended, and its participants are told it ran out of time. Empty: no limit.')">
+                <template #default="{ id, describedby }">
+                  <BInput
+                    :id="id"
+                    v-model="form.maxSessionMinutes"
+                    type="number"
+                    min="1"
+                    :max="MAX_SESSION_MINUTES"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="No limit"
+                    :disabled="readOnly"
+                    :aria-describedby="describedby"
+                    :aria-invalid="errors.maxSessionMinutes ? 'true' : undefined"
+                  >
+                    <template #suffix><span class="ap-unit">minutes</span></template>
                   </BInput>
                 </template>
               </BField>
@@ -359,8 +378,8 @@ import AutopilotStatus from './AutopilotStatus.vue'
 import { useUnsavedGuard } from './useUnsavedGuard'
 import {
   autopilotActivity, describeEngineSession, describeWaitingRoom, fetchAutopilot, haltOf, humanSeconds, participantLinks,
-  resumeAutopilot, resumeLabel, sameForm, saveAutopilot, takeOverTarget, DEFAULTS, toForm, toSettings, validateAutopilot,
-  stepsCall, waitingRoomLive, type AutopilotForm, type AutopilotState, type EngineSession,
+  resumeAutopilot, resumeLabel, sameForm, saveAutopilot, takeOverTarget, DEFAULTS, MAX_SESSION_MINUTES, toForm, toSettings,
+  validateAutopilot, stepsCall, waitingRoomLive, type AutopilotForm, type AutopilotState, type EngineSession,
 } from './autopilot'
 
 type Phase = 'loading' | 'ready' | 'unavailable' | 'error'
@@ -549,6 +568,10 @@ watch(() => [admin.instance?.id, admin.instance?.status], () => {
 
 function secondsHint (v: number | null, text: string) {
   return v != null && v >= 60 && Number.isInteger(v) ? `${text} (${humanSeconds(v)})` : text
+}
+
+function minutesHint (v: number | null, text: string) {
+  return v != null && v >= 60 && Number.isInteger(v) && v <= MAX_SESSION_MINUTES ? `${text} (${humanSeconds(v * 60)})` : text
 }
 
 function discard () {

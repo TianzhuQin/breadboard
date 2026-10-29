@@ -9,7 +9,7 @@
   >
     <form :id="formId" class="xren" novalidate @submit.prevent="submit">
       <p v-if="error" class="xnew__error" role="alert">{{ error }}</p>
-      <BField label="Name" required :error="nameError" hint="Links to its sessions keep working. An autopilot set up by name in the server's settings file (conf/application-prod.conf) needs the new name there too.">
+      <BField label="Name" required :error="nameError" hint="Links to its sessions keep working. An autopilot set up by name in the server's settings file (conf/local.conf) needs the new name there too.">
         <template #default="{ id, describedby }">
           <BInput
             :id="id"

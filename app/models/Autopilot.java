@@ -37,7 +37,10 @@ import java.util.concurrent.TimeUnit;
  * selecting another experiment, to edit it, leaves its session running), or when a step failure
  * stalls the game of its own session (one it opened, or the one of its experiment that was open
  * when Resume was pressed or its settings saved), which then ends (ScriptBoard.gameFailed; a
- * session a researcher runs by hand, even of its experiment, goes on). It opens none while the disk
+ * session a researcher runs by hand, even of its experiment, goes on). Its periodic check also guards
+ * its own session (guardOwnSession): a game that runs longer than the longest session the settings
+ * allow is ended, and one that has had nothing left to do for a minute after a step failed in it is
+ * ended as a failure that stalls it is. It opens none while the disk
  * that holds the database is almost full (diskFull). The game starts when the waiting room says so
  * (groovy/autopilot.groovy; its values can be set in the console, see {@link AutopilotHooks}). A
  * researcher's console that has its experiment selected (selected then, or when signing in) shows
@@ -48,12 +51,14 @@ import java.util.concurrent.TimeUnit;
  * {@code /play/{experimentId}/login} and {@code /play/{experimentId}/prolific?PROLIFIC_PID=...}.
  *
  * <p>The settings come from the console (GET/POST /autopilot, kept in the database as
- * {@link AutopilotSettings}). Until they are saved there, application.conf can turn it on:
+ * {@link AutopilotSettings}). Until they are saved there, the server's settings file (conf/local.conf
+ * in a release) can turn it on:
  * <pre>
  * breadboard.autopilot.experiment = "My experiment"   # experiment name; unset = autopilot off
  * breadboard.autopilot.user = "researcher@lab.org"    # admin account it runs as (default: first user)
  * breadboard.autopilot.continuous = true              # open a new session when one finishes
  * breadboard.autopilot.nextSessionDelaySeconds = 10
+ * breadboard.autopilot.maxSessionMinutes = 120        # longest a session's game may run; 0 or unset = no limit
  * </pre>
  */
 public final class Autopilot {
@@ -106,6 +111,39 @@ public final class Autopilot {
   // (gameFailed). Any other session of its experiment, e.g. one a researcher launched by hand to take
   // over, or its own resumed by hand later, is the researcher's until they hand it over that way.
   private static volatile Long ownSession = null;
+
+  // ---- the guards of its own session (see guardOwnSession) ----
+  // After this many of its own sessions in a row were ended for running too long, it pauses instead
+  // of opening the next: a design whose game never ends would use up participants. A game that comes
+  // to its end starts the count again (sessionFinished), and so do Resume and a save.
+  static final int TOO_LONG_IN_A_ROW = 3;
+  private static volatile int tooLongInARow = 0;
+  // The session the limit is ending: its finish is not a game that came to its end (sessionFinished).
+  private static volatile Long endingTooLong = null;
+  // The last session ended for running too long, in words, and when, for the console
+  // (status.notice); kept until the settings are saved or Resume is pressed.
+  private static volatile String notice = null;
+  private static volatile long noticeAt = 0L;
+  // How long its own session's game may have nothing to wait for, after a step failure was recorded
+  // in it, before it is ended (watchForStall). A field so tests can shorten it.
+  static volatile long stallMs = 60000L;
+  // The session whose game the last check found with nothing to wait for, since when, and how many
+  // steps had got going then (ScriptBoard.stepsGotGoing): a step that gets going in between counts as
+  // the game moving on. quietSession is null when the last check found something to wait for.
+  private static volatile Long quietSession = null;
+  private static volatile long quietSince = 0L;
+  private static volatile long quietSteps = 0L;
+  // The time the guards go by; a field so tests can move it on.
+  static volatile java.util.function.LongSupplier clock = new java.util.function.LongSupplier() {
+    public long getAsLong() {
+      return System.currentTimeMillis();
+    }
+  };
+  // A guard ends a session on a thread of its own (endOwnSession), under the engine lock, which an
+  // engine change can hold for long (a script that takes its time): the check waits for it this long
+  // at most, and asks for no other end while it is under way.
+  static volatile long guardWaitMs = 5000L;
+  private static volatile Thread guardEnd = null;
 
   /** Opens a session (see openSession for the arguments). */
   public interface Opener {
@@ -169,6 +207,10 @@ public final class Autopilot {
     s.experimentId = experiment == null ? null : experiment.id;
     s.continuous = conf.getBoolean("breadboard.autopilot.continuous", false);
     s.nextSessionDelaySeconds = Math.max(0, conf.getInt("breadboard.autopilot.nextSessionDelaySeconds", 10));
+    // (left out, or 0 or less: no limit. A study set up in the file before there was a limit goes on as
+    // it was: its games may run longer than the 2 hours new settings start with.)
+    int minutes = conf.getInt("breadboard.autopilot.maxSessionMinutes", 0);
+    s.maxSessionMinutes = minutes <= 0 ? null : Math.min(minutes, AutopilotSettings.MAX_SESSION_MINUTES);
     // The experiment's own scripts set the waiting room up; the file doesn't override them.
     s.waitingRoomEnabled = false;
     s.replaceEnabled = false;
@@ -197,6 +239,7 @@ public final class Autopilot {
         saved.experimentId = null;
         saved.save();
         setHalt(null, null, null);
+        guardsSeen();
         Logger.info("Autopilot: experiment " + experimentId + " was deleted; the autopilot is switched off");
       }
     } catch (Exception e) {
@@ -293,6 +336,12 @@ public final class Autopilot {
       return;
     }
     boolean own = e.settings.experimentId.equals(instance.experiment.id);
+    boolean played = Boolean.TRUE.equals(instance.hasStarted) || ScriptBoard.gameStartedAt(instance.id) > 0L;
+    if (own && played && !instance.id.equals(endingTooLong)) {
+      // A game of its experiment came to its end: the count of sessions in a row that ran too long
+      // starts again. (Not a session called off before its game started.)
+      tooLongInARow = 0;
+    }
     if (own && !e.settings.continuous) {
       // That was its one session; the watchdog leaves it at that.
       setHalt(e.settings.experimentId, pausedBecause, "Its session \"" + instance.name
@@ -341,13 +390,220 @@ public final class Autopilot {
    * experiment) left it waiting for good. It leaves a running session of another experiment alone,
    * and an engine a researcher has loaded with another experiment while their console is open; it
    * waits while a finished session's pause runs, and does nothing while paused or after the one
-   * session of a non-continuous run.
+   * session of a non-continuous run. First it guards its own session (guardOwnSession).
    */
   static void watchdog() {
-    if (stopped || nextOpenAt > System.currentTimeMillis()) {
+    if (stopped) {
+      return;
+    }
+    guardOwnSession();
+    if (nextOpenAt > System.currentTimeMillis()) {
       return;
     }
     openWhenDue("no session was open", true, true);
+  }
+
+  /**
+   * The guards of its own session (isOwnSession: one it opened, or was handed on Resume or a save; a
+   * session a researcher runs by hand is left to them), which nothing else ends when its game never
+   * does (a script waiting for something that never comes): the engine can't tell such a game from a
+   * long one. Its game may run maxSessionMinutes at most, counted from its start (endTooLong). And once
+   * a step failure has been recorded in it, a game that has had nothing to wait for during stallMs is
+   * ended as a failure that stalls it is (watchForStall): the step-failure rule (ScriptBoard.gameFailed)
+   * can't see every way a failure leaves a game with nothing to do. Never waits long.
+   */
+  static void guardOwnSession() {
+    Effective e;
+    ExperimentInstance live;
+    try {
+      e = effective();
+      live = e.isOn() ? liveEngineSession() : null;
+    } catch (Exception ex) {
+      Logger.error("Autopilot: could not check on its session", ex);
+      return;
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long id = live == null ? null : live.id;
+    Long of = live == null || live.experiment == null ? null : live.experiment.id;
+    if (id == null || !isOwnSession(id) || !e.settings.experimentId.equals(of)) {
+      quietSession = null;
+      return;
+    }
+    Thread ending = guardEnd;
+    if (ending != null && ending.isAlive()) {
+      // (an end asked for at an earlier check still waits for the engine lock)
+      return;
+    }
+    long started = ScriptBoard.gameStartedAt(id);
+    if (started <= 0L) {
+      // its game hasn't started: the waiting room has limits of its own
+      quietSession = null;
+      return;
+    }
+    long now = clock.getAsLong();
+    Integer limit = e.settings.maxSessionMinutes;
+    if (limit != null && now - started > limit * 60000L) {
+      endTooLong(live, e.settings, (now - started) / 60000L, limit);
+      return;
+    }
+    watchForStall(live, of, now);
+  }
+
+  /**
+   * The game of its own session has run longer than the longest session allowed: it is ended
+   * (ScriptBoard.endForGuard). Its participants are told the session ran out of time (someone whose
+   * screen shows their own end, e.g. a Prolific completion code, keeps it), the session is recorded as
+   * finished, with a sessionTooLong event (minutes, limit), and the next one opens after the usual
+   * pause (sessionFinished). The Autopilot page says so (status.notice). The third in a row pauses
+   * it instead, rather than letting a game that never ends use up participants.
+   */
+  private static void endTooLong(ExperimentInstance live, final AutopilotSettings settings, final long ran, final int limit) {
+    final Long id = live.id;
+    final String name = live.name;
+    final Long experimentId = settings.experimentId;
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    data.put("minutes", ran);
+    data.put("limit", limit);
+    // (how many in a row this one makes, worked out under the engine lock as it ends)
+    final int[] inARow = {0};
+    java.util.concurrent.Callable<Boolean> stillWanted = new java.util.concurrent.Callable<Boolean>() {
+      public Boolean call() {
+        // (still its own, and still too long now that nothing can change the engine: the limit may
+        // have been raised, or the game started again, since)
+        Integer allowed = effective().settings.maxSessionMinutes;
+        long started = ScriptBoard.gameStartedAt(id);
+        if (stopped || !isOwnSession(id) || allowed == null || started <= 0L || clock.getAsLong() - started <= allowed * 60000L) {
+          return false;
+        }
+        inARow[0] = tooLongInARow + 1;
+        endingTooLong = id;
+        if (inARow[0] >= TOO_LONG_IN_A_ROW) {
+          // Before its finish, so no next session is scheduled (sessionFinished).
+          setHalt(experimentId, inARow[0] + " sessions in a row ran longer than " + minutes(limit) + " (the longest a session may run) "
+              + "and were ended, the last one \"" + name + "\". Check that its game comes to an end, or allow longer sessions "
+              + "under Longest session", doneBecause);
+        }
+        return true;
+      }
+    };
+    final Runnable after = new Runnable() {
+      public void run() {
+        noticeAt = System.currentTimeMillis();
+        notice = "Session \"" + name + "\" was ended after " + minutes(ran)
+            + (ran == limit ? ", the longest a session may run." : "; the longest a session may run is " + minutes(limit) + ".")
+            + " Its participants were told that the session ran out of time.";
+        tooLongInARow = inARow[0] >= TOO_LONG_IN_A_ROW ? 0 : inARow[0];
+        Logger.warn("Autopilot: session " + name + " ran longer than " + minutes(limit) + " and was ended"
+            + (inARow[0] >= TOO_LONG_IN_A_ROW ? "; " + inARow[0] + " in a row, so the autopilot paused" : ""));
+      }
+    };
+    endOwnSession(id, "sessionTooLong", data, ScriptBoard.outOfTimeScreen(), true, stillWanted, after);
+  }
+
+  /** "1 minute", "90 minutes". */
+  private static String minutes(long n) {
+    return n + (n == 1 ? " minute" : " minutes");
+  }
+
+  /**
+   * The stall backstop for its own session (see guardOwnSession). Once a step failure has been
+   * recorded in its game (ScriptBoard.failureRecorded), the game counts as stalled when it has had
+   * nothing to wait for (ScriptBoard.somethingPending: no choice offered to anyone, no task on the
+   * engine's timers, such as a timed step waiting for its time or a computer player's pick, and no
+   * input from a participant it listens for, such as a form) at every check since one that first found
+   * it so, stallMs ago or more, and no step has got going since. It is then ended as a failure that
+   * stalls a game is (endStalled). A game between two rounds' timers has a timer waiting, and a session
+   * whose game recorded no failure is never ended this way.
+   */
+  private static void watchForStall(ExperimentInstance live, Long experimentId, long now) {
+    Long id = live.id;
+    ScriptBoard.RecordedFailure failure = ScriptBoard.failureRecorded(id);
+    long steps = ScriptBoard.stepsGotGoing();
+    if (failure == null || ScriptBoard.somethingPending()) {
+      quietSession = null;
+      return;
+    }
+    if (!id.equals(quietSession) || steps != quietSteps) {
+      // nothing to wait for, as far as this check can tell: counted from here
+      quietSession = id;
+      quietSince = now;
+      quietSteps = steps;
+      return;
+    }
+    if (now - quietSince >= stallMs) {
+      endStalled(live, experimentId, failure, (now - quietSince) / 1000L);
+    }
+  }
+
+  /**
+   * Its own session's game stalled after a step failed (watchForStall): it ends as a failure that
+   * stalls a game ends it (ScriptBoard.gameFailed): stopped, its participants told it had to stop
+   * because of a problem with the study (ScriptBoard.problemScreen; a completion code on screen stays),
+   * a sessionStalled event (step, error), and the autopilot pauses, naming the step and what went wrong.
+   */
+  private static void endStalled(ExperimentInstance live, final Long experimentId, final ScriptBoard.RecordedFailure failure,
+                                 final long quietSeconds) {
+    final Long id = live.id;
+    final String name = live.name;
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    data.put("step", failure.step);
+    data.put("error", failure.error);
+    java.util.concurrent.Callable<Boolean> stillWanted = new java.util.concurrent.Callable<Boolean>() {
+      public Boolean call() {
+        // (as found, now that nothing can change the engine: something may have come up since)
+        if (stopped || !isOwnSession(id) || ScriptBoard.failureRecorded(id) == null || ScriptBoard.somethingPending()) {
+          return false;
+        }
+        setHalt(experimentId, "the step \"" + failure.step + "\" failed during its session \"" + name + "\" (" + failure.error
+            + "), and then the game had nothing left to do, so that session was stopped. Fix the step on the Steps page first",
+            doneBecause);
+        return true;
+      }
+    };
+    Runnable after = new Runnable() {
+      public void run() {
+        quietSession = null;
+        Logger.warn("Autopilot: the game of session " + name + " had nothing left to do for " + quietSeconds
+            + " s after the step " + failure.step + " failed (" + failure.error + "); the session was stopped and the autopilot paused");
+      }
+    };
+    endOwnSession(id, "sessionStalled", data, ScriptBoard.problemScreen(), false, stillWanted, after);
+  }
+
+  /**
+   * End its own session for a guard (ScriptBoard.endForGuard, under the engine lock), then run
+   * {@code after} if it was ended. On a thread of its own: the engine lock can be held for long (an
+   * engine change running a script that takes its time), and the periodic check waits guardWaitMs at
+   * most. An end that goes on waiting still happens once the lock is free, if it is still wanted then
+   * ({@code stillWanted}, asked under the lock); no other is asked for meanwhile.
+   */
+  private static void endOwnSession(final Long id, final String event, final LinkedHashMap<Object, Object> data,
+                                    final ObjectNode screen, final boolean finished,
+                                    final java.util.concurrent.Callable<Boolean> stillWanted, final Runnable after) {
+    Thread thread = new Thread(new Runnable() {
+      public void run() {
+        try {
+          if (ScriptBoard.endForGuard(id, event, data, screen, finished, stillWanted)) {
+            after.run();
+          }
+        } catch (Throwable t) {
+          Logger.error("Autopilot: could not end session " + id, t);
+        } finally {
+          endingTooLong = null;
+        }
+      }
+    }, "breadboard-autopilot-guard");
+    thread.setDaemon(true);
+    guardEnd = thread;
+    thread.start();
+    try {
+      thread.join(guardWaitMs);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+    }
+    if (thread.isAlive()) {
+      Logger.warn("Autopilot: ending session " + id + " waits for the script engine, which is busy; it ends once the engine is free");
+    }
   }
 
   /**
@@ -510,6 +766,7 @@ public final class Autopilot {
   public static void settingsSaved(final AutopilotSettings saved, final boolean takeOver) {
     // Saving is the researcher's go-ahead again.
     setHalt(null, null, null);
+    guardsSeen();
     adoptLiveSession();
     scheduler.execute(new Runnable() {
       public void run() {
@@ -535,6 +792,7 @@ public final class Autopilot {
    */
   public static void resume(User by) {
     setHalt(null, null, null);
+    guardsSeen();
     adoptLiveSession();
     final String why = "it was resumed" + (by == null ? "" : " by " + by.email);
     Logger.info("Autopilot: " + why);
@@ -543,6 +801,17 @@ public final class Autopilot {
         openWhenDue(why, true, false);
       }
     });
+  }
+
+  /**
+   * A researcher saved the settings or pressed Resume, on the Autopilot page, which showed what the
+   * guards did: the notice of a session ended for running too long goes, and the count of those in a
+   * row starts again.
+   */
+  private static void guardsSeen() {
+    notice = null;
+    noticeAt = 0L;
+    tooLongInARow = 0;
   }
 
   /**
@@ -1007,6 +1276,16 @@ public final class Autopilot {
       status.put("problem", problem.text);
       status.put("problemKind", problem.kind);
     }
+    // The last session it ended for running too long (endTooLong), until a save or Resume.
+    String said = notice;
+    long saidAt = noticeAt;
+    if (said == null) {
+      status.putNull("notice");
+      status.putNull("noticeAt");
+    } else {
+      status.put("notice", said);
+      status.put("noticeAt", Timestamps.iso(new Date(saidAt)));
+    }
     return status;
   }
 
@@ -1048,7 +1327,7 @@ public final class Autopilot {
     }
     if (e.settings.experimentId == null) {
       return new Problem("error", CONFIG.equals(e.source)
-          ? "The server's settings file (conf/application-prod.conf) names the experiment \"" + configuredExperimentName()
+          ? "The server's settings file (conf/local.conf) names the experiment \"" + configuredExperimentName()
               + "\" (breadboard.autopilot.experiment), but there is no experiment with that name."
           : "No experiment is chosen.");
     }

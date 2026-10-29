@@ -220,6 +220,7 @@ public class Global extends GlobalSettings {
     } catch (Exception e) {
       Logger.warn("Could not add the index on event data names (looking up returning Prolific participants is slower without it): " + e.getMessage());
     }
+    addLongestSession();
 
     markInterruptedSessions();
 
@@ -274,6 +275,22 @@ public class Global extends GlobalSettings {
       throw new IllegalStateException("The database could not be brought up to date: " + e.getMessage()
           + ". If this is a new install, stop the server, delete the db folder and start again; "
           + "otherwise restore the database from a backup and report the problem.", e);
+    }
+  }
+
+  /**
+   * Evolution 34, for databases from older releases: the autopilot's longest session, with no
+   * default, so settings saved before keep no limit (AutopilotSettings.ADD_LONGEST_SESSION). Does
+   * nothing where the column is there. Where the table doesn't exist yet, the autopilot creates it
+   * with this column at first use.
+   */
+  static void addLongestSession() {
+    try {
+      if (tableExists("autopilot_settings")) {
+        Ebean.createSqlUpdate(AutopilotSettings.ADD_LONGEST_SESSION).execute();
+      }
+    } catch (Exception e) {
+      Logger.warn("Could not add the autopilot's longest session to its settings (its sessions then have no time limit): " + e.getMessage());
     }
   }
 

@@ -83,7 +83,7 @@ The top of the page shows the experiment you're working on, with **Export .zip**
 it, and its menu has **Export as .zip**, **Rename…**, **Duplicate…**, **Use file mode…** (or
 **Leave file mode…**) and **Delete…**. Renaming keeps the experiment's sessions, data and links;
 it isn't possible in file mode, whose folder is named after the experiment, and an autopilot set
-up by name in `application.conf` needs the new name there too.
+up by name in the server's settings (`conf/local.conf`) needs the new name there too.
 
 | Action | |
 |---|---|
@@ -276,6 +276,7 @@ experiment you're working on and leaves to its steps whatever they already set.
 | **Run this experiment unattended** | off | Keeps a session of the chosen **Experiment** open: right after saving, when the server starts, and after each session ends. Turned off, it opens no new session; an open one keeps running. |
 | **Open the next session when one finishes** | on | Also after a session is called off. |
 | **Pause before the next session** | 10 seconds | 0 opens it at once. |
+| **Longest session** | 120 minutes | Counted from the start of the game. A game that runs longer is ended (see below). Empty: no limit. New settings start at 120 minutes; settings saved with an older release keep no limit until you set one. |
 | **Use the waiting room set here** | on (off when the steps set one) | The waiting room: people who arrive early see a waiting page, and the game starts by itself. |
 | **Minimum players** | 2 | The game can start once this many people are here. |
 | **Maximum players** | none | When this many are here, the countdown starts at once. |
@@ -305,7 +306,7 @@ it, or anything that reloads the engine (creating or resuming another session, r
 another experiment doesn't. The console says so before you do it. A paused autopilot opens no
 session, so its links lead nowhere until you press **Resume** on this page. After its one session
 with **Open the next session when one finishes** off, the button reads **Open another session**.
-Both work when `application.conf` is in charge too, and a pause survives a server restart.
+Both work when the server's settings file is in charge too, and a pause survives a server restart.
 
 **A mistake in a step pauses it too.** When the steps of a session it opens don't load (a typo, a
 name that isn't defined), the autopilot stops that session before anyone can join, records
@@ -319,15 +320,32 @@ panel, and the session records a `stepFailed` event naming the step and the line
 *stalls* the game when it kept the next step from getting going; a step gets going when its start
 finishes without an error. In the autopilot's own session (also one of its experiment that was open
 when you pressed **Resume** or saved its settings), a failure that stalls ends the session, telling
-its participants, and pauses the autopilot, and this page names the step and line; so does an
-OnJoinStep that fails before the game starts when no waiting room is set. A failure that doesn't
-stall, such as a typo after the next round has started, is only recorded and shown, and the game
-goes on. In a session you run by hand nothing is ended: a start of the game that didn't get going is
-taken back, so newcomers can join and **Start the game** works again once you fix the step.
+its participants that it had to stop because of a problem with the study (someone who was given a
+completion code keeps it on screen), and pauses the autopilot, and this page names the step and
+line; so does an OnJoinStep that fails before the game starts when no waiting room is set. A failure
+that doesn't stall, such as a typo after the next round has started, is only recorded and shown, and
+the game goes on. In a session you run by hand nothing is ended. When **Start the game**, the
+waiting room or the OnJoinStep started a game that didn't get going, the start is taken back, so
+newcomers can join and **Start the game** works again once you fix the step; a start the experiment
+makes on a timer or after a choice is taken back only if InitStep itself fails, and otherwise the
+game counts as started. In the autopilot's own session, a **Start the game** that didn't get going
+ends the session and pauses the autopilot, as its waiting room's start does: once Start is pressed,
+its waiting room no longer starts the game.
 
-Settings saved on this page take precedence over `application.conf`. Until some are saved, a
-`breadboard.autopilot.experiment` line in `application.conf` turns the autopilot on, and the page
-only shows the settings
+**Games that never end.** The autopilot's own session is also ended when its game runs longer than
+**Longest session**, whatever keeps it going: its participants are told the session ran out of time
+(someone who was given a completion code keeps it on screen), the session is finished with a
+`sessionTooLong` event (`minutes`, `limit`), and the next one opens after the pause. This page says
+which session it was until you save or press **Resume**. After three such sessions in a row the
+autopilot pauses instead; a game that comes to its end starts the count again. And once a step has
+failed in its game, a game that has had nothing to wait for during a minute (no choice on anyone's
+screen, no step or timer waiting for its time, no form someone has yet to finish, no chat that is on,
+no other input it listens for) is ended as a failure that stalls it, with a `sessionStalled` event,
+and the autopilot pauses, naming the step. A session you run by hand is never ended this way.
+
+Settings saved on this page take precedence over the server's settings file, `conf/local.conf`.
+Until some are saved, a `breadboard.autopilot.experiment` line there turns the autopilot on, and the
+page only shows the settings
 ([whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot) lists them).
 Remove the `breadboard.autopilot.*` lines and restart the server to manage them here.
 
