@@ -118,7 +118,7 @@ public class FileWatcher {
       return null;
     }
     // (the folder the experiment's steps are read from: "Steps", or "steps" made by hand)
-    Path steps = Experiment.fileModeStepsDirectory(devDir.resolve(experiment.getDirectoryName()).toFile()).toPath();
+    Path steps = Experiment.fileModeStepsDirectory(devDir.resolve(folderName(experiment)).toFile()).toPath();
     Path folder = file.getParent();
     try {
       if (folder != null && Files.isDirectory(steps) && Files.isSameFile(folder, steps)) {
@@ -153,7 +153,7 @@ public class FileWatcher {
     for (Experiment experiment : Experiment.find.where().eq("fileMode", true).findList()) {
       Path folder;
       try {
-        folder = devDir.getFileSystem().getPath(experiment.getDirectoryName()).normalize();
+        folder = devDir.getFileSystem().getPath(folderName(experiment)).normalize();
       } catch (InvalidPathException notAFolderName) {
         continue;
       }
@@ -167,6 +167,20 @@ public class FileWatcher {
       }
     }
     return found;
+  }
+
+  /**
+   * The experiment's folder under dev/. Its files are written to "dev/" + getDirectoryName(), so a name
+   * starting with "/" (older databases and the API took them) makes dev//Rooted_7/, which is
+   * dev/Rooted_7/: the separators it starts with are left out. Kept, such a folder never matched.
+   */
+  static String folderName(Experiment experiment) {
+    String name = experiment.getDirectoryName();
+    int start = 0;
+    while (start < name.length() && (name.charAt(start) == '/' || name.charAt(start) == File.separatorChar)) {
+      start++;
+    }
+    return name.substring(start);
   }
 
   /** The consoles working on one of these experiments get their User JSON again, to show its files. */

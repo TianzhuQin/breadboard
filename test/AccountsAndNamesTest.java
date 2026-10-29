@@ -159,6 +159,39 @@ public class AccountsAndNamesTest extends BaseTest {
     }
 
     @Test
+    public void aNameLongerThan120CharactersIsRefusedWhereverAnExperimentIsNamed() {
+        Language lang = createLanguage("eng", "English");
+        User user = createUser("long-names@test.org", "Long names", "password123", lang);
+        Experiment a = createExperiment("Pilot");
+        user.ownedExperiments.add(a);
+        user.update();
+        user.saveManyToManyAssociations("ownedExperiments");
+        final String why = "Keep the name under 120 characters.";
+        final String tooLong = new String(new char[121]).replace('\0', 'n');
+        final String longest = tooLong.substring(1);
+
+        ObjectNode body = Json.newObject();
+        body.put("newExperimentName", tooLong);
+        Result made = route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(body, PUT));
+        assertEquals(BAD_REQUEST, status(made));
+        assertEquals(why, contentAsString(made));
+        Result imported = route(fakeRequest(POST, "/experiment/import/" + tooLong).withSession("uid", user.uid));
+        assertEquals(BAD_REQUEST, status(imported));
+        assertEquals(why, contentAsString(imported));
+        ObjectNode rename = Json.newObject();
+        rename.put("name", tooLong);
+        Result renamed = route(fakeRequest(POST, "/experiment/" + a.id + "/name").withSession("uid", user.uid).withJsonBody(rename));
+        assertEquals(BAD_REQUEST, status(renamed));
+        assertEquals(why, contentAsString(renamed));
+        assertEquals("nothing was made", 1, Experiment.findAll().size());
+
+        // 120 is fine
+        body.put("newExperimentName", longest);
+        assertEquals(OK, status(route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(body, PUT))));
+        assertNotNull(Experiment.findByName(longest));
+    }
+
+    @Test
     public void fromAnotherComputerTheFirstAccountNeedsTheSetupCodeTheServerPrinted() {
         Language lang = createLanguage("eng", "English");
         ObjectNode body = Json.newObject();

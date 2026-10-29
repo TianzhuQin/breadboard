@@ -108,12 +108,16 @@ public class ExperimentController extends Controller {
    * Why an experiment can't be called {@code name}, or null when it can. The name makes folder names
    * (dev/&lt;name&gt;_&lt;id&gt;/ in file mode), where a "/" (on Windows "\" too) makes a folder in a
    * folder. Checked wherever an experiment is named: created, imported or renamed (only renaming used
-   * to check).
+   * to check). So is its length, which only renaming limited: a name longer than the database keeps
+   * failed to be created with a database error.
    */
   static String nameRefused(String name) {
     // ((?s) lets "." match line breaks too: without it, a name with two of them got through)
     if (name.contains("/") || name.contains("\\") || name.matches("(?s).*\\p{Cntrl}.*")) {
       return "Names can't contain / or \\ or line breaks.";
+    }
+    if (name.length() > 120) {
+      return "Keep the name under 120 characters.";
     }
     return null;
   }
@@ -150,9 +154,6 @@ public class ExperimentController extends Controller {
     name = name == null ? "" : name.trim();
     if (name.isEmpty()) {
       return badRequest("Give the experiment a name.");
-    }
-    if (name.length() > 120) {
-      return badRequest("Keep the name under 120 characters.");
     }
     String refused = nameRefused(name);
     if (refused != null) {

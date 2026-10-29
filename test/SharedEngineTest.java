@@ -745,6 +745,19 @@ public class SharedEngineTest extends BaseTest {
             java.nio.file.Files.write(slashedStep, "fromSlashed = 1".getBytes("UTF-8"));
             assertEquals(slashed.id, FileWatcher.fileSaved(dev, slashedStep).id);
             assertEquals(1, engine().get("fromSlashed"));
+            // A name starting with "/": its files go to "dev/" + "/Rooted_<id>", which is dev/Rooted_<id>/.
+            final Experiment rooted = createExperiment("/Rooted");
+            rooted.setFileMode(true);
+            rooted.save();
+            own(alice, rooted);
+            final java.nio.file.Path rootedStep = java.nio.file.Paths.get(dev + "/" + rooted.getDirectoryName(), "Steps", "Setup.groovy");
+            assertEquals("Rooted_" + rooted.id + "/Steps/Setup.groovy", dev.relativize(rootedStep).toString());
+            java.nio.file.Files.createDirectories(rootedStep.getParent());
+            a.send("SelectExperiment", "experimentId", rooted.id);
+            await("it in the engine", () -> rooted.id.equals(engineExperimentId()));
+            java.nio.file.Files.write(rootedStep, "fromRooted = 1".getBytes("UTF-8"));
+            assertEquals(rooted.id, FileWatcher.fileSaved(dev, rootedStep).id);
+            assertEquals(1, engine().get("fromRooted"));
             // A folder inside another experiment's folder is the deeper one's.
             final Experiment outer = createExperiment("Outer");
             outer.setFileMode(true);
