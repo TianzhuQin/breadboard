@@ -39,7 +39,7 @@
           <strong>The engine isn't running your latest steps.</strong> Reload it to load everything that is saved,
           or use Run on a step to load just that one.
         </p>
-        <BButton size="sm" @click="reloadEngine">Reload engine</BButton>
+        <BButton size="sm" :disabled="!!reloadBlocked" :title="reloadBlocked || undefined" @click="reloadEngine">Reload engine</BButton>
       </div>
       <div v-if="stranded.length" class="steps__banner is-file is-stranded" role="status">
         <TriangleAlert :size="16" aria-hidden="true" class="steps__banner-icon" />
@@ -128,10 +128,10 @@
             <BButton
               :icon="Play"
               :loading="cur.run?.status === 'pending'"
-              :disabled="cur.status === 'saving' || cur.status === 'deleting'"
-              :title="dirty
+              :disabled="cur.status === 'saving' || cur.status === 'deleting' || !!runBlocked"
+              :title="runBlocked || (dirty
                 ? `Saves, then runs this step's code in the live engine so the change takes effect now. It doesn't start the step. (${modKey}+Enter)`
-                : `Runs this step's code in the live engine, so the engine uses this version. It doesn't start the step. (${modKey}+Enter)`"
+                : `Runs this step's code in the live engine, so the engine uses this version. It doesn't start the step. (${modKey}+Enter)`)"
               @click="saveAndRunCurrent"
             >
               {{ dirty ? 'Save & run' : 'Run' }}
@@ -213,6 +213,10 @@
               @goto="goto"
             />
           </div>
+          <p v-else-if="runBlocked && !fileMode" class="steps__hint is-blocked" role="note">
+            <Info :size="14" aria-hidden="true" />
+            <span><strong>Run is off for now.</strong> {{ runBlocked }} Saving works, and the next session of this experiment uses what is saved.</span>
+          </p>
           <p v-else-if="cur.engineBehind && !fileMode" class="steps__hint is-behind">
             <Info :size="14" aria-hidden="true" />
             Saved. The live engine isn't using this version yet: <strong>Run</strong> loads it now (it doesn't start the step).
@@ -244,7 +248,7 @@ import {
   BBadge, BButton, BEmpty, BField, BInput, BMenu, BSpinner, confirm, notify, toast, type MenuItem,
 } from '@/ui'
 import BCodeEditor from '@/ui/BCodeEditor.vue'
-import { actions, admin, ensureConnected } from '@/store/admin'
+import { actions, admin, ensureConnected, reloadBlocked, runBlocked } from '@/store/admin'
 import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
@@ -505,6 +509,7 @@ async function saveAndRunCurrent () {
   if (!b || !d || fileMode.value) return
   if (editingName.value && nameError.value) return
   editingName.value = false
+  let saved = false
   if (isDirty(d)) {
     if (!nameOk(d)) return
     const ok = await saveDraft(b, d)
@@ -512,6 +517,7 @@ async function saveAndRunCurrent () {
       notify.error(`Couldn't save “${d.name}”`, d.error || undefined)
       return
     }
+    saved = true
     refreshStore()
   }
   // The server runs the code in whatever the engine runs now: when the selected experiment changed
@@ -524,6 +530,14 @@ async function saveAndRunCurrent () {
   }
   if (!d.source.trim()) {
     notify.info('Nothing to run', 'This step has no code yet.')
+    return
+  }
+  // The engine runs another experiment (one whose session selecting left running, or that is just
+  // loaded): the server would refuse to run this one's code, so say why here.
+  if (runBlocked.value) {
+    if (saved && d.engineBehind) actions.markEngineStale()
+    notify.info(saved ? `“${d.name}” was saved but not run` : `“${d.name}” was not run`, runBlocked.value)
+    announce.value = `${d.name} was not run: the engine runs another experiment.`
     return
   }
   if (runDraft(d)) {
@@ -673,6 +687,11 @@ async function copyCode () {
 }
 
 async function reloadEngine () {
+  // (not over another experiment's live session, which a reload would end: the server refuses it too)
+  if (reloadBlocked.value) {
+    notify.info('The engine can’t be reloaded now', reloadBlocked.value)
+    return
+  }
   if (!ensureConnected()) return
   // the engine is shared by every account and the autopilot: ask while anyone is using it
   if (!await confirmEngineRebuild({ title: 'Reload the script engine?', action: 'Reloading', confirmLabel: 'Reload anyway', keeping: reloadKeeps() })) return
@@ -829,6 +848,9 @@ function clock (t: number) {
 .steps__hint { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--faint); font-size: var(--text-xs); }
 .steps__hint.is-behind { color: var(--info-soft-text); font-size: var(--text-sm); }
 .steps__hint.is-behind strong { font-weight: 650; }
+.steps__hint.is-blocked { flex-wrap: nowrap; align-items: flex-start; color: var(--text-soft); font-size: var(--text-sm); }
+.steps__hint.is-blocked svg { flex: none; margin-top: 3px; }
+.steps__hint.is-blocked strong { font-weight: 650; }
 .srun {
   display: flex;
   flex-direction: column;
@@ -865,7 +887,7 @@ function clock (t: number) {
 }
 @media (max-width: 560px) {
   /* no keyboard shortcuts to show on a phone */
-  .steps__hint:not(.is-behind) { display: none; }
+  .steps__hint:not(.is-behind):not(.is-blocked) { display: none; }
   .steps__actions { width: 100%; }
   .steps__actions > .b-btn:first-child { margin-right: auto; }
 }

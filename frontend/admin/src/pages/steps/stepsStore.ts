@@ -1,7 +1,7 @@
 import { computed, reactive, toRaw, watch } from 'vue'
 import { http, HttpError } from '@/lib/http'
 import { admin, actions, ensureConnected } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { confirmSwitch } from '@/store/engineGuard'
 import type { Step } from '@/store/types'
 import { registerUnsaved } from '@/shell/unsaved'
 import { notify, toast } from '@/ui'
@@ -333,10 +333,13 @@ watch(() => admin.experiment?.id, (now, before) => {
   })
 })
 
-/** The toast's way back. Switching rebuilds the shared engine, so ask first while anyone is using it. */
+/**
+ * The toast's way back. Switching rebuilds the shared engine when no session is live there, so ask
+ * first while anyone is using it.
+ */
 async function switchBack (id: number, name: string) {
   if (!ensureConnected()) return
-  if (!await confirmEngineRebuild({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+  if (!await confirmSwitch({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
   const asked = Date.now()
   const res = await actions.selectExperiment(id)
   if (!res) {

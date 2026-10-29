@@ -19,9 +19,10 @@ import static org.junit.Assert.*;
 /**
  * The script engine is shared by every account and runs one experiment's session at a time. An
  * account's console shows its own selection, so: engine actions are refused when the engine runs
- * another experiment; a launch is refused when the page shows an experiment that is no longer
- * selected; every tab of the account learns of a new selection; a session the engine moves off is
- * marked stopped, and its participants are not put into the next game. Also: event times come
+ * another experiment; selecting an experiment while a session runs changes only the selection; a
+ * launch is refused when the page shows an experiment that is no longer selected; every tab of the
+ * account learns of a new selection; a session the engine moves off is marked stopped, and its
+ * participants are not put into the next game. Also: event times come
  * with UTC, the websocket password change follows the Settings page's rules, and deleting an
  * experiment switches off an autopilot that runs it.
  */
@@ -250,15 +251,21 @@ public class SharedEngineTest extends BaseTest {
         assertTrue(ScriptBoard.runsSession(first.id, ExperimentInstance.findById(s1.id)));
         assertEquals(s1.id, Autopilot.openInstance(first.id).id);
 
-        // Selecting another experiment rebuilds the engine: S1's game is gone, and it says so.
+        // Opening a session of another experiment rebuilds the engine: S1's game is gone, and it says so.
         t.send("SelectExperiment", "experimentId", second.id);
+        await("selected", () -> {
+            Experiment selection = User.findByEmail(user.email).selectedExperiment;
+            return selection != null && second.id.equals(selection.id);
+        });
+        t.send("LaunchGame", "name", "S2", "parameters", Json.newObject());
         await("S1 stopped", () -> ExperimentInstance.findById(s1.id).status == ExperimentInstance.Status.STOPPED);
-        await("the engine runs the other experiment", () -> second.id.equals(engineExperimentId()));
+        await("the engine runs the other experiment", () -> second.id.equals(engineExperimentId())
+            && sessions(second).size() == 1 && sessions(second).get(0).status == ExperimentInstance.Status.RUNNING);
         final int users = t.count(AdminSocketsTest.userJson());
         t.send("Update");
         await("User JSON", () -> t.count(AdminSocketsTest.userJson()) > users);
         assertEquals(second.id.longValue(), lastUserJson(t).get("engine").get("experimentId").asLong());
-        assertTrue("it runs no session", lastUserJson(t).get("engine").get("sessionId").isNull());
+        assertEquals("it runs the new session", sessions(second).get(0).id.longValue(), lastUserJson(t).get("engine").get("sessionId").asLong());
         assertNull("the /play links don't lead to it", Autopilot.openInstance(first.id));
 
         // Even marked running again (as after a restart), its pages are turned away, not put into the
@@ -276,6 +283,63 @@ public class SharedEngineTest extends BaseTest {
         assertEquals(1, page.size());
         assertTrue(page.get(0).toString(), page.get(0).get("player").get("text").asText().contains("isn't running"));
         assertNull("no seat in the game", engine().eval("g.getVertex('late-page')"));
+    }
+
+    // ---- selecting while a session runs changes only the selection ---------------------------------------
+
+    @Test
+    public void selectingWhileASessionRunsLeavesItAndWithNoneRunningLoadsTheSteps() throws Throwable {
+        final User user = user("switcher");
+        final Experiment first = createExperiment("Run now");
+        final Experiment second = createExperiment("Edited meanwhile");
+        createStep(first, "Setup", "firstLoaded = true // marker-first");
+        createStep(second, "Setup", "secondLoaded = true // marker-second");
+        own(user, first);
+        own(user, second);
+        final AdminSocketsTest.Tab t = loggedIn(user);
+
+        // With no session running, selecting loads the experiment's steps into the engine, as before.
+        t.send("SelectExperiment", "experimentId", first.id);
+        await("first loaded", () -> first.id.equals(engineExperimentId()) && t.count(AdminSocketsTest.output("marker-first")) == 1);
+        assertNull("a rebuild follows", t.first(f -> f.has("engineKept")));
+        t.send("LaunchGame", "name", "S1", "parameters", Json.newObject());
+        await("S1 running", () -> sessions(first).size() == 1 && sessions(first).get(0).status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance s1 = sessions(first).get(0);
+        final ScriptEngine engine = engine();
+
+        // While S1 runs, selecting the other experiment changes only the selection: S1 runs on in the
+        // same engine, and stays the account's session.
+        final int reloads = t.count(AdminSocketsTest.notify("ScriptEngineReloading"));
+        t.send("SelectExperiment", "experimentId", second.id);
+        await("answered", () -> t.count(f -> f.has("user") && f.has("engineKept")) == 1);
+        Thread.sleep(300);
+        assertSame("not rebuilt", engine, engine());
+        assertEquals(reloads, t.count(AdminSocketsTest.notify("ScriptEngineReloading")));
+        assertEquals(first.id, engineExperimentId());
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(s1.id).status);
+        assertEquals(s1.id, User.findByEmail(user.email).experimentInstanceId);
+        assertEquals(second.id, User.findByEmail(user.email).selectedExperiment.id);
+        assertNull(engine().get("secondLoaded"));
+
+        // The second experiment's engine actions are refused, naming the account's own session.
+        t.send("RunGame");
+        await("refused", () -> t.count(AdminSocketsTest.error("RunGame")) == 1);
+        String text = t.first(AdminSocketsTest.error("RunGame")).get("error").asText();
+        assertTrue(text, text.contains("the engine is running \"Run now\" (your session \"S1\"), not your selected experiment \"Edited meanwhile\""));
+        assertTrue(text, text.contains("end that session first, or open a new session of \"Edited meanwhile\", which ends it."));
+
+        // Once S1 is stopped nothing is live, and a reload loads the selected experiment...
+        t.send("StopGame", "id", s1.id);
+        await("S1 stopped", () -> ExperimentInstance.findById(s1.id).status == ExperimentInstance.Status.STOPPED);
+        t.send("ReloadEngine");
+        await("second loaded", () -> second.id.equals(engineExperimentId()) && t.count(AdminSocketsTest.output("marker-second")) == 1);
+        assertEquals(0, t.count(AdminSocketsTest.error("ReloadEngine")));
+
+        // ...and selecting, with nothing running, rebuilds the engine as before.
+        final int firstLoads = t.count(AdminSocketsTest.output("marker-first"));
+        t.send("SelectExperiment", "experimentId", first.id);
+        await("first loaded again", () -> first.id.equals(engineExperimentId()) && t.count(AdminSocketsTest.output("marker-first")) > firstLoads);
+        assertEquals(1, t.count(f -> f.has("engineKept")));
     }
 
     // ---- a token for another session never opens a seat in the live game -------------------------------

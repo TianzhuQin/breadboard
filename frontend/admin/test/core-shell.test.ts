@@ -181,6 +181,29 @@ describe('switching experiments on the shared engine', () => {
     w.unmount()
   })
 
+  it('switches without asking while a session is live in the engine, and says it keeps running', async () => {
+    admin.email = 'r@lab'
+    graph.clear()
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    const engine = { experimentId: 1, experimentName: 'A', sessionId: 40, sessionName: 'Pilot', owner: 'boss@lab' }
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(1, 'A'), experimentInstance: '', engine })
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    toasts.splice(0, toasts.length)
+
+    const w = await pickB()
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
+    expect(confirmState.open).toBe(false)
+    // the server's answer: only the selection changed
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine, engineKept: true })
+    await vi.waitFor(() => expect(toasts.some(t => t.title === 'Switched to B')).toBe(true))
+    expect(toasts.find(t => t.title === 'Switched to B')!.detail).toBe('The engine keeps running “A” (session “Pilot”), untouched. Edit this experiment and see its data here; to run it, end that session first.')
+    connection.state.value = 'idle'
+    w.unmount()
+  })
+
   it('says it is not connected instead of asking', async () => {
     __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(1, 'A'), experimentInstance: '' })
     toasts.splice(0, toasts.length)
@@ -244,82 +267,97 @@ describe('the engine running another experiment', () => {
     __receive({ user: { email: 'r@lab', experiments: list, currentScript: '' }, experiment: exp(1, 'A'), experimentInstance: '', engine: eng })
   }
   const text = (w: any) => w.text().replace(/\s+/g, ' ').trim()
+  async function notice () {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
+    await router.push('/session')
+    const w = mount(EngineNotice, { global: { plugins: [router] }, attachTo: document.body })
+    await nextTick()
+    return { w, router }
+  }
+  const button = (w: any, label: string) => w.findAll('button').find((b: any) => b.text() === label)
 
   afterEach(() => { connection.state.value = 'idle' })
 
-  it('says what the engine runs, and that opening it here ends that session', async () => {
+  it('says what the engine runs and what that means here, and switching to it rebuilds nothing', async () => {
     admin.email = 'r@lab'
     graph.clear()
     state(engine(2, 'B', 'Pilot 3'))
-    const w = mount(EngineNotice, { attachTo: document.body })
-    await nextTick()
-    expect(text(w)).toContain('The engine is running B’s session Pilot 3 (other@lab). Live controls here act on nothing. Opening B here stops that session for everyone in it.')
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const { w, router } = await notice()
+    expect(text(w)).toBe('The engine is running “B” (other@lab’s session “Pilot 3”). You are working on “A”: its Build pages and data are here; to run it, end that session first. Work on “B”')
     expect(w.attributes('role')).toBe('status')
-    const btn = w.find('button')
-    expect(btn.text()).toBe('End that session and open B')
+    // the links to what works here
+    const links = w.findAll('a')
+    expect(links.map((a: any) => a.text())).toEqual(['Build pages', 'data'])
+    await links[1].trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/sessions'))
 
     connection.state.value = 'open'
     const send = vi.spyOn(connection, 'send').mockReturnValue(true)
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
-    await btn.trigger('click')
-    // switching rebuilds the engine, which ends the session it runs
-    await vi.waitFor(() => expect(confirmState.open).toBe(true))
-    expect(confirmState.req).toMatchObject({ title: 'End “Pilot 3” and open “B”?', confirmLabel: 'End it and open', danger: true })
-    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 3” of “B” running.')
-    expect(confirmState.req!.message).toContain('Session “Pilot 3” is stopped: the people in it can’t rejoin it, and its links stop working.')
-    settleConfirm(true)
+    await button(w, 'Work on “B”')!.trigger('click')
+    // a session is live there: selecting changes only what this console works on, so nothing is asked
     await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
-    // the switch done: the reply, the rebuild, and what the engine runs now
-    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine: engine(2, 'B', 'Pilot 3') })
-    __receive({ notify: { ScriptEngineReloading: 3 } })
-    __receive({ notify: { ScriptEngineReloaded: 4 } })
-    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine: engine(2, 'B', null, 'r@lab') })
+    expect(confirmState.open).toBe(false)
+    // the server's answer: B selected, the engine left as it was
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine: engine(2, 'B', 'Pilot 3'), engineKept: true })
     await nextTick()
     expect(w.find('.engine-notice').exists()).toBe(false)
     w.unmount()
   })
 
-  it('switches without asking when nobody uses the engine', async () => {
+  it('names the autopilot\'s session, says ending it pauses the autopilot, and links to it', async () => {
+    admin.email = 'r@lab'
+    graph.clear()
+    state(engine(2, 'B', 'Auto 4'))
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ status: { on: true, paused: false, instance: { id: 40, name: 'Auto 4', status: 'RUNNING' } } })))
+    const { w, router } = await notice()
+    await vi.waitFor(() => expect(text(w)).toContain('(the autopilot’s session “Auto 4”)'))
+    expect(text(w)).toContain('to run it, end that session first (that pauses the autopilot).')
+    await button(w, 'Autopilot')!.trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/autopilot'))
+    w.unmount()
+  })
+
+  it('names this account\'s own session', async () => {
+    admin.email = 'r@lab'
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    state(engine(2, 'B', 'Pilot 3', 'R@lab'))
+    const { w } = await notice()
+    expect(text(w)).toContain('The engine is running “B” (your session “Pilot 3”).')
+    expect(button(w, 'Autopilot')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('offers to load the selected experiment when the engine only has another one loaded', async () => {
+    admin.email = 'r@lab'
     graph.clear()
     state(engine(2, 'B', null, 'r@lab'))
-    const w = mount(EngineNotice, { attachTo: document.body })
-    await nextTick()
-    expect(text(w)).toContain('The engine has B loaded, with no session running (your account). Live controls here act on nothing until you switch.')
-    expect(w.find('button').text()).toBe('Switch to B')
+    const { w } = await notice()
+    expect(text(w)).toContain('The engine has “B” loaded, with no session running (loaded for your account). You are working on “A”: load it into the engine to run it here.')
+    expect(button(w, 'Work on “B”')).toBeDefined()
     connection.state.value = 'open'
     const send = vi.spyOn(connection, 'send').mockReturnValue(true)
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
-    await w.find('button').trigger('click')
-    await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
+    await button(w, 'Load “A”')!.trigger('click')
+    // nobody is using the engine: it reloads without asking
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith('ReloadEngine', {}))
     expect(confirmState.open).toBe(false)
     w.unmount()
   })
 
-  it('just switches when the session there is this account\'s own, which is taken up again', async () => {
-    state(engine(2, 'B', 'Pilot 3', 'r@lab'))
-    // the account's selected session is the one the engine runs (ChangeExperiment resumes it)
-    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(1, 'A'), engine: engine(2, 'B', 'Pilot 3', 'r@lab'),
-      experimentInstance: { id: 40, name: 'Pilot 3', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] } })
-    const w = mount(EngineNotice, { attachTo: document.body })
-    await nextTick()
-    expect(text(w)).toContain('Live controls here act on nothing until you switch.')
-    expect(w.find('button').text()).toBe('Switch to B')
-    w.unmount()
-  })
-
-  it('offers no switch to another account\'s experiment', async () => {
+  it('offers no switch to an experiment that is not in the list', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
     state(engine(9, 'Their study', 'Wave 2'))
-    const w = mount(EngineNotice, { attachTo: document.body })
-    await nextTick()
-    expect(text(w)).toContain('The engine is running Their study’s session Wave 2 (other@lab). Live controls here act on nothing for now.')
-    expect(w.find('button').exists()).toBe(false)
+    const { w } = await notice()
+    expect(text(w)).toContain('The engine is running “Their study” (other@lab’s session “Wave 2”).')
+    expect(w.findAll('button').length).toBe(0)
     w.unmount()
   })
 
   it('stays out of the way when the engine runs the selected experiment, or is reloading', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
     state(engine(1, 'A', 'Pilot'))
-    const w = mount(EngineNotice, { attachTo: document.body })
-    await nextTick()
+    const { w } = await notice()
     expect(w.find('.engine-notice').exists()).toBe(false)
     state(engine(2, 'B', 'Pilot'))
     await nextTick()
@@ -328,6 +366,29 @@ describe('the engine running another experiment', () => {
     await nextTick()
     expect(w.find('.engine-notice').exists()).toBe(false)
     __receive({ notify: { ScriptEngineReloaded: 6 } })
+    w.unmount()
+  })
+
+  it('shows on the Run pages only', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    state(engine(2, 'B', 'Pilot 3'))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/session', component: { render: () => h('p', 'Live') }, meta: { title: 'Live session', usesEngine: true } },
+        { path: '/steps', component: { render: () => h('p', 'Steps') }, meta: { title: 'Steps' } },
+        { path: '/:other(.*)*', component: { render: () => h('p', 'Other') } },
+      ],
+    })
+    admin.ready = true
+    await router.push('/session')
+    await router.isReady()
+    const w = mount(AppShell, { global: { plugins: [router] }, attachTo: document.body })
+    await nextTick()
+    expect(w.find('.engine-notice').exists()).toBe(true)
+    await router.push('/steps')
+    await nextTick()
+    expect(w.find('.engine-notice').exists()).toBe(false)
     w.unmount()
   })
 })

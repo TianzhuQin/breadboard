@@ -132,7 +132,7 @@ import {
 } from 'lucide-vue-next'
 import { BButton, BEmpty, BInput, BPage, BSelect, confirm, notify, toast } from '@/ui'
 import { admin, actions, ensureConnected, experiments, running } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { confirmSwitch, switchedNote } from '@/store/engineGuard'
 import type { Experiment } from '@/store/types'
 import ExperimentCard from './ExperimentCard.vue'
 import NewExperimentDialog from './NewExperimentDialog.vue'
@@ -219,29 +219,16 @@ const selectingId = ref<number | null>(null)
 const exportingId = ref<number | null>(null)
 
 async function select (e: Experiment) {
-  if (running.value) {
-    // The engine is shared: it runs one experiment's session at a time.
-    const ap = await autopilotNow(2000)
-    const unattended = !!ap && ap.status.on && ap.status.experimentId != null && ap.status.experimentId === admin.experiment?.id
-    if (unattended) {
-      toast('warning', `The autopilot is running “${admin.experiment?.name}”`,
-        'Switching experiments restarts the script engine, which ends its session and disconnects everyone in it. Pause the autopilot first (stopping its session pauses it), or edit the other experiment once this study is over.',
-        { action: { label: 'Autopilot', run: () => { void router.push('/autopilot') } } })
-    } else {
-      toast('warning', 'Stop the running session first',
-        'Switching experiments restarts the script engine, which disconnects everyone in the session.',
-        { action: { label: 'Go to the session', run: () => { void router.push('/session') } } })
-    }
-    return
-  }
   if (selectingId.value != null || !ensureConnected()) return
   selectingId.value = e.id
   try {
-    // the engine is shared: another researcher's session (or the autopilot's) may be live on it
-    if (!await confirmEngineRebuild({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+    // The engine is shared. While a session is live there (yours, another researcher's, the
+    // autopilot's), switching only changes what you work on and leaves it running; otherwise the
+    // engine loads this experiment, which is asked about while anyone is using it.
+    if (!await confirmSwitch({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
     const askedAt = Date.now()
     await actions.selectExperiment(e.id)
-    if (admin.experiment?.id === e.id) notify.success(`Now working on “${e.name}”`)
+    if (admin.experiment?.id === e.id) notify.success(`Now working on “${e.name}”`, switchedNote() || undefined)
     else {
       // only a refusal of this switch, not one left over from an earlier try
       const refusal = admin.requestError?.request === 'SelectExperiment' && admin.requestError.at >= askedAt ? admin.requestError.text : ''
@@ -285,7 +272,7 @@ function fileModeFor (e: Experiment) {
     // ToggleFileMode works on the experiment you're working on, so offer to switch to it first
     toast('info', `Work on “${e.name}” first`,
       'File mode is changed for the experiment you are working on.',
-      running.value ? {} : {
+      {
         action: {
           label: 'Work on it',
           // then carry on with what was asked

@@ -30,7 +30,8 @@ separate lists would not keep studies apart; run separate servers for that.)
 
 The console opens on Live session. Every page works on one experiment: the one in the experiment
 switcher at the top of the sidebar. Click it to find an experiment and switch to it, or for
-**New experiment**, **Import** and **Manage**. Stop a running session before switching.
+**New experiment**, **Import** and **Manage**. A running session keeps running when you switch
+(see below).
 
 | Sidebar | Page | What it is for |
 |---|---|---|
@@ -60,9 +61,15 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 | Output (Ctrl+J) | What the experiment's scripts print and return, and their errors. A red badge counts new errors. |
 
 There is one script engine per server, shared by every researcher's console and the autopilot.
-When it runs another experiment than yours, a notice under the top bar says which, and live
-controls do nothing until you switch. When that experiment is yours, the notice offers
-**Switch to …** (or **End that session and open …**, when one of its sessions is running).
+It runs one experiment at a time, which need not be the one you work on: while a session is running
+in it (yours, another researcher's or the autopilot's), switching experiments only changes what you
+work on, and that session carries on. Your experiment's Build pages and Sessions & data work as
+usual. On the Run pages (Live session, Network, Players, Script console, Preview) a notice says
+what the engine runs and whose session it is, and your experiment's live controls (Start, Run,
+scripts, previews) do nothing until that session has ended; **New session** still ends it, after
+asking. The notice's **Work on …** switches to the experiment the engine runs. When the engine only
+has another experiment loaded, with no session running, the notice also offers **Load …**, which
+loads yours.
 
 ## Building an experiment
 
@@ -115,7 +122,10 @@ saved**, **Copy the code** and **Delete step** (with **Undo** afterwards).
 **Save** (Ctrl+S) saves the step and **Save all** (Ctrl+Shift+S) every changed step. Saving doesn't
 change what the engine runs: the page says **The engine isn't running your latest steps** and
 offers **Reload engine**. **Run**, or **Save & run** (Ctrl+Enter), loads just this step's code
-into the live engine instead. It doesn't start the step.
+into the live engine instead. It doesn't start the step. While the engine runs another
+experiment, **Run** is off and the page says why: saving still works, and the next session of this
+experiment uses what is saved. **Reload engine** then loads this experiment, unless the other one
+has a session running, which a reload would end.
 
 ### Content
 
@@ -236,9 +246,11 @@ change the live session.
 scripts from its saved steps. The engine is shared by every researcher on the server, so everyone
 in the network is disconnected and the network is emptied, whoever's session they are in. Your own
 running session carries on: it takes people again, newcomers and those who held a seat, and its
-game counts as not started, so **Start the game** runs InitStep again. Switching experiments,
-creating a session and resuming one restart the engine too. While anyone is using it, the console
-says who before doing any of these, and whether it pauses the autopilot.
+game counts as not started, so **Start the game** runs InitStep again. Creating a session and
+resuming one restart the engine too, and so does switching experiments while no session is
+running. While anyone is using it, the console says who before doing any of these, and whether it
+pauses the autopilot. While another experiment's session is running, a reload is refused: it would
+end that session.
 
 ## Running sessions with nobody at the console
 
@@ -270,8 +282,11 @@ experiment you're working on and leaves to its steps whatever they already set.
 **Save** (Ctrl+S) saves, after asking when it turns the autopilot on. If another researcher's
 session is running, the autopilot waits for it to end; **Save and end it now…** ends it there and
 then. While a researcher has another experiment loaded and a console open, the autopilot leaves the
-engine to them and opens its session once they close the console. On a server that runs the
-autopilot, test other experiments on another server, or turn the autopilot off first.
+engine to them and opens its session once they close the console. While the autopilot runs, you
+can still work on other experiments: switching to one leaves its session running, and their Build
+pages and data work as usual. To run or test another experiment, stop the autopilot's session
+first (that pauses it) or open a session of the other experiment (which ends the autopilot's,
+after asking), then press **Resume** here when you are done.
 
 The top of the page shows the autopilot's state, its **Open session** (with **Watch it live**),
 recent activity, any problem that keeps it from opening sessions, and the **Participant links**:
@@ -279,11 +294,11 @@ the **Sign-in link** (`/play/<experiment id>/login`) and the **Prolific link**. 
 the session open at the moment, so the same links keep working from one session to the next.
 
 **What pauses it.** Ending the autopilot's session from the console pauses the autopilot: stopping
-it, or anything that reloads the engine (selecting another experiment, creating or resuming another
-session, reloading). The console says so before you do it. A paused autopilot opens no session, so
-its links lead nowhere until you press **Resume** on this page. After its one session with **Open
-the next session when one finishes** off, the button reads **Open another session**. Both work when
-`application.conf` is in charge too, and a pause survives a server restart.
+it, or anything that reloads the engine (creating or resuming another session, reloading); selecting
+another experiment doesn't. The console says so before you do it. A paused autopilot opens no
+session, so its links lead nowhere until you press **Resume** on this page. After its one session
+with **Open the next session when one finishes** off, the button reads **Open another session**.
+Both work when `application.conf` is in charge too, and a pause survives a server restart.
 
 **A mistake in a step pauses it too.** When the steps of a session it opens don't load (a typo, a
 name that isn't defined), the autopilot stops that session before anyone can join, records

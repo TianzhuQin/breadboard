@@ -34,7 +34,6 @@
             @keydown.enter.prevent="pickActive"
           >
         </div>
-        <p v-if="running" class="xsw__note">Stop the running session before switching experiments.</p>
         <ul :id="listId" class="xsw__list" role="listbox" aria-label="Experiments">
           <li
             v-for="(e, i) in filtered"
@@ -44,7 +43,6 @@
             class="xsw__opt"
             :class="{ 'is-active': i === active, 'is-current': admin.experiment && e.id === admin.experiment.id }"
             :aria-selected="admin.experiment && e.id === admin.experiment.id ? 'true' : 'false'"
-            :aria-disabled="running ? 'true' : undefined"
             @mouseenter="active = i"
             @click="pick(e)"
           >
@@ -68,8 +66,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { FlaskConical, ChevronsUpDown, Search, Check, Plus, Upload, Settings2 } from 'lucide-vue-next'
-import { admin, actions, ensureConnected, experiments, running } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { admin, actions, ensureConnected, experiments } from '@/store/admin'
+import { confirmSwitch, switchedNote } from '@/store/engineGuard'
 import type { Experiment } from '@/store/types'
 import { notify } from '@/ui'
 import { uid } from '@/ui/uid'
@@ -111,14 +109,14 @@ function pickActive () {
   if (e) pick(e)
 }
 async function pick (e: Experiment) {
-  if (running.value) return
   close(true)
   if (admin.experiment && e.id === admin.experiment.id) return
   if (!ensureConnected()) return
-  // the engine is shared: another researcher's session (or the autopilot's) may be live on it
-  if (!await confirmEngineRebuild({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+  // The engine is shared. While a session is live there, switching only changes what you work on and
+  // leaves it running; otherwise the engine loads this experiment (asked about while anyone uses it).
+  if (!await confirmSwitch({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
   await actions.selectExperiment(e.id)
-  if (admin.experiment?.id === e.id) notify.success(`Switched to ${e.name}`)
+  if (admin.experiment?.id === e.id) notify.success(`Switched to ${e.name}`, switchedNote() || undefined)
   else notify.error(`Could not switch to ${e.name}`, admin.requestError?.request === 'SelectExperiment' ? admin.requestError.text : 'The server did not confirm the switch. The output panel may say why.')
 }
 function go (to: string) {
@@ -168,11 +166,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc))
 }
 .xsw__search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--faint); }
 .xsw__search input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); }
-.xsw__note { padding: 8px 12px; font-size: var(--text-xs); color: var(--warning-soft-text); background: var(--warning-soft); }
 .xsw__list { list-style: none; margin: 0; padding: 5px; max-height: 320px; overflow-y: auto; }
 .xsw__opt { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border-radius: var(--radius-xs); cursor: pointer; }
 .xsw__opt.is-active { background: var(--surface-hover); }
-.xsw__opt[aria-disabled='true'] { cursor: not-allowed; opacity: 0.6; }
 .xsw__opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 520; }
 .xsw__opt.is-current .xsw__opt-name { font-weight: 650; }
 .xsw__opt-meta { font-size: var(--text-xs); color: var(--faint); white-space: nowrap; }

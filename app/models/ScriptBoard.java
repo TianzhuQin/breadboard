@@ -643,10 +643,11 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * A researcher's action is about to end the session a game listener runs (selecting another
-   * experiment or session, launching, reloading). When that is the autopilot's live session, the
-   * autopilot pauses first, as for Stop, so it doesn't take the engine back behind their back (and
-   * its periodic check can't slip in between). {@code continuing} is a session that carries on
-   * (re-selected), {@code how} says what the researcher did, with %s for who.
+   * session, launching, reloading; selecting an experiment leaves a live session alone). When that
+   * is the autopilot's live session, the autopilot pauses first, as for Stop, so it doesn't take the
+   * engine back behind their back (and its periodic check can't slip in between). {@code continuing}
+   * is a session that carries on (re-selected), {@code how} says what the researcher did, with %s
+   * for who.
    */
   private static void pauseAutopilotIfItsSession(GameListener listener, User by, String how, Long continuing) {
     Long id = instanceIdOf(listener);
@@ -1301,13 +1302,19 @@ public class ScriptBoard extends UntypedActor {
           }
         }
         synchronized (REBUILD_LOCK) {
-          // Any other session the engine runs ends with the rebuild (its network is emptied). It is
-          // marked stopped: left running, its pages reconnected into this experiment's game, and the
-          // Sessions list and the /play links still showed it as open. (Read under the lock: another
-          // actor may have changed the engine since this message was sent.)
+          // Breadboard passes a selection on only while no session is live in the engine. One may
+          // have started since (read under the lock): the engine is left to it all the same.
+          ExperimentInstance live = sessionKeptBySelection();
+          if (live != null) {
+            selectionKept(breadboardMessage, live);
+            return;
+          }
+          // The engine's last session isn't live (it would have kept the engine, above). If the game's
+          // copy of it still counts as running, it is marked stopped, so its pages aren't put into this
+          // experiment's game. (Read under the lock: another actor may have changed the engine since
+          // this message was sent.)
           GameListener previous = engineGameListener;
           if (previous != null && (resumed == null || !resumed.id.equals(instanceIdOf(previous)))) {
-            pauseAutopilotIfItsSession(previous, breadboardMessage.user, "ended when %s selected an experiment (which reloads the engine)", null);
             stopSession(previous);
           }
 
@@ -1423,6 +1430,12 @@ public class ScriptBoard extends UntypedActor {
     } else if (message instanceof Breadboard.ReloadEngine) {
       Experiment selectedExperiment = breadboardMessage.user.getExperiment();
       synchronized (REBUILD_LOCK) {
+        // Not over another experiment's live session, which selecting left running (reloadRefusal).
+        String refused = reloadRefusal(breadboardMessage.user);
+        if (refused != null) {
+          Breadboard.replyError(breadboardMessage, refused);
+          return;
+        }
         // A session another account runs ends with the rebuild: marked stopped, as above. This
         // account's own session carries on in the new engine, as before, if it is of the experiment
         // reloaded (the autopilot launches through its account's actor, and leaves the account's
@@ -1455,6 +1468,56 @@ public class ScriptBoard extends UntypedActor {
           }
         }
       }
+    }
+  }
+
+  /**
+   * The live session (RUNNING or TESTING) the engine runs, the autopilot's or any researcher's, of
+   * whichever experiment; null when none is live. While there is one, selecting an experiment changes
+   * only what the account works on, and the engine is left as it is: rebuilding it for the selection
+   * ended that session for everyone in it, so the console refused to switch at all, even just to
+   * edit. An experiment's Build pages and data need no engine, and its engine actions are refused
+   * until the engine runs it (engineRefusal, reloadRefusal). With no live session, selecting loads the
+   * selected experiment's steps, as before.
+   */
+  static ExperimentInstance sessionKeptBySelection() {
+    return engine == null ? null : Autopilot.liveEngineSession();
+  }
+
+  /**
+   * The account selected an experiment while the engine runs the live session {@code live}: only its
+   * selection changes (the caller saves it). When that session is of the experiment selected, the
+   * account follows it, as one whose selection the autopilot's session is of does, so its consoles
+   * show the session the engine runs rather than an older one.
+   */
+  static void followLiveSession(User user, ExperimentInstance live) {
+    if (user == null || user.selectedExperiment == null || live == null || live.id == null || live.isTestInstance()) {
+      return;
+    }
+    Long of = live.experiment == null ? null : live.experiment.id;
+    if (of == null || !of.equals(user.selectedExperiment.id) || live.id.equals(user.experimentInstanceId)) {
+      return;
+    }
+    user.setExperimentInstanceId(live.id);
+    user.update();
+  }
+
+  /**
+   * A selection that reached the engine's actor after a live session had started: the engine is left
+   * to that session, as Breadboard does when one is live already. The account's consoles get its User
+   * JSON again (its session may have changed); the one that asked gets it with {@code engineKept}, so
+   * it doesn't wait for a rebuild.
+   */
+  private static void selectionKept(Breadboard.BreadboardMessage request, ExperimentInstance live) {
+    User fresh = User.findByEmail(request.user.email);
+    if (fresh == null) {
+      return;
+    }
+    followLiveSession(fresh, live);
+    ObjectNode json = fresh.toJson();
+    toOtherTabs(fresh.email, json, request.out);
+    if (request.out != null) {
+      request.out.write(json.deepCopy().put("engineKept", true));
     }
   }
 
@@ -1538,7 +1601,8 @@ public class ScriptBoard extends UntypedActor {
   /**
    * Why this account can't act on the engine's game now, in plain words; null when it can. It can
    * when the engine runs the experiment it has selected (or there is no engine yet: the action
-   * says so itself). Its console shows that experiment; the engine may run another account's.
+   * says so itself). Its console shows that experiment; the engine may run another one's session,
+   * which selecting left running (see sessionKeptBySelection).
    */
   static String engineRefusal(User user) {
     if (engine == null) {
@@ -1549,26 +1613,74 @@ public class ScriptBoard extends UntypedActor {
     if (selected == null ? running == null : selected.equals(running)) {
       return null;
     }
-    Experiment experiment = engineExperiment();
     ExperimentInstance session = Autopilot.liveEngineSession();
-    String owner = engineOwnerEmail();
     String yours = user == null || user.selectedExperiment == null ? null : user.selectedExperiment.name;
     StringBuilder text = new StringBuilder("Nothing was done: the engine is running ");
-    text.append(experiment == null ? "no experiment" : "\"" + experiment.name + "\"");
-    if (session != null) {
-      text.append(" (session \"").append(session.name).append("\"");
-      if (owner != null && (user == null || !owner.equalsIgnoreCase(user.email))) {
-        text.append(" of ").append(owner);
-      }
-      text.append(")");
-    }
+    text.append(describeEngine(user, session));
     text.append(yours == null ? ", and you have no experiment selected." : ", not your selected experiment \"" + yours + "\".");
     if (session != null) {
-      text.append(" Launch a session of your own experiment first (that ends the session running now).");
+      text.append(toRunYours(yours, session));
     } else {
-      text.append(yours == null ? " Select one first." : " Select \"" + yours + "\" again to load it.");
+      text.append(yours == null ? " Select one first." : " Reload the engine to load \"" + yours + "\".");
     }
     return text.toString();
+  }
+
+  /**
+   * Why this account's reload must not run now, or null: the engine runs a live session of another
+   * experiment than the one it has selected (selecting left it running), and rebuilding the engine
+   * would end that session for everyone in it. With no live session, a reload is how the selected
+   * experiment gets loaded; a new session of it takes the engine over too, after the console asks.
+   */
+  static String reloadRefusal(User user) {
+    if (engine == null) {
+      return null;
+    }
+    Long selected = user == null || user.selectedExperiment == null ? null : user.selectedExperiment.id;
+    ExperimentInstance session = Autopilot.liveEngineSession();
+    if (session == null || (selected != null && selected.equals(engineExperimentId))) {
+      return null;
+    }
+    String yours = user == null || user.selectedExperiment == null ? null : user.selectedExperiment.name;
+    return "Nothing was reloaded: the engine is running " + describeEngine(user, session)
+        + (yours == null ? "" : ", not your selected experiment \"" + yours + "\"")
+        + ", and reloading it would end that session for everyone in it." + toRunYours(yours, session);
+  }
+
+  /**
+   * The engine's experiment ("\"A\"", or "no experiment") and its live session, if any: " (the
+   * autopilot's session \"S\")", " (your session \"S\")" or " (session \"S\" of x@lab.org)".
+   */
+  private static String describeEngine(User user, ExperimentInstance session) {
+    Experiment experiment = engineExperiment();
+    String text = experiment == null ? "no experiment" : "\"" + experiment.name + "\"";
+    if (session == null) {
+      return text;
+    }
+    String owner = engineOwnerEmail();
+    if (isAutopilots(session)) {
+      return text + " (the autopilot's session \"" + session.name + "\")";
+    }
+    if (owner != null && user != null && owner.equalsIgnoreCase(user.email)) {
+      return text + " (your session \"" + session.name + "\")";
+    }
+    return text + " (session \"" + session.name + "\"" + (owner == null ? "" : " of " + owner) + ")";
+  }
+
+  /** What to do to run the selected experiment while {@code session} holds the engine. */
+  private static String toRunYours(String yours, ExperimentInstance session) {
+    if (yours == null) {
+      return " Select an experiment first.";
+    }
+    return " To run \"" + yours + "\", end that session first" + (isAutopilots(session) ? " (that pauses the autopilot)" : "")
+        + ", or open a new session of \"" + yours + "\", which ends it.";
+  }
+
+  /** Whether a session is of the experiment the autopilot runs (ending it pauses the autopilot). */
+  private static boolean isAutopilots(ExperimentInstance session) {
+    Experiment autopilot = Autopilot.experiment();
+    Long of = session == null || session.experiment == null ? null : session.experiment.id;
+    return autopilot != null && of != null && of.equals(autopilot.id);
   }
 
   /** The account whose actor built the running engine (it runs the session in it), or null. */

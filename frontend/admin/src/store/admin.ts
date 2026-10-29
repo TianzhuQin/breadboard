@@ -198,7 +198,10 @@ function isSelectedSessionEvent (ev: any): boolean {
 
 // ---- the engine's reload ------------------------------------------------------------------------
 
-/** Requests that rebuild the engine; an error in reply means the rebuild did not finish. */
+/**
+ * Requests that rebuild the engine; an error in reply means the rebuild did not finish. (A selection
+ * rebuilds it only when no session is live there: its answer says engineKept otherwise.)
+ */
 const REBUILDS = new Set(['ReloadEngine', 'SelectExperiment', 'SelectInstance', 'LaunchGame'])
 const ENGINE_FAILED = 'The engine did not finish reloading. The output panel says why. Fix the problem, then reload it.'
 const ENGINE_FAILED_ELSEWHERE = 'The engine did not finish reloading. Reload it to try again.'
@@ -327,6 +330,13 @@ function applyUserJson (m: any) {
   preferUtcTimes(m)
   // the server sends it beside the user (User.toJson)
   m.user.engine = engineInfoOf('engine' in m ? m.engine : m.user.engine)
+  // A selection made while a session is live in the engine changes only the selection, and the
+  // server says so on its answer (engineKept): no rebuild follows, so what it names is current.
+  if (m.engineKept === true && engineInfoPhase === 'rebuilding' && state.engine !== 'loading') {
+    if (engineInfoTimer) clearTimeout(engineInfoTimer)
+    engineInfoTimer = null
+    engineInfoPhase = 'asked'
+  }
   if (engineInfoPhase === 'asked') {
     engineInfoPhase = 'current'
     state.engineInfoCurrent = true
@@ -336,11 +346,16 @@ function applyUserJson (m: any) {
   // missing key = nothing selected (User.java omits it)
   state.experiment = m.experiment && typeof m.experiment === 'object' ? m.experiment : null
   let inst = m.experimentInstance && typeof m.experimentInstance === 'object' ? m.experimentInstance : null
-  // The server can still name a session of the experiment selected before (one that has ended):
-  // it isn't this experiment's, so its page, data and chip mustn't show here.
+  // The server can still name a session of the experiment selected before: one that has ended, or
+  // one the engine still runs (selecting another experiment leaves a live session running). It
+  // isn't this experiment's, so its page, data and chip mustn't show here; the Run pages say what
+  // the engine runs instead.
   const exp = state.experiment
-  if (inst && exp && Array.isArray(exp.instances) && inst.status !== 'RUNNING' && inst.status !== 'TESTING' &&
-    !exp.instances.some((x: any) => x && x.id === inst.id)) inst = null
+  if (inst && exp && Array.isArray(exp.instances) && !exp.instances.some((x: any) => x && x.id === inst.id)) {
+    const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
+    const e = m.user.engine as EngineInfo | null
+    if (!live || (e && e.sessionId === inst.id && e.experimentId !== null && e.experimentId !== exp.id)) inst = null
+  }
   if (!inst || !state.instance || inst.id !== state.instance.id) {
     // a different session: its live event feed starts again from what the server recorded
     state.events = []
@@ -738,12 +753,38 @@ const engineElsewhere = computed<EngineInfo | null>(() => {
   if (!e || e.experimentId === null || !selected || !state.engineInfoCurrent || state.engine === 'loading') return null
   return e.experimentId === selected.id ? null : e
 })
+/** “Trust game”'s session “Pilot 3”, or as much of it as is known. */
+function engineSessionText (e: EngineInfo): string {
+  const of = e.experimentName ? `“${e.experimentName}”’s session` : 'another experiment’s session'
+  return e.sessionName ? `${of} “${e.sessionName}”` : of
+}
+/**
+ * Why the engine can't be reloaded from here now, in words ('' when it can): it runs a live session
+ * of another experiment than the selected one (selecting left it running), which a reload would end
+ * for everyone in it, so the server refuses (ScriptBoard.reloadRefusal). A new session of the
+ * selected experiment can still take the engine over, after asking.
+ */
+const reloadBlocked = computed(() => {
+  const e = engineElsewhere.value
+  if (!e || e.sessionId === null) return ''
+  return `The engine is running ${engineSessionText(e)}, and reloading it would end that session for everyone in it. End that session first, or open a new session of this experiment.`
+})
+/**
+ * Why the selected experiment's code can't run in the engine now ('' when it can): the engine runs
+ * another experiment, so the server refuses Run and the Script console (ScriptBoard.engineRefusal).
+ */
+const runBlocked = computed(() => {
+  const e = engineElsewhere.value
+  if (!e) return ''
+  if (e.sessionId !== null) return `The engine is running ${engineSessionText(e)}, so this experiment’s steps can’t run in it until that session has ended.`
+  return `The engine has ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'} loaded, not this one: reload the engine to load this experiment’s steps, then run.`
+})
 
 export const admin = state
 export const connection = conn
 export {
   graph, boot, login, logout, createFirstUser, adoptUid, actions, experiments, instances, running, engineInUse,
-  engineElsewhere, ensureConnected, nextMessage,
+  engineElsewhere, reloadBlocked, runBlocked, ensureConnected, nextMessage,
 }
 
 /** For tests: feed a message as if it came from the server. */

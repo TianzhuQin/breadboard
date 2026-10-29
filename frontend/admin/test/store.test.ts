@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { admin, graph, actions, experiments, engineInUse, engineElsewhere, connection, NOT_CONNECTED, ENGINE_SETTLE_MS, __receive } from '../src/store/admin'
+import {
+  admin, graph, actions, experiments, engineInUse, engineElsewhere, reloadBlocked, runBlocked, connection, NOT_CONNECTED, ENGINE_SETTLE_MS, __receive,
+} from '../src/store/admin'
 
 const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
 
@@ -534,6 +536,42 @@ describe('what the engine runs', () => {
     }
   })
 
+  it('trusts the answer to a selection that left the engine alone, and says what is off then', () => {
+    vi.useFakeTimers()
+    try {
+      const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+      void actions.selectExperiment(2)
+      expect(admin.engineInfoCurrent).toBe(false)
+      // a session is live in the engine: the server changed only the selection, and says so
+      __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine: engine(1, 9), engineKept: true })
+      expect(admin.engineInfoCurrent).toBe(true)
+      expect(engineElsewhere.value).toMatchObject({ experimentId: 1, sessionId: 9 })
+      expect(runBlocked.value).toBe('The engine is running “E1”’s session “S9”, so this experiment’s steps can’t run in it until that session has ended.')
+      expect(reloadBlocked.value).toBe('The engine is running “E1”’s session “S9”, and reloading it would end that session for everyone in it. End that session first, or open a new session of this experiment.')
+      // nothing more to ask for: no rebuild is coming
+      send.mockClear()
+      vi.advanceTimersByTime(20000)
+      expect(send).not.toHaveBeenCalled()
+
+      // the session over, the experiment is only loaded there: reloading is how to load this one
+      push(2, engine(1))
+      expect(runBlocked.value).toBe('The engine has “E1” loaded, not this one: reload the engine to load this experiment’s steps, then run.')
+      expect(reloadBlocked.value).toBe('')
+      push(2, engine(2))
+      expect(runBlocked.value).toBe('')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not trust "engineKept" on a frame it did not ask for while a rebuild is under way', () => {
+    __receive({ notify: { ScriptEngineReloading: 12 } })
+    __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '', engine: engine(1, 9), engineKept: true })
+    expect(admin.engineInfoCurrent).toBe(false)
+    expect(engineElsewhere.value).toBe(null)
+    __receive({ notify: { ScriptEngineReloaded: 13 } })
+  })
+
   it('asks again at once when a rebuild is refused', () => {
     const send = vi.spyOn(connection, 'send').mockReturnValue(true)
     void actions.selectInstance(5)
@@ -542,6 +580,38 @@ describe('what the engine runs', () => {
     expect(send).toHaveBeenLastCalledWith('Update')
     push(1, engine(2))
     expect(engineElsewhere.value).toMatchObject({ experimentId: 2 })
+  })
+})
+
+describe('the account\'s session while it works on another experiment', () => {
+  const live = (id: number) => ({ id, name: 'S' + id, status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] })
+  const engine = (experimentId: number, sessionId: number | null) =>
+    ({ experimentId, experimentName: 'E' + experimentId, sessionId, sessionName: sessionId === null ? null : 'S' + sessionId, owner: 'r@lab' })
+  const push = (selected: any, inst: any, eng: any) =>
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: selected, experimentInstance: inst, engine: eng })
+
+  beforeEach(() => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+  })
+
+  it('is not shown as the selected experiment\'s while the engine runs it for another one', () => {
+    // its own session of A runs on; the account selected B (selecting left the session running)
+    push(exp(2, 'B'), live(9), engine(1, 9))
+    expect(admin.instance).toBe(null)
+    expect(engineElsewhere.value).toMatchObject({ experimentId: 1, sessionId: 9 })
+    // back on A, whose session it is: shown again
+    push({ ...exp(1, 'A'), instances: [live(9)] }, live(9), engine(1, 9))
+    expect(admin.instance?.id).toBe(9)
+  })
+
+  it('is kept while it may be the selected experiment\'s own (the engine doesn\'t say otherwise)', () => {
+    // not in the list sent, but the engine runs it for the selected experiment (or doesn't say)
+    push(exp(2, 'B'), live(9), engine(2, 9))
+    expect(admin.instance?.id).toBe(9)
+    push(exp(2, 'B'), live(9), undefined)
+    expect(admin.instance?.id).toBe(9)
+    push(exp(2, 'B'), '', engine(2, null))
   })
 })
 

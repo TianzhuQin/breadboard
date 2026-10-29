@@ -37,6 +37,8 @@ vi.mock('@/store/admin', async () => {
     __push: push,
     running: computed(() => false),
     connectionState: ref('open'),
+    // what the engine runs when that is another experiment than the selected one
+    engineElsewhere: ref(null),
     graph: { nodes: new Map([['3', { id: '3', data: {} }], ['_1', { id: '_1', data: {} }], ['8', { id: '8', data: {} }]]), version: ref(0) },
   }
 })
@@ -539,5 +541,20 @@ describe('ConsolePage', () => {
     expect(w.find('.run.is-pending').exists()).toBe(false)
     conn.value = 'open'
     w.unmount()
+  })
+
+  it('says scripts can’t run here while the engine runs another experiment', async () => {
+    seedConsole('r@lab.org', '')
+    consoleState.buffer = 'g.V.count()'
+    const elsewhere = (store as any).engineElsewhere
+    elsewhere.value = { experimentId: 2, experimentName: 'Live study', sessionId: 9, sessionName: 'Wave 2', owner: 'boss@lab.org' }
+    try {
+      const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
+      await nextTick()
+      expect(w.find('.con__ctx-text').text()).toBe('The engine is running “Live study”, not this one: scripts can’t run here now')
+      w.unmount()
+    } finally {
+      elsewhere.value = null
+    }
   })
 })
