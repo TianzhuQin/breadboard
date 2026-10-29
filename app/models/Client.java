@@ -36,6 +36,9 @@ public class Client extends Model {
   // The autopilot's launch left them out of the game, as they had been away too long
   // (ScriptBoard.leftOutAtStart): lastFrame is the screen that tells them so.
   public volatile boolean leftOut;
+  // Their session is over (see end): lastFrame is their end screen for good, and the game sends them
+  // nothing more.
+  private volatile boolean ended;
 
   // The page that holds the seat, and researchers' previews watching it: they get every frame the
   // seat holder gets and can't act. Watchers stay when the participant's page reconnects.
@@ -226,6 +229,25 @@ public class Client extends Model {
     return computer;
   }
 
+  /**
+   * The session is over for this participant: {@code screen} is their last screen from now on (null:
+   * the one they have stays), and no game view replaces it or reaches their sockets (writeGraph).
+   * Under the monitor updateGraph holds, so an update under way (the client update actor's, every few
+   * hundred milliseconds) finishes first and none comes after. Returns their last screen.
+   */
+  public synchronized ObjectNode end(ObjectNode screen) {
+    if (screen != null) {
+      lastFrame = screen;
+    }
+    ended = true;
+    return lastFrame;
+  }
+
+  /** Whether their session is over (see end). */
+  public boolean ended() {
+    return ended;
+  }
+
   // (under seatLock)
   private void take(Connection holder) {
     this.seat = holder;
@@ -353,7 +375,6 @@ public class Client extends Model {
     Connection holder = seat;
     return holder != null && holder.isOpen() && holder.preview;
   }
-
   /** Whether this socket holds the seat now, open: what it sends acts for the participant. */
   public boolean holdsSeat(Connection connection) {
     return connection != null && connection == seat && connection.isOpen();
@@ -536,6 +557,10 @@ public class Client extends Model {
   }
 
   public void writeGraph(Vertex me, Graph graph) {
+    if (ended) {
+      // (their end screen stays their last: a page that comes back gets it)
+      return;
+    }
     ObjectNode jsonOutput = view(me, graph);
     // Each socket is sent it only if its last frame showed something else: a page that just
     // connected, or a preview that just started watching, gets the whole view.
@@ -726,13 +751,21 @@ public class Client extends Model {
 
   /** Close every socket of this participant, the previews watching included (their session is over). */
   public void disconnect () {
+    disconnect(null);
+  }
+
+  /**
+   * disconnect, writing {@code last} to each socket first ({@code null}: nothing), so no other frame
+   * reaches it after that one (see Connection.close).
+   */
+  public void disconnect (JsonNode last) {
     List<Connection> all;
     synchronized (seatLock) {
       all = connections();
       watchers.clear();
     }
     for (Connection connection : all) {
-      connection.close(null);
+      connection.close(last);
     }
   }
 

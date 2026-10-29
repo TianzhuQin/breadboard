@@ -1135,6 +1135,13 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
 
+      if (client != null && client.ended()) {
+        // Their session is ending this very moment (endParticipants): their end screen, as for a page
+        // that comes back later, not a seat in the game that is over.
+        finalScreen(in, out, endedSessionScreen(experimentInstance.id, clientId));
+        return;
+      }
+
       if (client == null && experimentInstance.status != null
           && (!experimentInstance.status.isRunnable() || experimentInstance.status == ExperimentInstance.Status.STOPPED)) {
         // The session is over (finished, or given up by the autopilot), and the engine may already
@@ -4028,51 +4035,59 @@ public class ScriptBoard extends UntypedActor {
    * (_system.recruitment). Their page is sent the end as "sessionOver", which it shows only when it
    * has no end of its own on the screen. Someone the game started without (leftOutAtStart) keeps
    * that screen as their last: it says what they should do.
+   *
+   * <p>Each participant's end is settled under their Client's monitor (Client.end), which updateGraph
+   * holds, and remembered at once: the client update actor replaces a participant's last screen with
+   * their game view every few hundred milliseconds, and one update landing between the end screen and
+   * its being remembered (only after every participant had been told) made a page that came back
+   * later show a frozen round instead of its end.
    */
   static void endParticipants(Long instanceId, ObjectNode frame) {
     if (instanceId == null) {
       return;
     }
-    List<Client> ended = new ArrayList<>();
     for (Client client : clients.values()) {
       if (client.experimentInstance != null && instanceId.equals(client.experimentInstance.id)) {
-        ended.add(client);
+        endParticipant(client, frame);
       }
     }
-    for (Client client : ended) {
+  }
+
+  // One participant of endParticipants.
+  private static void endParticipant(Client client, ObjectNode frame) {
+    JsonNode last;
+    synchronized (client) {
       Vertex completed = completedPlayer(client.id);
       boolean keep = completed != null || ownEnd(client.lastFrame);
-      if (!keep && !client.leftOut) {
-        client.lastFrame = frame;
-      }
-      try {
-        if (completed != null) {
+      if (completed != null) {
+        try {
           // Their screen as it is, with the code: a change inside _system alone isn't sent by itself,
           // so a code given a moment ago may not have reached the page (or its last screen) yet.
           client.updateGraph(completed);
+        } catch (Exception e) {
+          Logger.debug("Could not show " + client.id + " their screen as the session ended: " + e);
         }
-        if (keep) {
-          // The session is over all the same: the page stops reconnecting and keeps its own end
-          // (pages from before 3.1 ignore "sessionOver" and keep their screen too).
-          ObjectNode over = Json.newObject();
-          over.put("sessionOver", frame);
-          client.write(over);
-        } else {
-          // (to the page in the seat, if any, and to the previews watching: a computer player's
-          // seat has only those)
-          client.write(frame);
-        }
-      } catch (Exception e) {
-        Logger.debug("Could not tell " + client.id + " that the session ended: " + e);
       }
-      // (whatever happened above: a socket left open would show a game that no longer answers)
-      client.disconnect();
-      clients.remove(client.id, client);
-      if (graphChangedListener != null) {
-        graphChangedListener.removeClientListener(client);
+      client.end(keep || client.leftOut ? null : frame);
+      rememberLastScreens(Collections.singletonList(client));
+      if (keep) {
+        // The session is over all the same: the page stops reconnecting and keeps its own end
+        // (pages from before 3.1 ignore "sessionOver" and keep their screen too).
+        ObjectNode over = Json.newObject();
+        over.put("sessionOver", frame);
+        last = over;
+      } else {
+        last = frame;
       }
     }
-    rememberLastScreens(ended);
+    // Out of the game only now: a page of theirs that comes back meanwhile finds them ended (addClient).
+    clients.remove(client.id, client);
+    if (graphChangedListener != null) {
+      graphChangedListener.removeClientListener(client);
+    }
+    // To the page in the seat, if any, and to the previews watching (a computer player's seat has only
+    // those), each then closed: a socket left open would show a game that no longer answers.
+    client.disconnect(last);
   }
 
   /** The participant's vertex when the experiment gave them a completion code (_system.recruitment); else null. */

@@ -48,7 +48,8 @@ public class EventGraphChangedListener implements BreadboardGraphChangedListener
   @Override
   public void removeClientListener(Client clientListener) {
     if (clientListener != null) {
-      clientListeners.remove(clientListener.id);
+      // (only this one: a newer Client of the same id may have taken its place)
+      clientListeners.remove(clientListener.id, clientListener);
     }
   }
 
