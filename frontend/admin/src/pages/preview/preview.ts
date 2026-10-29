@@ -25,10 +25,14 @@ export const isTestPlayer = (p: PlayerLike) => truthyFlag(p.data?.testmode)
 /** A computer seat: created as AI (id starting with "_"), or a person's seat the computer took over (ai = 1). */
 export const isAIPlayer = (p: PlayerLike) => p.id.startsWith('_') || truthyFlag(p.data?.ai)
 /**
- * The player's own browser is connected right now (_system.connected). A preview that holds their
- * seat (they had left) counts too, so this speaks of their own page only before they are shown.
+ * The player's seat is connected right now (_system.connected): their own page, or a researcher's
+ * preview that holds it while their page is away (another console's, or this one's).
  */
 export const isConnected = (p: PlayerLike) => p.data?._system?.connected === true
+/** A researcher's preview holds their seat (_system.preview): their own page isn't connected. */
+export const heldByPreview = (p: PlayerLike) => isConnected(p) && p.data?._system?.preview === true
+/** Their own page is connected: a preview of them only watches it, read-only. */
+export const ownPageConnected = (p: PlayerLike) => isConnected(p) && !heldByPreview(p)
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 /** Players in natural id order: p2 before p10. */
@@ -55,12 +59,21 @@ export function quickPick<T extends PlayerLike> (players: readonly T[], pick: Qu
 }
 
 /**
- * Of the players about to be previewed, those whose own browser is connected: the server lets a
+ * Of the players about to be previewed, those whose own page is connected: the server lets a
  * preview only watch them (it shows what their page gets, and leaves their page alone), so their
- * previews are read-only, which the researcher is told.
+ * previews are read-only, which the researcher is told. A seat another preview holds is not theirs.
  */
 export function shownReadOnly<T extends PlayerLike> (adding: readonly T[], alreadyShown: ReadonlySet<string>): T[] {
-  return adding.filter(p => !alreadyShown.has(p.id) && isConnected(p))
+  return adding.filter(p => !alreadyShown.has(p.id) && ownPageConnected(p))
+}
+
+/**
+ * The test players shown on the first look at a session, as the old Testing panel did: not those
+ * whose seat is connected, by their own page or by another console's preview, which a preview from
+ * here would take the seat from (two consoles would take it from each other).
+ */
+export function autoPicked<T extends PlayerLike> (players: readonly T[]): T[] {
+  return quickPick(players, 'test').filter(p => !isConnected(p)).slice(0, MAX_PREVIEWS)
 }
 
 // ---- addresses --------------------------------------------------------------------------------

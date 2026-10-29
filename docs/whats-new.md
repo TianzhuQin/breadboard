@@ -132,6 +132,7 @@ autopilot.waitingRoom([
   waitSeconds: 120,        // once minPlayers are here, wait this long for more
   maxWaitSeconds: 900,     // give up if minPlayers never arrive
   countdownSeconds: 10,
+  departureGraceSeconds: 15, // someone leaving counts only once they have been gone this long
   onCancel: { players -> players.each { recruitment.completeProlific(it, [completionCode: "WAITFEE"]) } },
 ])
 autopilot.replaceDisconnected([afterSeconds: 30, returnToHuman: true])
@@ -146,9 +147,14 @@ People who come back after a session was given up get its "could not start" noti
 to `onCancel` too.
 
 The server opens a session at startup. Participants enter through `/play/{e}/login` or
-`/play/{e}/prolific?...` and wait in the waiting room. The game starts by itself, and people who
-left before the start get no seat. Someone who drops out mid-game is played by the computer after
-the grace period. A new session opens when the game finishes.
+`/play/{e}/prolific?...` and wait in the waiting room. Someone whose connection drops there counts
+as gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor
+gets the session given up. The game starts by itself. People who left more than a minute before
+the start (or `afterSeconds`, if that is longer) get no seat, and are told so if they come back
+(see below); someone away for less keeps their seat, which the computer plays until they are back.
+Someone who drops out mid-game is played by the computer after the grace period. A new session
+opens when the game finishes. Waiting-room settings saved in the console replace the steps' own
+even for people who are already waiting: the limits count from the first arrival.
 
 ## The participant page
 
@@ -275,7 +281,40 @@ page is connected only watches: it shows what their page shows, live, and leaves
 Its choices, forms and tie changes are disabled, it sends nothing for them, and
 `Breadboard.connection` is `watching` (`Breadboard.preview` tells a preview from a participant's
 page). A preview of anyone else (a test or computer player, or someone who left) acts for them as
-before, until their own page comes back; from then on it watches.
+before, until their own page comes back; from then on it watches. If their page goes while a
+preview watches, the preview takes their seat and acts for them again.
+
+**On the server.** What the server does about connections, for experiment authors:
+
+- **One page holds the seat.** A participant's newer page (another tab, a reload) takes the seat.
+  The older one is sent `{"bbClosed": "replaced"}` and closed, so it doesn't reconnect and take the
+  seat back. `clientConnected` and `clientDisconnected` are recorded only when the participant comes
+  or goes, not each time a page takes over; `bb:connection` is emitted whenever a page takes the
+  seat, so scripts may hear `connected: true` for someone who is connected already.
+- **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds
+  after, and gets `{"pong": <the server's time in ms>}`. A page that has pinged and then sends
+  nothing for 30 seconds is closed and counts as gone, as when its socket closes: a connection that
+  dies without closing (a phone out of range, a laptop put to sleep) used to look connected for
+  good, so the computer never took that seat. Pages that never ping (from before 3.1) are left
+  alone.
+- **`player._system.disconnectedAt`**: since when (ms) the player has been away, next to
+  `_system.connected`; it goes when they are back.
+- **Previews.** A researcher's preview of a player whose own page is connected is sent
+  `{"bbWatching": true}` and then every frame that page gets; what it sends is ignored, apart from
+  its sign-in (recorded as a preview's). When the player's page goes, a preview that watches takes
+  the seat and is sent `{"bbWatching": false}`. While a preview holds the seat,
+  `player._system.preview` is `true`; neighbours never see it, as with the rest of `_system`.
+- **Started without them.** Someone the autopilot's start left out (see the autopilot above) is
+  recorded as a `missedStart` event. Whenever their page comes back, even after the next session
+  has opened, it gets a screen saying the session went ahead without them (Prolific participants
+  are asked to return the study), with `player.ended = "missedStart"`, and stops reconnecting.
+  Someone taken out of the network any other way (by a researcher, or by the experiment) gets their
+  last screen back, as before.
+- **The seat cookie lasts a day.** A participant whose browser was closed finds their seat again
+  through the study link or the game's address.
+- **No identical views.** A page isn't sent the same view twice in a row. Participants got one every
+  few hundred milliseconds, mostly unchanged, and a page on a weak connection fell further and
+  further behind. A page that connects, and a preview that starts watching, get the whole view.
 
 ## The researcher console
 
@@ -317,7 +356,9 @@ restarts the running session.
   recorded, with no byte-order mark. A spreadsheet may read a value that starts with `=`, `+`,
   `-` or `@` as a formula, so import the file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
-- **Connection events:** `clientConnected` and `clientDisconnected`.
-- **Autopilot events:** `autopilotStart`, `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+- **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
+  or goes (not for every page that takes over their seat).
+- **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
+  `missedStart` (someone its start left out), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
 - **Tie edits:** `edgeEdit`, which records the actor.
 - **Prolific entry:** `prolificEntry`.

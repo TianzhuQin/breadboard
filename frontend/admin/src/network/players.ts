@@ -48,6 +48,8 @@ export function statusOf (n: GraphNode | undefined | null): string {
   // (a person whose seat the computer plays while they are away, e.g. autopilot.replaceDisconnected)
   if (isAi(n)) return /^_/.test(n.id) ? 'AI player' : 'Away: computer playing'
   const c = connectionOf(n)
+  // (a researcher's preview has the seat while their own page is away: _system.preview)
+  if (c === 'connected' && n.data?._system?.preview === true) return 'Preview connected'
   return c === 'connected' ? 'Connected' : c === 'disconnected' ? 'Disconnected' : ''
 }
 

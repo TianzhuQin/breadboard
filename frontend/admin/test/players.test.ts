@@ -10,6 +10,7 @@ import PlayerDetails from '../src/pages/players/PlayerDetails.vue'
 import PropertyRow from '../src/pages/players/PropertyRow.vue'
 import TiePicker from '../src/pages/players/TiePicker.vue'
 import type { GraphNode } from '../src/lib/graph'
+import { statusOf } from '../src/network/players'
 
 const tick = () => new Promise(r => setTimeout(r, 30))
 const node = (id: string, data: Record<string, any> = {}): GraphNode => ({ id, data })
@@ -50,6 +51,14 @@ describe('players table', () => {
     expect(sortNodes(people, { key: 'score', dir: -1 }, degree).map(n => n.id)).toEqual(['p10', 'p1', 'p2', '_1'])
     expect(sortNodes(people, { key: '@ties', dir: -1 }, degree).map(n => n.id)).toEqual(['p1', 'p10', 'p2', '_1'])
     expect(sortNodes(people, { key: '@choice', dir: 1 }, degree)[0].id).toBe('p1')
+  })
+
+  it('says when a researcher\'s preview, not their own page, has the seat', () => {
+    expect(statusOf(node('p1', { _system: { connected: true } }))).toBe('Connected')
+    expect(statusOf(node('p1', { _system: { connected: true, preview: true } }))).toBe('Preview connected')
+    expect(statusOf(node('p1', { _system: { connected: false } }))).toBe('Disconnected')
+    // still a connected seat for the quick filter
+    expect(quickMatch(node('p1', { _system: { connected: true, preview: true } }), 'connected')).toBe(true)
   })
 
   it('has quick filters for people, AI, disconnected and waiting', () => {
@@ -241,6 +250,18 @@ describe('PlayerDetails', () => {
     __receive({ action: 'nodePropertyChanged', id: 'p1', key: 'mood', value: 'happy' })
     await tick()
     expect(w.find('.pd__props').text()).toContain('mood')
+    w.unmount()
+  })
+
+  it('says whether their own page is connected, or a preview holds their seat', async () => {
+    const w = mount(PlayerDetails, { props: { id: 'p1' } })
+    const previewButton = () => w.findAll('.pd__actions a, .pd__actions button').find(b => b.text().includes('Preview their screen'))!
+    expect(w.find('.pd__badges').text()).toContain('Connected')
+    expect(previewButton().attributes('title')).toMatch(/read-only: their own page is connected/)
+    __receive({ action: 'nodePropertyChanged', id: 'p1', key: '_system', value: { connected: true, preview: true } })
+    await tick()
+    expect(w.find('.pd__badges').text()).toContain('Preview connected')
+    expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs.')
     w.unmount()
   })
 

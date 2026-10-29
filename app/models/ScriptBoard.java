@@ -56,6 +56,8 @@ public class ScriptBoard extends UntypedActor {
   // lost its connection, though its socket never closed (see closeSilentPages). Checked this often.
   static volatile long silenceLimitMs = 30000L;
   private static final long SILENCE_CHECK_SECONDS = 5L;
+  // When a page was heard from (ms); only tests set another clock.
+  static volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
   private static final AtomicBoolean silenceWatched = new AtomicBoolean();
   // Final screens of the participants of the last few sessions, by instance id and client id, for
   // pages that reconnect after their session has ended (see addClient).
@@ -311,7 +313,10 @@ public class ScriptBoard extends UntypedActor {
       }
     }
     for (Client client : ended) {
-      client.lastFrame = frame;
+      // (someone the game started without keeps that screen: it says what they should do)
+      if (!client.leftOut) {
+        client.lastFrame = frame;
+      }
       try {
         // (the previews watching them too)
         client.write(frame);
@@ -1227,14 +1232,18 @@ public class ScriptBoard extends UntypedActor {
           graphInterface.addPlayer(clientId);
         }
         Vertex clientVertex = playerVertex(engine.get("g"), clientId);
+        if (clientVertex == null && client.leftOut) {
+          // The game started without them (see leftOutAtStart).
+          leftOutOfTheGame(client, connection);
+          return;
+        }
         if (clientVertex == null && returning && Boolean.TRUE.equals(experimentInstance.hasStarted)) {
-          if (!ownEnd(client.lastFrame)) {
-            leftOutOfTheGame(client, connection, experimentInstance.id);
-            return;
+          // Taken out of the network some other way (by a researcher, or by the experiment, maybe
+          // after giving them a completion code): their last screen again, as it was.
+          ObjectNode last = client.lastFrame;
+          if (last != null) {
+            connection.write(last);
           }
-          // They came to their own end (e.g. a completion code) before their player was taken out
-          // of the network: that screen again.
-          connection.write(client.lastFrame);
         }
         if (clientVertex == null && !experimentInstance.hasStarted) {
           // Taken out again as they joined (graph.groovy no longer loses a player added at the
@@ -1245,7 +1254,7 @@ public class ScriptBoard extends UntypedActor {
         }
         Recruitment.applyTo(clientVertex);
         // After addPlayer, so a new participant's vertex exists to record it on.
-        recordConnection(client);
+        recordConnection(client, true);
         if (clientVertex != null) {
           if (graphChangedListener instanceof EventGraphChangedListener) {
             client.updateGraph(clientVertex);
@@ -1276,7 +1285,7 @@ public class ScriptBoard extends UntypedActor {
     JsonNode actionNode = event == null ? null : event.get("action");
     String action = actionNode == null ? "" : actionNode.asText();
     boolean ping = "Ping".equals(action);
-    connection.heard(ping);
+    connection.heard(ping, clock.getAsLong());
     if (ping) {
       ObjectNode pong = Json.newObject();
       pong.put("pong", System.currentTimeMillis());
@@ -1341,42 +1350,59 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
-   * The game started while this participant was away, without them (the autopilot's launch leaves
-   * out whoever has been gone for a while). Their page used to keep showing the waiting room it
-   * remembered ("Starting…") for good, even after the session had ended. Now it is told what
-   * happened and what to do, that screen is what they get back from now on, and the socket is
-   * closed: nothing more comes for them. A researcher's preview of them sees the same and changes
-   * nothing.
+   * The autopilot's launch left this participant out of the game: they had been away too long when
+   * it started (groovy/autopilot.groovy). Their page used to keep showing the waiting room it
+   * remembered ("Please keep this page open") for good, and to keep reconnecting, even into the next
+   * session. Now their last screen is the one that says what happened and what to do, which their
+   * page gets whenever it comes back (leftOutOfTheGame), also once the engine has been rebuilt
+   * (rememberLastScreens), and the event missedStart is recorded. Someone the experiment had already
+   * given an end of their own (e.g. a completion code) keeps it.
    */
-  private static void leftOutOfTheGame(Client client, Client.Connection connection, Long instanceId) {
-    ObjectNode screen = missedStartScreen(fromProlific(client, instanceId));
-    if (!connection.preview) {
-      client.lastFrame = screen;
-      if (!client.missedStart) {
-        client.missedStart = true;
-        if (eventTracker != null && eventTracker.sessionLive()) {
-          LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
-          data.put("clientId", client.id);
-          eventTracker.track("missedStart", data);
-        }
-      }
+  public static void leftOutAtStart(String clientId) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    if (client == null || client.leftOut || ownEnd(client.lastFrame)) {
+      return;
     }
-    client.write(screen);
+    Long instanceId = client.experimentInstance == null ? null : client.experimentInstance.id;
+    client.lastFrame = missedStartScreen(fromProlific(client, instanceId));
+    client.leftOut = true;
+    if (eventTracker != null && eventTracker.sessionLive()) {
+      LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+      data.put("clientId", clientId);
+      eventTracker.track("missedStart", data);
+    }
+  }
+
+  /**
+   * A page of someone the game started without (leftOutAtStart) connected: it is told so, and the
+   * socket is closed, as nothing more comes for them. A researcher's preview of them sees the same.
+   */
+  private static void leftOutOfTheGame(Client client, Client.Connection connection) {
+    ObjectNode screen = client.lastFrame;
+    if (screen != null) {
+      client.write(screen);
+    }
     socketClosed(client, connection);
     connection.close(null);
   }
 
   /**
-   * Record whether this participant has a page connected (setConnected), when that has changed:
-   * their first page, their return after it closed or fell silent, or its going. Another tab taking
-   * the seat from an open one changes nothing, nor does a preview: two tabs swapping the seat used to
-   * be recorded as a connection every few seconds.
+   * Record whether this participant has a page connected, and whether a researcher's preview holds
+   * their seat (setConnected). The events clientConnected / clientDisconnected only when that has
+   * changed: their first page, their return after it closed or fell silent, or its going; two tabs
+   * swapping the seat used to be recorded as a connection every few seconds. {@code tookSeat}: a
+   * socket has just taken the seat, maybe from another open one: their player is marked connected
+   * if it isn't (one added again since was left unmarked, so the autopilot didn't count them), and
+   * bb:connection is announced all the same, so the autopilot shows that page the waiting room's or
+   * countdown's seconds as they are now.
    */
-  static void recordConnection(Client client) {
+  static void recordConnection(Client client, boolean tookSeat) {
     synchronized (client.recordLock()) {
-      boolean connected = client.seatOpen();
-      if (client.connectionChanged(connected)) {
-        setConnected(client.id, connected);
+      Client.Connection holder = client.seat();
+      boolean connected = holder != null && holder.isOpen();
+      boolean changed = client.connectionChanged(connected);
+      if (changed || (connected && tookSeat)) {
+        setConnected(client.id, connected, connected && holder.preview, changed);
       }
     }
   }
@@ -1385,11 +1411,15 @@ public class ScriptBoard extends UntypedActor {
    * A participant's socket closed, or was closed because it fell silent (closeSilentPages). Only the
    * page that held the seat counts: a replaced socket or a watching preview going changes nothing.
    * Nor does a socket of a session that has ended, whose participants are gone (the next session may
-   * have someone with the same id).
+   * have someone with the same id). When the participant's page goes, a researcher's preview watching
+   * them takes the seat (Client.seatAWatcher), and can act for them until they are back.
    */
   static void socketClosed(Client client, Client.Connection connection) {
     if (client.closed(connection) && clients.get(client.id) == client) {
-      recordConnection(client);
+      recordConnection(client, false);
+      if (client.seatAWatcher() != null) {
+        recordConnection(client, true);
+      }
     }
   }
 
@@ -2636,10 +2666,19 @@ public class ScriptBoard extends UntypedActor {
   /**
    * Record whether a participant currently has an open socket: {@code player._system.connected}
    * on the vertex (engine-internal, never sent to neighbors), with {@code _system.disconnectedAt}
-   * (ms) while they are away, and a clientConnected / clientDisconnected event in the log. Called
-   * by recordConnection, when it has changed.
+   * (ms) while they are away, a clientConnected / clientDisconnected event in the log, and
+   * bb:connection for the scripts.
    */
   static void setConnected(String clientId, boolean connected) {
+    setConnected(clientId, connected, false, true);
+  }
+
+  /**
+   * setConnected (from recordConnection), with {@code _system.preview} while a researcher's preview
+   * holds the seat, so the console can tell it from the participant's own page. The vertex is written
+   * only where it differs; the event is logged only when {@code record} (the connection changed).
+   */
+  static void setConnected(String clientId, boolean connected, boolean preview, boolean record) {
     // Each part on its own: setting _system runs every graph listener (consoles, the player's and
     // neighbours' pages), and one of them failing used to skip bb:connection, so the autopilot never
     // learned that someone left and no AI took their seat.
@@ -2647,12 +2686,10 @@ public class ScriptBoard extends UntypedActor {
       if (engine != null) {
         Vertex v = playerVertex(engine.get("g"), clientId);
         if (v != null) {
-          // Since when they are away: the autopilot's launch keeps the seat of someone gone only a
-          // moment (groovy/autopilot.groovy).
-          Map<String, Object> values = new HashMap<String, Object>();
-          values.put("connected", connected);
-          values.put("disconnectedAt", connected ? null : System.currentTimeMillis());
-          setSystemValues(v, values);
+          Map<String, Object> changes = connectionChanges(v, connected, preview);
+          if (!changes.isEmpty()) {
+            setSystemValues(v, changes);
+          }
         }
       }
     } catch (Exception e) {
@@ -2660,7 +2697,7 @@ public class ScriptBoard extends UntypedActor {
     } finally {
       try {
         // (not into a session that is over: people leaving its thank-you page aren't part of it)
-        if (eventTracker != null && eventTracker.sessionLive()) {
+        if (record && eventTracker != null && eventTracker.sessionLive()) {
           LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
           data.put("clientId", clientId);
           eventTracker.track(connected ? "clientConnected" : "clientDisconnected", data);
@@ -2679,6 +2716,23 @@ public class ScriptBoard extends UntypedActor {
         }
       }
     }
+  }
+
+  // What changes in the player's _system: connected; since when they are away (disconnectedAt, set
+  // as they go: the autopilot's launch keeps the seat of someone gone only a moment); and preview,
+  // there only while a researcher's preview holds the seat.
+  private static Map<String, Object> connectionChanges(Vertex v, boolean connected, boolean preview) {
+    Object system = v.getProperty("_system");
+    Map<?, ?> now = system instanceof Map ? (Map<?, ?>) system : Collections.emptyMap();
+    Map<String, Object> changes = new HashMap<String, Object>();
+    if (!Boolean.valueOf(connected).equals(now.get("connected"))) {
+      changes.put("connected", connected);
+      changes.put("disconnectedAt", connected ? null : System.currentTimeMillis());
+    }
+    if (preview != Boolean.TRUE.equals(now.get("preview"))) {
+      changes.put("preview", preview ? Boolean.TRUE : null);
+    }
+    return changes;
   }
 
   /**

@@ -367,7 +367,9 @@ export class Socket extends Emitter {
     this.unansweredSince = 0
     this.emit('open')
     this.flush()
-    this.schedulePing()
+    // The first heartbeat at once: the server (and this page) only time a connection out once a
+    // ping has gone through, so one that died in its first 5 s used to look alive for good.
+    this.beat()
   }
 
   /**

@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.LongSupplier;
 
 import static org.junit.Assert.*;
 import static play.test.Helpers.*;
@@ -71,6 +72,7 @@ public class ParticipantConnectionTest extends BaseTest {
     @SuppressWarnings("unchecked")
     public void closeTabs() throws Throwable {
         field("silenceLimitMs").set(null, silenceLimit);
+        field("clock").set(null, (LongSupplier) System::currentTimeMillis);
         for (AdminSocketsTest.Tab t : tabs) t.close();
         // (later tests' participants may have the same ids)
         Map<String, Client> clients = (Map<String, Client>) field("clients").get(null);
@@ -132,6 +134,7 @@ public class ParticipantConnectionTest extends BaseTest {
 
     private static final AdminSocketsTest.Matcher REPLACED = f -> "replaced".equals(f.path("bbClosed").asText());
     private static final AdminSocketsTest.Matcher WATCHING = f -> f.path("bbWatching").asBoolean(false);
+    private static final AdminSocketsTest.Matcher NOT_WATCHING = f -> f.has("bbWatching") && !f.get("bbWatching").asBoolean();
     private static final AdminSocketsTest.Matcher PONG = f -> f.has("pong");
     private static final AdminSocketsTest.Matcher VIEW = f -> f.has("graph") && f.has("player");
     private static final AdminSocketsTest.Matcher ANSWER = f -> f.isObject() && f.size() == 0;
@@ -290,28 +293,36 @@ public class ParticipantConnectionTest extends BaseTest {
     @Test
     public void everyMessageCountsAsHearingFromThePage() throws Throwable {
         field("silenceLimitMs").set(null, 300L);
+        final long[] now = {System.currentTimeMillis()};
+        field("clock").set(null, (LongSupplier) () -> now[0]);
         Page page = connect("p1");
         page.send("Ping");
-        Thread.sleep(200);
+        now[0] += 200;
         page.send("CustomEvent", "eventName", "still-here");
-        Thread.sleep(200);
-        closeSilentPages(System.currentTimeMillis());
+        now[0] += 200;
+        closeSilentPages(now[0]);
         assertFalse("heard from 200 ms ago", page.closed);
-        Thread.sleep(400);
-        closeSilentPages(System.currentTimeMillis());
+        now[0] += 400;
+        closeSilentPages(now[0]);
         assertTrue(page.closed);
     }
 
     // ---- the game started without them -----------------------------------------------------------
 
+    // The autopilot's launch, as it leaves out someone who has been away too long.
+    private void leftOutAtStart(String clientId) throws Exception {
+        engine().eval("g.removePlayer('" + clientId + "')");
+        ScriptBoard.leftOutAtStart(clientId);
+        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+    }
+
     @Test
     public void someoneTheGameStartedWithoutIsToldSoAndThatIsTheirLastScreen() throws Throwable {
         Page page = connect("p1");
         page.hangUp();
-        // The game starts while they are away, without them (the autopilot leaves out who has been
-        // gone a while).
-        engine().eval("g.removePlayer('p1')");
-        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+        leftOutAtStart("p1");
+        assertEquals("recorded as it happens", 1, events("missedStart", "p1"));
+        assertEquals("missedStart", client("p1").lastFrame.path("player").path("ended").asText());
 
         Page back = connect("p1");
         assertEquals(back.frames.toString(), 1, back.frames.size());
@@ -335,6 +346,52 @@ public class ParticipantConnectionTest extends BaseTest {
     }
 
     @Test
+    public void someoneTakenOutOfTheNetworkAnotherWayGetsTheirLastScreenBack() throws Throwable {
+        // A researcher takes a player out of the network mid-game (the console's snippet), or the
+        // experiment does: nothing tells them the game started without them.
+        Page page = connect("p1");
+        engine().eval("g.getVertex('p1').text = '<p>Round 2</p>'; null");
+        page.hangUp();
+        engine().eval("g.removePlayer('p1')");
+        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+        final JsonNode last = client("p1").lastFrame;
+        assertTrue(last.path("player").path("text").asText().contains("Round 2"));
+
+        Page back = connect("p1");
+        assertEquals(last, back.frames.get(0));
+        assertFalse(back.closed);
+        assertSame(last, client("p1").lastFrame);
+        assertEquals(0, events("missedStart", "p1"));
+    }
+
+    @Test
+    public void someoneTheAutopilotLeftOutIsToldSoAfterTheEngineWasRebuilt() throws Throwable {
+        engine().eval("initStep = stepFactory.createStep('InitStep'); initStep.run = { }; initStep.done = { }; "
+            + "autopilot.waitingRoom([minPlayers: 2, maxPlayers: 2, waitSeconds: 60, countdownSeconds: 0]); null");
+        Page gone = connect("p1");
+        gone.hangUp();
+        // (away for longer than the autopilot keeps a seat)
+        engine().eval("g.getVertex('p1')._system.disconnectedAt = System.currentTimeMillis() - 120000; null");
+        connect("p2");
+        connect("p3");
+        await("the game started", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted));
+        assertNull("left out", engine().eval("g.getVertex('p1')"));
+        assertEquals(1, events("missedStart", "p1"));
+
+        // The engine is rebuilt for the next session before they come back: their page, reconnecting
+        // to this one, is told what happened, as their last screen, and stops there.
+        console.send("LaunchGame", "name", "Next", "parameters", Json.newObject());
+        await("the next session", () -> ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", "Next")
+            .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
+        assertNull(client("p1"));
+        Page back = connect("p1");
+        JsonNode player = back.frames.get(0).get("player");
+        assertEquals(back.frames.toString(), "missedStart", player.path("ended").asText());
+        assertTrue(player.path("finished").asBoolean());
+        assertEquals(1, events("missedStart", "p1"));
+    }
+
+    @Test
     public void aProlificParticipantTheGameStartedWithoutIsAskedToReturnTheStudy() throws Throwable {
         Recruitment.prolificEntry("pp-1", "a-prolific-id", "study", "session");
         Page page = connect("pp-1");
@@ -346,8 +403,8 @@ public class ParticipantConnectionTest extends BaseTest {
         Page other = connect("pp-2");
         page.hangUp();
         other.hangUp();
-        engine().eval("g.removePlayer('pp-1'); g.removePlayer('pp-2')");
-        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+        leftOutAtStart("pp-1");
+        leftOutAtStart("pp-2");
 
         String text = connect("pp-1").frames.get(0).get("player").get("text").asText();
         assertTrue(text, text.contains("return the study on Prolific"));
@@ -357,12 +414,11 @@ public class ParticipantConnectionTest extends BaseTest {
 
     @Test
     public void someoneAtTheirOwnEndKeepsThatScreen() throws Throwable {
-        // The experiment finishes them, with a code, and then takes their player out of the network.
+        // The experiment finishes them, with a code; they leave, and are taken out of the network.
         Page page = connect("p1");
         engine().eval("def v = g.getVertex('p1'); v.finished = true; v.text = '<p>Your code is ABC123</p>'; null");
         page.hangUp();
-        engine().eval("g.removePlayer('p1')");
-        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+        leftOutAtStart("p1");
         Page back = connect("p1");
         JsonNode player = back.frames.get(0).get("player");
         assertTrue(player.get("finished").asBoolean());
@@ -441,6 +497,7 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals("and is sent nothing", theirs, participant.frames.size());
         assertSame(participant.out, client("p1").out);
         assertEquals("no connection recorded for it", 1, events("clientConnected", "p1"));
+        assertNull("their own page holds the seat", system("p1").get("preview"));
 
         // Its sign-in is recorded, as a preview's.
         preview.send("LogIn");
@@ -505,7 +562,9 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(0, preview.count(REPLACED));
         assertSame(participant.out, client("p1").out);
         assertEquals(1, participant.count(VIEW));
-        assertEquals("nothing new for the preview", previewViews, preview.count(VIEW));
+        assertEquals("only that the seat is no longer a preview's", previewViews + 1, preview.count(VIEW));
+        assertEquals(participant.frames.get(0), preview.frames.get(preview.frames.size() - 1));
+        assertFalse(participant.frames.get(0).path("player").path("_system").has("preview"));
         assertEquals(1, client("p1").watchers().size());
 
         engine().eval("g.getVertex('p1').score = 3");
@@ -519,12 +578,120 @@ public class ParticipantConnectionTest extends BaseTest {
             bus().off("CustomEvent", customEvents);
         }
 
-        // Their page reconnecting keeps it watching.
+        // Their page going: the preview takes the seat until it is back, and then watches again.
         participant.hangUp();
+        assertEquals(1, preview.count(NOT_WATCHING));
+        assertSame(preview.out, client("p1").out);
         Page back = connect("p1");
+        assertEquals(2, preview.count(WATCHING));
         engine().eval("g.getVertex('p1').score = 4");
         assertEquals(back.last(), preview.last());
         assertEquals(4, preview.last().get("player").get("score").asInt());
+    }
+
+    @Test
+    public void aPreviewHoldingTheSeatIsMarkedSoAndTakesItWhenTheirOwnPageGoes() throws Throwable {
+        // A preview of someone away holds their seat: connected, and marked as a preview's (for the
+        // console), which their neighbours never see.
+        Page neighbour = connect("p2");
+        Page preview = connect("p1", true);
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(Boolean.TRUE, system("p1").get("preview"));
+        engine().eval("g.addEdge(g.getVertex('p1'), g.getVertex('p2'), 'connected'); null");
+        JsonNode nodes = neighbour.last().get("graph").get("nodes");
+        assertEquals(nodes.toString(), 2, nodes.size());
+        for (JsonNode node : nodes) assertFalse(nodes.toString(), node.has("_system") && !"p2".equals(node.path("id").asText()));
+
+        // Their own page comes back: the seat is theirs, the flag goes, the preview watches.
+        Page participant = connect("p1");
+        assertEquals(1, preview.count(WATCHING));
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertNull(system("p1").get("preview"));
+        assertEquals("the seat never emptied", 1, events("clientConnected", "p1"));
+
+        // Their page goes: the preview watching takes the seat, is told so, and can act for them.
+        participant.hangUp();
+        assertEquals(1, preview.count(NOT_WATCHING));
+        assertSame(preview.out, client("p1").out);
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(Boolean.TRUE, system("p1").get("preview"));
+        assertNull(system("p1").get("disconnectedAt"));
+        assertEquals("their page went", 1, events("clientDisconnected", "p1"));
+        assertEquals("and a preview took the seat", 2, events("clientConnected", "p1"));
+        CustomEvents customEvents = new CustomEvents();
+        bus().on("CustomEvent", customEvents);
+        try {
+            preview.send("CustomEvent", "eventName", "from-the-preview");
+            assertEquals(1, customEvents.heard.size());
+        } finally {
+            bus().off("CustomEvent", customEvents);
+        }
+
+        // The preview going empties the seat, and the flag goes with it.
+        preview.hangUp();
+        assertEquals(Boolean.FALSE, system("p1").get("connected"));
+        assertNull(system("p1").get("preview"));
+        assertNotNull(system("p1").get("disconnectedAt"));
+        assertEquals(2, events("clientDisconnected", "p1"));
+    }
+
+    // ---- a page that takes the seat from an open one ---------------------------------------------
+
+    /** The waiting room's state on the last view this page got: player._system.autopilot. */
+    private static JsonNode waitingRoom(Page page) {
+        for (int i = page.frames.size() - 1; i >= 0; i--) {
+            JsonNode state = page.frames.get(i).path("player").path("_system").path("autopilot");
+            if (state.isObject()) return state;
+        }
+        return null;
+    }
+
+    @Test
+    public void aTabThatTakesTheSeatIsShownTheWaitingRoomAsItIsNow() throws Throwable {
+        engine().eval("autopilot.waitingRoom([minPlayers: 2, maxPlayers: 3, waitSeconds: 60]); null");
+        connect("p1");
+        connect("p2");
+        // Twenty seconds into the wait for more, p2 opens the study in another tab.
+        engine().eval("autopilot.startAt -= 20000; null");
+        Page tab = connect("p2");
+        int startsIn = waitingRoom(tab).path("startsIn").asInt();
+        assertTrue("startsIn " + startsIn, startsIn >= 39 && startsIn <= 40);
+
+        // And during the countdown.
+        engine().eval("autopilot.waitingRoom([minPlayers: 2, maxPlayers: 3, countdownSeconds: 30]); null");
+        connect("p3");
+        engine().eval("autopilot.countdownEndsAt -= 12000; null");
+        Page late = connect("p3");
+        JsonNode countdown = waitingRoom(late);
+        assertEquals(countdown.toString(), "starting", countdown.path("state").asText());
+        assertEquals(18, countdown.path("seconds").asInt());
+        assertEquals("connected once each", 1, events("clientConnected", "p3"));
+        assertEquals(1, events("clientConnected", "p2"));
+    }
+
+    @Test
+    public void aPlayerAddedAgainIsMarkedConnectedByTheTabThatTakesTheSeat() throws Throwable {
+        engine().eval("autopilot.waitingRoom([minPlayers: 3, waitSeconds: 60]); null");
+        final List<Object> announced = new CopyOnWriteArrayList<>();
+        Closure listener = new Closure(null) {
+            public Object doCall(Object info) { announced.add(((Map<?, ?>) info).get("connected")); return null; }
+        };
+        bus().on("bb:connection", listener);
+        try {
+            connect("p1");
+            engine().eval("g.removePlayer('p1'); g.addPlayer('p1'); null");
+            assertNull(system("p1").get("connected"));
+            connect("p1");
+            assertEquals(Boolean.TRUE, system("p1").get("connected"));
+            assertEquals("the waiting room counts them", 1, engine().eval("autopilot.connectedPlayers().size()"));
+            connect("p1");
+            assertEquals("announced each time a page took the seat", 3, announced.size());
+            assertFalse(announced.contains(Boolean.FALSE));
+            assertEquals("recorded once", 1, events("clientConnected", "p1"));
+            assertEquals(0, events("clientDisconnected", "p1"));
+        } finally {
+            bus().off("bb:connection", listener);
+        }
     }
 
     @Test

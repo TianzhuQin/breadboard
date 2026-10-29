@@ -31,8 +31,12 @@ import com.tinkerpop.blueprints.Vertex
 // People who left before the start are taken out of the network before InitStep runs, so nobody
 // starts next to an empty seat, unless they have been gone less than a minute (or afterSeconds, if
 // that is longer): a connection that dropped for a moment. They keep their seat, which the computer
-// plays (with replaceDisconnected) until they are back. Every start, cancellation and takeover is
-// logged as an event.
+// plays (with replaceDisconnected) until they are back. Those taken out are told so if they come
+// back (the event missedStart). Every start, cancellation and takeover is logged as an event.
+//
+// The console's waiting room replaces the steps' own through replaceWaitingRoom, even for people
+// who are waiting already: its limits count from the first arrival, and from when the wait for more
+// began.
 
 class Autopilot {
   def g
@@ -42,6 +46,8 @@ class Autopilot {
   def startGame    // closure: starts InitStep through ScriptBoard (guarded, closes the game to newcomers);
                    // returns null, or what went wrong (a String)
   def startFailed  // closure, given what went wrong: the session is dealt with (ScriptBoard.gameStartFailed)
+  def leftOut      // closure, given the id of someone launch() takes out: their page is told so when it
+                   // comes back, even after the engine was rebuilt (ScriptBoard.leftOutAtStart)
   // Which vertices are participants. AI players added with g.addAI have ids starting with "_".
   Closure isParticipant = { v -> !v.id.toString().startsWith("_") }
   // Someone away at the start for less than this (or replace.afterSeconds, if longer) keeps their seat.
@@ -55,6 +61,7 @@ class Autopilot {
   Long firstArrivalAt = null
   Long countdownEndsAt = null
   BBTimer startTimer = null
+  Long waitBeganAt = null    // when enough people were here and the wait for more began
   Long startAt = null        // when startTimer fires: the waiting screen counts down to it
   boolean startDue = false   // startTimer fired while someone was away for a moment (see waitOver)
   BBTimer graceTimer = null  // fewer than minPlayers: when that has lasted departureGraceSeconds
@@ -64,7 +71,36 @@ class Autopilot {
   Set<String> cancelHandled = [] as Set   // players already passed to onCancel
 
   synchronized def waitingRoom(Map opts) {
-    room = [
+    room = roomOf(opts)
+    evaluate()
+  }
+
+  // As waitingRoom, for a room that replaces one people may be waiting in already: the console's
+  // settings (models.AutopilotHooks), applied once the experiment's steps have set up their own. Its
+  // timers follow the new values, counted from the first arrival and from when the wait for more
+  // began. The give-up timer used to start only with the first arrival, so a session someone joined
+  // under a room without maxWaitSeconds never gave up. (The steps' own call doesn't: their room is
+  // replaced a moment later, and timers counted from it could end a wait at once.)
+  synchronized def replaceWaitingRoom(Map opts) {
+    room = roomOf(opts)
+    if (!gameStarted() && !finished) {
+      if (firstArrivalAt != null) {
+        cancelTimer("giveUp")
+        if (room.maxWaitSeconds) {
+          giveUpTimer = scheduleMs(firstArrivalAt + millis(room.maxWaitSeconds) - System.currentTimeMillis()) { giveUp() }
+        }
+      }
+      if (startTimer != null && waitBeganAt != null) {
+        startTimer.cancel()
+        startAt = waitBeganAt + millis(room.waitSeconds)
+        startTimer = startWait(startAt)
+      }
+    }
+    evaluate()
+  }
+
+  private Map roomOf(Map opts) {
+    return [
       minPlayers      : opts.minPlayers ?: 2,
       maxPlayers      : opts.maxPlayers,
       waitSeconds     : opts.waitSeconds == null ? 60 : opts.waitSeconds,
@@ -79,7 +115,6 @@ class Autopilot {
       onCancel        : opts.onCancel,
       customText      : opts.containsKey("waitingText"),
     ]
-    evaluate()
   }
 
   synchronized def replaceDisconnected(Map opts = [:]) {
@@ -164,8 +199,9 @@ class Autopilot {
         return
       }
       if (startAt == null) {
-        startAt = System.currentTimeMillis() + Math.round(room.waitSeconds * 1000)
-        startTimer = schedule(room.waitSeconds) { waitOver() }
+        waitBeganAt = System.currentTimeMillis()
+        startAt = waitBeganAt + millis(room.waitSeconds)
+        startTimer = startWait(startAt)
       }
     } else if (!full && startAt != null && graceTimer == null) {
       // Too few now, but someone whose connection dropped for a moment comes back within seconds:
@@ -189,8 +225,10 @@ class Autopilot {
 
   // The wait for more people is over: the countdown begins, unless fewer than minPlayers are here
   // because someone is away for a moment. Then it begins as they come back (evaluate), or not at all
-  // if they stay away (departureLasted).
-  synchronized def waitOver() {
+  // if they stay away (departureLasted). {@code timer}: the one that fired. A wait called off as it
+  // fired (departureLasted) is over: the next arrival used to begin the countdown at once.
+  synchronized def waitOver(BBTimer timer = null) {
+    if (timer != null && !timer.is(startTimer)) return
     startTimer = null
     if (room == null || gameStarted() || finished) return
     if (connectedPlayers().size() >= room.minPlayers) {
@@ -258,19 +296,23 @@ class Autopilot {
       long now = System.currentTimeMillis()
       long keepMs = Math.max(KEEP_SEAT_MS, replace == null ? 0L : Math.round(replace.afterSeconds * 1000))
       def away = []
+      def gone = []
       participants().findAll { v -> v.getProperty("_system")?.connected != true }.each { v ->
         def since = v.getProperty("_system")?.disconnectedAt
         if (since instanceof Number && now - since < keepMs) {
           away << v
         } else {
           g.removePlayer(v.id)
+          gone << v.id.toString()
         }
       }
       def players = participants()
       clearStatus()
       def data = [[name: "players", value: players.size().toString()]]
       if (away) data << [name: "away", value: away.size().toString()]
+      if (gone) data << [name: "leftOut", value: gone.size().toString()]
       track("autopilotStart", data)
+      gone.each { id -> tellLeftOut(id) }
       // With replaceDisconnected, the computer plays their seat until they are back.
       away.each { v -> handleDeparture(v.id.toString(), false) }
       if (room?.onStart != null) room.onStart(players)
@@ -381,8 +423,13 @@ class Autopilot {
   }
 
   private BBTimer schedule(Number seconds, Closure action) {
+    return scheduleMs(millis(seconds), action)
+  }
+
+  // (at once, when ms isn't positive)
+  BBTimer scheduleMs(long ms, Closure action) {
     BBTimer timer = new BBTimer()
-    timer.runAfter((int) Math.round(seconds * 1000)) {
+    timer.runAfter((int) Math.max(0L, ms)) {
       try {
         action()
       } finally {
@@ -392,9 +439,33 @@ class Autopilot {
     return timer
   }
 
+  static long millis(Number seconds) {
+    return Math.round(seconds * 1000)
+  }
+
+  // The wait for more people, until {@code at} (ms).
+  BBTimer startWait(long at) {
+    BBTimer timer
+    timer = scheduleMs(at - System.currentTimeMillis()) { waitOver(timer) }
+    return timer
+  }
+
+  // Someone launch() took out of the network: their page is told when it comes back (leftOut).
+  // Each on its own, never throwing: the game starts the same.
+  void tellLeftOut(String id) {
+    if (leftOut == null) return
+    try {
+      leftOut(id)
+    } catch (Exception e) {
+      models.ScriptLoader.humanizeStackTrace(e)
+      play.Logger.error("autopilot: could not note that the game started without " + id, e)
+    }
+  }
+
   private void cancelTimer(String which) {
     if (which == "start") {
       startAt = null
+      waitBeganAt = null
       startDue = false
       if (startTimer != null) {
         startTimer.cancel()
@@ -422,7 +493,8 @@ class Autopilot {
 
 autopilot = new Autopilot(g: g, a: a, gameListener: gameListener, eventTracker: eventTracker,
     startGame: { models.ScriptBoard.processScript("initStep.start()", null, "autopilot") },
-    startFailed: { String failed -> gameListener.gameStartFailed(failed) })
+    startFailed: { String failed -> gameListener.gameStartFailed(failed) },
+    leftOut: { String clientId -> models.ScriptBoard.leftOutAtStart(clientId) })
 
 events.on("bb:connection", { Map info ->
   try {

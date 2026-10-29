@@ -299,7 +299,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    * Whether this page only watches its player: a researcher's preview of a player whose own page
    * is connected. The server sends it what the player's page gets, and ignores what it sends; it
    * sends no choices, tie changes or other messages for them. The server decides again for every
-   * new connection (the player's page may have gone by then).
+   * new connection, and hands the seat to a preview that watches when the player's page goes
+   * ({"bbWatching": false}).
    */
   get watching (): boolean {
     return this.watchingNow
@@ -673,6 +674,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         // from a preview that had it.
         if (!this.watchingNow) {
           this.watchingNow = true
+          this.emit(CONNECTION_EVENT)
+        }
+        return
+      }
+      if (data && data.bbWatching === false) {
+        // The player's own page has gone, and the seat passed to this preview: it acts for them
+        // until their page is back.
+        if (this.watchingNow) {
+          this.watchingNow = false
           this.emit(CONNECTION_EVENT)
         }
         return

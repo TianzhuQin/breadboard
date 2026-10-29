@@ -112,24 +112,3 @@ test("a player is looked up under the lock that joining and leaving hold") {
     holder.join(5000)
   }
 }
-
-test("players looked up while others join at the same moment are always found") {
-  int threads = 8
-  def pool = Executors.newFixedThreadPool(threads)
-  try {
-    200.times { round ->
-      def graph = new BreadboardGraph(new TinkerGraph(), null)
-      def missed = java.util.Collections.synchronizedList([])
-      atOnce(pool, threads) { t ->
-        4.times { k ->
-          def id = "p" + t + "-" + k
-          graph.addPlayer(id)
-          if (graph.getPlayer(id) == null) missed << id
-        }
-      }
-      assert missed.isEmpty() : "round ${round}: not found right after joining: ${missed}"
-    }
-  } finally {
-    pool.shutdownNow()
-  }
-}

@@ -198,6 +198,71 @@ test.async("a departure that lasts departureGraceSeconds calls the start off", 4
   }
 }
 
+test("a start called off just as its timer fires waits again for enough people") {
+  def hooks = [:]
+  def ap = pilot('ap-off-', hooks)
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 30, countdownSeconds: 0])
+    arrive(ap, 'ap-off-1'); arrive(ap, 'ap-off-2')
+    def firing = ap.startTimer
+    leave(ap, 'ap-off-2')
+    // the departure has lasted, and the start timer fires as the start is called off
+    ap.departureLasted()
+    ap.waitOver(firing)
+    assert !ap.startDue
+    arrive(ap, 'ap-off-2')
+    assert hooks.started == null : "the countdown began at once"
+    assert ap.startAt != null : "no new wait for more"
+  } finally {
+    ap.stop()
+  }
+}
+
+test.async("a room that replaces another while someone waits gives up as the new one says", 4000) { done ->
+  def hooks = [:]
+  def ap = pilot('ap-later-', hooks)
+  // The steps' own room never gives up; someone comes before the console's settings, which do.
+  ap.waitingRoom([minPlayers: 3, waitSeconds: 60])
+  arrive(ap, 'ap-later-1')
+  ap.replaceWaitingRoom([minPlayers: 3, waitSeconds: 60, maxWaitSeconds: 0.3])
+  timers.newTimer().runAfter(900) {
+    done {
+      try {
+        assert hooks.finished == true : "the session never gave up"
+      } finally {
+        ap.stop()
+      }
+    }
+  }
+}
+
+test("a room that replaces another while people wait for more times that wait as the new one says") {
+  def ap = pilot('ap-retime-', [:])
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 60])
+    def v = arrive(ap, 'ap-retime-1')
+    arrive(ap, 'ap-retime-2')
+    def began = ap.waitBeganAt
+    assert ap.startAt == began + 60000
+    ap.replaceWaitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 20])
+    assert ap.waitBeganAt == began : "the wait started again"
+    assert ap.startAt == began + 20000
+    assert v._system.autopilot.startsIn in 19..20
+    // the same values again (every load of the steps applies them) change nothing
+    ap.replaceWaitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 20])
+    assert ap.startAt == began + 20000
+    assert ap.giveUpTimer == null : "no maxWaitSeconds: never gives up"
+    // The steps' own room, set up again as they reload (the console's replaces it a moment later),
+    // changes no timer: one counted from it could end the wait, or give up, at once.
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 1, maxWaitSeconds: 1])
+    assert ap.startAt == began + 20000
+    assert ap.giveUpTimer == null
+    assert !ap.starting
+  } finally {
+    ap.stop()
+  }
+}
+
 test.async("the session isn't given up while someone is away for a moment", 4000) { done ->
   def hooks = [:]
   def ap = pilot('ap-patience-', hooks)
@@ -267,6 +332,46 @@ test("someone away for a moment at the start keeps their seat") {
     assert started.toSet() == ['ap-seat-1', 'ap-seat-2', 'ap-seat-3', 'ap-seat-4', 'ap-seat-5'].toSet()
     // without replaceDisconnected the seat waits for them
     assert ap.takeoverTimers.isEmpty()
+  } finally {
+    ap.stop()
+  }
+}
+
+test("whoever launch() takes out is passed on, so their page is told when it comes back") {
+  def hooks = [:]
+  def told = []
+  def ap = pilot('ap-out-', hooks)
+  ap.leftOut = { String id -> told << id }
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 3, countdownSeconds: 0])
+    arrive(ap, 'ap-out-1'); arrive(ap, 'ap-out-2')
+    leave(ap, 'ap-out-2', 61000)
+    arrive(ap, 'ap-out-3')
+    leave(ap, 'ap-out-3', 5000)
+    arrive(ap, 'ap-out-4'); arrive(ap, 'ap-out-5')
+    assert hooks.started == 1
+    assert told == ['ap-out-2'] : "only those taken out"
+  } finally {
+    ap.stop()
+  }
+}
+
+test("the game starts as it should when passing on whoever was taken out fails") {
+  def hooks = [:]
+  def started = []
+  def ap = pilot('ap-outfail-', hooks)
+  ap.leftOut = { String id -> throw new IllegalStateException("could not note it") }
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 3, countdownSeconds: 0, onStart: { players -> started.addAll(players*.id) }])
+    ap.replaceDisconnected([afterSeconds: 30])
+    arrive(ap, 'ap-outfail-1'); arrive(ap, 'ap-outfail-2')
+    leave(ap, 'ap-outfail-2', 61000)
+    arrive(ap, 'ap-outfail-3')
+    leave(ap, 'ap-outfail-3', 5000)
+    arrive(ap, 'ap-outfail-4'); arrive(ap, 'ap-outfail-5')
+    assert hooks.started == 1
+    assert started.toSet() == ['ap-outfail-1', 'ap-outfail-3', 'ap-outfail-4', 'ap-outfail-5'].toSet()
+    assert ap.takeoverTimers.containsKey('ap-outfail-3') : "the kept seat was not handed to the computer"
   } finally {
     ap.stop()
   }

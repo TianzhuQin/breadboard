@@ -180,7 +180,11 @@ session's sign-in page in a new tab.
 screen as it changes, but can't answer for them, and their page is left alone. Anyone else's
 preview (a test or computer player, or someone who left) signs in as that player, and a click is a
 real choice, recorded with the session's data. If their own page comes back, it takes over, and
-the preview goes on read-only.
+the preview goes on read-only; if it goes again, the preview takes their seat back. In the list, a
+green dot means the seat is connected; its tooltip says whether by their own page or by a preview
+(maybe another console's). The first look at a session shows the test players whose seat isn't
+connected, by their own page or by another console's preview (which a preview here would take it
+from).
 
 ## Running a session
 
@@ -237,7 +241,8 @@ to the table, and **Download CSV** saves the players shown with every property.
 Click a player (here or on the Network page) to see what is **On their screen** and their
 choices, their **Ties** and **Properties**. Clicking a choice submits it for them, after you
 confirm; it can't be undone. Each tie has **Cut**, and **Tie … to…** adds one. **Preview their
-screen** opens them on the Preview page.
+screen** opens them on the Preview page. **Preview connected** means a researcher's preview has
+their seat, and their own page isn't connected.
 
 ### Script console
 

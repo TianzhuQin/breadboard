@@ -442,21 +442,25 @@ describe('Socket heartbeat', () => {
     vi.restoreAllMocks()
   })
 
-  it('pings every 5 s while the connection is open, and only then', () => {
+  it('pings as the connection opens and every 5 s while it is open, and only then', () => {
     const s = track(new Socket('ws://lab/connect', undefined, HEARTBEAT))
     s.connect()
     vi.advanceTimersByTime(10000)
-    FakeSocket.all[0].accept()
-    vi.advanceTimersByTime(4999)
     expect(FakeSocket.all[0].sent).toEqual([])
-    vi.advanceTimersByTime(1)
+    // at once: the server only times a connection out once a ping has come, and one that died
+    // before its first ping used to look alive for good
+    FakeSocket.all[0].accept()
     expect(FakeSocket.all[0].sent).toEqual(['PING'])
+    vi.advanceTimersByTime(4999)
+    expect(FakeSocket.all[0].sent).toEqual(['PING'])
+    vi.advanceTimersByTime(1)
+    expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING'])
     FakeSocket.all[0].message('PONG')
     vi.advanceTimersByTime(5000)
-    expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING'])
+    expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING', 'PING'])
     s.close()
     vi.advanceTimersByTime(60000)
-    expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING'])
+    expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING', 'PING'])
   })
 
   it('keeps the answers to itself', () => {
@@ -548,7 +552,7 @@ describe('Socket heartbeat', () => {
     vi.setSystemTime(Date.now() + 60 * 1000)
     vi.advanceTimersByTime(5000)
     expect(FakeSocket.all.length).toBe(1)
-    expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING'])
+    expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING', 'PING'])
     FakeSocket.all[0].message('PONG')
     vi.advanceTimersByTime(5000)
     expect(FakeSocket.all.length).toBe(1)

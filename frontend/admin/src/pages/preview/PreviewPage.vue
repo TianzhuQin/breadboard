@@ -171,7 +171,7 @@ import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  MAX_PREVIEWS, isAIPlayer, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, quickPick,
+  MAX_PREVIEWS, autoPicked, isAIPlayer, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, quickPick,
   shownReadOnly, sortPlayers, tileWidth, type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
@@ -348,7 +348,7 @@ async function openTab (id: string) {
 // ---- following the session ---------------------------------------------------------------
 
 // A new session starts from a clean slate; on the first look the test players are shown, as in
-// the old Testing panel (those whose own browser is open, read-only).
+// the old Testing panel (but not those whose seat is connected: see autoPicked).
 watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
   if (id == null) return
   if (memory.instanceId !== id) {
@@ -360,7 +360,7 @@ watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
   }
   if (!memory.autoPicked && players.value.length) {
     memory.autoPicked = true
-    const tests = quickPick(players.value, 'test').slice(0, MAX_PREVIEWS)
+    const tests = autoPicked(players.value)
     if (tests.length && !memory.ids.length) memory.ids = tests.map(p => p.id)
   }
 }, { immediate: true })

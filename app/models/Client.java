@@ -33,8 +33,9 @@ public class Client extends Model {
   // The last full update this participant got. ScriptBoard keeps it for a while after the session
   // ends, so a page that reconnects later gets its final screen back (see ScriptBoard.addClient).
   public volatile ObjectNode lastFrame;
-  // The session started while they were away, without them (ScriptBoard.addClient): recorded once.
-  public volatile boolean missedStart;
+  // The autopilot's launch left them out of the game, as they had been away too long
+  // (ScriptBoard.leftOutAtStart): lastFrame is the screen that tells them so.
+  public volatile boolean leftOut;
 
   // The page that holds the seat, and researchers' previews watching it: they get every frame the
   // seat holder gets and can't act. Watchers stay when the participant's page reconnects.
@@ -47,9 +48,10 @@ public class Client extends Model {
   private final Object recordLock = new Object();
   private Boolean recordedConnected;
 
-  // The frames that tell a page what became of its socket (see connect).
+  // The frames that tell a page what became of its socket (see connect and seatAWatcher).
   private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
   private static final ObjectNode WATCHING = Json.newObject().put("bbWatching", true);
+  private static final ObjectNode NOT_WATCHING = Json.newObject().put("bbWatching", false);
 
   /**
    * One socket of this participant: the page that holds the seat, or a researcher's preview watching
@@ -78,9 +80,9 @@ public class Client extends Model {
       return !closed.get();
     }
 
-    /** It sent something; {@code ping}: a {"action": "Ping"}. */
-    public void heard(boolean ping) {
-      lastHeard = System.currentTimeMillis();
+    /** It sent something at {@code now} (ms); {@code ping}: a {"action": "Ping"}. */
+    public void heard(boolean ping, long now) {
+      lastHeard = now;
       if (ping) {
         pinged = true;
       }
@@ -230,6 +232,30 @@ public class Client extends Model {
       }
       watchers.remove(connection);
       return seat == connection;
+    }
+  }
+
+  /**
+   * The seat is empty (the participant's page went): a researcher's preview watching it takes it, the
+   * one that came last, and is told it no longer only watches ({"bbWatching": false}). It acts for the
+   * player from now on, as a preview of someone who has left does, until their own page comes back.
+   * Null when the seat is held again, or no open preview watches.
+   */
+  public Connection seatAWatcher() {
+    synchronized (seatLock) {
+      if (seatOpen()) {
+        return null;
+      }
+      for (int i = watchers.size() - 1; i >= 0; i--) {
+        Connection watcher = watchers.get(i);
+        if (watcher.isOpen()) {
+          watchers.remove(i);
+          take(watcher);
+          watcher.writeAside(NOT_WATCHING);
+          return watcher;
+        }
+      }
+      return null;
     }
   }
 

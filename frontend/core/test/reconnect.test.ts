@@ -328,8 +328,9 @@ describe('the heartbeat', () => {
   it('finds a connection that died without closing, and connects again at once in the same seat', async () => {
     const fetch = stateAnswers([200, CONFIG])
     const page = await openPage(fetch)
-    await vi.advanceTimersByTimeAsync(5000)
     expect(FakeSocket.all[0].sent).toEqual([PING])
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(FakeSocket.all[0].sent).toEqual([PING, PING])
     FakeSocket.all[0].frame({ pong: 1761700000000 })
     // the answer is the page's own business
     expect(page.messages).toEqual([])
@@ -374,7 +375,8 @@ describe('answers given while the connection is down', () => {
     page.Breadboard.sendChoice('fresh-choice')
     FakeSocket.all[1].accept()
     const sent = FakeSocket.all[1].sentFrames()
-    expect(sent.map((m: any) => m.action)).toEqual(['LogIn', 'MakeChoice'])
+    // (then the first heartbeat)
+    expect(sent.map((m: any) => m.action)).toEqual(['LogIn', 'MakeChoice', 'Ping'])
     expect(sent[1].choiceUID).toBe('fresh-choice')
   })
 })
@@ -442,6 +444,8 @@ describe('the token kept for a browser that comes back', () => {
 describe('a researcher\'s preview of a player whose own page is connected', () => {
   const WATCHING = { bbWatching: true }
   const PING = '{"action":"Ping"}'
+  /** What the page sent for its player: everything but the heartbeat */
+  const answers = (s: any) => s.sentFrames().filter((m: any) => m.action !== 'Ping')
 
   function asPreview () {
     location.search = '?preview=1'
@@ -471,9 +475,9 @@ describe('a researcher\'s preview of a player whose own page is connected', () =
     FakeSocket.all[0].frame({ player: { _system: {}, text: 'Round 1', choices: [{ uid: 'c1', name: 'Cooperate' }] } })
     expect(page.players.map(p => p.text)).toEqual(['Round 1'])
     await answerForThem(page.Breadboard)
-    expect(FakeSocket.all[0].sent).toEqual([])
+    expect(answers(FakeSocket.all[0])).toEqual([])
     await vi.advanceTimersByTimeAsync(5000)
-    expect(FakeSocket.all[0].sent).toEqual([PING])
+    expect(FakeSocket.all[0].sent).toEqual([PING, PING])
     FakeSocket.all[0].frame({ pong: 1761700000000 })
     expect(page.Breadboard.connection).toBe('watching')
   })
@@ -482,11 +486,11 @@ describe('a researcher\'s preview of a player whose own page is connected', () =
     asPreview()
     const page = await openPage(stateAnswers([200, CONFIG]))
     page.Breadboard.sendChoice('c1')
-    expect(FakeSocket.all[0].sentFrames().map((m: any) => m.choiceUID)).toEqual(['c1'])
+    expect(answers(FakeSocket.all[0]).map((m: any) => m.choiceUID)).toEqual(['c1'])
     FakeSocket.all[0].frame(WATCHING)
     expect(page.Breadboard.connection).toBe('watching')
     page.Breadboard.sendChoice('c2')
-    expect(FakeSocket.all[0].sentFrames().map((m: any) => m.choiceUID)).toEqual(['c1'])
+    expect(answers(FakeSocket.all[0]).map((m: any) => m.choiceUID)).toEqual(['c1'])
     // the connection stays as it is
     await vi.advanceTimersByTimeAsync(60 * 1000)
     expect(FakeSocket.all.length).toBe(1)
@@ -505,7 +509,26 @@ describe('a researcher\'s preview of a player whose own page is connected', () =
     FakeSocket.all[1].accept()
     expect(page.Breadboard.connection).toBe('open')
     page.Breadboard.sendChoice('c1')
-    expect(FakeSocket.all[1].sentFrames().map((m: any) => m.choiceUID)).toEqual(['c1'])
+    expect(answers(FakeSocket.all[1]).map((m: any) => m.choiceUID)).toEqual(['c1'])
+  })
+
+  it('acts for the player as soon as the server hands it the seat their page left', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame(WATCHING)
+    page.Breadboard.sendChoice('c1')
+    expect(answers(FakeSocket.all[0])).toEqual([])
+    FakeSocket.all[0].frame({ bbWatching: false })
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.Breadboard.watching).toBe(false)
+    expect(page.connections.slice(-2)).toEqual(['watching', 'open'])
+    page.Breadboard.sendChoice('c2')
+    expect(answers(FakeSocket.all[0]).map((m: any) => m.choiceUID)).toEqual(['c2'])
+    // on the same connection: nothing reconnects
+    expect(FakeSocket.all.length).toBe(1)
+    // and it watches again when their page comes back
+    FakeSocket.all[0].frame(WATCHING)
+    expect(page.Breadboard.connection).toBe('watching')
   })
 
   it('is told when another preview takes the seat for real, like a participant\'s other tab', async () => {
