@@ -100,8 +100,15 @@ export async function stopSession (inst: Instance) {
       danger: true,
     })
     if (!ok) return
+    const askedAt = Date.now()
     const m = await actions.stopInstance(inst.id)
     if (!m) {
+      // refused, e.g. it had finished meanwhile: the server says so (and its status follows)
+      const refusal = admin.requestError
+      if (refusal && refusal.request === 'StopGame' && refusal.at >= askedAt) {
+        notify.info(`“${inst.name}” was not stopped`, refusal.text)
+        return
+      }
       notify.error('The server did not confirm the stop', 'Check your connection, then look at Sessions & data to see the session\'s status.')
       return
     }

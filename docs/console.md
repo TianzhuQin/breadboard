@@ -67,9 +67,12 @@ work on, and that session carries on. Your experiment's Build pages and Sessions
 usual. On the Run pages (Live session, Network, Players, Script console, Preview) a notice says
 what the engine runs and whose session it is, and your experiment's live controls (Start, Run,
 scripts, previews) do nothing until that session has ended; **New session** still ends it, after
-asking. The notice's **Work on …** switches to the experiment the engine runs. When the engine only
-has another experiment loaded, with no session running, the notice also offers **Load …**, which
-loads yours.
+asking. Every console hears when that session ends, whoever ends it, and the notice and controls
+follow. The notice's **Work on …** switches to the experiment the engine runs; working on that
+experiment, your Live session page shows its running session. When the engine only has another
+experiment loaded, with no session running, the notice also offers **Load …**, which loads yours.
+Meanwhile the sidebar doesn't count the engine's players under **Players**: they are in the other
+experiment's session.
 
 ## Building an experiment
 
@@ -94,10 +97,14 @@ Breadboard then reads it from `dev/<name>_<id>/` in the server's folder (spaces 
 dashes) instead of the database. **Use file mode…** writes the steps, content, parameters, images,
 participant page and style there. **If the folder already exists, it is deleted first.** In file
 mode, Steps, Content, Parameters, Images and Participant page are read-only in the console and
-follow the files, and a step file saved in `Steps/` runs at once. **Edit in the console again…**
-replaces the experiment's steps, content, parameters, images, participant page and style in the
-database with what is in the folder, which stays on the server. Neither works while a session is
-running.
+follow the files, and a step file saved in `Steps/` runs at once while the engine runs the
+experiment, during its sessions too. While the engine runs another experiment, a saved step file
+isn't loaded (that experiment's session would get it): the output panel says so, and the
+experiment's next session, or a reload of the engine while you work on it, loads what is saved.
+**Edit in the console again…** replaces the experiment's steps, content, parameters, images,
+participant page and style in the database with what is in the folder, which stays on the server.
+Neither works while a session of the experiment is running, and **Use file mode…** doesn't while
+another experiment's session is.
 
 **Example: network game** is a complete experiment that runs from start to finish by itself, to try
 Breadboard out or to build on. People wait in a waiting room until at least 2 are there; computer

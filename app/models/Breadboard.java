@@ -727,6 +727,12 @@ public class Breadboard extends UntypedActor {
       } else if (message instanceof ToggleFileMode) {
         Experiment selectedExperiment = breadboardMessage.user.getExperiment();
         if (selectedExperiment != null) {
+          // Not on while the engine runs another experiment's session: a saved step file couldn't run.
+          String refused = Boolean.TRUE.equals(selectedExperiment.fileMode) ? null : ScriptBoard.fileModeRefusal(breadboardMessage.user);
+          if (refused != null) {
+            replyError(breadboardMessage.out, "ToggleFileMode", refused);
+            return;
+          }
           try {
             selectedExperiment.toggleFileMode(breadboardMessage.user);
           } catch (Exception e) {
@@ -777,6 +783,15 @@ public class Breadboard extends UntypedActor {
       instances.put(user.email, scriptBoard);
     }
 
+    // An account that has the experiment of the engine's live session selected follows that session,
+    // as when it selects the experiment: its console showed "No session is open" beside it, and
+    // offered to restart it.
+    try {
+      ScriptBoard.followLiveSession(user, ScriptBoard.sessionKeptBySelection());
+    } catch (Exception e) {
+      // (signing in goes on: the account just keeps the session it had)
+      Logger.warn("LogIn: " + user.email + " could not follow the live session: " + e);
+    }
     // User JSON first, then the network (the ScriptBoard actor writes it after this).
     out.write(user.toJson());
     // Registered now, not only when the engine actor gets to it (it may be busy for seconds), so

@@ -34,12 +34,16 @@ vi.mock('@/store/admin', async () => {
   ;(store as any).engineElsewhere = engineElsewhere
   const graph = { nodes: new Map() }
   ;(store as any).graph = graph
+  // why file mode can't be switched on now ('' when it can)
+  const fileModeBlocked = ref('')
+  ;(store as any).fileModeBlocked = fileModeBlocked
   return {
     admin,
     actions: store.actions,
     experiments: computed(() => list),
     running,
     engineElsewhere,
+    fileModeBlocked,
     ensureConnected: () => true,
     graph,
   }
@@ -593,6 +597,39 @@ describe('Experiments page', () => {
     expect(document.querySelector('.xfm__error')!.textContent).toMatch(/couldn't write to dev\/Alpha_300\/.*server log/)
     admin.requestError = null
     w.unmount()
+  })
+
+  it('won\'t switch file mode on while another experiment\'s session runs in the engine, and says why', async () => {
+    const FileModeDialog = (await import('../src/pages/experiments/FileModeDialog.vue')).default
+    const why = 'The engine is running “Live study”’s session “Wave 2”. In file mode a step file you save runs at once, which it can’t while that session runs. Switch file mode on once it has ended.'
+    ;(store as any).fileModeBlocked.value = why
+    store.actions.toggleFileMode.mockClear()
+    const admin = (store as any).admin
+    try {
+      const w = mount(FileModeDialog, { props: { open: true }, attachTo: document.body })
+      await flushPromises()
+      expect(document.querySelector('.xfm__blocked')!.textContent).toBe(why)
+      const go = [...document.querySelectorAll<HTMLButtonElement>('.b-dialog button')].find(b => /Switch to file mode/.test(b.textContent || ''))!
+      expect(go.disabled).toBe(true)
+      go.click()
+      await flushPromises()
+      expect(store.actions.toggleFileMode).not.toHaveBeenCalled()
+      // and the dialog says when a saved file runs
+      expect(document.querySelector('.xfm__list')!.textContent).toContain('it runs at once in the engine (while the engine runs this experiment)')
+      w.unmount()
+
+      // Leaving file mode doesn't touch the engine: that stays possible.
+      admin.experiment = B
+      const back = mount(FileModeDialog, { props: { open: true }, attachTo: document.body })
+      await flushPromises()
+      expect(document.querySelector('.xfm__blocked')).toBe(null)
+      const leave = [...document.querySelectorAll<HTMLButtonElement>('.b-dialog button')].find(b => /Import the files and switch/.test(b.textContent || ''))!
+      expect(leave.disabled).toBe(false)
+      back.unmount()
+    } finally {
+      ;(store as any).fileModeBlocked.value = ''
+      admin.experiment = A
+    }
   })
 
   it('opens the New dialog from ?action=new and clears the query', async () => {

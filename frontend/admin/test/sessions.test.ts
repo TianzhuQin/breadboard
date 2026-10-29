@@ -468,6 +468,22 @@ describe('useSessionActions', () => {
     expect(ui.notify.success).toHaveBeenCalledWith('Stopped “pilot 2”', expect.any(String))
   })
 
+  it('says why the server didn\'t stop a session that was over already', async () => {
+    const why = 'Nothing was stopped: session "pilot 2" is already over (it has finished).'
+    store.actions.stopInstance.mockImplementationOnce(async () => {
+      store.admin.requestError = { request: 'StopGame', text: why, at: Date.now() }
+      store.admin.experiment.instances[1].status = 'FINISHED'
+      return null
+    })
+    try {
+      expect(await actionsApi.stop(store.admin.experiment.instances[1])).toBe(false)
+      expect(ui.notify.info).toHaveBeenCalledWith('“pilot 2” was not stopped', why)
+      expect(ui.notify.success).not.toHaveBeenCalledWith('Stopped “pilot 2”', expect.anything())
+    } finally {
+      store.admin.requestError = null
+    }
+  })
+
   it('says that stopping the autopilot\'s session pauses the autopilot', async () => {
     httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
       ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: { id: 2, name: 'pilot 2', status: 'RUNNING' } } }

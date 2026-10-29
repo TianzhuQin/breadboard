@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  admin, graph, actions, experiments, engineInUse, engineElsewhere, reloadBlocked, runBlocked, connection, NOT_CONNECTED, ENGINE_SETTLE_MS, __receive,
+  admin, graph, actions, experiments, engineInUse, engineElsewhere, reloadBlocked, runBlocked, fileStepsWait, connection, NOT_CONNECTED, ENGINE_SETTLE_MS,
+  __receive,
 } from '../src/store/admin'
 
 const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
@@ -612,6 +613,123 @@ describe('the account\'s session while it works on another experiment', () => {
     push(exp(2, 'B'), live(9), undefined)
     expect(admin.instance?.id).toBe(9)
     push(exp(2, 'B'), '', engine(2, null))
+  })
+})
+
+describe('what the server says the engine runs now ({"engine": …})', () => {
+  const live = (id: number, status = 'RUNNING') => ({ id, name: 'S' + id, status, creationTime: '', hitId: '', hits: [], data: [] })
+  const engine = (experimentId: number, sessionId: number | null) =>
+    ({ experimentId, experimentName: 'E' + experimentId, sessionId, sessionName: sessionId === null ? null : 'S' + sessionId, owner: 'boss@lab' })
+  const push = (selected: any, inst: any, eng: any) =>
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: selected, experimentInstance: inst, engine: eng })
+
+  beforeEach(() => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+  })
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
+  it('lifts the blocks once the other experiment\'s session has ended, though another account ended it', () => {
+    vi.useFakeTimers()
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    // working on B while the engine runs A's session 9
+    push(exp(2, 'B'), '', engine(1, 9))
+    expect(reloadBlocked.value).toContain('“E1”’s session “S9”')
+    expect(runBlocked.value).toContain('until that session has ended')
+    // another account stops it: what the engine runs reaches this console too
+    __receive({ engine: engine(1, null) })
+    expect(admin.user!.engine).toMatchObject({ experimentId: 1, sessionId: null })
+    expect(admin.engineInfoCurrent).toBe(true)
+    expect(reloadBlocked.value).toBe('')
+    expect(runBlocked.value).toBe('The engine has “E1” loaded, not this one: reload the engine to load this experiment’s steps, then run.')
+    expect(fileStepsWait.value).toBe('The engine has “E1” loaded; a saved file loads when this experiment’s next session starts, or when you reload the engine.')
+    // (nothing of B's changed: no need to ask for more)
+    vi.advanceTimersByTime(1000)
+    expect(send).not.toHaveBeenCalled()
+    // a new session of A starts: blocked again
+    __receive({ engine: engine(1, 12) })
+    expect(reloadBlocked.value).toContain('“E1”’s session “S12”')
+    expect(fileStepsWait.value).toBe('The engine is running “E1”’s session “S12”; a saved file loads when this experiment’s next session starts.')
+    // working on A, whose session it is: nothing is held back
+    push(exp(1, 'A'), '', engine(1, 12))
+    expect(fileStepsWait.value).toBe('')
+  })
+
+  it('asks for the User JSON when the session followed here (or one of the selected experiment) begins or ends', () => {
+    vi.useFakeTimers()
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    // following A's session 9, which another account runs
+    push({ ...exp(1, 'A'), instances: [live(9)] }, live(9), engine(1, 9))
+    expect(admin.instance?.id).toBe(9)
+    // the game started: the same session, nothing more to ask (GameStarted is asked about anyway)
+    __receive({ engine: { ...engine(1, 9), gameStarted: true } })
+    vi.advanceTimersByTime(1000)
+    expect(send).not.toHaveBeenCalled()
+    // it finished: this console asks how things stand, once
+    __receive({ engine: engine(1, null) })
+    __receive({ engine: engine(1, null) })
+    vi.advanceTimersByTime(300)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send.mock.calls[0][0]).toBe('Update')
+    push({ ...exp(1, 'A'), instances: [live(9, 'FINISHED')] }, live(9, 'FINISHED'), engine(1, null))
+    expect(admin.instance?.status).toBe('FINISHED')
+    // another session of A begins: its list of sessions changed
+    send.mockClear()
+    __receive({ engine: engine(1, 10) })
+    vi.advanceTimersByTime(300)
+    expect(send).toHaveBeenCalledWith('Update', {})
+  })
+
+  it('is not taken for what runs while a rebuild this console asked for is under way', () => {
+    vi.spyOn(connection, 'send').mockReturnValue(true)
+    push(exp(1, 'A'), '', engine(1, null))
+    actions.reloadEngine()
+    expect(admin.engineInfoCurrent).toBe(false)
+    __receive({ engine: engine(2, 5) })
+    expect(admin.engineInfoCurrent).toBe(false)
+    expect(engineElsewhere.value).toBe(null)
+    __receive({ notify: { ScriptEngineReloading: 3 } })
+    __receive({ notify: { ScriptEngineReloaded: 4 } })
+    // the rebuild is over (and asked about): the next word on it is current
+    __receive({ engine: engine(1, null) })
+    expect(admin.engineInfoCurrent).toBe(true)
+    expect(admin.user!.engine).toMatchObject({ experimentId: 1, sessionId: null })
+  })
+})
+
+describe('"Reload needed" is about the experiment the engine runs', () => {
+  const engine = (experimentId: number, sessionId: number | null) =>
+    ({ experimentId, experimentName: 'E' + experimentId, sessionId, sessionName: sessionId === null ? null : 'S' + sessionId, owner: 'boss@lab' })
+  const push = (selected: number, eng: any) =>
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(selected, selected === 1 ? 'A' : 'B'), experimentInstance: '', engine: eng })
+
+  beforeEach(() => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    admin.engine = 'ready'
+  })
+
+  it('isn\'t marked for steps of an experiment the engine doesn\'t run', () => {
+    // B selected, the engine runs A's session: B's next build loads what is saved
+    push(2, engine(1, 9))
+    actions.markEngineStale()
+    expect(admin.engine).toBe('ready')
+    actions.markEngineStale(2)
+    expect(admin.engine).toBe('ready')
+    // A's steps are what it runs
+    actions.markEngineStale(1)
+    expect(admin.engine).toBe('stale')
+    actions.markEngineCurrent()
+    // on A
+    push(1, engine(1, 9))
+    actions.markEngineStale()
+    expect(admin.engine).toBe('stale')
+    actions.markEngineCurrent()
+    // not known what runs (a rebuild under way, an older server): marked, as before
+    push(2, undefined)
+    actions.markEngineStale(2)
+    expect(admin.engine).toBe('stale')
+    actions.markEngineCurrent()
   })
 })
 

@@ -107,7 +107,14 @@ export function useSessionActions () {
     })
     if (!ok) return false
     return !!await run('stop', s.id, async () => {
-      await actions.stopInstance(s.id)
+      const askedAt = Date.now()
+      const m = await actions.stopInstance(s.id)
+      // refused, e.g. it had finished meanwhile: the server says so (and its status follows)
+      const refusal = admin.requestError
+      if (!m && refusal && refusal.request === 'StopGame' && refusal.at >= askedAt) {
+        notify.info(`“${s.name}” was not stopped`, refusal.text)
+        return false
+      }
       const stopped = await waitUntil(() => {
         const now = find(s.id)
         return !now || !canStop(now)

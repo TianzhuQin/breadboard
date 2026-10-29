@@ -116,6 +116,8 @@ function handle (m: any) {
 
   if ('user' in m && m.user && typeof m.user === 'object') {
     applyUserJson(m)
+  } else if (m.engine && typeof m.engine === 'object') {
+    applyEngineNews(m.engine)
   }
   if (m.notify) {
     if (m.notify.ScriptEngineReloading) {
@@ -166,19 +168,19 @@ function handle (m: any) {
   }
   // An experiment was made, imported, renamed or deleted, maybe by another researcher: every
   // researcher works on every experiment, so ask for the newest list.
-  if (m.experimentsChanged === true) experimentsChanged()
+  if (m.experimentsChanged === true) askUserJsonSoon()
   if (m.event && typeof m.event === 'object' && isSelectedSessionEvent(m.event)) {
     state.events.push({ ...m.event, receivedAt: Date.now() })
     if (state.events.length > EVENTS_CAP) state.events.splice(0, state.events.length - EVENTS_CAP)
   }
 }
 
-let experimentsTimer: ReturnType<typeof setTimeout> | null = null
+let askTimer: ReturnType<typeof setTimeout> | null = null
 /** Ask for the newest User JSON once, a moment after the last of a burst of changes. */
-function experimentsChanged () {
-  if (experimentsTimer) clearTimeout(experimentsTimer)
-  experimentsTimer = setTimeout(() => {
-    experimentsTimer = null
+function askUserJsonSoon () {
+  if (askTimer) clearTimeout(askTimer)
+  askTimer = setTimeout(() => {
+    askTimer = null
     send('Update')
   }, 250)
 }
@@ -346,10 +348,10 @@ function applyUserJson (m: any) {
   // missing key = nothing selected (User.java omits it)
   state.experiment = m.experiment && typeof m.experiment === 'object' ? m.experiment : null
   let inst = m.experimentInstance && typeof m.experimentInstance === 'object' ? m.experimentInstance : null
-  // The server can still name a session of the experiment selected before: one that has ended, or
-  // one the engine still runs (selecting another experiment leaves a live session running). It
-  // isn't this experiment's, so its page, data and chip mustn't show here; the Run pages say what
-  // the engine runs instead.
+  // An older server can still name a session of the experiment selected before: one that has ended,
+  // or one the engine still runs (selecting another experiment leaves a live session running; newer
+  // servers send the account's session only with its own experiment). It isn't this experiment's,
+  // so its page, data and chip mustn't show here; the Run pages say what the engine runs instead.
   const exp = state.experiment
   if (inst && exp && Array.isArray(exp.instances) && !exp.instances.some((x: any) => x && x.id === inst.id)) {
     const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
@@ -362,6 +364,34 @@ function applyUserJson (m: any) {
   }
   state.instance = inst
   state.ready = true
+}
+
+/**
+ * {"engine": {...}}: what the shared engine runs, as the User JSON's `engine` says it, which the
+ * server sends every console whenever that changes (a session launched, resumed, started, stopped,
+ * finished or ended; the engine rebuilt). Only the account that acted used to hear, so this console
+ * kept refusing Reload and Run for a session that had ended. When a session of the experiment
+ * selected here (or the one shown here) began or ended, the User JSON is asked for too, for the
+ * sessions' states: one followed here that finished went on showing as running.
+ */
+function applyEngineNews (v: any) {
+  const user = state.user
+  // (before the first User JSON: the one that answers LogIn says it)
+  if (!user) return
+  const before = user.engine
+  const now = engineInfoOf(v)
+  user.engine = now
+  if (engineInfoPhase === 'asked') {
+    engineInfoPhase = 'current'
+    state.engineInfoCurrent = true
+  }
+  if (engineInfoPhase === 'current') state.engineInfoAt = Date.now()
+  if (!now || (before && before.sessionId === now.sessionId)) return
+  const selected = state.experiment?.id
+  const shown = state.instance?.id
+  const concernsThis = (e: EngineInfo | null) => !!e &&
+    ((e.sessionId !== null && e.sessionId === shown) || (e.experimentId !== null && e.experimentId === selected))
+  if (concernsThis(before) || concernsThis(now)) askUserJsonSoon()
 }
 
 conn.onMessage(handle)
@@ -707,9 +737,18 @@ const actions = {
   markErrorsSeen () {
     state.unseenErrors = 0
   },
-  /** Steps changed since the engine last loaded them (e.g. one was deleted). */
-  markEngineStale () {
-    if (state.engine !== 'loading') state.engine = 'stale'
+  /**
+   * Steps of experiment `experimentId` (the selected one when left out) changed since the engine last
+   * loaded them (e.g. one was deleted). Only while the engine runs that experiment (or that isn't
+   * known): steps of another one are loaded by its next build, and a reload from here would end the
+   * session the engine runs, or load the selected experiment instead of catching up.
+   */
+  markEngineStale (experimentId?: number) {
+    if (state.engine === 'loading') return
+    const id = experimentId ?? state.experiment?.id
+    const e = state.user?.engine
+    if (id != null && e && e.experimentId !== null && state.engineInfoCurrent && e.experimentId !== id) return
+    state.engine = 'stale'
   },
   /**
    * The engine runs the saved steps again (each change was loaded with Run): undo markEngineStale.
@@ -779,12 +818,32 @@ const runBlocked = computed(() => {
   if (e.sessionId !== null) return `The engine is running ${engineSessionText(e)}, so this experiment’s steps can’t run in it until that session has ended.`
   return `The engine has ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'} loaded, not this one: reload the engine to load this experiment’s steps, then run.`
 })
+/**
+ * In file mode, why a step file saved now isn't loaded into the engine, and when it is ('' while the
+ * engine runs the selected experiment): it runs another one (ScriptBoard.stepFileSaved).
+ */
+const fileStepsWait = computed(() => {
+  const e = engineElsewhere.value
+  if (!e) return ''
+  if (e.sessionId !== null) return `The engine is running ${engineSessionText(e)}; a saved file loads when this experiment’s next session starts.`
+  return `The engine has ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'} loaded; a saved file loads when this experiment’s next session starts, or when you reload the engine.`
+})
+/**
+ * Why file mode can't be switched on for the selected experiment now ('' when it can): the engine
+ * runs another experiment's live session. In file mode a step file saved on the server runs at
+ * once, which it can't while that session runs (the server refuses too: ScriptBoard.fileModeRefusal).
+ */
+const fileModeBlocked = computed(() => {
+  const e = engineElsewhere.value
+  if (!e || e.sessionId === null) return ''
+  return `The engine is running ${engineSessionText(e)}. In file mode a step file you save runs at once, which it can’t while that session runs. Switch file mode on once it has ended.`
+})
 
 export const admin = state
 export const connection = conn
 export {
   graph, boot, login, logout, createFirstUser, adoptUid, actions, experiments, instances, running, engineInUse,
-  engineElsewhere, reloadBlocked, runBlocked, ensureConnected, nextMessage,
+  engineElsewhere, reloadBlocked, runBlocked, fileModeBlocked, fileStepsWait, ensureConnected, nextMessage,
 }
 
 /** For tests: feed a message as if it came from the server. */

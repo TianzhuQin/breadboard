@@ -198,10 +198,16 @@ public class User extends Model {
     } else if (experimentInstanceId != null && experimentInstanceId != -1L) {
       ExperimentInstance ei = ExperimentInstance.findById(experimentInstanceId);
       Logger.debug("experimentInstanceId = " + experimentInstanceId.toString() + (ei == null ? " is null" : ""));
-      if (ei != null) {
+      Long of = ei == null || ei.experiment == null ? null : ei.experiment.id;
+      if (ei == null) {
+        experimentInstanceId = -1L;
+        breadboard.put("experimentInstance", "");
+      } else if (selectedExperiment != null && selectedExperiment.id.equals(of)) {
         breadboard.put("experimentInstance", ei.toJson());
       } else {
-        experimentInstanceId = -1L;
+        // A session of another experiment than the selected one (selecting leaves a live session
+        // running, as the account's): it is sent again once that experiment is selected. Sent here,
+        // the previous console showed it, and acted on it, as the selected experiment's.
         breadboard.put("experimentInstance", "");
       }
     } else {

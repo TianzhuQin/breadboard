@@ -72,6 +72,9 @@ public class GameListener {
       this.experimentInstance.finish();
       this.experimentInstance.save();
       Autopilot.sessionFinished(this.experimentInstance);
+      // Every console hears that the engine runs no session now (another account's, which may be
+      // following this one, too).
+      ScriptBoard.engineChanged();
     }
     if (user != null && engine != null) {
       // Every console tab of this account learns the session finished. The tab that last sent this

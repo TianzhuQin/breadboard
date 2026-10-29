@@ -21,6 +21,7 @@
         <p class="steps__banner-text">
           <strong>Read from files.</strong> This experiment is in file mode: its steps come from the .groovy files in its
           folder on the server, and this page follows them as they change. Editing here is off so nothing overwrites those files.
+          <template v-if="fileStepsWait"><br><strong>A step file saved now isn’t loaded into the engine.</strong> {{ fileStepsWait }}</template>
         </p>
         <BButton size="sm" @click="router.push('/experiments')">Switch off file mode…</BButton>
       </div>
@@ -248,7 +249,7 @@ import {
   BBadge, BButton, BEmpty, BField, BInput, BMenu, BSpinner, confirm, notify, toast, type MenuItem,
 } from '@/ui'
 import BCodeEditor from '@/ui/BCodeEditor.vue'
-import { actions, admin, ensureConnected, reloadBlocked, runBlocked } from '@/store/admin'
+import { actions, admin, ensureConnected, fileStepsWait, reloadBlocked, runBlocked } from '@/store/admin'
 import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
@@ -495,7 +496,7 @@ async function saveCurrent () {
   const ok = await saveDraft(b, d)
   if (ok) {
     refreshStore()
-    if (d.engineBehind) actions.markEngineStale()
+    if (d.engineBehind) actions.markEngineStale(b.experimentId)
     announce.value = `Saved ${d.name}.`
     notify.success(`Saved “${d.name}”`, d.engineBehind && !sessionLive.value ? 'The next session you open uses it.' : undefined)
   } else {
@@ -533,14 +534,14 @@ async function saveAndRunCurrent () {
     return
   }
   // The engine runs another experiment (one whose session selecting left running, or that is just
-  // loaded): the server would refuse to run this one's code, so say why here.
+  // loaded): the server would refuse to run this one's code, so say why here. (Nothing to mark: the
+  // next build of this experiment loads what is saved.)
   if (runBlocked.value) {
-    if (saved && d.engineBehind) actions.markEngineStale()
     notify.info(saved ? `“${d.name}” was saved but not run` : `“${d.name}” was not run`, runBlocked.value)
     announce.value = `${d.name} was not run: the engine runs another experiment.`
     return
   }
-  if (runDraft(d)) {
+  if (runDraft(d, b.experimentId)) {
     announce.value = `Running ${d.name} in the engine.`
     return
   }
@@ -592,7 +593,7 @@ async function saveAll (): Promise<boolean> {
   savingAll.value = false
   if (saved) {
     refreshStore()
-    if (behind) actions.markEngineStale()
+    if (behind) actions.markEngineStale(b.experimentId)
     notify.success(`Saved ${saved} step${saved === 1 ? '' : 's'}`, !behind
       ? undefined
       : sessionLive.value ? 'Reload the engine, or Run a step, to use the new versions in the running session.' : 'The next session you open uses them.')
@@ -636,7 +637,7 @@ async function deleteCurrent () {
     return
   }
   if (snapshot.wasSaved) {
-    actions.markEngineStale()
+    actions.markEngineStale(b.experimentId)
     refreshStore()
   }
   const rest = sortDrafts(b.drafts)

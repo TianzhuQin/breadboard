@@ -426,6 +426,43 @@ public class AutopilotSessionTest extends BaseTest {
         await("its scripts run again", () -> Integer.valueOf(1).equals(engineValue("watched")));
     }
 
+    @Test
+    public void stopPressedOnItsSessionAfterItFinishedLeavesTheAutopilotAlone() throws Exception {
+        final User operator = user("finisher");
+        final Experiment auto = createExperiment("Finishes by itself");
+        operator.ownedExperiments.add(auto);
+        operator.saveManyToManyAssociations("ownedExperiments");
+        ObjectNode settings = settings(auto, 2);
+        settings.put("nextSessionDelaySeconds", 2);
+        assertEquals(OK, status(post(operator, settings)));
+        await("its session", () -> sessions(auto).size() == 1 && running(auto) == 1);
+        final ExperimentInstance first = sessions(auto).get(0);
+
+        // A console that still shows it running; meanwhile its game finishes (the next one is due).
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(operator.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        engine().eval("gameListener.finish()");
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(first.id).status);
+
+        // Stop pressed on it: nothing is stopped, it says why, and the autopilot isn't paused (which
+        // also called off the next session).
+        tab.send("StopGame", "id", first.id);
+        await("refused", () -> tab.count(AdminSocketsTest.error("StopGame")) == 1);
+        String why = tab.first(AdminSocketsTest.error("StopGame")).get("error").asText();
+        assertTrue(why, why.contains("is already over (it has finished)"));
+        assertFalse(state(operator).get("status").toString(), state(operator).get("status").get("paused").asBoolean());
+        // (Nor does it pause when told outright that a researcher ended a session that is over.)
+        java.lang.reflect.Method stopped = Autopilot.class.getDeclaredMethod("sessionStopped", ExperimentInstance.class, User.class, String.class);
+        stopped.setAccessible(true);
+        stopped.invoke(null, ExperimentInstance.findById(first.id), operator, "was stopped by %s");
+        assertFalse(state(operator).get("status").get("paused").asBoolean());
+        assertEquals(0, Event.find.where().eq("experimentInstance.id", first.id).eq("name", "sessionStopped").findRowCount());
+
+        await("the next session", () -> sessions(auto).size() == 2 && running(auto) == 1);
+    }
+
     // (Ids don't always grow with time here, so sessions are told apart by status.)
     private static int running(Experiment experiment) {
         int n = 0;

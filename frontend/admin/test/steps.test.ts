@@ -14,6 +14,8 @@ vi.mock('@/store/admin', async () => {
     engine: 'ready',
     engineReloadedAt: 0,
     engineProblem: '',
+    // whether user.engine (what the shared engine runs) is known to be current
+    engineInfoCurrent: true,
     requestError: null as any,
     output: [] as any[],
   })
@@ -39,6 +41,8 @@ vi.mock('@/store/admin', async () => {
     engineElsewhere: ref(null),
     runBlocked: ref(''),
     reloadBlocked: ref(''),
+    // in file mode: why a saved step file isn't loaded now
+    fileStepsWait: ref(''),
   }
 })
 
@@ -409,6 +413,50 @@ describe('the live engine', () => {
     admin.engineReloadedAt = Date.now() + 2
     await nextTick()
     expect(b.drafts[0].engineBehind).toBe(false)
+  })
+
+  it('keeps the mark about the experiment the engine runs as the selection changes without a rebuild', async () => {
+    // the engine runs experiment 7 (its session kept the engine while experiment 8 was selected)
+    admin.user.engine = { experimentId: 7, experimentName: 'Trust game', sessionId: 9, sessionName: 'Wave 1', owner: 'r@lab.org', gameStarted: false }
+    try {
+      await nextTick()
+      const b7 = ensureBucket(7, false)
+      b7.drafts.push(draftFromStep({ id: 1, name: 'Bonus', source: 'bonus = 1' }))
+      ;(http.del as any).mockResolvedValueOnce(undefined)
+      expect(await deleteDraft(b7, b7.drafts[0])).toBe(true)
+      admin.engine = 'stale'
+      // a step deleted from 8 is 8's: it says nothing about what the engine runs
+      const b8 = ensureBucket(8, false)
+      b8.drafts.push(draftFromStep({ id: 2, name: 'Other', source: 'other = 1' }))
+      ;(http.del as any).mockResolvedValueOnce(undefined)
+      expect(await deleteDraft(b8, b8.drafts[0])).toBe(true)
+
+      // working on 8: the engine runs 7, so it isn't 8's mark to show
+      admin.experiment = { id: 8, name: 'Pilot study', fileMode: false, steps: [] }
+      await nextTick()
+      expect(admin.engine).toBe('ready')
+      // back on 7: what the deleted step defined is still in the engine
+      actions.markEngineStale.mockClear()
+      admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps: [] }
+      await nextTick()
+      expect(actions.markEngineStale).toHaveBeenCalledWith(7)
+      expect(admin.engine).toBe('stale')
+
+      // a reload loads 7 again: nothing behind on either
+      admin.engineReloadedAt = Date.now() + 5
+      await nextTick()
+      admin.engine = 'ready'
+      actions.markEngineStale.mockClear()
+      admin.experiment = { id: 8, name: 'Pilot study', fileMode: false, steps: [] }
+      await nextTick()
+      admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps: [] }
+      await nextTick()
+      expect(actions.markEngineStale).not.toHaveBeenCalled()
+      expect(admin.engine).toBe('ready')
+    } finally {
+      delete admin.user.engine
+      admin.experiment = null
+    }
   })
 
   it('throws away the drafts of a deleted experiment, but keeps them through signing out', async () => {
@@ -787,6 +835,33 @@ describe('StepsPage while the engine runs another experiment', () => {
     } finally {
       blocked('', '')
       admin.engine = 'ready'
+    }
+  })
+
+  it('says in file mode that a step file saved now isn’t loaded into the engine', async () => {
+    const WAIT = 'The engine is running “Live study”’s session “Wave 2”; a saved file loads when this experiment’s next session starts.'
+    blocked(RUN, RELOAD)
+    ;(store as any).fileStepsWait.value = WAIT
+    try {
+      admin.experiment = { id: 7, name: 'Trust game', fileMode: true, steps }
+      get.mockResolvedValue({ steps })
+      const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }] })
+      router.push('/steps')
+      await router.isReady()
+      const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs: { BCodeEditor: CodeStub } } })
+      await flushPromises()
+      const banner = w.find('.steps__banner.is-file')
+      expect(banner.text()).toContain('Read from files.')
+      expect(banner.text()).toContain(`A step file saved now isn’t loaded into the engine. ${WAIT}`)
+      // with the engine running this experiment, nothing of the sort
+      blocked('', '')
+      ;(store as any).fileStepsWait.value = ''
+      await nextTick()
+      expect(w.find('.steps__banner.is-file').text()).not.toContain('isn’t loaded')
+      w.unmount()
+    } finally {
+      blocked('', '')
+      ;(store as any).fileStepsWait.value = ''
     }
   })
 

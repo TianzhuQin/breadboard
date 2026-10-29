@@ -10,9 +10,11 @@ import AccountMenu from '../src/shell/AccountMenu.vue'
 import TopBar from '../src/shell/TopBar.vue'
 import { registerUnsaved, unsavedTotal, confirmSignOut } from '../src/shell/unsaved'
 import { admin, actions, connection, graph, __receive } from '../src/store/admin'
-import { isStaleBuildError, onStaleBuild } from '../src/router'
+import { isStaleBuildError, onStaleBuild, routes } from '../src/router'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
+import { buckets, ensureBucket } from '../src/pages/steps/stepsStore'
+import { draftFromStep } from '../src/pages/steps/stepsModel'
 
 const tick = () => new Promise(r => setTimeout(r, 0))
 
@@ -369,26 +371,133 @@ describe('the engine running another experiment', () => {
     w.unmount()
   })
 
-  it('shows on the Run pages only', async () => {
+  it('shows on the Run pages only, as the console\'s routes mark them', async () => {
+    const RUN = ['/session', '/network', '/players', '/console', '/preview']
+    const BUILD = ['/steps', '/content', '/parameters', '/page', '/images']
+    const OTHER = ['/sessions', '/autopilot', '/recruit', '/experiments', '/settings']
+    const meta = (path: string) => (routes.find(r => r.path === path) as any)?.meta || null
+    for (const p of RUN) expect(meta(p), p).toMatchObject({ usesEngine: true })
+    for (const p of [...BUILD, ...OTHER]) expect(meta(p)?.usesEngine, p).toBeFalsy()
+
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
     state(engine(2, 'B', 'Pilot 3'))
+    // the console's own routes, with stand-ins for the pages
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [
-        { path: '/session', component: { render: () => h('p', 'Live') }, meta: { title: 'Live session', usesEngine: true } },
-        { path: '/steps', component: { render: () => h('p', 'Steps') }, meta: { title: 'Steps' } },
-        { path: '/:other(.*)*', component: { render: () => h('p', 'Other') } },
-      ],
+      routes: routes.map(r => ('redirect' in r && r.redirect)
+        ? { path: r.path, redirect: r.redirect } as any
+        : { path: r.path, meta: r.meta, component: { render: () => h('p', String(r.name)) } }),
     })
     admin.ready = true
     await router.push('/session')
     await router.isReady()
     const w = mount(AppShell, { global: { plugins: [router] }, attachTo: document.body })
+    for (const p of RUN) {
+      await router.push(p)
+      await nextTick()
+      expect(w.find('.engine-notice').exists(), p).toBe(true)
+    }
+    for (const p of [...BUILD, ...OTHER]) {
+      await router.push(p)
+      await nextTick()
+      expect(w.find('.engine-notice').exists(), p).toBe(false)
+    }
+    w.unmount()
+  })
+
+  it('doesn\'t count the engine\'s players in the sidebar while it runs another experiment', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    graph.clear()
+    state(engine(2, 'B', 'Pilot 3'))
+    const seen = graph.version.value
+    graph.apply({ action: 'addNode', id: 'p1' })
+    graph.apply({ action: 'addNode', id: 'p2' })
+    await vi.waitFor(() => expect(graph.version.value).toBeGreaterThan(seen))
+    const { w } = await mountShell()
+    const players = () => w.findAll('.sidenav__link').find(l => l.text().startsWith('Players'))!
+    // B's players, while A is the experiment worked on here
+    expect(players().find('.sidenav__count').exists()).toBe(false)
+    // the engine runs A now (as the server says, with no rebuild): they are A's
+    __receive({ engine: engine(1, 'A', 'Pilot') })
     await nextTick()
-    expect(w.find('.engine-notice').exists()).toBe(true)
-    await router.push('/steps')
+    expect(players().find('.sidenav__count').text()).toBe('2')
+    graph.clear()
+    w.unmount()
+  })
+})
+
+describe('"Reload needed" while working on another experiment', () => {
+  const exp = (id: number, name: string, instances: any[] = []) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances, images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
+  const S = { id: 9, name: 'Auto 1', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] }
+  // the autopilot's session of A runs in the engine
+  const engine = { experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 1', owner: 'auto@lab' }
+  const list = () => [exp(1, 'A', [S]), exp(2, 'B')]
+  const onA = { experiment: exp(1, 'A', [S]), experimentInstance: S }
+  const onB = { experiment: exp(2, 'B'), experimentInstance: '' }
+  /** Select an experiment, and the server's answer: only the selection changed (a live session kept the engine). */
+  async function select (id: number, picture: any) {
+    void actions.selectExperiment(id)
+    __receive({ user: { email: 'r@lab', experiments: list(), currentScript: '' }, ...picture, engine, engineKept: true })
     await nextTick()
-    expect(w.find('.engine-notice').exists()).toBe(false)
+  }
+  async function chip () {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
+    const w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    await nextTick()
+    return w
+  }
+
+  afterEach(() => {
+    connection.state.value = 'idle'
+    admin.engine = 'ready'
+    buckets.clear()
+  })
+
+  it('isn\'t left on A by a step of B saved meanwhile, and is worked out again for the experiment selected', async () => {
+    admin.email = 'r@lab'
+    graph.clear()
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    __receive({ user: { email: 'r@lab', experiments: list(), currentScript: '' }, ...onA, engine })
+    admin.engine = 'ready'
+    connection.state.value = 'open'
+    vi.spyOn(connection, 'send').mockReturnValue(true)
+    const w = await chip()
+
+    // On B, one of its steps is saved (as the Steps page marks it): the engine doesn't run B.
+    await select(2, onB)
+    const stepOfB = draftFromStep({ id: 21, name: 'InitStep', source: 'b = 2' })
+    ensureBucket(2, false).drafts.push(stepOfB)
+    stepOfB.engineBehind = true
+    actions.markEngineStale(2)
+    expect(admin.engine).toBe('ready')
+
+    // Back on A (its session kept the engine): A's steps didn't change, the engine runs them.
+    await select(1, onA)
+    expect(admin.instance?.id).toBe(9)
+    expect(admin.engine).toBe('ready')
+    expect(w.find('.topbar__chip').text()).not.toContain('Reload needed')
+
+    // A step of A saved and not run: marked, off on B, and marked again back on A.
+    const stepOfA = draftFromStep({ id: 11, name: 'InitStep', source: 'a = 2' })
+    ensureBucket(1, false).drafts.push(stepOfA)
+    stepOfA.engineBehind = true
+    actions.markEngineStale(1)
+    await nextTick()
+    expect(w.find('.topbar__chip').text()).toContain('Reload needed')
+    await select(2, onB)
+    expect(admin.engine).toBe('ready')
+    expect(w.find('.topbar__chip').text()).not.toContain('Reload needed')
+    await select(1, onA)
+    expect(admin.engine).toBe('stale')
+    expect(w.find('.topbar__chip').text()).toContain('Reload needed')
+
+    // A rebuild loads every saved step (of the experiment it loads; others aren't in it at all).
+    __receive({ notify: { ScriptEngineReloading: 3 } })
+    __receive({ notify: { ScriptEngineReloaded: 4 } })
+    await nextTick()
+    expect(stepOfA.engineBehind).toBe(false)
+    expect(stepOfB.engineBehind).toBe(false)
     w.unmount()
   })
 })
