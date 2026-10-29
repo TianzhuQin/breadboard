@@ -411,26 +411,40 @@ public class AutopilotGuardTest extends BaseTest {
             + "roundStep.run = { g.V.filter { !it.id.startsWith('_') }.each { p -> a.add(p, [name: 'Done', result: { }]) } }\n"
             + "roundStep.done = { roundStep.finish() }");
         own(researcher, experiment);
-        ObjectNode s = settings(experiment, 1, 1, 1);
+        ObjectNode s = settings(experiment, 2, 2, 1);
         s.put("continuous", false);   // (no next session as the test ends)
         assertEquals(OK, status(post(researcher, s)));
         final ExperimentInstance session = nextSession(experiment, 1);
-        Page participant = joins(experiment, session, "pv-1");
+        Page first = joins(experiment, session, "pv-1");
+        Page second = joins(experiment, session, "pv-2");
         await("the start", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted)
-            && ((Number) engineValue("a.actions.size()")).intValue() == 1 && engineValue("g.getVertex('_1')") != null);
-        // The researcher watches the computer player (its Client never takes a seat) and the participant.
+            && ((Number) engineValue("a.actions.size()")).intValue() == 2 && engineValue("g.getVertex('_1')") != null);
+        // The researcher watches the computer player (its Client never takes a seat) and both participants.
         Page computer = previews(experiment, session, "_1");
-        Page watcher = previews(experiment, session, "pv-1");
-        assertTrue(computer.frames.get(0).path("bbWatching").asBoolean());
-        assertTrue(watcher.frames.get(0).path("bbWatching").asBoolean());
+        Page watchingFirst = previews(experiment, session, "pv-1");
+        Page watchingSecond = previews(experiment, session, "pv-2");
+        for (Page preview : new Page[]{computer, watchingFirst, watchingSecond}) {
+            assertTrue(preview.frames.get(0).path("bbWatching").asBoolean());
+        }
+        // The second came from Prolific, and the experiment has just given them their completion code.
+        engine().eval("def v = g.getVertex('pv-2'); recruitment.registerProlific(v); "
+            + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
 
         ahead = 61000L;
         watchdog();
         await("the session to be finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
-        // Every page is told and closed: the computer player's preview (it used to be left open with a
-        // frozen view, as its Client has no seat), and the participant's, which watches too.
-        for (Page page : new Page[]{participant, watcher, computer}) {
+        // Every page is told and closed, the previews as the pages they watch: the computer player's
+        // preview (it used to be left open with a frozen view, as its Client has no seat), and the
+        // participants' (they used to be closed without a word).
+        for (Page page : new Page[]{first, watchingFirst, computer}) {
             assertEquals(page.frames.toString(), "outOfTime", page.lastPlayer().get("player").get("ended").asText());
+            assertTrue(page.closed);
+        }
+        // The one with a completion code keeps it, their preview too: their screen with the code, then
+        // the end in the way that keeps it.
+        for (Page page : new Page[]{second, watchingSecond}) {
+            assertEquals("C0DE42", page.lastPlayer().get("player").get("_system").get("recruitment").get("completionCode").asText());
+            assertEquals("outOfTime", page.last().get("sessionOver").get("player").get("ended").asText());
             assertTrue(page.closed);
         }
     }
