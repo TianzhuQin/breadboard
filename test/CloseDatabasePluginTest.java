@@ -147,6 +147,39 @@ public class CloseDatabasePluginTest extends BaseTest {
     }
 
     @Test
+    public void theEndOfAStopInTheServersOwnProcessClosesTheDatabase() throws Exception {
+        // a script's own connection, never given back
+        Connection script = DriverManager.getConnection(url, "", "");
+        try (Statement s = script.createStatement()) {
+            s.execute("create table kept (id int)");
+            s.executeUpdate("insert into kept values (1)");
+        }
+        assertTrue(CloseDatabasePlugin.closeAtEndOfStop(true, settings()));
+        assertFalse("closed properly: nothing for H2 to recover", lock.exists());
+        assertTrue("the script's connection is closed with it", script.isClosed());
+        try (Connection again = DriverManager.getConnection(url, "", "")) {
+            assertEquals(1, count(again, "kept"));
+        }
+    }
+
+    @Test
+    public void theEndOfAStopInTheTestsOrSbtLeavesTheDatabaseOpen() throws Exception {
+        // (sbt reloads the application in the same process, and the tests go on with their database)
+        Connection script = DriverManager.getConnection(url, "", "");
+        try (Statement s = script.createStatement()) {
+            s.execute("create table kept (id int)");
+        }
+        assertFalse(CloseDatabasePlugin.closeAtEndOfStop(false, settings()));
+        assertTrue("still open", lock.exists());
+        assertFalse(script.isClosed());
+        try (Statement s = script.createStatement()) {
+            s.executeUpdate("insert into kept values (1)");
+            assertEquals(1, count(script, "kept"));
+        }
+        script.close();
+    }
+
+    @Test
     public void itStopsAfterTheConnectionPool() {
         // Play stops its plugins in the reverse of this order (conf/play.plugins)
         List<String> plugins = new ArrayList<>();

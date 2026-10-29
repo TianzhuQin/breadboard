@@ -26,6 +26,18 @@
     </encoder>
   </appender>
 
+  <!-- The console's lines wait in a queue, and a thread of their own writes them out: a window that
+       stops taking output (a click in a Windows console starts selecting text, which pauses it;
+       Ctrl+S in a terminal) used to hold up everything that logs, participants signing in among
+       them. Once 128 lines wait, which happens only when the console takes none, INFO lines are left
+       out of the console (warnings and errors have the other 384 places); logs/application.log
+       (FILE) still gets every line. -->
+  <appender name="CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+    <queueSize>512</queueSize>
+    <discardingThreshold>384</discardingThreshold>
+    <appender-ref ref="STDOUT" />
+  </appender>
+
   <logger name="play" level="INFO" />
   <logger name="application" level="INFO" />
   <!-- Akka's own warnings and errors (akka.loggers in conf/application-prod.conf), e.g. the fatal
@@ -40,7 +52,7 @@
   <logger name="com.avaje.ebeaninternal.server.lib.BackgroundThread" level="OFF" />
 
   <root level="WARN">
-    <appender-ref ref="STDOUT" />
+    <appender-ref ref="CONSOLE" />
     <appender-ref ref="FILE" />
   </root>
 

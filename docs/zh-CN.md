@@ -19,12 +19,14 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | `breadboard-<version>.zip` | 任何系统，但要自己装 Java 8（**只能用 Java 8**），并把 `JAVA8_HOME` 设为它的安装文件夹 |
 
 2. 启动：
-   - **macOS**：双击 `Start Breadboard.command`。第一次 macOS 可能提示"无法验证开发者"：右键点这个文件，选 **打开**（较新的 macOS 要到 系统设置 → 隐私与安全性 里点 **仍要打开**）。也可以在终端里进入文件夹，运行 `./breadboard.sh`。
-   - **Windows**：双击 `breadboard.bat`。如果 SmartScreen 拦截，点 **更多信息** → **仍要运行**。
-   - **Linux**：在文件夹里运行 `./breadboard.sh`。
-3. 服务器启动好后，浏览器会自动打开控制台（也可以手动打开 <http://localhost:9000>）。如果是从别的电脑打开一台新服务器（例如远程的服务器），还要填 **Setup code**：服务器会把它打印在自己的窗口里和 `logs/application.log` 里，这样只有管理这台服务器的人能创建第一个账号。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
+   - **macOS**：双击 `Start Breadboard.command`。第一次 macOS 会拦下它，因为它是从网上下载的，macOS 无法验证开发者。macOS 15 及以后，按住 Control 键点按 → **打开** 已经不管用，只能到 **系统设置 → 隐私与安全性** 里点 **仍要打开**。一定能用的办法是用"终端"：打开终端，输入 `sh` 和一个空格，把文件夹里的 `breadboard.sh` 拖进终端窗口，按回车。
+   - **Windows**：解压之前，先右键点下载的 zip，选 **属性**，勾选 **解除锁定**，点 **确定**。不然 Windows（智能应用控制）可能不让运行从网上下载的 `breadboard.bat`。然后右键点 zip，选 **全部解压缩**，再双击解压出的文件夹里的 `breadboard.bat`。（直接在 zip 里双击的话，它会提示先解压。）第一次启动时，Windows 防火墙会询问是否允许 Java 访问网络：勾选 **专用网络**，实验室里的其他电脑才能连上，再点 **允许访问**。如果 SmartScreen 还是拦截，点 **更多信息** → **仍要运行**。
+   - **Linux**：解压（没有 `unzip` 的话，先运行 `sudo apt install unzip`），在文件夹里运行 `./breadboard.sh`。
+3. 服务器启动好后，浏览器会自动打开控制台。窗口里也会写出访问地址：`On this computer: http://localhost:9000` 给这台电脑用，`On this network: http://192.168.…:9000` 给同一网络（比如实验室）里的其他电脑用。如果是从别的电脑打开一台新服务器（例如远程的服务器），还要填 **Setup code**：服务器会把它打印在自己的窗口里和 `logs/application.log` 里，这样只有管理这台服务器的人能创建第一个账号。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
 4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。所有研究者都能看到和修改这台服务器上的每个实验。
 5. 停止服务器：在它的窗口里按 Ctrl+C，或直接关掉窗口。
+
+服务器运行期间，电脑不会自己进入睡眠。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（用电池时合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里"显示器关闭时防止自动进入睡眠"那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
 
 如果提示端口被占用（"Port 9000 is in use" 或 "Breadboard is already running"），通常是 Breadboard 已经在运行，直接打开那个网址就行；要再开一个，用 `./breadboard.sh -Dhttp.port=9001`。
 
@@ -51,7 +53,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 1. 在 **Live session** 页点 **New session**，填 **Session name**，检查 **Launch parameters**（已填好默认值），点 **Create session**。这一场马上开放，参与者可以用链接加入。
 2. 把 **Links for participants** 里的链接发给参与者。**This session** 只在这一场运行时有效。**Whichever session is open** 总是指向这个实验当前开放、还没开始的那一场，可以一直用同一个。**Prolific study URL** 给 Prolific 用。参与者打开链接，在 **Your ID** 里输入一个 ID，点 **Continue**。
 3. 链接用的是你打开控制台时的网址。用 localhost 打开时，链接只在你自己的电脑上能用。放到服务器上以后，要用服务器的公开网址打开控制台，再复制链接。
-4. 人到齐后点 **Start the game**。等待的人一起进入，实验开始。之后再来的人会被拒绝（除非在 `conf/application-prod.conf` 里设了 `breadboard.allowLateJoin=true`）。
+4. 人到齐后点 **Start the game**。等待的人一起进入，实验开始。之后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面"设置写在哪里"）。
 5. 在 **Network** 页实时看网络。选 **Tie**（快捷键 C），先点一个人再点另一个人，就加了一条连接；选 **Cut**（X）再点一条连接，就把它切断。成功后会出现 **Undo**，Ctrl+Z 也能撤销。每次修改都记成一条 `edgeEdit` 事件，操作者是 `admin`。
 6. **Stop session** 之后，没有新人能加入。
 
@@ -108,7 +110,7 @@ CSV 里的时间都是 UTC（北京时间是 UTC+8）。数值按原样保存。
 
 ## 放到服务器上
 
-参与者要从互联网访问服务器，实际上就要用 HTTPS。最简单的做法是在 Breadboard 前面放一个能自己申请证书的反向代理，比如 [Caddy](https://caddyserver.com)，配置只有三行（见下）。然后用这个公开网址（例如 `https://breadboard.example.org`）打开控制台，再复制给参与者的链接：控制台里的链接用的是你打开它时的网址。在 `conf/application-prod.conf` 里设 `breadboard.secureCookies=true` 和 `session.secure=true`；用 Mechanical Turk 的话，还要把 `breadboard.rootUrl` 设为这个网址。nginx 配置、作为服务长期运行（systemd）等见 [install.md](install.md#putting-it-on-a-server)。
+参与者要从互联网访问服务器，实际上就要用 HTTPS。最简单的做法是在 Breadboard 前面放一个能自己申请证书的反向代理，比如 [Caddy](https://caddyserver.com)，配置只有三行（见下）。然后用这个公开网址（例如 `https://breadboard.example.org`）打开控制台，再复制给参与者的链接：控制台里的链接用的是你打开它时的网址。在 `conf/local.conf` 里设 `breadboard.secureCookies=true` 和 `session.secure=true`；用 Mechanical Turk 的话，还要把 `breadboard.rootUrl` 设为这个网址。nginx 配置见 [install.md](install.md#putting-it-on-a-server)，作为服务长期运行（systemd、launchd、任务计划程序）见 [install.md](install.md#running-it-for-good)。
 
 ```
 breadboard.example.org {
@@ -118,9 +120,9 @@ breadboard.example.org {
 
 ## 常见问题
 
-**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。双击 `Start Breadboard.command`（Mac）或 `breadboard.bat`（Windows）启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#putting-it-on-a-server)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
+**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
 
-**启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`。
+**启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`，用找到的第一个 Java 8。`JAVA8_HOME` 可以是 JDK 的文件夹、它的 `bin` 文件夹，或者 Mac 的 Finder 里看到的 JDK 文件夹（比如 `zulu-8.jdk`）；如果那里没有 Java 8，启动脚本会提示 "JAVA8_HOME is …, which has no Java 8; ignoring it"，然后接着找别的。
 
 **参与者看到 "This session isn't running right now"**：这一场已经结束，或服务器重启过，或控制台把引擎换到了另一场。新开一场，或打开自动运行，再把研究链接发给参与者。
 
@@ -130,7 +132,9 @@ breadboard.example.org {
 
 **参与者关了网页还能回来吗？** 能。用同一个浏览器重新打开研究链接（或登录页再输入一次自己的 ID），就会回到原来的座位，即使游戏已经开始；离开超过设定时间时由电脑代玩，回来后交还给本人。换了浏览器或设备就不行，这是为了防止别人冒用 ID。
 
-**数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），保留最近 14 份，不用停服务器。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：停止服务器，把备份 zip 解压到 `db` 文件夹（替换里面的 `breadboard.h2.db`），再启动。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传，从 3.x 升级时和数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
+**数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），保留最近 14 份，不用停服务器。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：停止服务器，把备份 zip 解压到 `db` 文件夹（替换里面的 `breadboard.h2.db`），再启动。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传。从 3.x 升级时，把它和 `conf/local.conf`（你的设置）跟数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
+
+**设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的"文本编辑"，Windows 上的"记事本"）打开就能改。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。
 
 **实验室几个人怎么一起用？** 每人一个账号：在 **Settings → Researchers** 里添加、删除，或给别人重置密码。所有研究者共用这台服务器上的全部实验（谁都能打开、修改、运行）。要和别的课题组分开，就各用一台服务器。
 

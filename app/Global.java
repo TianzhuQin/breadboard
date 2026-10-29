@@ -462,14 +462,22 @@ public class Global extends GlobalSettings {
    * waiting at most {@code waitMs}: true when it was closed in time. A statement running meanwhile
    * holds it up, and one that never ends would for good, hence the limit (the attempt goes on, on its
    * own daemon thread). It connects through H2's driver itself: once Play's connection pool has
-   * stopped, DriverManager has no driver left (BoneCPPlugin.onStop takes every one out).
+   * stopped, DriverManager has no driver left (BoneCPPlugin.onStop takes every one out). When it
+   * isn't closed, the log says why: a statement still running, or what the attempt ran into.
    */
   static boolean closeDatabase(String url, String user, String password, long waitMs) {
-    // (IFEXISTS: a database that isn't there is not made, empty, just to be closed)
-    String existing = url.replaceAll(";+$", "") + ";IFEXISTS=TRUE";
+    // IFEXISTS: a database that isn't there is not made, empty, just to be closed. H2 refuses a setting
+    // given twice with two values ("Duplicate property"), and then nothing was closed: the URL's own
+    // IFEXISTS, user and password, in whatever case, are kept instead.
+    String trimmed = url.replaceAll(";+$", "");
+    String existing = urlSets(trimmed, "IFEXISTS") ? trimmed : trimmed + ";IFEXISTS=TRUE";
     Properties login = new Properties();
-    login.setProperty("user", user);
-    login.setProperty("password", password);
+    if (!urlSets(trimmed, "USER")) {
+      login.setProperty("user", user);
+    }
+    if (!urlSets(trimmed, "PASSWORD")) {
+      login.setProperty("password", password);
+    }
     FutureTask<Boolean> close = new FutureTask<>(() -> {
       try (Connection connection = new org.h2.Driver().connect(existing, login);
            Statement statement = connection.createStatement()) {
@@ -480,11 +488,29 @@ public class Global extends GlobalSettings {
     Thread closer = new Thread(close, "breadboard-close-database");
     closer.setDaemon(true);
     closer.start();
+    String why;
     try {
       return close.get(waitMs, TimeUnit.MILLISECONDS);
-    } catch (Exception e) {
-      return false;
+    } catch (java.util.concurrent.TimeoutException e) {
+      why = "did not close within " + waitMs + " ms (a statement was still running)";
+    } catch (java.util.concurrent.ExecutionException e) {
+      why = "could not be closed: " + e.getCause();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      why = "was not closed: the stop was interrupted";
     }
+    // (never an exception from here: a stop cut short halts the process right after this)
+    try {
+      Logger.warn("The database " + why + "; H2 recovers it at the next start");
+    } catch (Throwable ignored) {
+      // nothing more to do
+    }
+    return false;
+  }
+
+  /** Whether the H2 database URL {@code url} gives the setting {@code name} itself (in any case, as H2 reads it). */
+  private static boolean urlSets(String url, String name) {
+    return java.util.regex.Pattern.compile(";" + name + "=", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(url).find();
   }
 
   /**
