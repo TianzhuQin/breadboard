@@ -15,8 +15,12 @@ class FakeSocket {
   fire (type: string, ev: any = {}) { for (const fn of this.on[type] || []) fn(ev) }
   /** The server accepts the connection. */
   accept () { this.readyState = 1; this.fire('open') }
+  /** The server sends a message. */
+  message (data: string) { this.fire('message', { data }) }
   /** The server goes away. */
   drop () { this.readyState = 3; this.fire('close') }
+  /** The connection can't be made (the server is down). */
+  fail () { this.readyState = 3; this.fire('error'); this.fire('close') }
 }
 
 describe('Socket', () => {
@@ -80,5 +84,81 @@ describe('Socket', () => {
     vi.advanceTimersByTime(5 * 60 * 1000)
     expect(FakeSocket.all.length).toBe(1)
     expect(FakeSocket.all[0].sent).toEqual([])
+  })
+
+  it('keeps the open connection but opens no other once told to stop reconnecting', () => {
+    const s = new Socket('ws://lab/connect')
+    const messages: string[] = []
+    s.on('message', (d: string) => messages.push(d))
+    s.connect()
+    FakeSocket.all[0].accept()
+    s.stopReconnecting()
+    FakeSocket.all[0].message('still here')
+    s.send('reply')
+    expect(messages).toEqual(['still here'])
+    expect(FakeSocket.all[0].sent).toEqual(['reply'])
+    FakeSocket.all[0].drop()
+    vi.advanceTimersByTime(5 * 60 * 1000)
+    expect(FakeSocket.all.length).toBe(1)
+  })
+
+  it('cancels a reconnect that was waiting when told to stop reconnecting', () => {
+    const s = new Socket('ws://lab/connect')
+    const retries: number[] = []
+    s.on('retry', (wait: number) => retries.push(wait))
+    s.connect()
+    FakeSocket.all[0].accept()
+    FakeSocket.all[0].drop()
+    expect(retries.length).toBe(1)
+    s.stopReconnecting()
+    vi.advanceTimersByTime(5 * 60 * 1000)
+    expect(FakeSocket.all.length).toBe(1)
+  })
+
+  it('says it is refused when the server closes three connections in a row without a word', () => {
+    const s = new Socket('ws://lab/connect')
+    let refused = 0
+    s.on('refused', () => refused++)
+    s.connect()
+    for (let k = 0; k < 3; k++) {
+      expect(refused).toBe(0)
+      FakeSocket.all[k].accept()
+      FakeSocket.all[k].drop()
+      vi.advanceTimersByTime(10000)
+    }
+    expect(refused).toBe(1)
+    // it goes on trying meanwhile, and counts again from there
+    expect(FakeSocket.all.length).toBe(4)
+    FakeSocket.all[3].accept()
+    FakeSocket.all[3].drop()
+    expect(refused).toBe(1)
+    s.close()
+  })
+
+  it('takes neither a server that answered nor one that can\'t be reached for a refusal', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const s = new Socket('ws://lab/connect')
+    let refused = 0
+    s.on('refused', () => refused++)
+    s.connect()
+    // two silent ones, then a connection that brings something: a short network drop, not a refusal
+    FakeSocket.all[0].accept()
+    FakeSocket.all[0].drop()
+    vi.advanceTimersByTime(10000)
+    FakeSocket.all[1].accept()
+    FakeSocket.all[1].drop()
+    vi.advanceTimersByTime(10000)
+    FakeSocket.all[2].accept()
+    FakeSocket.all[2].message('{"style":""}')
+    FakeSocket.all[2].drop()
+    vi.advanceTimersByTime(10000)
+    // the server is down: connections never open
+    for (let k = 3; k < 8; k++) {
+      FakeSocket.all[k].fail()
+      vi.advanceTimersByTime(2 * 60 * 1000)
+    }
+    expect(FakeSocket.all.length).toBe(9)
+    expect(refused).toBe(0)
+    s.close()
   })
 })
