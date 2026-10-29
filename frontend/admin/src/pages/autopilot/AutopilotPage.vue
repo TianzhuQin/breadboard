@@ -9,7 +9,7 @@
       <BEmpty
         :icon="ServerCog"
         title="The autopilot needs a server update"
-        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file, conf/local.conf (breadboard.autopilot.*), which is kept across upgrades."
+        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file (breadboard.autopilot.*)."
       >
         <template #actions>
           <BButton :icon="RefreshCw" :loading="refreshing" @click="load()">Check again</BButton>

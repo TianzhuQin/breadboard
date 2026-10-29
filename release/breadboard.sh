@@ -11,8 +11,9 @@
 # (which signs sign-ins and invitation links) in conf/application.secret, and the settings you change
 # in conf/local.conf. Run in a terminal, it opens the console in the browser once it is up
 # (BREADBOARD_NO_BROWSER=1 stops that). On macOS it keeps the computer awake while the server runs.
-# On Linux, in a desktop session, it asks the desktop and systemd to keep the computer awake; if the
-# computer still suspends (some older desktops), turn off automatic suspend in the power settings.
+# On Linux, in a desktop session, it asks systemd (and on GNOME the desktop too) to keep the computer
+# awake; if the computer still suspends (some desktops do, such as Cinnamon), turn off automatic
+# suspend in the power settings.
 #
 # Keep running: run in a terminal, or with BREADBOARD_KEEP_RUNNING=1 (Start Breadboard.command sets
 # it), a server that stops by itself (it ran out of memory, Java crashed, it was killed) is started
@@ -284,14 +285,15 @@ fi
 
 # The computer stays awake while the server runs (a study left to run by itself stopped when it went
 # to sleep), until this process ends: Java, which takes it over (exec) below, or this script, which
-# ends with Java. On macOS, caffeinate holds that. On Linux, the launcher asks systemd and the
-# desktop. systemd-inhibit holds a lock in a desktop session, where systemd lets anyone logged in at
+# ends with Java. On macOS, caffeinate holds that. On Linux, the launcher asks systemd, and GNOME
+# too. systemd-inhibit holds a lock in a desktop session, where systemd lets anyone logged in at
 # the computer take one without a password; elsewhere (under a service manager, over SSH) it is
 # refused, and nothing is held. With systemd 256 or older (Ubuntu 22.04 and 24.04, Debian 12), that
 # lock doesn't stop GNOME's automatic suspend: GNOME heeds only gnome-session's inhibitors, and asks
 # systemd to suspend as the same account, whose own locks such a systemd lets past. So in a GNOME
-# session, gnome-session-inhibit asks gnome-session too (for suspend only: idle would also keep the
-# screen from blanking and locking, which caffeinate and breadboard.bat leave alone). A laptop still
+# session, gnome-session-inhibit asks gnome-session too. Both ask about sleep only: an idle lock would
+# also keep the screen from blanking and locking (KDE reads systemd's that way), which caffeinate and
+# breadboard.bat leave alone. A laptop still
 # sleeps when its lid is closed. Both are started from a subshell that ends at once, so that they
 # aren't this process's children (they watch it all the same): one that is refused ends at once, and
 # Java, which never collects a child it didn't start (wait), would keep it as a zombie for as long as
@@ -302,7 +304,7 @@ else
   # (input from /dev/null: neither ever asks for a password)
   AWAKE_WHILE_RUNNING='while kill -0 "$1" 2>/dev/null; do sleep 5; done'
   if command -v systemd-inhibit >/dev/null 2>&1; then
-    (systemd-inhibit --what=idle:sleep --who=Breadboard --why="Breadboard is running" --mode=block \
+    (systemd-inhibit --what=sleep --who=Breadboard --why="Breadboard is running" --mode=block \
       sh -c "$AWAKE_WHILE_RUNNING" breadboard-awake $$ </dev/null >/dev/null 2>&1 &)
   fi
   case ":${XDG_CURRENT_DESKTOP:-}:" in
