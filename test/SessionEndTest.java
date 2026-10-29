@@ -212,4 +212,96 @@ public class SessionEndTest extends BaseTest {
         assertEquals(before, first.frames.size());
         assertEquals("stopped", ended(connect("p1").frames.get(0)));
     }
+
+    // ---- a session a rebuild of the engine ends, ends as Stop ends it -----------------------------
+
+    /**
+     * The pages of session S as a rebuild is about to end it: a participant, a researcher's preview
+     * watching them, one given a completion code (from Prolific), and a preview of a computer player.
+     */
+    private Page[] pagesOfALiveGame() throws Throwable {
+        Page participant = connect("p1");
+        Page watcher = connect("p1", true);
+        assertTrue(watcher.frames.get(0).path("bbWatching").asBoolean());
+        Page coded = connect("p2");
+        engine().eval("def v = g.getVertex('p2'); recruitment.registerProlific(v); "
+            + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); bot = g.addAI(a, 1, { p -> })[0]; null");
+        Page computer = connect(String.valueOf(engine().eval("bot.id")), true);
+        engine().eval("g.getVertex('p1').text = '<p>Round 3: pick one</p>'; null");
+        return new Page[]{participant, watcher, coded, computer};
+    }
+
+    /** They were told S was stopped and closed, and pages that come back to it get that end, not the round. */
+    private void toldItWasStopped(Page[] pages) throws Throwable {
+        assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(session.id).status);
+        for (Page page : new Page[]{pages[0], pages[1], pages[3]}) {
+            assertEquals(page.frames.toString(), "stopped", ended(page.lastPlayer()));
+            assertTrue(page.closed);
+        }
+        // the one with a completion code keeps it on screen, and is told the session is over all the same
+        Page coded = pages[2];
+        assertEquals("C0DE42", coded.lastPlayer().path("player").path("_system").path("recruitment").path("completionCode").asText());
+        assertEquals("stopped", ended(coded.last().path("sessionOver")));
+        assertTrue(coded.closed);
+        Page back = connect(session, "p1", false);
+        assertEquals(back.frames.toString(), "stopped", ended(back.frames.get(0)));
+        assertFalse(back.frames.get(0).toString().contains("Round 3"));
+        assertEquals("C0DE42", connect(session, "p2", false).frames.get(0).path("player").path("_system")
+            .path("recruitment").path("completionCode").asText());
+    }
+
+    @Test
+    public void aSessionALaunchReplacesEndsForItsParticipantsAsStopEndsIt() throws Throwable {
+        Page[] pages = pagesOfALiveGame();
+        // Stop it and create: the console sends LaunchGame alone, which rebuilds the engine.
+        ExperimentInstance next = launchSession(console, "T");
+        toldItWasStopped(pages);
+        assertNull("not in the new session", client("p1"));
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(next.id).status);
+    }
+
+    @Test
+    public void aSessionThatOpeningAnotherOneEndsEndsForItsParticipantsAsStopEndsIt() throws Throwable {
+        Page[] pages = pagesOfALiveGame();
+        ExperimentInstance earlier = createInstance("Earlier", experiment);
+        assertEquals(ExperimentInstance.Status.STOPPED, earlier.status);
+        console.send("SelectInstance", "id", earlier.id);
+        await("the earlier one resumed", () -> ExperimentInstance.findById(earlier.id).status == ExperimentInstance.Status.RUNNING
+            && earlier.id.equals(engineSessionId()));
+        toldItWasStopped(pages);
+    }
+
+    @Test
+    public void aSessionThatAnotherAccountsReloadEndsEndsForItsParticipantsAsStopEndsIt() throws Throwable {
+        Page[] pages = pagesOfALiveGame();
+        // Another researcher works on the same experiment and reloads the engine: the session this
+        // account runs isn't carried on (only the reloading account's own would be).
+        final User other = createUser("other-" + UUID.randomUUID() + "@test.org", "other", "secret-1", user.defaultLanguage);
+        other.ownedExperiments.add(experiment);
+        other.saveManyToManyAssociations("ownedExperiments");
+        AdminSocketsTest.Tab theirs = loggedIn(other);
+        theirs.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> {
+            Experiment selection = User.findByEmail(other.email).selectedExperiment;
+            return selection != null && experiment.id.equals(selection.id);
+        });
+        theirs.send("ReloadEngine");
+        await("the session ended by the reload", () -> pages[0].closed
+            && ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        assertEquals(0, theirs.count(AdminSocketsTest.error("ReloadEngine")));
+        toldItWasStopped(pages);
+    }
+
+    @Test
+    public void aReloadThatCarriesTheSessionOnTellsNobodyItEnded() throws Throwable {
+        Page participant = connect("p1");
+        console.send("ReloadEngine");
+        await("rebuilt", () -> participant.closed && client("p1") == null);
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertEquals(participant.frames.toString(), "", ended(participant.lastPlayer()));
+        // their page reconnects to the same session, which takes them again
+        Page back = connect("p1");
+        assertFalse(back.closed);
+        assertNotNull(engine().eval("g.getVertex('p1')"));
+    }
 }

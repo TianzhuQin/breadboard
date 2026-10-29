@@ -809,6 +809,36 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  /**
+   * A rebuild of the engine is about to end the live session {@code listener} runs (a launch over it,
+   * as Stop it and create does, another session opened, a reload that doesn't carry it on): it ends
+   * for its participants first, as Stop ends it. The computer players go off, the session is marked
+   * stopped (a page that comes back is given its end screen), its participants and the previews
+   * watching them are told the session was stopped (a completion code on screen stays), the game's
+   * timers stop and nothing more is recorded in it. The rebuild used to close their sockets without
+   * a word and keep each page's game view as its last screen: a page that came back showed a round
+   * whose buttons did nothing, for as long as it stayed open. Nothing for a session that isn't live,
+   * nor for the test session. Under the engine lock.
+   */
+  private static void endBeforeRebuild(GameListener listener) {
+    Long id = instanceIdOf(listener);
+    if (id == null || Experiment.TEST_INSTANCE_ID.equals(id)) {
+      return;
+    }
+    ExperimentInstance live = Autopilot.liveEngineSession();
+    if (live == null || !id.equals(live.id)) {
+      return;
+    }
+    // (the computer players first, as for Stop: a takeover as the pages close would play on)
+    if (playerActions != null) {
+      playerActions.turnAIOff();
+    }
+    stopSession(listener);
+    endParticipants(id, stoppedScreen());
+    cancelEngineTimers();
+    eventTracker.disable();
+  }
+
   /** Start sending graph changes to this console socket. */
   public static void addAdmin(Admin admin) {
     synchronized (ADMIN_LOCK) {
@@ -1894,6 +1924,7 @@ public class ScriptBoard extends UntypedActor {
             && own.experiment.id.equals(selectedExperiment.id);
         if (previous != null && !carriesOn) {
           pauseAutopilotIfItsSession(previous, breadboardMessage.user, "ended when %s reloaded the engine", null);
+          endBeforeRebuild(previous);
           stopSession(previous);
           if (previous == gameListener) {
             gameListener.experimentInstance = null;
@@ -2510,6 +2541,7 @@ public class ScriptBoard extends UntypedActor {
       if (!byAutopilot) {
         pauseAutopilotIfItsSession(previous, user, "ended when %s launched another session", null);
       }
+      endBeforeRebuild(previous);
       rebuildScriptBoard(experiment, byAutopilot ? null : user.email);
       stopSession(previous);
       ExperimentInstance instance = startGame(launchGame.name, user.experimentInstanceId, parameters, experiment, user, onAccount);
@@ -2674,6 +2706,10 @@ public class ScriptBoard extends UntypedActor {
       pauseAutopilotIfItsSession(gameListener, user, "ended when %s opened another session", continuing);
       if (previous != null && previous != gameListener) {
         pauseAutopilotIfItsSession(previous, user, "ended when %s opened another session", continuing);
+      }
+      // (the engine's session, unless it is the one selected, which carries on)
+      if (previous != null && (continuing == null || !continuing.equals(instanceIdOf(previous)))) {
+        endBeforeRebuild(previous);
       }
       rebuildScriptBoard(experiment, builtFor(selectInstance));
       loadSteps(experiment, selectInstance.out);
