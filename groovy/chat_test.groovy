@@ -28,6 +28,27 @@ test("switching a player's chat off takes its listener away") {
   assert !("chatState" in a.private)
 }
 
+test("chat switched off with its messages kept shows them, and the page no longer offers to write") {
+  def chat = new ChatManager()
+  def a = g.addPlayer("chat-kept-a")
+  def b = g.addPlayer("chat-kept-b")
+  chat.enableTextChat(a, [recipients: [b.id]])
+  chat.enableTextChat(b, [recipients: [a.id]])
+  say(a, "hello", [b.id])
+  def before = a.private.chatState
+  chat.disableTextChat(a, false)
+  assert listening(a, "chat") == 0
+  assert a.private.chatState.isEnabled == false
+  assert a.private.chatState.messages*.text == ["hello"]
+  // (a new map: changed in place, the page wouldn't be sent it)
+  assert !a.private.chatState.is(before)
+  assert b.private.chatState.isEnabled == true
+  // Switched on again, it takes messages again.
+  chat.enableTextChat(a, [recipients: [b.id]])
+  assert a.private.chatState.isEnabled == true
+  assert listening(a, "chat") == 1
+}
+
 test("chat switched on again handles every message once") {
   def chat = new ChatManager()
   def a = g.addPlayer("chat-again-a")

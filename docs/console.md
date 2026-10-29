@@ -177,9 +177,22 @@ Tick players in the list, or pick **Test players** (those your steps marked with
 **AI players**, then choose **Desktop** or **Phone**. **Join as a new participant** opens the
 session's sign-in page in a new tab.
 
-**Previews are live.** Each one signs in as that player, and a click is a real choice, recorded
-with the session's data. If the player's own browser is open, the two keep taking the connection
-from each other, so preview test or computer players, or people who have left.
+**Previews are live.** A click in a preview is a real choice, recorded with the session's data. A
+player whose own page is connected is shown read-only: you see their screen as it changes, but
+can't answer for them, and their page is left alone. So is a computer player: you see what the
+computer does, and it goes on playing. A test player, whose own page hasn't been in the session,
+is played through the preview: it signs in as that player, and they count as connected (the
+connections it causes are recorded with `preview` = `true`). Anyone else (someone whose own page
+has been in the session and isn't now: they left, or the computer took their seat) can be answered
+for in a preview, but counts as away all the same, like anyone who leaves, however often you open,
+reload or enlarge the preview: the computer takes their seat after the usual wait (when it plays
+for people who leave), or goes on playing it, and a waiting room doesn't count them. So **AI
+players** shows the computer players and the seats the computer took over, and the computer goes on
+playing all of them. When a player's own page comes back, it takes over, and the preview goes on
+read-only. In the list, a green dot means the seat is connected; its tooltip says whether by their
+own page or by a preview (maybe another console's), or that a preview stands in for someone away.
+The first look at a session shows the test players whose seat is neither connected nor held by a
+preview, theirs or another console's (which a preview here would take it from).
 
 ## Running a session
 
@@ -192,7 +205,7 @@ people can join with its links. If a session is running, the button reads **Stop
 | Button | Shown when | What it does |
 |---|---|---|
 | **Start the game** | The session runs and its game hasn't started | Runs `initStep.start()`: everyone waiting is let in and the experiment begins. Later arrivals are turned away, and a waiting room is cut short. Once started, it does nothing more until the engine is reloaded. |
-| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped, and nothing more is recorded in it. Stopping the autopilot's session pauses the autopilot. |
+| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (someone who was given a completion code keeps it on screen), and nothing more is recorded in it. Stopping the autopilot's session pauses the autopilot. |
 | **Resume session** | The session is stopped | Restarts the experiment's scripts: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
 | **Download data** | The session has finished | Its events as CSV. A finished session can't be resumed; start a new one. |
 
@@ -240,7 +253,10 @@ one participant's page to another.
 Click a player (here or on the Network page) to see what is **On their screen** and their
 choices, their **Ties** and **Properties**. Clicking a choice submits it for them, after you
 confirm; it can't be undone. Each tie has **Cut**, and **Tie … to…** adds one. **Preview their
-screen** opens them on the Preview page.
+screen** opens them on the Preview page. **Preview connected** means a researcher's preview plays
+the seat of a test player, whose own page hasn't been in the session. **Away: preview standing in**
+means their own page isn't connected and a preview has their seat: the preview can answer for
+them, but they count as away.
 
 ### Script console
 
@@ -345,9 +361,10 @@ its waiting room no longer starts the game.
 which session it was until you save or press **Resume**. After three such sessions in a row the
 autopilot pauses instead; a game that comes to its end starts the count again. And once a step has
 failed in its game, a game that has had nothing to wait for during a minute (no choice on anyone's
-screen, no step or timer waiting for its time, no form someone has yet to finish, no chat that is on,
-no other input it listens for) is ended as a failure that stalls it, with a `sessionStalled` event,
-and the autopilot pauses, naming the step. A session you run by hand is never ended this way.
+screen, no step or timer waiting for its time, no form someone has yet to finish, no other input it
+listens for; a chat isn't one, as nothing written there moves a game on) is ended as a failure that
+stalls it, with a `sessionStalled` event, and the autopilot pauses, naming the step. A session you
+run by hand is never ended this way.
 
 Settings saved on this page take precedence over the server's settings file, `conf/local.conf`.
 Until some are saved, a `breadboard.autopilot.experiment` line in `conf/local.conf` turns the
@@ -408,7 +425,7 @@ of event with a column per data name.
 
 | Download | Where | Contents |
 |---|---|---|
-| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`. |
+| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. |
 | **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
 | **Export all**, **Export filtered** | A session's events | The same columns as the session's file, with times in standard ISO 8601 (`2026-10-28T13:24:23.757Z`). Events without data keep a row. |

@@ -1,5 +1,14 @@
 ExperimentImportCtrl.$inject = ['$scope', 'Upload', '$timeout'];
 
+/**
+ * Where an exported experiment is imported under {@code name}: one path segment, encoded. Unencoded,
+ * a name with a "/", "?" or "#" in it went to another address, or none, and got a 404 instead of
+ * the server's reason for refusing it.
+ */
+export function importUrl(path, name) {
+  return path + '/' + encodeURIComponent(name);
+}
+
 export default function ExperimentImportCtrl($scope, Upload, $timeout){
 
   $scope.import = {
@@ -26,7 +35,7 @@ export default function ExperimentImportCtrl($scope, Upload, $timeout){
     let name = $scope.import.name.length ? $scope.import.name : $scope.import.file.name;
     name = name.replace('.zip', '');
     Upload.upload({
-      url: $scope.import.path + `/${name}`,
+      url: importUrl($scope.import.path, name),
       data: {
         file: $scope.import.file
       }

@@ -16,8 +16,9 @@ import static org.junit.Assert.*;
 
 /**
  * A normal stop of the server (SIGTERM, Ctrl+C: Global.onStop) while a session runs: the session's
- * data records it, its participants' pages say the session has stopped, and the next start marks it
- * stopped (Global.markInterruptedSessions).
+ * data records it, its participants' pages say the session ended because the server was stopped or
+ * restarted (not that a researcher stopped it; a completion code on screen stays), and the next start
+ * marks it stopped (Global.markInterruptedSessions).
  */
 public class ServerStopTest extends BaseTest {
 
@@ -50,6 +51,12 @@ public class ServerStopTest extends BaseTest {
         }, 0L);
     }
 
+    private static javax.script.ScriptEngine engine() throws Exception {
+        Field f = ScriptBoard.class.getDeclaredField("engine");
+        f.setAccessible(true);
+        return (javax.script.ScriptEngine) f.get(null);
+    }
+
     private static List<ExperimentInstance> sessions(Experiment experiment) {
         return ExperimentInstance.find.where().eq("experiment.id", experiment.id).orderBy("id asc").findList();
     }
@@ -80,6 +87,11 @@ public class ServerStopTest extends BaseTest {
         Page page = new Page();
         ScriptBoard.addClient(experiment.id.toString(), live.id.toString(), "p1", new WebSocket.In<JsonNode>(), page.out);
         assertFalse(page.closed);
+        // A second one came from Prolific, and the experiment has given them their completion code.
+        Page done = new Page();
+        ScriptBoard.addClient(experiment.id.toString(), live.id.toString(), "p2", new WebSocket.In<JsonNode>(), done.out);
+        engine().eval("def v = g.getVertex('p2'); recruitment.registerProlific(v); "
+            + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
 
         assertEquals(live.id, ServerStop.endLiveSession());
 
@@ -87,9 +99,19 @@ public class ServerStopTest extends BaseTest {
         assertEquals(1, stopping.size());
         assertEquals("reason", stopping.get(0).eventData.get(0).name);
         JsonNode last = page.frames.get(page.frames.size() - 1);
-        assertEquals(last.toString(), "stopped", last.get("player").get("ended").asText());
-        assertTrue(last.toString(), last.get("player").get("text").asText().contains("stopped"));
+        assertEquals(last.toString(), "serverStopped", last.get("player").get("ended").asText());
+        String text = last.get("player").get("text").asText();
+        assertTrue(text, text.contains("It ended because the study's server was stopped or restarted."));
+        assertFalse(text, text.contains("researcher stopped"));
         assertTrue("its socket is closed", page.closed);
+        // The one with a completion code keeps it on screen, and is told the session is over all the same.
+        JsonNode over = done.frames.get(done.frames.size() - 1);
+        assertEquals(over.toString(), "serverStopped", over.path("sessionOver").path("player").path("ended").asText());
+        JsonNode screen = null;
+        for (JsonNode f : done.frames) if (f.has("player")) screen = f;
+        assertEquals("C0DE42", screen.path("player").path("_system").path("recruitment").path("completionCode").asText());
+        assertFalse(screen.path("player").has("ended"));
+        assertTrue(done.closed);
         assertEquals("left for the next start to mark", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(live.id).status);
 
         // the next start

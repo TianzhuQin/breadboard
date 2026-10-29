@@ -3,8 +3,8 @@
     :open="!!playerId"
     size="full"
     flush
-    :title="playerId ? `What ${playerId} sees` : ''"
-    subtitle="Live and interactive: clicks here are real choices for this player and are recorded."
+    :title="playerId ? `What ${name} sees` : ''"
+    subtitle="Live: clicks here are real choices for this player, and are recorded. Read-only while their own page is connected."
     @update:open="(v: boolean) => { if (!v) emit('close') }"
   >
     <div v-if="playerId" class="pfx">
@@ -26,7 +26,7 @@
         <PreviewFrame
           :key="`${playerId}-${nonce}`"
           :target="target"
-          :title="`Participant page of ${playerId}`"
+          :title="`Participant page of ${name}`"
           :device="device"
           :width="frameWidth"
           interactive
@@ -42,6 +42,7 @@ import { ChevronLeft, ChevronRight, ExternalLink, Monitor, RotateCw, Smartphone 
 import { BButton, BDialog, BTabs, type TabItem } from '@/ui'
 import PreviewFrame from './PreviewFrame.vue'
 import { DEVICES, frameGeometry, naturalWidth, widthToFit, type DeviceKind, type PreviewTarget } from './preview'
+import { playerName } from '@/network/players'
 
 const props = defineProps<{
   playerId: string | null
@@ -52,6 +53,8 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ close: [], step: [delta: number], 'open-tab': [] }>()
 
+// "AI 6 (_6)" for a computer player, as on its tile and in the list
+const name = computed(() => props.playerId ? playerName(props.playerId) : '')
 const device = ref<DeviceKind>(props.initialDevice)
 const zoom = ref<'fit' | 'actual'>('fit')
 const nonce = ref(0)

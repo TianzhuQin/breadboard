@@ -17,7 +17,8 @@ export default function ClientFactory($websocketFactory, $rootScope, configServi
     },
     async send (message) {
       await Breadboard.connect()
-      Breadboard.socket.send(JSON.stringify(message))
+      // (through sendType, which sends nothing on a preview that only watches its player)
+      Breadboard.sendType(message.action, message)
     }
   }
 }

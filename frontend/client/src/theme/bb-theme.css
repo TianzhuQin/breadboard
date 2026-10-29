@@ -167,13 +167,26 @@
   left: 50%;
   transform: translateX(-50%);
   z-index: 20;
-  width: min(560px, calc(100% - 32px));
+  /* (wide enough for the usual message and its button on one line) */
+  width: min(640px, calc(100% - 32px));
   margin: 0;
   border-radius: 14px;
   background: #0f172a !important;
   color: #f8fafc !important;
   font-size: 15px;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.28);
+}
+/* a researcher's preview that only watches: a quiet strip above the page rather than a box over
+   it, since it may stay for the whole session */
+.bb-app .bb-connection.bb-connection--watching.v-alert {
+  position: static;
+  transform: none;
+  width: auto;
+  border-radius: 0;
+  background: #e0f2fe !important;
+  color: #075985 !important;
+  font-size: 14px;
+  box-shadow: none;
 }
 
 /* built-in screens: upstream waiting room, finish pages, forms */

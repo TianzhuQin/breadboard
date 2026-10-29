@@ -29,8 +29,8 @@ import static play.test.Helpers.*;
  * pause it, and a game that comes to its end starts the count again. Once a step failure has been
  * recorded in it, a game that has nothing left to wait for is ended as a failure that stalls it is,
  * its participants told it had to stop because of a problem with the study; one that waits for a
- * round's time, a timer, a choice or a participant's input (a form they have yet to finish, a chat
- * that is on) goes on, and a form they finished or a chat switched off is nothing to wait for. A start
+ * round's time, a timer, a choice or a participant's input (a form they have yet to finish) goes on,
+ * and a form they finished or a chat, on or off, is nothing to wait for. A start
  * the console's Start made in its own session that didn't get going ends that session. Stop, and a
  * session stopped because its steps didn't load, turn the computer players off, so a takeover after
  * it never plays the stopped game on. The clock and the stall time are moved here, not waited for.
@@ -170,6 +170,10 @@ public class AutopilotGuardTest extends BaseTest {
         return ExperimentInstance.find.where().eq("experiment.id", experiment.id).orderBy("id asc").findList();
     }
 
+    private static ExperimentInstance named(Experiment experiment, String name) {
+        return ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", name).findUnique();
+    }
+
     private static int running(Experiment experiment) {
         int n = 0;
         for (ExperimentInstance i : sessions(experiment)) if (i.status == ExperimentInstance.Status.RUNNING) n++;
@@ -299,15 +303,18 @@ public class AutopilotGuardTest extends BaseTest {
         return tab;
     }
 
-    /** The autopilot's next session: open, its steps loaded, its waiting room set. */
+    /**
+     * The autopilot's next session, its experiment's n-th: open, its steps loaded, its waiting room set.
+     * The one it has open, not the last in id order: Ebean can hand out ids out of order in one JVM
+     * (seen: 140, then 121).
+     */
     private static ExperimentInstance nextSession(final Experiment experiment, final int n) throws Exception {
+        final ExperimentInstance[] next = new ExperimentInstance[1];
         await("session " + n, () -> {
-            List<ExperimentInstance> all = sessions(experiment);
-            ExperimentInstance open = Autopilot.openInstance(experiment.id);
-            return all.size() == n && open != null && open.id.equals(all.get(n - 1).id)
-                && engineValue("autopilot.room?.minPlayers") != null;
+            next[0] = Autopilot.openInstance(experiment.id);
+            return sessions(experiment).size() == n && next[0] != null && engineValue("autopilot.room?.minPlayers") != null;
         });
-        return sessions(experiment).get(n - 1);
+        return next[0];
     }
 
     // ---- the longest session ------------------------------------------------------------------------
@@ -391,6 +398,62 @@ public class AutopilotGuardTest extends BaseTest {
         s.put("maxSessionMinutes", 90);
         assertEquals(OK, status(post(researcher, s)));
         assertTrue(autopilotStatus(researcher).get("notice").isNull());
+    }
+
+    @Test
+    public void theEndReachesTheResearchersPreviewsOfAComputerPlayerAndOfAParticipant() throws Throwable {
+        final User researcher = user("previews");
+        final Experiment experiment = createExperiment("Watched as it runs too long");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { g.addAI(a, 1, { p -> }) }\n"
+            + "initStep.done = { roundStep.start() }\n"
+            + "roundStep = stepFactory.createStep('RoundStep')\n"
+            + "roundStep.run = { g.V.filter { !it.id.startsWith('_') }.each { p -> a.add(p, [name: 'Done', result: { }]) } }\n"
+            + "roundStep.done = { roundStep.finish() }");
+        own(researcher, experiment);
+        ObjectNode s = settings(experiment, 2, 2, 1);
+        s.put("continuous", false);   // (no next session as the test ends)
+        assertEquals(OK, status(post(researcher, s)));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        Page first = joins(experiment, session, "pv-1");
+        Page second = joins(experiment, session, "pv-2");
+        await("the start", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted)
+            && ((Number) engineValue("a.actions.size()")).intValue() == 2 && engineValue("g.getVertex('_1')") != null);
+        // The researcher watches the computer player (its Client never takes a seat) and both participants.
+        Page computer = previews(experiment, session, "_1");
+        Page watchingFirst = previews(experiment, session, "pv-1");
+        Page watchingSecond = previews(experiment, session, "pv-2");
+        for (Page preview : new Page[]{computer, watchingFirst, watchingSecond}) {
+            assertTrue(preview.frames.get(0).path("bbWatching").asBoolean());
+        }
+        // The second came from Prolific, and the experiment has just given them their completion code.
+        engine().eval("def v = g.getVertex('pv-2'); recruitment.registerProlific(v); "
+            + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
+
+        ahead = 61000L;
+        watchdog();
+        await("the session to be finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        // Every page is told and closed, the previews as the pages they watch: the computer player's
+        // preview (it used to be left open with a frozen view, as its Client has no seat), and the
+        // participants' (they used to be closed without a word).
+        for (Page page : new Page[]{first, watchingFirst, computer}) {
+            assertEquals(page.frames.toString(), "outOfTime", page.lastPlayer().get("player").get("ended").asText());
+            assertTrue(page.closed);
+        }
+        // The one with a completion code keeps it, their preview too: their screen with the code, then
+        // the end in the way that keeps it.
+        for (Page page : new Page[]{second, watchingSecond}) {
+            assertEquals("C0DE42", page.lastPlayer().get("player").get("_system").get("recruitment").get("completionCode").asText());
+            assertEquals("outOfTime", page.last().get("sessionOver").get("player").get("ended").asText());
+            assertTrue(page.closed);
+        }
+    }
+
+    /** A researcher's preview of a player (a signed-in researcher's socket, as ClientController makes it). */
+    private static Page previews(Experiment experiment, ExperimentInstance session, String id) throws Exception {
+        Page page = new Page();
+        ScriptBoard.addClient(experiment.id.toString(), session.id.toString(), id, page.in, page.out, true);
+        return page;
     }
 
     @Test
@@ -517,9 +580,10 @@ public class AutopilotGuardTest extends BaseTest {
         // The researcher takes over with a session of their own (the autopilot pauses).
         final AdminSocketsTest.Tab tab = console(researcher, experiment);
         tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
+        // (by its name: Ebean can hand out ids out of order, so it needn't be the second by id)
         await("their session", () -> sessions(experiment).size() == 2 && running(experiment) == 1
-            && sessions(experiment).get(1).status == ExperimentInstance.Status.RUNNING);
-        final ExperimentInstance byHand = sessions(experiment).get(1);
+            && named(experiment, "by hand") != null && named(experiment, "by hand").status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance byHand = named(experiment, "by hand");
         engine().eval("g.addPlayer('hand-1'); null");
         tab.send("RunGame");
         await("their game", () -> engineValue("a.actions.size()") != null && ((Number) engineValue("a.actions.size()")).intValue() == 1);
@@ -846,7 +910,7 @@ public class AutopilotGuardTest extends BaseTest {
         + "noticeStep.done = { }";
 
     @Test
-    public void aFormStillToFinishOrAChatThatIsOnKeepsItWaitingButListenersLeftOnAfterwardsDoNot() throws Exception {
+    public void aFormStillToFinishKeepsItWaitingButAChatOrAFinishedFormsListenerDoesNot() throws Exception {
         final User researcher = user("waitsfor");
         final Experiment experiment = createExperiment("Survey and chat");
         createStep(experiment, "InitStep", SHOWS_A_SURVEY_THEN_FAILS);
@@ -859,22 +923,19 @@ public class AutopilotGuardTest extends BaseTest {
         await("the failure", () -> events(session, "stepFailed").size() == 1);
         assertEquals("RoundStep", value(events(session, "stepFailed").get(0), "step"));
 
-        // The survey is still to be finished.
-        watchWhileRunning("the survey is still to be finished", session, 1000);
-        // Chat is on for them, and they finish the survey (its listeners come off): the chat is still on.
+        // The survey is still to be finished, with chat on for them too.
         engine().eval("chat.enableTextChat(g.getVertex('waits-1')); null");
+        watchWhileRunning("the survey is still to be finished", session, 1000);
+        // They finish it (its listeners come off). The chat is still on, and the finished survey's own
+        // listener is put back on all the same: neither is anything the game waits for (the chat
+        // keeps and records messages, and nothing written there moves the game on).
         engine().eval("events.emit('CustomEvent', [playerId: 'waits-1', eventName: 'f-next', data: [name: 'survey', results: [:]]], "
             + "[clientId: 'waits-1']); null");
         for (String event : FORM_EVENTS) assertEquals(event, 0, listening("waits-1", event));
-        assertEquals(1, listening("waits-1", "chat"));
-        watchWhileRunning("chat is on for them", session, 1000);
-
-        // Listeners left on all the same count for nothing: the finished survey's own one put back on,
-        // and the chat's once chat is off for them (its state taken away, not by disableTextChat).
-        engine().eval("def v = g.getVertex('waits-1'); v.on('f-next', survey.navigationListeners['f-next']); "
-            + "v.private.remove('chatState'); null");
+        engine().eval("def v = g.getVertex('waits-1'); v.on('f-next', survey.navigationListeners['f-next']); null");
         assertEquals(1, listening("waits-1", "f-next"));
         assertEquals(1, listening("waits-1", "chat"));
+        assertEquals(Boolean.TRUE, engineValue("g.getVertex('waits-1').private.chatState.isEnabled"));
         watchUntil("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
         assertEquals(1, events(session, "sessionStalled").size());
         assertTrue(autopilotStatus(researcher).get("paused").asBoolean());
@@ -952,7 +1013,7 @@ public class AutopilotGuardTest extends BaseTest {
         // A round the computer finishes at once for whoever it plays; the game ends after it.
         createStep(experiment, "InitStep", "picks = 0\n"
             + "picksAtOnce = { p -> a.ai.pickLater(p, 50) { a.ai.chooseFor(p, p.choices[0]) } }\n"
-            + "autopilot.replaceDisconnected([afterSeconds: 0.2, behavior: picksAtOnce])\n"
+            + "autopilot.replaceDisconnected([afterSeconds: 30, behavior: picksAtOnce])\n"
             + "initStep = stepFactory.createStep('InitStep')\n"
             + "initStep.run = { }\n"
             + "initStep.done = { roundStep.start() }\n"
@@ -969,12 +1030,16 @@ public class AutopilotGuardTest extends BaseTest {
         tab.send("RunGame");
         await("the round", () -> ((Number) engineValue("a.actions.size()")).intValue() == 2);
 
+        // The first page goes just before the stop: its seat's takeover is due after it. (Its page
+        // going afterwards would change nothing: the session's participants are gone by then.)
+        first.socketClosed();
+        assertEquals(Boolean.TRUE, engineValue("autopilot.takeoverTimers.containsKey('stop-1')"));
         tab.send("StopGame", "id", session.id);
         await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
-        // The first page's socket closes afterwards: its seat's takeover is due 0.2 s later. A script
-        // then hands the other seat to the computer.
-        first.socketClosed();
-        engine().eval("a.ai.add(g.getVertex('stop-2'), picksAtOnce); null");
+        // The takeover comes 0.2 s after the stop (brought forward from its 30 s, so that it surely
+        // comes after). A script then hands the other seat to the computer.
+        engine().eval("autopilot.replace.afterSeconds = 0.2; autopilot.handleDeparture('stop-1', false); "
+            + "a.ai.add(g.getVertex('stop-2'), picksAtOnce); null");
         Thread.sleep(1500);
         assertEquals("the computer made no pick", 0, engineValue("picks"));
         assertEquals(Integer.valueOf(1), engineValue("g.getVertex('stop-1').ai"));
@@ -993,8 +1058,11 @@ public class AutopilotGuardTest extends BaseTest {
         createStep(experiment, "InitStep", "NETWORK_SIZE = 3\nSEATS = five");
         own(researcher, experiment);
         assertEquals(OK, status(post(researcher, settings(experiment, 2, null, 120))));
+        // (and the autopilot paused, which comes once the stop is done: a new session is STOPPED from
+        // the moment it is made until its game is set going, so its status alone came too early)
         await("the session to be stopped", () -> sessions(experiment).size() == 1
-            && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED);
+            && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED
+            && autopilotStatus(researcher).get("paused").asBoolean());
         assertEquals(Boolean.FALSE, engineValue("a.ai.isOn"));
     }
 }

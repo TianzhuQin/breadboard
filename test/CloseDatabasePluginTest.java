@@ -66,11 +66,18 @@ public class CloseDatabasePluginTest extends BaseTest {
     }
 
     /**
-     * Closed: no lock file. H2 deletes it as the database closes, but its lock watchdog can write it
-     * again just then (H2 1.3; a busy machine shows it now and then). A file nobody keeps up is taken
-     * away here: an open database's watchdog would write it again within a second.
+     * Closed: no lock file. H2 deletes it as the database closes, but doesn't wait for its lock
+     * watchdog (H2 1.3), which can write it again just after: a missing file is trusted only once
+     * that thread has ended (H2 names it after the file), and 300 ms on. A file nobody keeps up is
+     * taken away here: an open database's watchdog would write it again within a second.
      */
     private boolean closed() throws InterruptedException {
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            if (t.getName().startsWith("H2 File Lock Watchdog") && t.getName().contains(folder.getName())) {
+                t.join(3000);
+            }
+        }
+        Thread.sleep(300);
         if (!lock.exists()) {
             return true;
         }
@@ -158,6 +165,41 @@ public class CloseDatabasePluginTest extends BaseTest {
             watch.join();
         }
         assertFalse(opened.get());
+    }
+
+    @Test
+    public void aLockFileLeftBehindByTheCloseIsNotTakenForAnOpenDatabase() throws Exception {
+        try (Connection pooled = DriverManager.getConnection(url, "", "");
+             Statement s = pooled.createStatement()) {
+            s.execute("create table kept (id int)");
+        }
+        assertTrue(closed());
+        // What H2 1.3's lock watchdog can leave behind just after a close: the lock file written again.
+        String leftBehind = "#FileLock\nmethod=file\nid=left-behind\n";
+        FileUtils.writeStringToFile(lock, leftBehind);
+
+        List<String> said = new ArrayList<>();
+        long start = System.currentTimeMillis();
+        assertTrue(Global.closeOwnDatabase(settings(), Global.CLOSE_DATABASE_MS, said::add));
+        assertTrue("answered at once", System.currentTimeMillis() - start < 1500);
+        assertEquals("nothing to say: it was closed", Collections.<String>emptyList(), said);
+        // (opening the database would have taken the lock file over, once it had aged)
+        assertEquals(leftBehind, FileUtils.readFileToString(lock));
+        assertFalse(Global.openHere(new File(folder, "breadboard.h2.db")));
+    }
+
+    @Test
+    public void itTellsADatabaseThisProcessHasOpenFromOneItDoesnt() throws Exception {
+        File data = new File(folder, "breadboard.h2.db");
+        assertFalse(Global.openHere(data));
+        try (Connection open = DriverManager.getConnection(url, "", "")) {
+            assertTrue(Global.openHere(data));
+            assertEquals(Boolean.TRUE, Global.openInH2(new File(folder, "breadboard")));
+            // (another folder's database with the same name is not this one)
+            assertEquals(Boolean.FALSE, Global.openInH2(new File(folder, "elsewhere/breadboard")));
+        }
+        assertTrue(closed());
+        assertEquals(Boolean.FALSE, Global.openInH2(new File(folder, "breadboard")));
     }
 
     @Test

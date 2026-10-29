@@ -48,6 +48,12 @@ export function statusOf (n: GraphNode | undefined | null): string {
   // (a person whose seat the computer plays while they are away, e.g. autopilot.replaceDisconnected)
   if (isAi(n)) return /^_/.test(n.id) ? 'AI player' : 'Away: computer playing'
   const c = connectionOf(n)
+  // (a researcher's preview has the seat while their own page is away: _system.preview. It plays a
+  // test player's seat; on the seat of anyone whose own page has been in the session it only stands
+  // in: they count as away.)
+  const preview = n.data?._system?.preview === true
+  if (c === 'connected' && preview) return 'Preview connected'
+  if (c === 'disconnected' && preview) return 'Away: preview standing in'
   return c === 'connected' ? 'Connected' : c === 'disconnected' ? 'Disconnected' : ''
 }
 
@@ -119,6 +125,11 @@ export function aiName (id: string): string | null {
 export function playerName (id: string): string {
   const ai = aiName(id)
   return ai ? `${ai} (${id})` : id
+}
+
+/** The id to show under a name, unless the name shows it already ("AI 6 (_6)" does): '' then. */
+export function idUnder (name: string, id: string): string {
+  return name !== id && name !== playerName(id) ? id : ''
 }
 
 /** labelOf, with playerName where it would show the bare id. */

@@ -8,8 +8,9 @@ import java.util.LinkedHashMap;
  * What a normal stop of the server (SIGTERM, Ctrl+C: Global.onStop) does to the session the engine
  * runs. Its game lives in the server's memory and ends with it; it used to end without a word. Now
  * its data records the stop (a serverStopping event) and its participants' pages say that the
- * session has stopped, instead of a game that no longer answers. Its status is left to the next
- * start, which marks it stopped (Global.markInterruptedSessions).
+ * session ended because the server was stopped or restarted (ScriptBoard.serverStoppedScreen; a
+ * completion code on screen stays), instead of a game that no longer answers. Its status is left to
+ * the next start, which marks it stopped (Global.markInterruptedSessions).
  */
 public final class ServerStop {
 
@@ -44,11 +45,12 @@ public final class ServerStop {
       tracker.track("serverStopping", data);
     }
     try {
-      ScriptBoard.endParticipants(live.id);
+      // (not the screen of a researcher's Stop: nobody stopped it)
+      ScriptBoard.endParticipants(live.id, ScriptBoard.serverStoppedScreen());
     } catch (Exception e) {
       Logger.warn("Stopping: could not tell the participants of session " + live.id + ": " + e);
     }
-    Logger.info("Stopping: session " + live.id + " (\"" + live.name + "\") was running; its participants were told it has stopped");
+    Logger.info("Stopping: session " + live.id + " (\"" + live.name + "\") was running; its participants were told it has ended");
     return live.id;
   }
 }

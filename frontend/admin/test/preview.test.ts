@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { reactive } from 'vue'
 import {
-  DEVICES, MAX_PREVIEWS, frameGeometry, isAIPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth,
-  previewMemory, previewPageUrl, quickPick, sortPlayers, tileWidth, truthyFlag, widthToFit, wouldDisplace,
+  DEVICES, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer, isComputerPlayer, isConnected, isTestPlayer, joinUrl,
+  matchesPlayer, naturalWidth, ownPageConnected, previewMemory, previewPageUrl, quickPick, shownReadOnly, sortPlayers,
+  tileWidth, truthyFlag, widthToFit,
 } from '../src/pages/preview/preview'
 import { fetchPreviewToken } from '../src/pages/preview/previewLink'
 import { HttpError } from '../src/lib/http'
@@ -38,7 +40,10 @@ vi.mock('@/ui', async (orig) => {
   }
 })
 const push = vi.fn()
-vi.mock('vue-router', () => ({ useRouter: () => ({ push }), useRoute: () => ({ query: {} }) }))
+// the page's address (?player=... comes from the player panel's "Preview their screen")
+const route = reactive({ query: {} as Record<string, any> })
+const replace = vi.fn((to: any) => { route.query = to.query || {} })
+vi.mock('vue-router', () => ({ useRouter: () => ({ push, replace }), useRoute: () => route }))
 
 const store = await import('@/store/admin') as any
 const ui = await import('@/ui') as any
@@ -58,9 +63,23 @@ describe('who a player is', () => {
     expect(isAIPlayer(P('_bot1'))).toBe(true)
     expect(isAIPlayer(P('p1', { ai: 1 }))).toBe(true)
     expect(isAIPlayer(P('p1', { ai: 0 }))).toBe(false)
+    // created as one; a person the computer took over is still a person
+    expect(isComputerPlayer(P('_bot1'))).toBe(true)
+    expect(isComputerPlayer(P('p1', { ai: 1 }))).toBe(false)
     expect(isConnected(P('p1', { _system: { connected: true } }))).toBe(true)
     expect(isConnected(P('p1', { _system: { connected: false } }))).toBe(false)
     expect(isConnected(P('p1'))).toBe(false)
+  })
+
+  it('tells their own page from a preview that holds their seat', () => {
+    const own = P('p1', { _system: { connected: true } })
+    const preview = P('p2', { _system: { connected: true, preview: true } })
+    const away = P('p3', { _system: { connected: false } })
+    // a preview that took the seat as their page went: it stands in, and they count as away
+    const standIn = P('p4', { _system: { connected: false, preview: true } })
+    expect([own, preview, away, standIn].map(ownPageConnected)).toEqual([true, false, false, false])
+    expect([own, preview, away, standIn].map(heldByPreview)).toEqual([false, true, false, true])
+    expect([own, preview, away, standIn].map(isConnected)).toEqual([true, true, false, false])
   })
 
   it('searches by id, or by "test" and "ai"', () => {
@@ -84,9 +103,19 @@ describe('quick picks', () => {
     expect(quickPick(players, 'first', 0)).toEqual([])
     expect(quickPick(players, 'first', 99)).toHaveLength(5)
   })
-  it('flags connected players not already shown (a preview would take their connection)', () => {
-    const list = [P('a', { _system: { connected: true } }), P('b', { _system: { connected: true } }), P('c')]
-    expect(wouldDisplace(list, new Set(['b'])).map(p => p.id)).toEqual(['a'])
+  it('finds players whose own page is connected, and computer players, not already shown (their previews only watch)', () => {
+    const list = [P('a', { _system: { connected: true } }), P('b', { _system: { connected: true } }), P('c'),
+      P('d', { _system: { connected: true, preview: true } }), P('e', { _system: { connected: false, preview: true } }),
+      P('_1'), P('_2'), P('f', { ai: 1 })]
+    expect(shownReadOnly(list, new Set(['b', '_2'])).map(p => p.id)).toEqual(['a', '_1'])
+  })
+  it('picks the test players first shown, but none whose seat is connected or held by a preview', () => {
+    const list = [P('t1', { testmode: true }), P('t2', { testmode: true, _system: { connected: true } }),
+      P('t3', { testmode: true, _system: { connected: true, preview: true } }), P('t4', { testmode: true, _system: { connected: false } }),
+      P('t5', { testmode: true, _system: { connected: false, preview: true } }), P('p5')]
+    expect(autoPicked(list).map(p => p.id)).toEqual(['t1', 't4'])
+    const many = Array.from({ length: MAX_PREVIEWS + 3 }, (_, i) => P(`t${i}`, { testmode: true }))
+    expect(autoPicked(many)).toHaveLength(MAX_PREVIEWS)
   })
 })
 
@@ -176,6 +205,7 @@ describe('PreviewPage', () => {
     Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false, device: 'desktop', size: 'M', interactive: false })
     store.admin.experiment = { id: 7, name: 'Trust game', instances: [] }
     store.admin.instance = { id: 44, name: 'pilot', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] }
+    route.query = {}
     try { localStorage.clear() } catch (e) { /* ignore */ }
   })
   afterEach(() => { document.body.innerHTML = '' })
@@ -207,18 +237,24 @@ describe('PreviewPage', () => {
     w.unmount()
   })
 
-  it('shows the test players at once, but not ones whose own browser is open', async () => {
+  // (not those whose seat is connected: their own page, or another console's preview, which a
+  // preview from here would take the seat from)
+  it('shows the test players at once, but none whose seat is connected', async () => {
     addPlayer('p1', { testmode: true })
     addPlayer('p2', { testmode: true, _system: { connected: true } })
     addPlayer('p3')
+    addPlayer('p4', { testmode: true, _system: { connected: true, preview: true } })
+    addPlayer('p5', { testmode: true })
     await settle()
     const w = await mountPage()
     await settle()
     const frames = w.findAll('iframe')
-    expect(frames).toHaveLength(1)
+    expect(frames).toHaveLength(2)
     expect(http.post).toHaveBeenCalledWith('/preview-token', { experimentId: 7, experimentInstanceId: 44, clientId: 'p1' })
     expect(frames[0].attributes('src')).toBe(`${window.location.origin}/game/7/44/p1/connected?preview=1#bbt=tok-p1-1`)
     expect(frames[0].attributes('title')).toBe('Participant page of p1')
+    expect(frames[1].attributes('title')).toBe('Participant page of p5')
+    expect(ui.confirm).not.toHaveBeenCalled()
     w.unmount()
   })
 
@@ -241,8 +277,12 @@ describe('PreviewPage', () => {
     // with the page isolated, the warning that previews run with the researcher's rights is gone
     expect(w.find('.pv__warn').exists()).toBe(false)
     expect(w.text()).not.toMatch(/researcher sign-in/)
-    // what stays true is said once and can be put away: a preview is a live seat
+    // what stays true is said once and can be put away: a preview is a live seat, or only watches
     expect(w.find('.pv__notice').text()).toMatch(/Previews are live/)
+    expect(w.find('.pv__notice').text()).toMatch(/A player whose own page is connected, and a computer player, are shown read-only/)
+    expect(w.find('.pv__notice').text()).toMatch(/A test player, whose own page hasn’t been in the session, is played here/)
+    expect(w.find('.pv__notice').text()).toMatch(/Anyone else \(someone who left, or whose seat the computer took\) can be answered for here, but counts as away/)
+    expect(w.find('.pv__notice').text()).not.toMatch(/taking the connection/)
     await w.find('.pv__notice button').trigger('click')
     expect(w.find('.pv__notice').exists()).toBe(false)
     w.unmount()
@@ -339,24 +379,107 @@ describe('PreviewPage', () => {
     }
   })
 
-  it('asks before previewing a connected participant, and respects no', async () => {
+  // A preview of a connected participant used to take their seat, after a warning; the server now
+  // lets it only watch, so there is nothing to ask.
+  it('previews a connected participant without asking, and says the preview is read-only', async () => {
     addPlayer('p1')
     addPlayer('p2', { _system: { connected: true } })
     await settle()
     const w = await mountPage()
-    ui.confirm.mockResolvedValueOnce(false)
     const box = w.findAll('.pp__item').find(li => li.text().includes('p2'))!.find('input[type="checkbox"]')
     await box.setValue(true)
     await flushPromises()
-    expect(ui.confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'p2 is connected right now', danger: true }))
-    expect(previewMemory.ids).toEqual([])
+    expect(ui.confirm).not.toHaveBeenCalled()
+    expect(previewMemory.ids).toEqual(['p2'])
+    expect(ui.notify.info).toHaveBeenCalledWith('p2 is connected right now', expect.stringMatching(/^Their preview is read-only: you see what they see, but can’t answer for them\./))
 
-    // a player nobody is using is added without a question
+    // a player nobody is using is added without a word
     const box1 = w.findAll('.pp__item').find(li => li.text().includes('p1'))!.find('input[type="checkbox"]')
     await box1.setValue(true)
     await flushPromises()
-    expect(ui.confirm).toHaveBeenCalledTimes(1)
-    expect(previewMemory.ids).toEqual(['p1'])
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
+    expect(previewMemory.ids).toEqual(['p2', 'p1'])
+    w.unmount()
+  })
+
+  // _system.preview: a researcher's preview has the seat (another console's), not their own page
+  it('tells a seat a preview holds from the player\'s own page', async () => {
+    addPlayer('p1', { _system: { connected: true } })
+    addPlayer('p2', { _system: { connected: true, preview: true } })
+    addPlayer('p3', { _system: { connected: false } })
+    // their own page has been in the session and isn't now: the preview stands in, and they count as away
+    addPlayer('p4', { _system: { connected: false, preview: true } })
+    addPlayer('_1', { ai: 1 })
+    await settle()
+    const w = await mountPage()
+    const dot = (id: string) => w.findAll('.pp__item').find(li => li.text().includes(id))!.find('.pp__dot')
+    expect(dot('p1').attributes('title')).toBe('their own page is connected, so a preview is read-only')
+    expect(dot('p2').attributes('title')).toBe('a preview plays this seat: their own page hasn’t been in this session')
+    expect(dot('p3').attributes('title')).toBe('not connected')
+    expect(dot('p2').classes()).toContain('is-on')
+    expect(dot('p4').attributes('title')).toBe('away: a preview stands in for them')
+    expect(dot('p4').classes()).not.toContain('is-on')
+    expect(dot('_1').attributes('title')).toBe('played by the computer, so a preview is read-only')
+    // not read-only: what the preview does counts as theirs, so there is no note
+    await w.findAll('.pp__item').find(li => li.text().includes('p2'))!.find('input[type="checkbox"]').setValue(true)
+    await flushPromises()
+    expect(previewMemory.ids).toEqual(['p2'])
+    expect(ui.notify.info).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('previews a computer player read-only, and says so', async () => {
+    addPlayer('_1', { ai: 1 })
+    addPlayer('_2', { ai: 1 })
+    addPlayer('p1', { ai: 1 })
+    await settle()
+    const w = await mountPage()
+    await w.findAll('.pp__picks button').find(b => b.text().startsWith('AI players'))!.trigger('click')
+    await flushPromises()
+    expect(previewMemory.ids).toEqual(['_1', '_2', 'p1'])
+    // (a person the computer took over is still theirs to answer for)
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
+    expect(ui.notify.info).toHaveBeenCalledWith('2 of these are computer players',
+      'Their previews are read-only: you see what the computer does, and it goes on playing.')
+    w.unmount()
+  })
+
+  it('says once which players of a quick pick are shown read-only', async () => {
+    addPlayer('p1', { _system: { connected: true } })
+    addPlayer('p2', { _system: { connected: true } })
+    addPlayer('p3')
+    await settle()
+    const w = await mountPage()
+    await w.find('.pp__n-input input').setValue(3)
+    await w.findAll('.pp__first button')[0].trigger('click')
+    await flushPromises()
+    expect(previewMemory.ids).toEqual(['p1', 'p2', 'p3'])
+    expect(ui.confirm).not.toHaveBeenCalled()
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
+    expect(ui.notify.info).toHaveBeenCalledWith('2 of these players are connected right now', expect.stringMatching(/^Their previews are read-only/))
+    w.unmount()
+  })
+
+  // It used to be a single look at a connected participant, ended (and their seat given back) as
+  // the full-size view closed.
+  it('opens a player full size from the player panel, and keeps their tile afterwards', async () => {
+    addPlayer('p1')
+    addPlayer('p2', { _system: { connected: true } })
+    await settle()
+    route.query = { player: 'p2' }
+    const w = await mountPage()
+    await settle()
+    expect(replace).toHaveBeenCalled()
+    expect(route.query.player).toBeUndefined()
+    expect(previewMemory.ids).toEqual(['p2'])
+    expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).toContain('/game/7/44/p2/connected')
+    expect(ui.notify.info).toHaveBeenCalledWith('p2 is connected right now', expect.any(String))
+    const PreviewFocus = (await import('../src/pages/preview/PreviewFocus.vue')).default
+    w.findComponent(PreviewFocus).vm.$emit('close')
+    await settle()
+    expect(previewMemory.ids).toEqual(['p2'])
+    expect(w.find('.pt iframe').exists()).toBe(true)
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
     w.unmount()
   })
 

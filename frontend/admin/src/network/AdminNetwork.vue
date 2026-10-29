@@ -71,7 +71,7 @@ import {
   type RenderTheme, type Scene, type SceneNode, type SceneLink, type LegendBlock, type LabelCandidate,
 } from './render'
 import {
-  NOISY_KEYS, NOISY_LINK_KEYS, formatValue, isAi, isTie, connectionOf, displayName, propertyTitle, statusOf, tieBetween, valueOf,
+  NOISY_KEYS, NOISY_LINK_KEYS, formatValue, idUnder, isAi, isTie, connectionOf, displayName, propertyTitle, statusOf, tieBetween, valueOf,
 } from './players'
 
 export type NetworkMode = 'view' | 'connect' | 'cut'
@@ -1005,7 +1005,8 @@ const tooltip = computed(() => {
   }
   return {
     title: label,
-    sub: label !== id ? id : '',
+    // (not "AI 6 (_6)" and then "_6" again)
+    sub: idUnder(label, id),
     note: '',
     rows,
     color: fillOf(id, scale.value, theme),

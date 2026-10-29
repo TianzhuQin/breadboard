@@ -423,7 +423,8 @@ function onKey (e: KeyboardEvent) {
   if (e.defaultPrevented || typing(e) || document.querySelector('.b-dialog')) return
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
     e.preventDefault()
-    void undoLast()
+    // (its notice names the players as the table does: "AI 6 (_6)", not "_6")
+    void undoLast(playerName)
     return
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return
