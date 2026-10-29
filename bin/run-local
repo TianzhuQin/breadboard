@@ -35,8 +35,8 @@ ln -sfn "$ROOT/groovy" "$STAGE/groovy"
 export JAVA_HOME="$JDK"
 export PATH="$JDK/bin:$PATH"
 cd "$RUN"
-# DB_CLOSE_ON_EXIT=FALSE, as in a release (conf/application-prod.conf): without it H2 closed the
-# database as soon as Ctrl+C came, and the stop could no longer record that a running session ended.
+# DB_CLOSE_ON_EXIT=FALSE, as a release has it (conf/application-prod.conf): the server closes the
+# database itself, at the end of its stop, after recording that a running session ended with it.
 exec "$STAGE/bin/breadboard" -J-Duser.timezone=UTC \
   -Dconfig.file="$ROOT/conf/application.conf" \
   -Ddb.default.url="jdbc:h2:$RUN/db/breadboard;MODE=MYSQL;DB_CLOSE_ON_EXIT=FALSE" \

@@ -1,0 +1,10 @@
+# The Java 8 runtime that bin/bundle-java puts in jre/ of each platform's download: Azul Zulu 8 JRE,
+# pinned, so that every build of a release carries the same one, checked against its SHA-256 from
+# Azul. Change it on purpose only: bin/bundle-java --update looks up the newest Zulu 8 JRE for each
+# platform on api.azul.com and writes it here; then build, check (bin/smoke-dist) and commit.
+#
+# platform     sha256                                                            url
+macos-arm64    e363187e4c49650906b17466d5f158a2a488a0ed8dde296a54399fa45d19e895  https://cdn.azul.com/zulu/bin/zulu8.98.0.107-ca-jre8.0.512-macosx_aarch64.tar.gz
+macos-x64      982152b352a7ff6850800984b7d801bf031df23f8713d3c777d7137c0baf9ded  https://cdn.azul.com/zulu/bin/zulu8.98.0.107-ca-jre8.0.512-macosx_x64.tar.gz
+linux-x64      5dfbd0a969da91b71b5d10d13d456c57d3d3a6b9986f2ad016d04e8ee823d13e  https://cdn.azul.com/zulu/bin/zulu8.98.0.107-ca-jre8.0.512-linux_x64.tar.gz
+windows-x64    885eb900690de5041597ca19972cbed85dc282b01d12b8ae6af91c85d484034c  https://cdn.azul.com/zulu/bin/zulu8.98.0.107-ca-jre8.0.512-win_x64.zip

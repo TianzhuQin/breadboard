@@ -1,5 +1,5 @@
 import play.Application;
-import play.Logger;
+import play.Configuration;
 import play.Plugin;
 
 /**
@@ -20,9 +20,15 @@ public class CloseDatabasePlugin extends Plugin {
 
   @Override
   public void onStop() {
-    // (the server's own process, as in Global.onStart: not the tests', nor sbt's, which reloads)
-    if (app.isProd() && !Global.closeOwnDatabase(app.configuration(), Global.CLOSE_DATABASE_MS)) {
-      Logger.warn("The database did not close in time (a statement was still running); H2 recovers it at the next start");
-    }
+    closeAtEndOfStop(app.isProd(), app.configuration());
+  }
+
+  /**
+   * What a stop does last: in the server's own process ({@code prod}, as in Global.onStart), it closes
+   * the database; in the tests' and sbt's (which reloads the application), it leaves it open. True
+   * when it closed it (or found it closed); when it couldn't, Global.closeDatabase logs why.
+   */
+  static boolean closeAtEndOfStop(boolean prod, Configuration config) {
+    return prod && Global.closeOwnDatabase(config, Global.CLOSE_DATABASE_MS);
   }
 }

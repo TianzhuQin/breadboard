@@ -26,21 +26,29 @@ your computer and unzip it:
 
 Then start it:
 
-- **macOS**: double-click `Start Breadboard.command`. The first time, macOS may say it can't check
-  who made the file: right-click it and choose **Open** (on newer macOS, click **Open Anyway** in
-  System Settings → Privacy & Security). Or, in Terminal: `cd` into the folder and run
-  `./breadboard.sh`.
-- **Windows**: double-click `breadboard.bat`. (If Windows SmartScreen warns about it, choose
-  **More info** → **Run anyway**.)
-- **Linux**: `./breadboard.sh` in the folder.
+- **macOS**: double-click `Start Breadboard.command`. The first time, macOS blocks it, as it does any
+  file from the internet whose maker it can't check. On macOS 15 and later, Control-click → **Open**
+  no longer gets past that; only **Open Anyway** in System Settings → Privacy & Security does. The
+  way that always works: open Terminal, type `sh` and a space, drag `breadboard.sh` from the folder
+  into the Terminal window, and press Return.
+- **Windows**: before you unzip the download, right-click it, choose **Properties**, tick
+  **Unblock** and click **OK**. Otherwise Windows (Smart App Control) may refuse to run
+  `breadboard.bat`, which came from the internet. Then right-click the zip, choose **Extract All**,
+  and double-click `breadboard.bat` in the new folder. (Opened inside the zip, it says to extract
+  the zip first.) The first time, Windows Firewall asks about Java: tick **Private networks**, so
+  that the lab's computers can reach Breadboard, and click **Allow**. If SmartScreen still warns,
+  choose **More info** → **Run anyway**.
+- **Linux**: unzip it (if `unzip` is missing: `sudo apt install unzip`) and run `./breadboard.sh` in
+  the folder.
 
-The console opens in your browser once the server is up (or open <http://localhost:9000>). On a new
-install it asks you to create the first researcher account. Opened from another computer (a server
-you reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
+The launcher says where Breadboard is reached: `On this computer: http://localhost:9000`, and
+`On this network: http://192.168.…:9000`, this computer's address on its network (a lab's), for the
+other computers there. The console opens in your browser once the server is up. On a new install
+it asks you to create the first researcher account. Opened from another computer (a server you
+reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
 it in its window and in `logs/application.log`, so only whoever runs the server can create that
-first account. Stop the server with Ctrl+C, or by
-closing its window. If the port is taken, the launcher says so: often Breadboard is running
-already, and its address is the one to open.
+first account. Stop the server with Ctrl+C, or by closing its window. If the port is taken, the
+launcher says so: often Breadboard is running already, and its address is the one to open.
 
 Anything after the launcher's name is passed to the server as a setting:
 
@@ -48,16 +56,29 @@ Anything after the launcher's name is passed to the server as a setting:
 ./breadboard.sh -Dhttp.port=8080
 JAVA8_HOME=/opt/zulu8 ./breadboard.sh      # another Java 8 than the one in jre/
 BREADBOARD_NO_BROWSER=1 ./breadboard.sh    # don't open the browser
-BREADBOARD_KEEP_RUNNING=1 ./breadboard.sh  # start it again if it stops by itself
+BREADBOARD_KEEP_RUNNING=0 ./breadboard.sh  # don't start it again if it stops by itself
 ```
 
-**Keeping it running.** With `BREADBOARD_KEEP_RUNNING=1`, the launcher starts the server again
-when it stops by itself (it ran out of memory, or crashed), after a short wait that grows each time
-(5 s up to a minute), and gives up after 5 restarts within 10 minutes. It says why on its window and
-in `logs/application.log`. Ctrl+C, closing the window, or stopping it as a service ends it for
-good. `Start Breadboard.command` (macOS) turns it on, and so does `breadboard.bat` when it was
-double-clicked or typed in a Command Prompt; a service manager (systemd, launchd, Task Scheduler)
-restarts it itself, so leave it off there.
+`JAVA8_HOME` can be the JDK's folder, its `bin` folder, or on macOS the JDK's folder as Finder shows
+it (`zulu-8.jdk`); one that holds no Java 8 is ignored, with a warning. The settings you change go in
+`conf/local.conf` (see [Settings](#settings)).
+
+**Keeping it running.** Started in a terminal, by `Start Breadboard.command` (macOS), or by
+double-clicking `breadboard.bat`, the launcher starts the server again when it stops by itself (it
+ran out of memory, or crashed), after a short wait that grows each time (5 s up to a minute), and
+gives up after 5 restarts within 10 minutes. It says why on its window and in
+`logs/application.log`. Ctrl+C, closing the window, or stopping it as a service ends it for good.
+`BREADBOARD_KEEP_RUNNING=0` turns this off, and `=1` turns it on anywhere else. Under systemd or
+launchd, the launcher becomes the server and the service manager starts it again. Run by Task
+Scheduler as a service (see [Running it for good](#running-it-for-good)), `breadboard.bat` starts it
+again itself and never gives up: after 5 restarts in 10 minutes, it tries once a minute.
+
+**Sleep.** While the server runs, the launchers keep the computer from going to sleep by itself
+(on macOS with `caffeinate`, on Windows by asking Windows to stay awake), and let it sleep again
+once the server has stopped. A laptop on battery still sleeps when its lid is closed. For a long
+study that runs by itself, keep the computer plugged in with its lid open; on a Mac, also turn on
+**Prevent automatic sleeping … when the display is off** (System Settings → Battery → Options; on a
+Mac mini or iMac, System Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
@@ -71,13 +92,26 @@ On first start the launcher creates:
 |---|---|
 | `db/breadboard.h2.db` | The database. On a new install its tables are created at first start. |
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
+| `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux only your account can read it, as it may hold keys. |
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
 
 ## Settings
 
-The settings are in `conf/application-prod.conf`, each with a comment. The ones to look at
-before participants join:
+Put the settings you change in `conf/local.conf`, one per line, then restart Breadboard:
+
+```
+breadboard.rootUrl="https://breadboard.example.org"
+breadboard.allowLateJoin=true
+```
+
+The launchers make this file at first start; open it in a text editor (TextEdit, Notepad). It is
+read after `conf/application-prod.conf`, which lists every setting with what it does, so its values
+win. Don't change `application-prod.conf` itself: each release brings its own, while
+`conf/local.conf` is yours, and you copy it into the next release when you upgrade. (A setting can
+also be given when starting, e.g. `./breadboard.sh -Dbreadboard.allowLateJoin=true`.)
+
+The ones to look at before participants join:
 
 | Setting | Default | |
 |---|---|---|
@@ -126,7 +160,7 @@ server {
 }
 ```
 
-Then in `conf/application-prod.conf`:
+Then in `conf/local.conf`:
 
 ```
 breadboard.rootUrl="https://breadboard.example.org"
@@ -137,8 +171,14 @@ session.secure=true
 Leave `breadboard.wsUrl="auto"`: pages connect back to the address they were loaded from. Open
 the console at the public address too, so the participant links it shows use it.
 
-To keep Breadboard running after you log out, run it as a service under an account of its own.
-With systemd, set it up once:
+## Running it for good
+
+To keep Breadboard running after you log out, and have it start again with the computer, run it as
+a service.
+
+### Linux (systemd)
+
+Run it under an account of its own. Set it up once:
 
 ```bash
 sudo useradd --system --home-dir /opt/breadboard --shell /usr/sbin/nologin breadboard
@@ -176,21 +216,42 @@ sudo systemctl enable --now breadboard
 
 **A folder the server can't write**, such as one root keeps read-only under `/opt`, works too, as
 long as the folders the server writes exist and are the account's, and Java's pid file
-(`RUNNING_PID`, which would go into the folder) goes somewhere the account can write:
+(`RUNNING_PID`, which would go into the folder) goes somewhere the account can write. The folders
+are `db`, `logs`, `backups`, `dev` (file mode) and `experiments` (the previous console's exports):
 
 ```bash
-sudo mkdir -p /opt/breadboard/db /opt/breadboard/logs /opt/breadboard/backups
-sudo chown breadboard: /opt/breadboard/db /opt/breadboard/logs /opt/breadboard/backups
+cd /opt/breadboard
+sudo mkdir -p db logs backups dev experiments
+sudo chown breadboard: db logs backups dev experiments
 ```
 
 and in the service, `RuntimeDirectory=breadboard` and
 `ExecStart=/opt/breadboard/breadboard.sh -Dpidfile.path=/run/breadboard/RUNNING_PID`. It can't make
-`conf/application.secret` there either: put one in that the account can read (copied from an
-earlier folder, or made with `openssl rand -hex 32`), or set `APPLICATION_SECRET`.
+`conf/application.secret` there either: make one that only the account can read (or copy the one
+from an earlier folder the same way),
 
-**On a Mac that stays on** (a lab computer), launchd can start Breadboard at login and again if
-it stops. Save this as `~/Library/LaunchAgents/org.breadboard.plist`, with the path to your
-Breadboard folder in both places:
+```bash
+sudo sh -c 'umask 077; openssl rand -hex 32 > /opt/breadboard/conf/application.secret'
+sudo chown breadboard: /opt/breadboard/conf/application.secret
+```
+
+or put `APPLICATION_SECRET=` and a long random text in a file only root can read
+(`sudo install -m 600 /dev/null /etc/breadboard.env`, then add the line) and give it to the service
+with `EnvironmentFile=/etc/breadboard.env`. Not with `Environment=`: anyone can read a unit file,
+and `systemctl show` prints it. Your settings go in `/opt/breadboard/conf/local.conf`, which you
+make there yourself (with `sudo`).
+
+For an upgrade: unzip the new release next to the old one and `chown` it the same way, then
+`sudo systemctl stop breadboard`, copy the database and settings over (see [Upgrading](#upgrading)),
+point the `/opt/breadboard` link at the new folder, and `sudo systemctl start breadboard`.
+
+### macOS (launchd)
+
+On a Mac that stays on (a lab computer), launchd can start Breadboard when you log in, and again if
+it stops. Keep the Breadboard folder in your home folder (such as `/Users/you/breadboard-v3.1.0`),
+not in Desktop, Documents or Downloads: macOS doesn't let a background job read those. Save this as
+`~/Library/LaunchAgents/org.breadboard.plist`, with the path to your Breadboard folder in each
+place:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -199,32 +260,64 @@ Breadboard folder in both places:
 <dict>
   <key>Label</key><string>org.breadboard</string>
   <key>ProgramArguments</key>
-  <array><string>/Users/you/breadboard-v3.1.0/breadboard.sh</string></array>
+  <array><string>/bin/sh</string><string>/Users/you/breadboard-v3.1.0/breadboard.sh</string></array>
   <key>WorkingDirectory</key><string>/Users/you/breadboard-v3.1.0</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/Users/you/breadboard-v3.1.0/logs/launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/you/breadboard-v3.1.0/logs/launchd.log</string>
 </dict>
 </plist>
 ```
 
-and load it with `launchctl load ~/Library/LaunchAgents/org.breadboard.plist` (`unload` to stop
-it).
+Start it with
 
-**On Windows**, Task Scheduler can start it when the computer starts: create a task that runs
-`breadboard.bat` in the Breadboard folder "At startup", with "Run whether user is logged on or
-not", and under Settings "If the task fails, restart every 1 minute". Set the environment variable
-`BREADBOARD_NO_BROWSER=1` for the account it runs as, so it doesn't try to open a browser.
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist
+```
 
-**Checking that it is up**: `GET /health` answers `{"status":"ok", "database":"ok", "diskFreeMb": …}`
-with status 200 while the server works: it writes to the database (so a full disk or a locked
-database shows), checks there are more than 100 MB free where the database is, and that the
-server's internals are running. Otherwise it answers 503 with `"status":"failing"` and a `"reason"`.
-Point an uptime monitor (or your proxy's health check) at `https://breadboard.example.org/health`.
-It needs no sign-in and says nothing about experiments or participants.
+From then on it also starts whenever you log in. To stop it, and keep it stopped:
+`launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.breadboard.plist`. What the server prints
+goes to `logs/launchd.log`. It needs you logged in: after a power cut or a restart, a Mac with
+FileVault on waits at the login window for a password (it can't log in by itself), and Breadboard
+is back only once someone logs in. Keeping the Mac awake: see **Sleep** under
+[Starting it](#starting-it).
 
-For an upgrade: unzip the new release next to the old one and `chown` it the same way, then
-`sudo systemctl stop breadboard`, copy the database and settings over (see [Upgrading](#upgrading)),
-point the `/opt/breadboard` link at the new folder, and `sudo systemctl start breadboard`.
+### Windows (Task Scheduler)
+
+`breadboard-task.xml`, next to `breadboard.bat`, has Task Scheduler start Breadboard whenever the
+computer starts, whether or not anyone signs in. Set it up once:
+
+1. Open `breadboard-task.xml` in Notepad, replace `C:\path\to\your\Breadboard\folder` with the
+   folder that holds `breadboard.bat`, and save.
+2. Open Command Prompt as administrator (Start, type `cmd`, right-click Command Prompt, **Run as
+   administrator**), go to that folder, and register the task:
+
+   ```
+   cd /d "C:\Users\you\breadboard-v3.1.0"
+   schtasks /Create /TN Breadboard /XML breadboard-task.xml /RU "%USERDOMAIN%\%USERNAME%" /RP
+   ```
+
+   It asks for your Windows password: the task runs as you, also while nobody is signed in. If you
+   change your password later, run the same command again with `/F` at the end.
+3. Start it now with `schtasks /Run /TN Breadboard`, or restart the computer.
+
+The task runs `breadboard.bat` with `BREADBOARD_SERVICE=1` and `BREADBOARD_NO_BROWSER=1`, without a
+window: it never waits for a key after an error, opens no browser, and starts the server again
+whenever it stops by itself (after 5 restarts in 10 minutes, once a minute). The task has no time
+limit, runs on battery too, and if it fails, Task Scheduler tries again every minute. What the
+server says is in `logs/application.log`. `schtasks /End /TN Breadboard` stops it at once (do that
+between sessions); `schtasks /Delete /TN Breadboard /F` removes the task.
+
+### Checking that it is up
+
+`GET /health` answers `{"status":"ok", "database":"ok", "diskFreeMb": …}` with status 200 while the
+server works: it writes to the database (so a full disk or a locked database shows), checks there
+are more than 100 MB free where the database is, and that the server's internals are running.
+Otherwise it answers 503 with `"status":"failing"` and a `"reason"`. Point an uptime monitor (or
+your proxy's health check) at `https://breadboard.example.org/health`. It needs no sign-in and says
+nothing about experiments or participants.
 
 **A restart ends running sessions.** The game state of a session lives in the server's memory,
 so stopping the server ends any session in progress. When it starts again, such a session is
@@ -257,17 +350,19 @@ session's data from Sessions & data.
 
 1. Stop the server.
 2. Unzip the new release next to the old one.
-3. Copy `db/breadboard.h2.db` and `conf/application.secret` from the old folder into the new one
-   (and `dev/`, if you use file mode, and `backups/`), and carry over any settings you changed in
-   `conf/application-prod.conf`.
+3. Copy `db/breadboard.h2.db`, `conf/application.secret` and `conf/local.conf` from the old folder
+   into the new one (and `dev/`, if you use file mode, and `backups/`). Coming from 3.0, which had
+   no `conf/local.conf`: put the settings you changed in its `conf/application-prod.conf` into the
+   new folder's `conf/local.conf` instead, just those lines, not the whole file.
 4. Start the new release. It backs up the database (`backups/...-upgrade.zip`) before it changes
    anything in it.
 
 ### From Breadboard 2.x
 
 The same steps, with the database from the 2.x install (its `application.secret` was a published
-default, so don't copy that). The new release adds what its tables need at first start; this is
-tested with databases from 2.2, 2.3 and 2.4. Then:
+default, so don't copy that), and the settings you changed in its `conf/application-prod.conf` put
+in the new folder's `conf/local.conf`. The new release adds what its tables need at first start;
+this is tested with databases from 2.2, 2.3 and 2.4. Then:
 
 - Researchers sign in again.
 - Experiments keep their own participant pages, so their participants see what they saw
@@ -284,14 +379,31 @@ Keep a copy of the old database until you have checked your experiments in the n
 
 ## Troubleshooting
 
-**"Breadboard needs Java 8"**: the launcher found no Java, or another version. It looks in
-`JAVA8_HOME`, then in the `jre` folder of the downloads that include Java, then (on macOS) for any
-Java 8 installed, then `JAVA_HOME`, then `java` on the PATH. Download the release for your
-platform, which includes Java, or install Java 8 and set `JAVA8_HOME` to it.
+**"Breadboard needs Java 8"**: the launcher found no Java, or another version. It takes the first
+Java 8 of: `JAVA8_HOME`, the `jre` folder of the downloads that include Java, (on macOS) any Java 8
+installed, `JAVA_HOME`, and `java` on the PATH. Download the release for your platform, which
+includes Java, or install Java 8 and set `JAVA8_HOME` to it. **"JAVA8_HOME is …, which has no Java
+8; ignoring it"**: `JAVA8_HOME` points at a folder without Java 8 (another version, or a typo); the
+launcher goes on with the others. Point it at the JDK's folder, or remove it.
+
+**"Extract the whole zip first"** (Windows): `breadboard.bat` was opened inside the zip, where the
+rest of Breadboard isn't. Right-click the zip, **Extract All**, and open `breadboard.bat` in the new
+folder.
 
 **"Port 9000 is in use"** (or "Breadboard is already running on port 9000"): another program, or
 a Breadboard started earlier, holds the port. If it is Breadboard, open its address; otherwise
-start on another port with `-Dhttp.port=9001`.
+start on another port with `-Dhttp.port=9001`. (A proxy set for the internet, such as
+`http_proxy`, doesn't matter: the launchers check the port directly.)
+
+**The server's window shows nothing new, and the console still works**: output to the window is
+written by a thread of its own, so a window that stops taking it (a click into a Windows console
+starts selecting text and pauses it, until Esc; Ctrl+S in a terminal, until Ctrl+Q) holds up
+nothing. While it is paused, its INFO lines are left out of the window; `logs/application.log`
+has them all.
+
+**A setting in `conf/local.conf` has a typo**: the server doesn't start, and says which line of
+`conf/local.conf` it couldn't read. Fix that line (text values go in double quotes) and start it
+again.
 
 **The first start of a new install stopped halfway** (the server says the database "could not be
 brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.
