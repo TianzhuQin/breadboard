@@ -36,10 +36,15 @@ public class LanguageController extends Controller {
   public static Result getLanguages() {
     ObjectNode returnJson = Json.newObject();
     ArrayNode jsonLanguages = returnJson.putArray("languages");
-    List<Language> languages = Language.findAll();
-    if (languages.isEmpty()) {
-      // The database table is empty, add default languages
-      languages = seedLanguages();
+    List<Language> languages;
+    // (One at a time: two first requests at once, e.g. the Welcome page and another tab, both found
+    // the table empty and added every language twice.)
+    synchronized (LanguageController.class) {
+      languages = Language.findAll();
+      if (languages.isEmpty()) {
+        // The database table is empty, add default languages
+        languages = seedLanguages();
+      }
     }
     for (Language language : languages) {
       jsonLanguages.add(language.toJson());

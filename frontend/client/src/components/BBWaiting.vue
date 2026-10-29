@@ -147,7 +147,9 @@ export default Vue.extend({
     'info.startsIn': {
       immediate: true,
       handler (n: any) {
+        // same instant for both, or a clock tick in between shows one second more
         this.waitStart = Date.now()
+        this.now = this.waitStart
         // the longest wait seen, so the bar fills over the whole of it
         if (typeof n === 'number' && n > this.startsTotal) this.startsTotal = n
         if (n == null) this.startsTotal = 0

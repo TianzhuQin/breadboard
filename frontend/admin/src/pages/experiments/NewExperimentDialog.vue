@@ -86,12 +86,14 @@ import { http } from '@/lib/http'
 import { admin, actions, experiments, running } from '@/store/admin'
 import type { Experiment } from '@/store/types'
 import { describeError, validateExperimentName } from './experiments'
+import { useRouter } from 'vue-router'
 import { switchToNew } from './switchTo'
 
 const props = defineProps<{ open: boolean, copyFrom?: number | null }>()
 const emit = defineEmits<{ 'update:open': [v: boolean], created: [exp: Experiment] }>()
 
 const formId = uid('xnew')
+const router = useRouter()
 const from = ref<'template' | 'example' | 'copy'>('template')
 const EXAMPLE_NAME = 'Network game'
 const copyId = ref<number | null>(null)
@@ -163,7 +165,10 @@ async function submit () {
     // PUT /experiment doesn't push the researcher's state, so ask for it
     await actions.refresh()
     if (switchTo.value && !running.value && created && typeof created.id === 'number') {
-      await switchToNew(created.id, finalName, `Created “${finalName}”`)
+      // (the example runs as it is: the next step is a session to try it)
+      await switchToNew(created.id, finalName, `Created “${finalName}”`, from.value === 'example'
+        ? { label: 'Open a session', detail: 'It runs as it is: open a session, then join it from two tabs with its sign-in link.', run: () => { void router.push('/session?new=1') } }
+        : undefined)
     } else {
       notify.success(`Created “${finalName}”`)
     }

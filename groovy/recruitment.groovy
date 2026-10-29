@@ -61,6 +61,17 @@ recruitment = [
     v._system.recruitment.bonus = completeOpts.bonus
     v._system.recruitment.message = completeOpts.message
     v._system.recruitment.noFeedback = completeOpts.noFeedback
+    // Also in the session's data, which outlives the player (players and their end screens are kept
+    // in memory only): someone who opens the study link again, e.g. after a server restart, is given
+    // this code again instead of a seat in the next session (ClientLogin.prolificEntry). Recording
+    // it never stands in the way of the completion itself.
+    try {
+      def data = [player: v.id, completionCode: completeOpts.completionCode]
+      if (completeOpts.bonus != null) data.bonus = completeOpts.bonus
+      eventTracker?.track("prolificComplete", data)
+    } catch (Exception e) {
+      play.Logger.error("recruitment: could not record the Prolific completion of " + v.id, e)
+    }
   },
   completeMturk: { Vertex v, Map opts = [:] ->
     MTurkCompleteOpts completeOpts = new MTurkCompleteOpts(opts)

@@ -35,7 +35,10 @@ Then start it:
 - **Linux**: `./breadboard.sh` in the folder.
 
 The console opens in your browser once the server is up (or open <http://localhost:9000>). On a new
-install it asks you to create the first researcher account. Stop the server with Ctrl+C, or by
+install it asks you to create the first researcher account. Opened from another computer (a server
+you reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
+it in its window and in `logs/application.log`, so only whoever runs the server can create that
+first account. Stop the server with Ctrl+C, or by
 closing its window. If the port is taken, the launcher says so: often Breadboard is running
 already, and its address is the one to open.
 
@@ -45,7 +48,22 @@ Anything after the launcher's name is passed to the server as a setting:
 ./breadboard.sh -Dhttp.port=8080
 JAVA8_HOME=/opt/zulu8 ./breadboard.sh      # another Java 8 than the one in jre/
 BREADBOARD_NO_BROWSER=1 ./breadboard.sh    # don't open the browser
+BREADBOARD_KEEP_RUNNING=1 ./breadboard.sh  # start it again if it stops by itself
 ```
+
+**Keeping it running.** With `BREADBOARD_KEEP_RUNNING=1`, the launcher starts the server again
+when it stops by itself (it ran out of memory, or crashed), after a short wait that grows each time
+(5 s up to a minute), and gives up after 5 restarts within 10 minutes. It says why on its window and
+in `logs/application.log`. Ctrl+C, closing the window, or stopping it as a service ends it for
+good. `Start Breadboard.command` (macOS) turns it on, and so does `breadboard.bat` when it was
+double-clicked or typed in a Command Prompt; a service manager (systemd, launchd, Task Scheduler)
+restarts it itself, so leave it off there.
+
+When the server runs out of memory it stops at once rather than limping on, and writes
+`logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
+that file is gone). A server whose shutdown is stuck (an experiment's script that never ends) is
+stopped after 20 seconds. When it stops normally, the participants of a running session are told
+the session has stopped, and a `serverStopping` event is recorded in it.
 
 On first start the launcher creates:
 
@@ -183,10 +201,12 @@ it).
 not", and under Settings "If the task fails, restart every 1 minute". Set the environment variable
 `BREADBOARD_NO_BROWSER=1` for the account it runs as, so it doesn't try to open a browser.
 
-**Checking that it is up**: `GET /health` answers `{"status":"ok", ...}` with status 200 while the
-server and its database work, and 503 otherwise. Point an uptime monitor (or your proxy's health
-check) at `https://breadboard.example.org/health`. It needs no sign-in and says nothing about
-experiments or participants.
+**Checking that it is up**: `GET /health` answers `{"status":"ok", "database":"ok", "diskFreeMb": …}`
+with status 200 while the server works: it writes to the database (so a full disk or a locked
+database shows), checks there are more than 100 MB free where the database is, and that the
+server's internals are running. Otherwise it answers 503 with `"status":"failing"` and a `"reason"`.
+Point an uptime monitor (or your proxy's health check) at `https://breadboard.example.org/health`.
+It needs no sign-in and says nothing about experiments or participants.
 
 For an upgrade: unzip the new release next to the old one and `chown` it the same way, then
 `sudo systemctl stop breadboard`, copy the database and settings over (see [Upgrading](#upgrading)),
@@ -262,9 +282,16 @@ start on another port with `-Dhttp.port=9001`.
 **The first start of a new install stopped halfway** (the server says the database "could not be
 brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.
 
-**"This application is already running"**: a server is running from this folder, or one crashed
-and left `RUNNING_PID` behind. The launchers remove a stale one themselves; if you start the
-server another way, delete `RUNNING_PID` after checking that no server is running.
+**"Breadboard is already running from this folder"**: a server started from this folder still runs
+(the message gives its process number and address): open it, or stop it first. A `RUNNING_PID` left
+behind by a crash is removed by the launchers themselves; if you start the server another way,
+delete `RUNNING_PID` after checking that no server is running.
+
+**"db/ can't be written by …"**: the folder belongs to another account (often after unzipping with
+`sudo`). Fix its owner as the message says, e.g. `sudo chown -R breadboard: /opt/breadboard`.
+
+**Event values cut short**: values are kept up to 1 MB each; a longer one is cut, ending in
+"…[truncated from N characters]".
 
 **The console can't connect** (its top bar keeps saying "Reconnecting…"): a proxy in front of
 Breadboard doesn't pass websockets. See the nginx settings above.

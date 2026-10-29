@@ -11,7 +11,8 @@ Shortcuts are written with Ctrl; on a Mac, use Cmd.
 
 On a new install the console asks for the first researcher account (**Welcome to Breadboard**):
 an **Email**, a **Password** of at least 8 characters (typed twice), and the **Default language**
-new content is written in. **Create account** creates it and signs you in. The form only appears
+new content is written in. Opened from another computer than the server's own, it also asks for the
+**Setup code** the server prints in its window and in `logs/application.log`. **Create account** creates it and signs you in. The form only appears
 while the server has no account. From then on the console opens with **Sign in to Breadboard**.
 
 The email is not case-sensitive. The account can be signed in on several browsers at once (say a
@@ -97,7 +98,8 @@ players then fill the network up to 8. Each round everyone picks Blue or Orange 
 when their pick matches most of their neighbors'; the network shows what each neighbor picked last
 round and the ties among their neighbors, and during a round everyone may cut one of their own ties
 by clicking it. The size of the network, the waiting room's minimum and wait, and the number and
-length of rounds are launch parameters, so they change on the Parameters page. Picks and scores are
+length of rounds are launch parameters, so they change on the Parameters page, and everything
+participants read is on the Content page, to reword or translate. Picks and scores are
 recorded as `ColourPick` and `RoundResult` events. Open a session (or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
@@ -312,7 +314,15 @@ recorded in a `prolificEntry` event. **When a participant finishes** builds the 
 step from your completion code, `recruitment.completeProlific(player, [completionCode: "…"])`:
 participants then see the code and a **Finish** button that takes them back to Prolific. **From
 Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus.
+Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
+
+**People don't take part twice.** Someone who opens the Prolific link again after they took part in
+this experiment (they were given a completion code, or were still there when a session's game
+finished) sees **You have already taken part in this study** with their code and a button back to
+Prolific, also after a server restart, and gets no seat. Someone whose session was stopped or cut
+short by a restart may join the open one. The check covers the whole experiment: for a new wave on
+Prolific with the same people, copy the experiment. Testing by hand, use **Try it as a test
+participant**, which makes up a new Prolific ID each time.
 
 **Mechanical Turk.** The server needs your AWS keys first ([install.md](install.md#settings)); until
 then the tab explains how to add them. At the top, choose **Sandbox** (practice) or **Production**

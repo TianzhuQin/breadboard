@@ -248,8 +248,9 @@ public class PreviewTokenTest extends BaseTest {
     // ---- the participant websocket --------------------------------------------------------------------
 
     /**
-     * Whether the participant websocket takes this handshake: a refused one is closed at once without
-     * a frame. (The session here is over, so a taken one gets its final screen and joins nothing.)
+     * Whether the participant websocket takes this handshake: a refused one is closed at once, after a
+     * frame that says why (ParticipantReconnectTest). (The session here is over, so a taken one gets
+     * its final screen and joins nothing.)
      */
     private static boolean socketAccepted(String experimentId, String instanceId, String clientId, FakeRequest handshake) throws Exception {
         Http.Context.current.set(play.core.j.JavaHelpers$.MODULE$.createJavaContext(handshake.getWrappedRequest()));

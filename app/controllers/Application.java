@@ -9,6 +9,7 @@ import play.data.Form;
 import play.libs.Json;
 import play.mvc.*;
 import security.PreviewTokens;
+import security.SetupCode;
 import views.html.*;
 import java.io.*;
 import java.text.SimpleDateFormat;
@@ -35,9 +36,31 @@ public class Application extends Controller {
     }
 
     Language defaultLanguage = Language.findById(defaultLanguageId);
+    if (defaultLanguage == null && email != null && password != null) {
+      // (A language list read while the server was still adding its languages: English will do,
+      // and it can be changed in Settings.)
+      defaultLanguage = Language.findByIso3("eng");
+      if (defaultLanguage == null) {
+        return status(SERVICE_UNAVAILABLE, "The server is still setting up. Try again in a moment.");
+      }
+    }
 
     if (email == null || password == null || defaultLanguage == null) {
       return badRequest("Please provide email, password, and default language.");
+    }
+    // From another computer, the code the server printed (SetupCode): otherwise whoever reached a
+    // new server first would own it.
+    if (!SetupCode.isLocal(request())) {
+      JsonNode given = json.get("setupCode");
+      SetupCode.current();
+      if (given == null || !SetupCode.matches(given.asText())) {
+        ObjectNode refused = Json.newObject();
+        refused.put("message", given == null || given.asText().trim().isEmpty()
+            ? "Enter the setup code: the server printed it in its window and in logs/application.log."
+            : "That isn't the setup code the server printed. Check its window or logs/application.log.");
+        refused.put("setupCodeRequired", true);
+        return forbidden(refused);
+      }
     }
     email = email.trim();
     if (!User.looksLikeEmail(email)) {
@@ -58,6 +81,7 @@ public class Application extends Controller {
     // A token nobody holds until the first sign-in (a missing one used to match a request with none).
     user.uid = UUID.randomUUID().toString();
     user.save();
+    SetupCode.forget();
 
     // TODO: Make method for creating demo experiments and associating with new user
     /*

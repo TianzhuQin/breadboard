@@ -398,6 +398,19 @@ describe('Autopilot page', () => {
     }
   })
 
+  it('never set up: suggests the current experiment, and gives a lone participant ten minutes', async () => {
+    http.get.mockResolvedValue(stateJson({ source: 'off', settings: { ...DEFAULTS, enabled: false, experimentId: null } }))
+    http.post.mockImplementation(async (_url: string, body: any) => stateJson({ settings: body }))
+    const w = await mountPage()
+    await w.find('.ap-sec input[role="switch"]').setValue(true)
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    const sent = http.post.mock.calls[0][1]
+    expect(sent.experimentId).toBe(12)
+    expect(sent.waitingRoom).toMatchObject({ enabled: true, maxWaitSeconds: 600 })
+    w.unmount()
+  })
+
   it('shows a paused autopilot and when the next session opens, as information', async () => {
     http.get.mockResolvedValue(stateJson({
       settings: { ...DEFAULTS, enabled: true, experimentId: 12 },

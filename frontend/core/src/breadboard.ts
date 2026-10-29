@@ -125,12 +125,70 @@ function showPreviewEnded () {
   app.appendChild(page)
 }
 
+/** Ask for this page's state (/state), with its token */
+function requestState () {
+  const token = participantToken()
+  return http.get<BreadboardConfig>('state', token ? { headers: { [TOKEN_HEADER]: token } } : {})
+}
+
+/** Where /state's answer sends a page whose credentials the server doesn't take; else null */
+function loginOf (status: number, body: any): string | null {
+  return status === 401 && body && body.error === 'not-logged-in' && body.login ? body.login : null
+}
+
+/**
+ * Leave a page the server doesn't let act for its participant: a preview says it can't continue,
+ * a participant goes to the sign-in (which says so when the session isn't running). Returns why.
+ */
+function leavePage (login: string): string {
+  if (isPreview()) {
+    showPreviewEnded()
+    return 'Preview token not accepted'
+  }
+  // A participant page opened without this seat's credentials (e.g. someone else's URL), or whose
+  // seat the server has forgotten since (e.g. in a restart).
+  window.location.href = login
+  return 'Not logged in'
+}
+
+/**
+ * Whether a player update is the server's own end of the session for this page: it was stopped,
+ * isn't running, or started without them. The server marks those finished and ended.
+ */
+function endsSession (player: any): boolean {
+  return !!player && typeof player === 'object' && !!player.finished && !!player.ended
+}
+
+/**
+ * Whether a player update is the participant's own end: the experiment finished them, or gave them a
+ * completion code (_system.recruitment). That screen matters more than a later notice from the server
+ * that the session has stopped or isn't running.
+ */
+function isOwnEnd (player: any): boolean {
+  if (!player || typeof player !== 'object' || player.ended) return false
+  const recruitment = player._system && player._system.recruitment
+  return !!player.finished || !!(recruitment && recruitment.completed)
+}
+
+/**
+ * Emitted once the session is over for this page and it stopped reconnecting. Prefixed like the
+ * other events of Breadboard's own ('bb:edge-edit-result'), so an experiment's custom events
+ * (player.send(name, ...)) can't be taken for it.
+ */
+export const ENDED_EVENT = 'bb:ended'
+
 export class BreadboardClass extends Emitter implements BreadboardMessages {
 
+  /** The session is over for this page (stopped, not running, ...): it no longer reconnects */
+  public ended = false
   private socket!: Socket
   private config!: BreadboardConfig | null
   private socketMutex = new Mutex()
   private configMutex = new Mutex()
+  /** The page shows the participant's own end (see isOwnEnd) */
+  private ownEnd = false
+  /** recheckSeat() is waiting for the server */
+  private checkingSeat = false
 
   /**
    * Load the client config.
@@ -143,17 +201,11 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       return this.config
     }
     try {
-      const token = participantToken()
-      const res = await http.get<BreadboardConfig>('state', token ? { headers: { [TOKEN_HEADER]: token } } : {})
+      const res = await requestState()
       const body = await res.json()
-      if (res.status === 401 && body && body.error === 'not-logged-in' && body.login) {
-        if (isPreview()) {
-          showPreviewEnded()
-          throw new Error('Preview token not accepted')
-        }
-        // A participant page opened without this seat's credentials (e.g. someone else's URL).
-        window.location.href = body.login
-        throw new Error('Not logged in')
+      const login = loginOf(res.status, body)
+      if (login) {
+        throw new Error(leavePage(login))
       }
       this.config = body
       return this.config!
@@ -179,6 +231,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       for (const event of ['connect', 'open', 'close', 'error', 'retry']) {
         this.socket.on(event, (...args: any) => this.emit(event, ...args))
       }
+      // Taken and closed again without a word, time after time: ask what is going on.
+      this.socket.on('refused', () => this.recheckSeat())
       this.attachParser()
       this.socket.connect()
     } finally {
@@ -405,12 +459,76 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   }
 
   /**
+   * The session is over for this page: it stops reconnecting, and tells its listeners (ENDED_EVENT)
+   */
+  private end () {
+    this.socket.stopReconnecting()
+    if (!this.ended) {
+      this.ended = true
+      this.emit(ENDED_EVENT)
+    }
+  }
+
+  /**
+   * Ask for the page's state again, as loading the page does, after the server turned its socket
+   * away. If the server no longer takes the page's credentials (it forgot the seat, e.g. in a
+   * restart), go where loading the page would go: the sign-in, or the notice that the session isn't
+   * running. A participant who had come to their own end keeps that screen instead. Otherwise (the
+   * server can't be reached, or takes them after all) the socket goes on reconnecting.
+   */
+  private async recheckSeat () {
+    if (this.checkingSeat || this.ended) return
+    this.checkingSeat = true
+    try {
+      const res = await requestState()
+      const login = loginOf(res.status, await res.json())
+      if (!login) return
+      if (this.ownEnd) {
+        this.end()
+        return
+      }
+      this.socket.close()
+      leavePage(login)
+    } catch (e) {
+      // (the server can't be reached: the socket keeps trying)
+    } finally {
+      this.checkingSeat = false
+    }
+  }
+
+  /**
    * Handle parsing breadboard socket events
    */
   private attachParser () {
     this.socket.on('message', (d: string) => {
       this.emit('message', d)
       const data = JSON.parse(d)
+      if (data && data.reauth) {
+        // The session runs, but the server has forgotten this page's seat (e.g. it restarted since):
+        // find out where to sign in again.
+        this.recheckSeat()
+        return
+      }
+      if (data && data.sessionOver && typeof data.sessionOver === 'object') {
+        // The server turned the socket away: the session isn't running (any more). Pages from before
+        // 3.1 ignore this key; this one shows the screen inside, unless the participant's own end
+        // (a completion code) is on the screen.
+        this.end()
+        if (!this.ownEnd && data.sessionOver.player) {
+          this.emit('data', data.sessionOver)
+          this.emit('player', data.sessionOver.player)
+        }
+        return
+      }
+      const player = data && data.player
+      if (endsSession(player)) {
+        // Reconnecting can't change that, and the screen says what to do now.
+        this.end()
+        // Someone who had come to their own end keeps it on the screen, with any completion code.
+        if (this.ownEnd) return
+      } else if (player && typeof player === 'object') {
+        this.ownEnd = isOwnEnd(player)
+      }
       this.emit('data', data)
       for (const key of ['graph', 'player', 'style']) {
         if (data[key]) {

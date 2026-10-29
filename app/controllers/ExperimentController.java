@@ -890,6 +890,21 @@ public class ExperimentController extends Controller {
     if (parameters != null) {
       experiment.parameters.addAll(getParameters(new StringReader(parameters)));
     }
+    // What participants read, on the Content page (in the account's language) so it can be reworded
+    // or translated without changing the steps.
+    for (JsonNode contentName : Json.parse(manifest).path("content")) {
+      String html = resourceText(root + "Content/" + contentName.asText() + ".html");
+      if (html == null) {
+        throw new IOException("The example " + name + " has no content " + contentName.asText());
+      }
+      Translation translation = new Translation();
+      translation.language = user.defaultLanguage;
+      translation.setHtml(html.trim());
+      Content content = new Content();
+      content.name = contentName.asText();
+      content.translations.add(translation);
+      experiment.content.add(content);
+    }
     experiment.setClientHtml(Experiment.defaultClientHTML());
     experiment.setClientGraph(Experiment.defaultClientGraph());
     experiment.addLanguage(user.defaultLanguage);

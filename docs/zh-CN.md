@@ -22,7 +22,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
    - **macOS**：双击 `Start Breadboard.command`。第一次 macOS 可能提示"无法验证开发者"：右键点这个文件，选 **打开**（较新的 macOS 要到 系统设置 → 隐私与安全性 里点 **仍要打开**）。也可以在终端里进入文件夹，运行 `./breadboard.sh`。
    - **Windows**：双击 `breadboard.bat`。如果 SmartScreen 拦截，点 **更多信息** → **仍要运行**。
    - **Linux**：在文件夹里运行 `./breadboard.sh`。
-3. 服务器启动好后，浏览器会自动打开控制台（也可以手动打开 <http://localhost:9000>）。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
+3. 服务器启动好后，浏览器会自动打开控制台（也可以手动打开 <http://localhost:9000>）。如果是从别的电脑打开一台新服务器（例如远程的服务器），还要填 **Setup code**：服务器会把它打印在自己的窗口里和 `logs/application.log` 里，这样只有管理这台服务器的人能创建第一个账号。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
 4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。所有研究者都能看到和修改这台服务器上的每个实验。
 5. 停止服务器：在它的窗口里按 Ctrl+C，或直接关掉窗口。
 
@@ -40,7 +40,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
 - **Preview**（页面标题是 Participant preview）：开场后，在这里按选中参与者的视角看页面，可选 **Desktop** 或 **Phone**。**预览是真的**：在预览里点一个选项，就等于那位参与者做了这个选择，会记进数据。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，在 **Parameters** 页面就能改，不用改代码。每次选择和每轮得分会记成 `ColourPick`、`RoundResult` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，在 **Parameters** 页面就能改，不用改代码；参与者看到的所有文字都在 **Content** 页面，可以直接改写或翻译。每次选择和每轮得分会记成 `ColourPick`、`RoundResult` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 
@@ -83,7 +83,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行。
 2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 里选择用 URL 参数记录 Prolific ID，链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。
 3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，参与者会看到 "No session is open right now"。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
-4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。
+4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。**同一个人不会参加两次**：在这个实验里已经参加过的人（拿到过完成码，或者游戏结束时还在场）再打开 Prolific 链接，会看到 "You have already taken part in this study" 和他的完成码，不会被安排进新的一场（服务器重启后也一样）；场次被停止或因重启中断的人可以再加入。这个检查按整个实验算：如果要在 Prolific 上用同一批人做新一期，就复制一个实验。自己测试时请用 **Try it as a test participant**，它每次都会生成新的 Prolific ID。
 5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回。然后在 **When a participant finishes** 的 **Your completion code** 里填上这个码，用 **Copy code** 复制生成的代码，放进实验步骤里参与者结束的地方（比如最后一步）。它的核心是这一行（把 `C1A2B3C4` 换成你的完成码）：
 
 ```groovy
@@ -118,7 +118,7 @@ breadboard.example.org {
 
 ## 常见问题
 
-**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。要让服务器意外退出后自己重新启动（以及开机自动启动），见 [install.md](install.md#putting-it-on-a-server)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
+**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。双击 `Start Breadboard.command`（Mac）或 `breadboard.bat`（Windows）启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#putting-it-on-a-server)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
 
 **启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`。
 

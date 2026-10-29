@@ -130,8 +130,8 @@ pages () {
   for asset in admin/admin.js admin/admin.css bundles/client.js bundles/design.js bundles/breadboard.js css/participant.css; do
     get "/assets/$asset"
   done
-  # Compressed for browsers that accept it
-  for asset in admin/admin.js bundles/client.js; do
+  # Compressed for browsers that accept it (admin.js itself is a few bytes: its code is in chunks)
+  for asset in admin/admin.css bundles/client.js; do
     curl -s --max-time 30 -o /dev/null -D "$WORK/headers" -H 'Accept-Encoding: gzip, deflate, br' "$BASE/assets/$asset"
     grep -qi '^content-encoding: *gzip' "$WORK/headers" || fail "/assets/$asset isn't sent gzipped"
   done

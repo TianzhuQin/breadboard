@@ -117,4 +117,32 @@ public class AccountsAndNamesTest extends BaseTest {
         body.put("name", "Not mine");
         assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/experiment/" + a.id + "/name").withJsonBody(body))));
     }
+
+    @Test
+    public void fromAnotherComputerTheFirstAccountNeedsTheSetupCodeTheServerPrinted() {
+        Language lang = createLanguage("eng", "English");
+        ObjectNode body = Json.newObject();
+        body.put("email", "remote@test.org");
+        body.put("password", "password123");
+        body.put("defaultLanguageId", lang.getId());
+
+        // the console, opened through a proxy, is told before it asks
+        Result state = route(fakeRequest(GET, "/state").withHeader("X-Forwarded-For", "203.0.113.5"));
+        assertEquals(UNAUTHORIZED, status(state));
+        assertTrue(Json.parse(contentAsString(state)).get("setupCodeRequired").asBoolean());
+        Result local = route(fakeRequest(GET, "/state"));
+        assertFalse(Json.parse(contentAsString(local)).get("setupCodeRequired").asBoolean());
+
+        Result refused = route(fakeRequest(POST, "/createFirstUser").withHeader("X-Forwarded-For", "203.0.113.5").withJsonBody(body));
+        assertEquals(FORBIDDEN, status(refused));
+        assertEquals(0, User.findRowCount());
+        body.put("setupCode", "WRONG-CODE");
+        assertEquals(FORBIDDEN, status(route(fakeRequest(POST, "/createFirstUser").withHeader("X-Forwarded-For", "203.0.113.5").withJsonBody(body))));
+
+        // typed in lower case, with a space for the dash
+        body.put("setupCode", security.SetupCode.current().toLowerCase().replace("-", " "));
+        Result made = route(fakeRequest(POST, "/createFirstUser").withHeader("X-Forwarded-For", "203.0.113.5").withJsonBody(body));
+        assertEquals(contentAsString(made), OK, status(made));
+        assertNotNull(User.findByEmail("remote@test.org"));
+    }
 }

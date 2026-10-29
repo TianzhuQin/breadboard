@@ -51,7 +51,11 @@ public class ScriptBoard extends UntypedActor {
       new LinkedHashMap<Long, Map<String, ObjectNode>>() {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Long, Map<String, ObjectNode>> eldest) {
-          return size() > ENDED_SESSIONS_KEPT;
+          if (size() <= ENDED_SESSIONS_KEPT) {
+            return false;
+          }
+          releaseSeatsIfOver(eldest.getKey());
+          return true;
         }
       });
 
@@ -233,6 +237,25 @@ public class ScriptBoard extends UntypedActor {
         }
         screens.put(client.id, client.lastFrame);
       }
+    }
+  }
+
+  /**
+   * A session whose last screens are forgotten: its seat tokens go too (they used to be kept for
+   * good), unless it can still be resumed. Someone coming back to it then gets the general "isn't
+   * running" page, as they would without a last screen. A stopped session can be resumed, and takes
+   * back those who held a seat by their tokens: those stay until it is deleted
+   * (ExperimentInstance.delete), or its screens are forgotten again once it has finished.
+   */
+  private static void releaseSeatsIfOver(Long instanceId) {
+    try {
+      ExperimentInstance session = ExperimentInstance.findById(instanceId);
+      if (session == null || session.status == null || !session.status.isRunnable()) {
+        security.ParticipantAuth.releaseInstance(String.valueOf(instanceId));
+      }
+    } catch (Exception e) {
+      // (its seats stay, as they always used to)
+      Logger.warn("Could not tell whether session " + instanceId + " can still be resumed: " + e);
     }
   }
 
@@ -487,6 +510,9 @@ public class ScriptBoard extends UntypedActor {
       // Cancel any pending AMT lifecycle timers from a previous session so they don't
       // fire against the rebuilt engine or outlive it (MEMORY_LEAKS.md L6).
       cancelAmtTimers();
+      // Let go of what kept every replaced engine in memory for good (Groovy's caches of its
+      // classes, Jackson's), before the next one is built.
+      EngineCleanup.release(engine);
     }
 
     // Global events used to communicate via the groovy scripting
@@ -1144,6 +1170,13 @@ public class ScriptBoard extends UntypedActor {
         }
         Graph wholeGraph = (Graph) engine.get("g");
         Vertex clientVertex = wholeGraph.getVertex(clientId);
+        if (clientVertex == null && !experimentInstance.hasStarted) {
+          // Taken out again as they joined (graph.groovy no longer loses a player added at the
+          // same time as another): e.g. by the autopilot's launch, which leaves out whoever isn't
+          // connected yet, as they aren't until setConnected below. That stands; adding them back
+          // would undo it and run OnJoinStep for them twice.
+          Logger.info("addClient: " + clientId + " was taken out of the network as they joined");
+        }
         Recruitment.applyTo(clientVertex);
         // After addPlayer, so a new participant's vertex exists to record it on.
         setConnected(clientId, true);

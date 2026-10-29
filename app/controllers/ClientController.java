@@ -303,8 +303,7 @@ public class ClientController extends Controller
             {
                 Logger.debug("ClientController.connectClient.onReady");
                 if (!authorized) {
-                    Logger.info("Refused websocket for client " + clientId + " in instance " + experimentInstanceId + ": no valid token");
-                    out.close();
+                    refuse(experimentId, experimentInstanceId, clientId, out);
                     return;
                 }
                 try
@@ -317,5 +316,62 @@ public class ClientController extends Controller
                 }
             }
         };
+    }
+
+    /**
+     * Turn away a participant page whose socket holds no valid credentials. Most often the page was
+     * open while the server restarted: seat tokens live only in memory, so its token is gone. Closed
+     * without a word, the page took it for a dropped connection and retried every few seconds for
+     * ever, so it is told why first: the session isn't running (it then shows what a reload would
+     * show, and stops reconnecting), or the session runs and the page has to sign in again. Only at
+     * debug level: each open page used to add a line to the log every few seconds.
+     */
+    private static void refuse(String experimentId, String experimentInstanceId, String clientId, WebSocket.Out<JsonNode> out) {
+        Logger.debug("Refused websocket for client " + clientId + " in instance " + experimentInstanceId + ": no valid token");
+        try {
+            out.write(ScriptBoard.runsSession(experimentId, experimentInstanceId) ? signInAgain() : notRunningScreen(experimentId, experimentInstanceId));
+        } catch (RuntimeException e) {
+            // (then closed without a word, as before)
+            Logger.debug("Could not tell client " + clientId + " why its websocket was refused: " + e);
+        } finally {
+            out.close();
+        }
+    }
+
+    /**
+     * The last screen of a page whose session the engine doesn't run (any more), with the words a
+     * reload of the page shows (index: the notice for a Mechanical Turk HIT, for a session that
+     * doesn't exist, or ClientLogin.notRunning()), marked finished and ended like the screens of
+     * sessions that have ended. Under "sessionOver", not "player": pages from before 3.1 (and the
+     * AngularJS client) render every player frame, and a completion code on their screen would be
+     * replaced; they ignore this and go on retrying quietly, as they did.
+     */
+    static ObjectNode notRunningScreen(String experimentId, String experimentInstanceId) {
+        String[] words;
+        ExperimentInstance instance = null;
+        try {
+            instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+        } catch (NumberFormatException ignored) {}
+        if (instance != null && instance.getHit() != null) {
+            words = ClientLogin.AMT_NOT_RUNNING;
+        } else if (!ClientLogin.sessionExists(experimentId, experimentInstanceId)) {
+            words = ClientLogin.INVALID_LINK;
+        } else {
+            words = ClientLogin.NOT_RUNNING;
+        }
+        ObjectNode frame = Json.newObject();
+        ObjectNode player = frame.putObject("sessionOver").putObject("player");
+        player.putObject("_system");
+        player.put("finished", true);
+        player.put("ended", "notRunning");
+        player.put("text", "<h3>" + words[0] + "</h3><p>" + words[1] + "</p>");
+        return frame;
+    }
+
+    /** For a page whose session runs but whose token no longer opens its seat: it signs in again. */
+    private static ObjectNode signInAgain() {
+        ObjectNode frame = Json.newObject();
+        frame.put("reauth", true);
+        return frame;
     }
 }

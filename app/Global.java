@@ -200,6 +200,13 @@ public class Global extends GlobalSettings {
 
     resetPasswordIfAsked();
 
+    // Evolution 33, for databases from older releases (it does nothing where the index exists).
+    try {
+      Ebean.createSqlUpdate("create index if not exists ix_event_data_name on event_data (name)").execute();
+    } catch (Exception e) {
+      Logger.warn("Could not add the index on event data names (looking up returning Prolific participants is slower without it): " + e.getMessage());
+    }
+
     markInterruptedSessions();
 
     // Open a session of the configured experiment so participants can join without an admin.
