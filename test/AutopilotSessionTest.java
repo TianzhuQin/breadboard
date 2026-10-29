@@ -24,7 +24,8 @@ import static play.test.Helpers.*;
  * The autopilot opening real sessions on the shared engine: saving the settings opens one, applies
  * the console's waiting room over the experiment's own, keeps an open session when only the waiting
  * room changes, and opens the next one after a session finishes when continuous. The account it runs
- * as sees the session in its open console tabs. A step failure stalls the game when it kept the next
+ * as sees the session in its open console tabs, and so does every account working on its experiment,
+ * from one session to the next. A step failure stalls the game when it kept the next
  * step from getting going (a step gets going when its start() returns without throwing). One that
  * stalls the game of its own session (one it opened, or one of its experiment Resume or a save handed
  * it) ends that session and pauses it; in a session a researcher runs by hand (even of its
@@ -1358,6 +1359,70 @@ public class AutopilotSessionTest extends BaseTest {
         Autopilot.sessionFinished(finished);
         Thread.sleep(600);
         assertEquals(2, sessions(experiment).size());
+    }
+
+    /** "<id> <status>" of the session a User JSON shows, or "(none)". */
+    private static String shown(JsonNode userJson) {
+        JsonNode i = userJson == null ? null : userJson.get("experimentInstance");
+        return i == null || !i.isObject() ? "(none)" : i.get("id").asLong() + " " + i.get("status").asText();
+    }
+
+    private static JsonNode lastUserJson(AdminSocketsTest.Tab t) {
+        JsonNode last = null;
+        for (JsonNode f : t.frames) if (f.has("user")) last = f;
+        return last;
+    }
+
+    private static ExperimentInstance theRunning(Experiment experiment) {
+        for (ExperimentInstance i : sessions(experiment)) {
+            if (i.status == ExperimentInstance.Status.RUNNING) return i;
+        }
+        return null;
+    }
+
+    @Test
+    public void aResearcherWorkingOnItsExperimentFollowsEverySessionItOpens() throws Exception {
+        final User operator = user("operator");
+        final User pi = user("pi");
+        final Experiment experiment = createExperiment("Followed study");
+        operator.ownedExperiments.add(experiment);
+        operator.saveManyToManyAssociations("ownedExperiments");
+        // The PI, not the account the autopilot runs as, works on its experiment in two tabs, opened before
+        // any session is.
+        pi.setSelectedExperiment(Experiment.findById(experiment.id));
+        pi.update();
+        final AdminSocketsTest.Tab first = watching(pi);
+        final AdminSocketsTest.Tab second = watching(pi);
+        assertEquals("(none)", shown(lastUserJson(first)));
+
+        ObjectNode settings = settings(experiment, 2);
+        settings.put("nextSessionDelaySeconds", 1);
+        assertEquals(OK, status(post(operator, settings)));
+        await("the first session", () -> theRunning(experiment) != null);
+        final ExperimentInstance s1 = theRunning(experiment);
+        // Both tabs show it as it goes live, without asking.
+        for (final AdminSocketsTest.Tab t : new AdminSocketsTest.Tab[]{first, second}) {
+            await("a tab shows the first session", () -> (s1.id + " RUNNING").equals(shown(lastUserJson(t))));
+        }
+        assertEquals(s1.id, User.findByEmail(pi.email).experimentInstanceId);
+
+        // It finishes by itself: the tabs show it finished, then the next session the autopilot opens.
+        engine().eval("gameListener.finish(); null");
+        for (final AdminSocketsTest.Tab t : new AdminSocketsTest.Tab[]{first, second}) {
+            await("a tab shows it finished", () -> t.count(f -> f.has("user") && (s1.id + " FINISHED").equals(shown(f))) >= 1);
+        }
+        await("the next session", () -> sessions(experiment).size() == 2 && theRunning(experiment) != null);
+        final ExperimentInstance s2 = theRunning(experiment);
+        for (final AdminSocketsTest.Tab t : new AdminSocketsTest.Tab[]{first, second}) {
+            await("a tab shows the next session", () -> (s2.id + " RUNNING").equals(shown(lastUserJson(t))));
+        }
+        assertEquals(s2.id, User.findByEmail(pi.email).experimentInstanceId);
+        // What the console asks for when the engine news names it (askUserJsonSoon) says the same.
+        final int before = first.count(AdminSocketsTest.userJson());
+        first.send("Update");
+        await("the User JSON asked for", () -> first.count(AdminSocketsTest.userJson()) > before);
+        assertEquals(s2.id + " RUNNING", shown(lastUserJson(first)));
+        assertEquals("the two tabs agree", shown(lastUserJson(first)), shown(lastUserJson(second)));
     }
 
     @Test

@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { playerName } from '@/network/players'
 
 /**
  * Helpers for the Preview page: who a player is (test, AI, connected), which players a quick pick
@@ -36,7 +37,8 @@ export function sortPlayers<T extends PlayerLike> (list: readonly T[]): T[] {
 export function matchesPlayer (p: PlayerLike, query: string): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  if (p.id.toLowerCase().includes(q)) return true
+  // (by the name the list shows too: "AI 6" finds _6)
+  if (playerName(p.id).toLowerCase().includes(q)) return true
   if (q === 'test') return isTestPlayer(p)
   if (q === 'ai') return isAIPlayer(p)
   return false

@@ -1,7 +1,7 @@
 <template>
-  <li class="pt" :style="{ width: `${width}px` }" :aria-label="`Preview of ${playerId}`">
+  <li class="pt" :style="{ width: `${width}px` }" :aria-label="`Preview of ${name}`">
     <div class="pt__head">
-      <span class="pt__id" :title="playerId">{{ playerId }}</span>
+      <span class="pt__id" :title="playerId">{{ name }}</span>
       <span class="pt__tags">
         <span v-if="test" class="pt__tag" title="Test player (testmode)"><FlaskConical :size="13" aria-hidden="true" /><span class="sr-only">Test player</span></span>
         <span v-if="ai" class="pt__tag" title="Played by the computer"><Bot :size="13" aria-hidden="true" /><span class="sr-only">Computer player</span></span>
@@ -12,13 +12,13 @@
           variant="ghost"
           :icon="RotateCw"
           :disabled="!!paused"
-          :aria-label="`Reload ${playerId}'s page`"
+          :aria-label="`Reload ${name}'s page`"
           title="Reload"
           @click="emit('reload')"
         />
         <BMenu :items="menu" align="right" :width="210">
           <template #trigger="{ toggle, attrs }">
-            <BButton size="sm" variant="ghost" :icon="Ellipsis" v-bind="attrs" :aria-label="`More for ${playerId}`" title="More" @click="toggle" />
+            <BButton size="sm" variant="ghost" :icon="Ellipsis" v-bind="attrs" :aria-label="`More for ${name}`" title="More" @click="toggle" />
           </template>
         </BMenu>
       </span>
@@ -29,7 +29,7 @@
         <PreviewFrame
           :key="frameKey"
           :target="target"
-          :title="`Participant page of ${playerId}`"
+          :title="`Participant page of ${name}`"
           :device="device"
           :width="width"
           :interactive="interactive"
@@ -39,7 +39,7 @@
           v-if="!interactive"
           type="button"
           class="pt__cover"
-          :aria-label="`Open ${playerId}'s page full size`"
+          :aria-label="`Open ${name}'s page full size`"
           @click="emit('focus')"
         >
           <span class="pt__cover-hint"><Maximize2 :size="14" aria-hidden="true" /> Open full size</span>
@@ -64,6 +64,7 @@
 import { computed } from 'vue'
 import { Bot, Ellipsis, ExternalLink, FlaskConical, Maximize2, RotateCw, TriangleAlert, X } from 'lucide-vue-next'
 import { BButton, BMenu, type MenuItem } from '@/ui'
+import { playerName } from '@/network/players'
 import PreviewFrame from './PreviewFrame.vue'
 import { frameGeometry, type DeviceKind, type PreviewTarget } from './preview'
 
@@ -83,6 +84,8 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ focus: [], reload: [], 'open-tab': [], remove: [], resume: [] }>()
 
+// "AI 6 (_6)" for a computer player, as in the list
+const name = computed(() => playerName(props.playerId))
 const geo = computed(() => frameGeometry(props.device, props.width))
 const menu = computed<MenuItem[]>(() => [
   { label: 'Open full size', icon: Maximize2, run: () => emit('focus') },

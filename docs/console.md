@@ -69,7 +69,8 @@ what the engine runs and whose session it is, and your experiment's live control
 scripts, previews) do nothing until that session has ended; **New session** still ends it, after
 asking. Every console hears when that session ends, whoever ends it, and the notice and controls
 follow. The notice's **Work on …** switches to the experiment the engine runs; working on that
-experiment, your Live session page shows its running session. When the engine only has another
+experiment, your Live session page shows its running session, and each one that opens after it (the
+autopilot's next session, say) as it opens, in every tab. When the engine only has another
 experiment loaded, with no session running, the notice also offers **Load …**, which loads yours.
 Meanwhile the sidebar doesn't count the engine's players under **Players**: they are in the other
 experiment's session.
@@ -88,7 +89,7 @@ up by name in the server's settings file (`conf/local.conf`) needs the new name 
 | Action | |
 |---|---|
 | **New experiment** | Starts from **Breadboard's template** (the empty steps OnJoinStep, OnLeaveStep and InitStep, and the standard participant page), from **Example: network game**, or from **A copy of an experiment** (its steps, content, translations, parameters, images and participant page, without sessions or data). Names must be unique and can't contain `/` or `\`. |
-| **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment; nothing you have is changed. |
+| **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment, named by the same rules; nothing you have is changed. |
 | **Export .zip** | Downloads the experiment, to move it to another server or keep a copy. |
 | **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm (capital letters, spaces and dashes don't matter). Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
 
@@ -230,7 +231,11 @@ The Players page lists everyone in the session. Type an id, or a filter: `score=
 `score>5` (also `<`, `>=`, `<=`), `name~ann` (contains). Join conditions with `&`; dots reach inside
 a property (`_system.connected=false`). The buttons above the table show **Everyone**, **People**,
 **AI players**, **Connected**, **Disconnected** or who **Has a choice**. **Columns** adds properties
-to the table, and **Download CSV** saves the players shown with every property.
+to the table, and **Download CSV** saves the players shown with every property. Computer players
+(`g.addAI`) are called AI 1 (`_1`), AI 2 (`_2`) and so on, here and on the Network and Preview
+pages; scripts, filters and the data use their ids. A participant's page calls the people around
+them Person A, Person B, … in the order it first shows them, so a player's letter can differ from
+one participant's page to another.
 
 Click a player (here or on the Network page) to see what is **On their screen** and their
 choices, their **Ties** and **Properties**. Clicking a choice submits it for them, after you
@@ -437,4 +442,5 @@ participants could type such values.
 The previous console is still at `/legacy-admin`, while researchers move over. Open it from the
 sign-in page, from **Open the previous console** in the menu under your email, or from Settings. It
 works with the same experiments and sessions and the same script engine, and both consoles can be
-open at the same time.
+open at the same time. Both show when the session you follow ends, and the next session of your
+experiment as it opens.

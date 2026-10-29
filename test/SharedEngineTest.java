@@ -28,9 +28,11 @@ import static org.junit.Assert.*;
  * account's console shows its own selection, so: engine actions are refused when the engine runs
  * another experiment; selecting an experiment while a session runs changes only the selection; a
  * launch is refused when the page shows an experiment that is no longer selected; every tab of the
- * account learns of a new selection; every console hears what the engine runs when that changes; a
- * session the engine moves off is marked stopped, and its participants are not put into the next
- * game; a step file saved in file mode runs only while the engine runs its experiment. Also: event
+ * account learns of a new selection; every console hears what the engine runs when that changes; an
+ * account working on an experiment follows each of its sessions that goes live, and its tabs are sent
+ * its User JSON then and when that session ends; a session the engine moves off is marked stopped,
+ * and its participants are not put into the next game; a step file saved in file mode runs only while
+ * the engine runs its experiment, also one whose name has a "/". Also: event
  * times come with UTC, the websocket password change follows the Settings page's rules, deleting an
  * experiment switches off an autopilot that runs it, and someone taken out of the network as they
  * join stays out.
@@ -559,13 +561,20 @@ public class SharedEngineTest extends BaseTest {
         await("Live running", () -> sessions(hers).size() == 1 && sessions(hers).get(0).status == ExperimentInstance.Status.RUNNING);
         final ExperimentInstance live = sessions(hers).get(0);
 
-        // Bob had her experiment selected already: his console shows its live session, as when he
-        // selects it (it showed "No session is open" beside it, and offered to restart it).
-        bob.setSelectedExperiment(Experiment.findById(hers.id));
-        bob.update();
+        // Bob's first tab is open, with nothing selected.
+        final AdminSocketsTest.Tab first = loggedIn(bob);
+        assertEquals("", lastUserJson(first).get("experimentInstance").asText());
+        // Then he has her experiment selected (saved as the session went live, say): his next tab shows its
+        // live session, as when he selects it (it showed "No session is open" beside it, and offered to
+        // restart it), and so does the tab he had open.
+        User selecting = User.findByEmail(bob.email);
+        selecting.setSelectedExperiment(Experiment.findById(hers.id));
+        selecting.update();
         final AdminSocketsTest.Tab b = loggedIn(bob);
         assertEquals(live.id.longValue(), lastUserJson(b).get("experimentInstance").get("id").asLong());
         assertEquals(live.id, User.findByEmail(bob.email).experimentInstanceId);
+        await("his first tab shows it too", () -> lastUserJson(first).get("experimentInstance").isObject()
+            && lastUserJson(first).get("experimentInstance").get("id").asLong() == live.id);
         // Carol works on another experiment: nothing changes for her.
         carol.setSelectedExperiment(Experiment.findById(other.id));
         carol.update();
@@ -573,6 +582,123 @@ public class SharedEngineTest extends BaseTest {
         assertEquals("", lastUserJson(c).get("experimentInstance").asText());
         assertEquals(-1L, User.findByEmail(carol.email).experimentInstanceId.longValue());
         assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(live.id).status);
+    }
+
+    /** "<id> <status>" of the session the tab's last User JSON shows, or "(none)". */
+    private static String shown(AdminSocketsTest.Tab t) {
+        JsonNode last = lastUserJson(t);
+        JsonNode i = last == null ? null : last.get("experimentInstance");
+        return i == null || !i.isObject() ? "(none)" : i.get("id").asLong() + " " + i.get("status").asText();
+    }
+
+    @Test
+    public void anAccountWorkingOnAnExperimentFollowsEachOfItsSessionsAndIsToldWhenOneEnds() throws Throwable {
+        final User alice = user("alice");
+        final User bob = user("bob");
+        final User carol = user("carol");
+        final Experiment hers = createExperiment("Watched by two");
+        final Experiment other = createExperiment("Carol's draft");
+        own(alice, hers);
+        final AdminSocketsTest.Tab a = loggedIn(alice);
+        a.send("SelectExperiment", "experimentId", hers.id);
+        await("hers loaded", () -> hers.id.equals(engineExperimentId()));
+        // Bob works on her experiment too, and Carol on another one. Their tabs ask for nothing after
+        // signing in, as the previous console (/legacy-admin), which doesn't read the engine news.
+        bob.setSelectedExperiment(Experiment.findById(hers.id));
+        bob.update();
+        carol.setSelectedExperiment(Experiment.findById(other.id));
+        carol.update();
+        final AdminSocketsTest.Tab b = loggedIn(bob);
+        final AdminSocketsTest.Tab c = loggedIn(carol);
+        final int carolHad = c.count(AdminSocketsTest.userJson());
+
+        // Alice opens a session: Bob's tab shows it as it goes live.
+        a.send("LaunchGame", "name", "S", "parameters", Json.newObject());
+        await("S running", () -> sessions(hers).size() == 1 && sessions(hers).get(0).status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance s = sessions(hers).get(0);
+        await("Bob's tab shows S", () -> (s.id + " RUNNING").equals(shown(b)));
+        assertEquals(s.id, User.findByEmail(bob.email).experimentInstanceId);
+
+        // She stops it: his tab shows it stopped.
+        a.send("StopGame", "id", s.id);
+        await("Bob's tab shows S stopped", () -> (s.id + " STOPPED").equals(shown(b)));
+        await("Alice's own session cleared", () -> User.findByEmail(alice.email).experimentInstanceId == -1L);
+        // She resumes it: running again.
+        a.send("SelectInstance", "id", s.id);
+        await("Bob's tab shows S running again", () -> (s.id + " RUNNING").equals(shown(b)));
+        // Its game finishes: finished.
+        a.send("SendScript", "script", "gameListener.finish(); null", "experimentId", hers.id, "requestId", "fin-1");
+        await("Bob's tab shows S finished", () -> (s.id + " FINISHED").equals(shown(b)));
+
+        // She opens another one: Bob follows it.
+        a.send("LaunchGame", "name", "S2", "parameters", Json.newObject());
+        await("S2 running", () -> sessions(hers).size() == 2 && sessions(hers).get(1).status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance s2 = sessions(hers).get(1);
+        await("Bob's tab shows S2", () -> (s2.id + " RUNNING").equals(shown(b)));
+        assertEquals(s2.id, User.findByEmail(bob.email).experimentInstanceId);
+
+        // Carol, on another experiment, was told none of this, and follows nothing.
+        Thread.sleep(300);
+        assertEquals(carolHad, c.count(AdminSocketsTest.userJson()));
+        assertEquals(-1L, User.findByEmail(carol.email).experimentInstanceId.longValue());
+    }
+
+    /** Runs {@code meanwhile} holding ScriptBoard's engine lock, which every change of the engine holds. */
+    private static void holdingTheEngine(Callable<Object> meanwhile) throws Exception {
+        Field f = ScriptBoard.class.getDeclaredField("REBUILD_LOCK");
+        f.setAccessible(true);
+        synchronized (f.get(null)) {
+            meanwhile.call();
+        }
+    }
+
+    @Test
+    public void aRequestWaitingForTheEngineWhileItsAccountFollowsASessionStillGoesThrough() throws Throwable {
+        final User alice = user("alice");
+        final User bob = user("bob");
+        final Experiment hers = createExperiment("Busy engine");
+        own(alice, hers);
+        final AdminSocketsTest.Tab a = loggedIn(alice);
+        a.send("SelectExperiment", "experimentId", hers.id);
+        await("hers loaded", () -> hers.id.equals(engineExperimentId()));
+        a.send("LaunchGame", "name", "S", "parameters", Json.newObject());
+        await("S running", () -> sessions(hers).size() == 1 && sessions(hers).get(0).status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance s = sessions(hers).get(0);
+        final AdminSocketsTest.Tab b = loggedIn(bob);
+        b.send("SelectExperiment", "experimentId", hers.id);
+        await("Bob follows S", () -> s.id.equals(User.findByEmail(bob.email).experimentInstanceId));
+
+        // Bob's script waits for the engine while his account changes, as when a session that goes live
+        // meanwhile moves him (moveFollowersTo): the copy of his account it carries is out of date.
+        holdingTheEngine(() -> {
+            b.send("SendScript", "script", "fromBob = 7; null", "experimentId", hers.id, "requestId", "bob-1");
+            Thread.sleep(300);
+            User changed = User.findByEmail(bob.email);
+            changed.setExperimentInstanceId(-1L);
+            changed.update();
+            return null;
+        });
+        await("it ran", () -> Integer.valueOf(7).equals(engine().get("fromBob")) || b.count(AdminSocketsTest.error("SendScript")) > 0);
+        assertEquals(0, b.count(AdminSocketsTest.error("SendScript")));
+        assertEquals(7, engine().get("fromBob"));
+
+        // So does a session he selects (his account, without a session now, follows one meanwhile).
+        a.send("StopGame", "id", s.id);
+        await("S stopped", () -> ExperimentInstance.findById(s.id).status == ExperimentInstance.Status.STOPPED);
+        Thread.sleep(300);
+        assertEquals(-1L, User.findByEmail(bob.email).experimentInstanceId.longValue());
+        holdingTheEngine(() -> {
+            b.send("SelectInstance", "id", s.id);
+            Thread.sleep(300);
+            User changed = User.findByEmail(bob.email);
+            changed.setExperimentInstanceId(s.id);
+            changed.update();
+            return null;
+        });
+        await("S resumed", () -> ExperimentInstance.findById(s.id).status == ExperimentInstance.Status.RUNNING
+            || b.count(AdminSocketsTest.error("SelectInstance")) > 0);
+        assertEquals(0, b.count(AdminSocketsTest.error("SelectInstance")));
+        await("his session", () -> s.id.equals(User.findByEmail(bob.email).experimentInstanceId));
     }
 
     // ---- file mode, while the engine runs another experiment ----------------------------------------------
@@ -605,6 +731,34 @@ public class SharedEngineTest extends BaseTest {
             await("every console sees it load", () -> a.count(f -> AdminSocketsTest.output("marker-file-1").matches(f)
                 && "Steps".equals(f.get("source").asText())) == 1);
 
+            // A name with a "/" (older databases and the API took them) makes a folder in a folder,
+            // dev/Pilot-A/B_<id>/: its step files run all the same while the engine runs it.
+            final Experiment slashed = createExperiment("Pilot A/B");
+            slashed.setFileMode(true);
+            slashed.save();
+            own(alice, slashed);
+            final java.nio.file.Path slashedStep = dev.resolve(slashed.getDirectoryName()).resolve("Steps").resolve("Setup.groovy");
+            assertEquals("Pilot-A/B_" + slashed.id + "/Steps/Setup.groovy", dev.relativize(slashedStep).toString());
+            java.nio.file.Files.createDirectories(slashedStep.getParent());
+            a.send("SelectExperiment", "experimentId", slashed.id);
+            await("it in the engine", () -> slashed.id.equals(engineExperimentId()));
+            java.nio.file.Files.write(slashedStep, "fromSlashed = 1".getBytes("UTF-8"));
+            assertEquals(slashed.id, FileWatcher.fileSaved(dev, slashedStep).id);
+            assertEquals(1, engine().get("fromSlashed"));
+            // A folder inside another experiment's folder is the deeper one's.
+            final Experiment outer = createExperiment("Outer");
+            outer.setFileMode(true);
+            outer.save();
+            final Experiment inner = createExperiment(outer.getDirectoryName() + "/Inner");
+            inner.setFileMode(true);
+            inner.save();
+            final java.nio.file.Path innerStyle = dev.resolve(inner.getDirectoryName()).resolve("style.css");
+            java.nio.file.Files.createDirectories(innerStyle.getParent());
+            java.nio.file.Files.write(innerStyle, "p {}".getBytes("UTF-8"));
+            java.nio.file.Files.write(dev.resolve(outer.getDirectoryName()).resolve("style.css"), "p {}".getBytes("UTF-8"));
+            assertEquals(inner.id, FileWatcher.fileSaved(dev, innerStyle).id);
+            assertEquals(outer.id, FileWatcher.fileSaved(dev, dev.resolve(outer.getDirectoryName()).resolve("style.css")).id);
+
             // Another experiment's session runs (here Alice's own): the file is not loaded into its game,
             // and every console is told why.
             a.send("SelectExperiment", "experimentId", live.id);
@@ -629,6 +783,12 @@ public class SharedEngineTest extends BaseTest {
             java.nio.file.Files.createDirectories(lookAlike);
             java.nio.file.Files.write(lookAlike.resolve("Setup.groovy"), "lookAlike = 1".getBytes("UTF-8"));
             assertNull(FileWatcher.fileSaved(dev, lookAlike.resolve("Setup.groovy")));
+            java.nio.file.Path longerId = dev.resolve(files.getDirectoryName() + "0").resolve("Steps");
+            java.nio.file.Files.createDirectories(longerId);
+            java.nio.file.Files.write(longerId.resolve("Setup.groovy"), "lookAlike = 1".getBytes("UTF-8"));
+            assertNull(FileWatcher.fileSaved(dev, longerId.resolve("Setup.groovy")));
+            assertNull("the folder of a name with a \"/\", only its first part",
+                FileWatcher.fileSaved(dev, dev.resolve("Pilot-A").resolve("style.css")));
             java.nio.file.Path notFiles = dev.resolve(his.getDirectoryName()).resolve("Steps");
             java.nio.file.Files.createDirectories(notFiles);
             java.nio.file.Files.write(notFiles.resolve("Setup.groovy"), "notFiles = 1".getBytes("UTF-8"));

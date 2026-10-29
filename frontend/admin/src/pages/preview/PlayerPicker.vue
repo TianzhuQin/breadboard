@@ -34,7 +34,7 @@
       <li v-for="p in visible" :key="p.id" class="pp__item" :class="{ 'is-on': selected.has(p.id) }">
         <BCheckbox :model-value="selected.has(p.id)" @update:model-value="(v: boolean) => emit('toggle', p.id, v)">
           <span class="pp__label">
-            <span class="pp__id" :title="p.id">{{ p.id }}</span>
+            <span class="pp__id" :title="p.id">{{ playerName(p.id) }}</span>
             <span v-if="isTestPlayer(p)" class="pp__tag" title="Test player (testmode)"><FlaskConical :size="12" aria-hidden="true" /><span class="sr-only">, test player</span></span>
             <span v-if="isAIPlayer(p)" class="pp__tag" title="Played by the computer"><Bot :size="12" aria-hidden="true" /><span class="sr-only">, computer player</span></span>
             <span
@@ -58,6 +58,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { playerName } from '@/network/players'
 import { Bot, FlaskConical, ListOrdered, Search } from 'lucide-vue-next'
 import { BButton, BCheckbox, BInput } from '@/ui'
 import { isAIPlayer, isConnected, isTestPlayer, matchesPlayer, type PlayerLike, type QuickPick } from './preview'
