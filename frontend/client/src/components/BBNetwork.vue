@@ -21,6 +21,7 @@
             type="button"
             class="bb-network__btn"
             :class="proposal.op === 'remove' ? 'bb-network__btn--danger' : 'bb-network__btn--primary'"
+            :disabled="!canSend"
             @click="confirmProposal"
           >{{ proposal.op === 'remove' ? 'Cut tie' : 'Connect' }}</button>
         </div>
@@ -154,8 +155,8 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force'
+import { LinkAware } from '../lib/connection'
 
 type Point = { x: number, y: number }
 type AnyNode = { id: string, data: any, [key: string]: any }
@@ -193,8 +194,11 @@ let instances = 0
  * Takes the same `player` and `graph` objects as SVGGraph, sets node.isEgo like it does, and emits
  * nodeClick / edgeClick for clicks on any person or tie. SVGGraph's layout props (width, height,
  * centerEgo, nodeStroke, ...) and edge label slots don't apply here.
+ *
+ * While the connection is down nothing can be changed: a change sent then would arrive late, or
+ * never. The bar says so, and a confirmation already open waits for the connection.
  */
-export default Vue.extend({
+export default LinkAware.extend({
   name: 'BBNetwork',
   props: {
     player: { type: Object, required: true },
@@ -514,6 +518,7 @@ export default Vue.extend({
     hint (): string {
       const e = this.edits
       if (!e.enabled) return ''
+      if (!this.canSend) return 'Reconnecting… you can change ties once the connection is back.'
       if (this.selectedNode) return `Now choose who ${this.nameOf(this.selectedNode)} should be connected with.`
       const parts: string[] = []
       const how: string[] = []
@@ -955,7 +960,7 @@ export default Vue.extend({
       }
     },
     removeAllowed (a: string, b: string): boolean {
-      if (!this.edits.enabled || !this.edits.remove || this.isPending('remove', a, b)) return false
+      if (!this.canSend || !this.edits.enabled || !this.edits.remove || this.isPending('remove', a, b)) return false
       if (this.candidates) {
         const c = this.candidateFor('remove', a, b)
         return !!c && c.available !== false
@@ -971,7 +976,7 @@ export default Vue.extend({
       return !!this.edgeKeys[pairKey(a, b)]
     },
     addAllowed (a: string, b: string): boolean {
-      if (!this.edits.enabled || !this.edits.add || a === b || this.connected(a, b) || this.isPending('add', a, b)) return false
+      if (!this.canSend || !this.edits.enabled || !this.edits.add || a === b || this.connected(a, b) || this.isPending('add', a, b)) return false
       if (!this.nodeById[a] || !this.nodeById[b]) return false
       if (this.candidates) {
         const c = this.candidateFor('add', a, b)
@@ -988,7 +993,7 @@ export default Vue.extend({
       return null
     },
     nodeSelectable (id: string): boolean {
-      if (!this.edits.enabled || !this.edits.add) return false
+      if (!this.canSend || !this.edits.enabled || !this.edits.add) return false
       if (this.selectedNode) return this.selectedNode === id || this.addAllowed(this.selectedNode, id)
       return this.nodes.some(other => other.id !== id && this.addAllowed(id, other.id))
     },
@@ -1060,7 +1065,7 @@ export default Vue.extend({
       }
     },
     propose (op: 'add' | 'remove', a: string, b: string) {
-      if (this.isPending(op, a, b)) return
+      if (!this.canSend || this.isPending(op, a, b)) return
       this.opener = (typeof document !== 'undefined' ? document.activeElement : null) as any
       this.clearSelection()
       this.proposal = { op, a, b, turn: this.edits.turn }
@@ -1118,7 +1123,7 @@ export default Vue.extend({
     },
     confirmProposal () {
       const p = this.proposal
-      if (!p) return
+      if (!p || !this.canSend) return
       this.proposal = null
       if (this.isPending(p.op, p.a, p.b)) return
       const key = `${p.op}:${pairKey(p.a, p.b)}`

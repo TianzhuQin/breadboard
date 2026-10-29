@@ -25,18 +25,20 @@
             <component 
               :is="blockComponent(block.type)" 
               :block="block"
-              :disabled="isBusy"
+              :disabled="isBusy || !canSend"
               @update="updateResult(block, $event)" />
           </v-flex>
         </v-layout>
         <slot />
         <v-divider />
+        <!-- Sent while the connection is down, a page of answers would arrive late, or never: it waits. -->
+        <ReconnectingNote v-if="link === 'reconnecting'" class="mt-3" />
         <v-layout class="tutorial-foo mt-2">
-          <v-btn v-if="form.pages.length > 1" @click="prev" :disabled="!form.location.index || isBusy" :loading="isBusy && dir === 'prev'">
+          <v-btn v-if="form.pages.length > 1" @click="prev" :disabled="!form.location.index || isBusy || !canSend" :loading="isBusy && dir === 'prev'">
             <v-icon>mdi-chevron-left</v-icon> Previous
           </v-btn>
           <v-spacer />
-          <v-btn @click="next" :disabled="!valid || isBusy" :loading="isBusy && dir === 'next'">
+          <v-btn @click="next" :disabled="!valid || isBusy || !canSend" :loading="isBusy && dir === 'next'">
             <span v-if="form.location.index < form.location.size - 1">
               Next <v-icon>mdi-chevron-right</v-icon>
             </span>
@@ -52,18 +54,21 @@
 </template>
 
 <script lang="ts">
-  import Vue, { Component, PropOptions } from 'vue'
+  import { Component, PropOptions } from 'vue'
   import { PlayerWithForms, PlayerForm, BlockType, QuestionResult, Prim, BaseBlock, FormError, FormPage } from './form.types'
   import ScaleQuestion from './blocks/ScaleQuestion.vue'
   import HtmlBlock from './blocks/HtmlBlock.vue'
   import ChoiceQuestion from './blocks/ChoiceQuestion.vue'
   import TextQuestion from './blocks/TextQuestion.vue'
+  import ReconnectingNote from '../ReconnectingNote.vue'
+  import { LinkAware } from '../../lib/connection'
 
   type PlayerForms = { [key: string]: PlayerForm }
   const bb = window.Breadboard
-  export default Vue.extend({
+  // (its buttons and questions are disabled while the connection is down)
+  export default LinkAware.extend({
     name: 'Form',
-    components: { ScaleQuestion, HtmlBlock, ChoiceQuestion, TextQuestion, },
+    components: { ScaleQuestion, HtmlBlock, ChoiceQuestion, TextQuestion, ReconnectingNote },
     props: {
       player: {
         type: Object as () => PlayerWithForms,
@@ -125,6 +130,7 @@
         this.memForm = null
       },
       next () {
+        if (!this.canSend) return
         this.isBusy = true
         this.dir = 'next'
         bb.send('f-next', {
@@ -133,6 +139,7 @@
         })
       },
       prev () {
+        if (!this.canSend) return
         this.isBusy = true
         this.dir = 'prev'
         bb.send('f-prev', {

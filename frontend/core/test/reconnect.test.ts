@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryStorage } from './memoryStorage'
 
 // A participant page that was open while the server restarted holds a seat token the server has
 // forgotten. It used to retry its websocket for ever, saying "Reconnecting…". Now the server says
@@ -28,6 +29,10 @@ class FakeSocket {
   accept () { this.readyState = 1; this.fire('open') }
   frame (data: any) { this.fire('message', { data: JSON.stringify(data) }) }
   drop () { this.readyState = 3; this.fire('close') }
+  /** The connection can't be made */
+  fail () { this.readyState = 3; this.fire('error'); this.fire('close') }
+  /** What the page sent, read back */
+  sentFrames () { return this.sent.map(d => JSON.parse(d)) }
 }
 
 /** /state's answers, one per request (the last one repeats) */
@@ -45,36 +50,50 @@ async function settle () {
 }
 
 let location: any
+/** The page under test, disconnected afterwards (so it stops listening to the window) */
+let current: any = null
 
 beforeEach(() => {
   FakeSocket.all = []
   vi.stubGlobal('WebSocket', FakeSocket)
   location = { pathname: PAGE, search: '', hash: '', href: 'http://lab.example' + PAGE, protocol: 'http:', host: 'lab.example' }
   vi.stubGlobal('location', location)
+  vi.stubGlobal('localStorage', new MemoryStorage())
   document.body.innerHTML = '<div id="app">Loading…</div>'
   vi.useFakeTimers()
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'debug').mockImplementation(() => {})
+  vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
 afterEach(() => {
+  if (current) current.disconnect()
+  current = null
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
-/** A newly loaded participant page: it gets its state, opens its socket, and the server takes it. */
-async function openPage (fetch: ReturnType<typeof stateAnswers>) {
+/**
+ * A newly loaded participant page: it gets its state, opens its socket, and the server takes it
+ * (unless `accept` is false).
+ */
+async function openPage (fetch: ReturnType<typeof stateAnswers>, accept = true) {
   vi.stubGlobal('fetch', fetch)
   vi.resetModules()
-  const { Breadboard, ENDED_EVENT } = await import('../src/breadboard')
+  const { Breadboard, ENDED_EVENT, CONNECTION_EVENT } = await import('../src/breadboard')
+  current = Breadboard
   const players: any[] = []
+  const messages: string[] = []
+  const connections: string[] = []
   let ended = 0
   Breadboard.on('player', (p: any) => players.push(p))
+  Breadboard.on('message', (d: string) => messages.push(d))
   Breadboard.on(ENDED_EVENT, () => ended++)
+  Breadboard.on(CONNECTION_EVENT, () => connections.push(Breadboard.connection))
   await Breadboard.connect()
-  FakeSocket.all[0].accept()
-  return { Breadboard, players, ended: () => ended }
+  if (accept) FakeSocket.all[0].accept()
+  return { Breadboard, players, messages, connections, ended: () => ended }
 }
 
 /** The server goes away and comes back: the page's next attempt is taken. */
@@ -199,5 +218,192 @@ describe('reconnecting', () => {
     FakeSocket.all[3].frame({ player: { _system: {}, text: 'Round 2' } })
     expect(page.players).toEqual([{ _system: {}, text: 'Round 2' }])
     expect(page.Breadboard.ended).toBe(false)
+  })
+})
+
+describe('a page whose study was opened in another tab or window', () => {
+  // What the server writes to the older socket before closing it, when a newer one takes the seat.
+  // The two tabs used to take the seat from each other every few seconds, for ever.
+  const REPLACED = { bbClosed: 'replaced' }
+
+  it('stops reconnecting, and takes the seat back only when the participant asks', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame({ player: { _system: {}, text: 'Round 1' } })
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    expect(page.Breadboard.connection).toBe('elsewhere')
+    expect(page.Breadboard.replaced).toBe(true)
+    expect(page.connections).toContain('elsewhere')
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+    // nor when the network or the page comes back, or the participant tries again
+    window.dispatchEvent(new Event('online'))
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    page.Breadboard.reconnectNow()
+    expect(FakeSocket.all.length).toBe(1)
+    expect(page.Breadboard.ended).toBe(false)
+
+    // "Use it here": one new connection, at once (the other tab is told in turn)
+    page.Breadboard.useHere()
+    expect(FakeSocket.all.length).toBe(2)
+    expect(page.Breadboard.replaced).toBe(false)
+    FakeSocket.all[1].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    FakeSocket.all[1].frame({ player: { _system: {}, text: 'Round 1' } })
+    expect(page.players.length).toBe(2)
+    // and from then on it reconnects as before
+    FakeSocket.all[1].drop()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(FakeSocket.all.length).toBe(3)
+  })
+
+  it('keeps the seat it was given back while the other tab is told', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame(REPLACED)
+    // asked before the server has even closed the old socket
+    page.Breadboard.useHere()
+    expect(FakeSocket.all.length).toBe(2)
+    FakeSocket.all[0].drop()
+    FakeSocket.all[1].accept()
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(page.Breadboard.connection).toBe('open')
+  })
+})
+
+describe('the page\'s connection, as the participant hears of it', () => {
+  it('says when it opens, drops and opens again', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    expect(page.Breadboard.connection).toBe('connecting')
+    expect(page.Breadboard.isOpen).toBe(false)
+    FakeSocket.all[0].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.Breadboard.isOpen).toBe(true)
+    FakeSocket.all[0].drop()
+    expect(page.Breadboard.connection).toBe('lost')
+    await vi.advanceTimersByTimeAsync(1000)
+    FakeSocket.all[1].accept()
+    expect(page.connections).toEqual(['connecting', 'open', 'lost', 'lost', 'open'])
+  })
+
+  it('says the network may block it when it has never opened after three attempts', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    FakeSocket.all[0].fail()
+    expect(page.Breadboard.connection).toBe('lost')
+    for (let k = 1; k < 3; k++) {
+      await vi.advanceTimersByTimeAsync(5000)
+      FakeSocket.all[k].fail()
+    }
+    expect(page.Breadboard.connection).toBe('blocked')
+    // it goes on trying, and the participant can try at once
+    page.Breadboard.reconnectNow()
+    expect(FakeSocket.all.length).toBe(4)
+    FakeSocket.all[3].accept()
+    expect(page.Breadboard.connection).toBe('open')
+  })
+
+  it('tries again at once when the participant asks', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.999)
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].drop()
+    expect(FakeSocket.all.length).toBe(1)
+    page.Breadboard.reconnectNow()
+    expect(FakeSocket.all.length).toBe(2)
+  })
+
+  it('says when the session is over for the page, and tries no more', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame(NOT_RUNNING)
+    FakeSocket.all[0].drop()
+    expect(page.Breadboard.connection).toBe('ended')
+    page.Breadboard.reconnectNow()
+    page.Breadboard.useHere()
+    window.dispatchEvent(new Event('online'))
+    expect(FakeSocket.all.length).toBe(1)
+  })
+})
+
+describe('the heartbeat', () => {
+  const PING = '{"action":"Ping"}'
+
+  it('finds a connection that died without closing, and connects again at once in the same seat', async () => {
+    const fetch = stateAnswers([200, CONFIG])
+    const page = await openPage(fetch)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(FakeSocket.all[0].sent).toEqual([PING])
+    FakeSocket.all[0].frame({ pong: 1761700000000 })
+    // the answer is the page's own business
+    expect(page.messages).toEqual([])
+    expect(page.players).toEqual([])
+    // the network goes away without a word: no banner, no new connection, until now
+    await vi.advanceTimersByTimeAsync(14000)
+    expect(FakeSocket.all.length).toBe(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(page.Breadboard.connection).toBe('lost')
+    FakeSocket.all[1].accept()
+    FakeSocket.all[1].frame({ player: { _system: {}, text: 'Round 1' } })
+    expect(page.players.length).toBe(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a connection to a server that doesn\'t answer (3.0), in a quiet waiting room too', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+    expect(FakeSocket.all.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('open')
+  })
+
+  it('is left out of the previous console\'s socket, whose server would answer with an error', async () => {
+    await openPage(stateAnswers([200, { uid: 'u1', connectSocket: 'ws://lab.example/connect' }]))
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(FakeSocket.all[0].sent).toEqual([])
+  })
+})
+
+describe('answers given while the connection is down', () => {
+  it('are dropped once they have waited 5 s for it; the page\'s other messages still go', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame({ player: { _system: {}, text: 'Round 1' } })
+    FakeSocket.all[0].drop()
+    page.Breadboard.sendChoice('stale-choice')
+    page.Breadboard.sendGroupChoice('stale-group-choice')
+    await page.Breadboard.sendEdgeEdit('remove', 'na', 'nb')
+    page.Breadboard.sendType('LogIn', { clientId: 'p1' })
+    await vi.advanceTimersByTimeAsync(6000)
+    page.Breadboard.sendChoice('fresh-choice')
+    FakeSocket.all[1].accept()
+    const sent = FakeSocket.all[1].sentFrames()
+    expect(sent.map((m: any) => m.action)).toEqual(['LogIn', 'MakeChoice'])
+    expect(sent[1].choiceUID).toBe('fresh-choice')
+  })
+})
+
+describe('the token kept for a browser that comes back', () => {
+  const KEY = 'breadboard-token:' + PAGE
+  const keep = () => localStorage.setItem(KEY, JSON.stringify({ token: 'tok', until: Date.now() + 60 * 60 * 1000 }))
+
+  it('is forgotten when the session is over for the page', async () => {
+    keep()
+    await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame(NOT_RUNNING)
+    expect(localStorage.getItem(KEY)).toBe(null)
+  })
+
+  it('is forgotten when the server no longer takes it', async () => {
+    keep()
+    await openPage(stateAnswers([200, CONFIG], [401, SIGN_IN]))
+    FakeSocket.all[0].frame({ reauth: true })
+    await settle()
+    expect(location.href).toBe('/game/1/2/login')
+    expect(localStorage.getItem(KEY)).toBe(null)
+  })
+
+  it('is kept while the page only reconnects', async () => {
+    keep()
+    await openPage(stateAnswers([200, CONFIG]))
+    await reconnect(1)
+    FakeSocket.all[1].frame({ player: { _system: {}, text: 'Round 1' } })
+    expect(JSON.parse(localStorage.getItem(KEY)!).token).toBe('tok')
   })
 })

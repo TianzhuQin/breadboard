@@ -1,9 +1,11 @@
 <template>
   <v-col v-if="hasChoices" class="player-choices">
+    <!-- A click while the connection is down would arrive late, or never: the choices wait for it. -->
+    <ReconnectingNote v-if="link === 'reconnecting'" />
     <v-row no-gutters class="choices-container justify-space-between">
       <template v-for="(choice, index) of player.choices">
-        <slot name="choice" :choice="choice" :submit="submit" :index="index">
-          <Choice :choice="choice" :key="choice.uid" @click="submit(choice)" />
+        <slot name="choice" :choice="choice" :submit="submit" :index="index" :disabled="!canSend">
+          <Choice :choice="choice" :key="choice.uid" :disabled="!canSend" @click="submit(choice)" />
         </slot>
       </template>
     </v-row>
@@ -11,16 +13,17 @@
 </template>
 
 <script lang="ts">
-import Vue from 'vue'
 import { PlayerChoice } from '@human-nature-lab/breadboard-core'
 import Choice from './Choice.vue'
+import ReconnectingNote from './ReconnectingNote.vue'
+import { LinkAware } from '../lib/connection'
 
 /**
- * A container for all of the player choices
+ * A container for all of the player choices. They are disabled while the connection is down.
  */
-export default Vue.extend({
+export default LinkAware.extend({
   name: 'PlayerChoices',
-  components: { Choice },
+  components: { Choice, ReconnectingNote },
   props: {
     player: {
       type: Object,
@@ -41,6 +44,8 @@ export default Vue.extend({
   },
   methods: {
     submit (choice: PlayerChoice) {
+      // (a page's own choices, in the slot, may not be disabled)
+      if (!this.canSend) return
       if (choice._route === 'group') {
         // Group choices aren't in the platform action map; route to the group handler.
         window.Breadboard.sendGroupChoice(choice.uid, choice.params)
