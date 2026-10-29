@@ -51,6 +51,8 @@ class Step {
     // The server learns when the init step starts, however it is started, and takes it back if the
     // step throws before it gets going (see ScriptBoard.stepStarting).
     def startMark = (gameListener instanceof models.GameListener) ? gameListener.stepStarting(this) : null
+    // (the steps that had got going on this thread before this one's code runs, see reportFailure)
+    def going = startedSoFar()
 
     // Record the start time of each step.
     if (name != null) {
@@ -64,7 +66,7 @@ class Step {
       if (startMark != null) {
         gameListener.stepStartFailed(startMark)
       }
-      reportFailure(t)
+      reportFailure(t, going)
       return
     }
 
@@ -72,59 +74,81 @@ class Step {
 
     if (duration != null && duration > 0) {
       startTimed(player, hasUserActions)
+      gotGoing()
       return
     }
 
-    if (hasUserActions) {
-      //println("playerActions.actions.size() = " + playerActions.actions.size())
-
-      if (!ignoreUserAction) {
-        //if has user actions, the done should be triggered after all the actions are completed
-        emptyListener = { event ->
-          if (event instanceof ObservableMap.PropertyRemovedEvent) {
-            //println("playerActions.actions.size() = " + playerActions.actions.size())
-            if (playerActions.actions.isEmpty()) {
-              playerActions.removeActionPropertyChangeListener(emptyListener)
-              callDone(player)
-            }
+    if (hasUserActions && !ignoreUserAction) {
+      //if has user actions, the done should be triggered after all the actions are completed
+      emptyListener = { event ->
+        if (event instanceof ObservableMap.PropertyRemovedEvent) {
+          //println("playerActions.actions.size() = " + playerActions.actions.size())
+          if (playerActions.actions.isEmpty()) {
+            playerActions.removeActionPropertyChangeListener(emptyListener)
+            callDone(player)
           }
-        } as PropertyChangeListener
+        }
+      } as PropertyChangeListener
 
-        playerActions.addActionPropertyChangeListener(emptyListener)
-      } else {
-        callDone(player, startMark)
-      }
-    } else {
-      callDone(player, startMark)
+      playerActions.addActionPropertyChangeListener(emptyListener)
+      gotGoing()
+      return
     }
-  }
 
-  // done(player), and what it returns; what it throws goes to reportFailure. Called as the step
-  // starts (with what its start marked), a done that throws hands the start back too, as a run that
-  // throws does: an init step whose done fails at once (e.g. a typo in the next step's name) never
-  // got the game going, and the start may be tried again, as when the console's Start fails. One
-  // that started the next step first (its first round) did, and the server leaves its start
-  // (ScriptBoard.stepStartFailed).
-  private def callDone(String player, startMark = null) {
+    // Nothing to wait for: done runs now, and the step has got going once it returns. A done that
+    // throws hands the start back too, as a run that throws does: an init step whose done fails at
+    // once (e.g. a typo in the next step's name) never got the game going, and the start may be tried
+    // again, as when the console's Start fails. One whose done started the next step first (its first
+    // round), which got going, did, and the server leaves its start (ScriptBoard.stepStartFailed).
+    def answer
     try {
-      return done(player)
+      answer = done(player)
     } catch (Throwable t) {
       if (startMark != null) {
         gameListener.stepStartFailed(startMark)
       }
-      reportFailure(t)
+      reportFailure(t, going)
       return null
     }
+    gotGoing()
+    return answer
+  }
+
+  // done(player) once the last pending choice is made (on the thread that made it); what it throws
+  // goes to reportFailure.
+  private void callDone(String player) {
+    def going = startedSoFar()
+    try {
+      done(player)
+    } catch (Throwable t) {
+      reportFailure(t, going)
+    }
+  }
+
+  // The step got going: its start() returns without having thrown, waiting for choices or for its
+  // time, or with its done run (ScriptBoard.stepStarted counts it on this thread).
+  private void gotGoing() {
+    if (gameListener instanceof models.GameListener) {
+      gameListener.stepStarted(this)
+    }
+  }
+
+  // How many steps the server has seen get going on this thread so far; null when the listener isn't
+  // the server's.
+  private def startedSoFar() {
+    return (gameListener instanceof models.GameListener) ? gameListener.stepsStarted() : null
   }
 
   // The step's own code (run, done, onTimeout) threw. On a timer, a participant's choice or a
   // computer player's, that used to end the thread, with the error only in the server's output, and
-  // the game waited for good: the server reports it now (ScriptBoard.stepFailed). Inside a script
-  // the server runs (the console's Start, a step run from the Steps page, the autopilot's start,
-  // OnJoinStep and OnLeaveStep) it is thrown on to that script, whose error reports it; for the last
-  // three, which nobody waits on, the server then deals with it as above.
-  private void reportFailure(Throwable t) {
-    if (!(gameListener instanceof models.GameListener) || !gameListener.stepFailed(this, t)) {
+  // the game waited for good: the server reports it now (ScriptBoard.stepFailed). With going (what
+  // startedSoFar() said as that code began) it tells whether the failure stalls the game: not when a
+  // step got going since (the done started the next round, then threw). Inside a script the server
+  // runs (the console's Start, a step run from the Steps page, the autopilot's start, OnJoinStep and
+  // OnLeaveStep) it is thrown on to that script, whose error reports it; for the last three, which
+  // nobody waits on, the server then deals with it as above.
+  private void reportFailure(Throwable t, going) {
+    if (!(gameListener instanceof models.GameListener) || !gameListener.stepFailed(this, t, going)) {
       throw t
     }
   }
@@ -150,6 +174,7 @@ class Step {
     if (!ended.compareAndSet(false, true)) {
       return
     }
+    def going = startedSoFar()
     try {
       if (emptyListener != null) {
         playerActions.removeActionPropertyChangeListener(emptyListener)
@@ -174,11 +199,17 @@ class Step {
       }
       done(player)
     } catch (Throwable t) {
-      reportFailure(t)
+      reportFailure(t, going)
     }
   }
 
   def finish() {
+    // A step of an engine since replaced, whose code ran on after the rebuild (a timer task under
+    // way, code after its own finish()), would finish the session running now: the server gives
+    // every engine it builds the same game listener and event tracker.
+    if (gameListener instanceof models.GameListener && !gameListener.ofRunningEngine(this)) {
+      return
+    }
     eventTracker.track("Finished", [])
     gameListener.finish()
   }

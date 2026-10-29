@@ -428,10 +428,10 @@ public class ScriptTestHarness {
         }
 
         @Override
-        public boolean stepFailed(Object step, Throwable failure) {
+        public boolean stepFailed(Object step, Throwable failure, Long going) {
             stepFailures.add(new StepFailure(step, failure));
             // (the server's own handling: this engine isn't the server's, so it is only logged)
-            return super.stepFailed(step, failure);
+            return super.stepFailed(step, failure, going);
         }
     }
 

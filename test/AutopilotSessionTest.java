@@ -24,11 +24,13 @@ import static play.test.Helpers.*;
  * The autopilot opening real sessions on the shared engine: saving the settings opens one, applies
  * the console's waiting room over the experiment's own, keeps an open session when only the waiting
  * room changes, and opens the next one after a session finishes when continuous. The account it runs
- * as sees the session in its open console tabs. A step that fails during the game of its own session
- * (one it opened, or one of its experiment Resume or a save handed it) ends that session and pauses
- * it; in a session a researcher runs by hand (even of its experiment) the error is shown and the
- * session goes on. A failure that leaves the game going (after its first round started, a mistake in
- * the OnLeaveStep) or that comes from an engine replaced since ends nothing.
+ * as sees the session in its open console tabs. A step failure stalls the game when it kept the next
+ * step from getting going (a step gets going when its start() returns without throwing). One that
+ * stalls the game of its own session (one it opened, or one of its experiment Resume or a save handed
+ * it) ends that session and pauses it; in a session a researcher runs by hand (even of its
+ * experiment) a start that didn't get going is taken back, the error is shown and the session goes
+ * on. A failure that leaves the game going (once the next round got going, a mistake in the
+ * OnLeaveStep) or that comes from an engine replaced since ends nothing.
  */
 public class AutopilotSessionTest extends BaseTest {
 
@@ -585,6 +587,374 @@ public class AutopilotSessionTest extends BaseTest {
         JsonNode status = state(researcher).get("status");
         assertFalse(status.toString(), status.get("paused").asBoolean());
         assertEquals(session.id.longValue(), status.get("instance").get("id").asLong());
+    }
+
+    // The experiment's OnJoinStep starts the game once two people are in; InitStep (no choices) starts
+    // the first round at once, whose run has a typo on its line 4: that round never gets going.
+    private void startsOnJoinAndTheFirstRoundFailsAsItStarts(Experiment experiment) {
+        createStep(experiment, "OnJoinStep", "onJoinStep = stepFactory.createNoUserActionStep()\n"
+            + "onJoinStep.run = { playerId -> if (g.V.count() >= 2) initStep.start() }\n"
+            + "onJoinStep.done = { }");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { roundStep.start() }");
+        createStep(experiment, "RoundStep", "roundStep = stepFactory.createStep('RoundStep')\n"
+            + "roundStep.duration = 60\n"
+            + "roundStep.run = {\n"
+            + "  println \"round ${roundd}\"\n"
+            + "}\n"
+            + "roundStep.done = { }");
+    }
+
+    @Test
+    public void aFirstRoundThatFailsAsItStartsEndsTheAutopilotsSessionWhoseOnJoinStepStartedIt() throws Exception {
+        final User researcher = user("roundfails");
+        final Experiment experiment = createExperiment("First round fails as it starts");
+        startsOnJoinAndTheFirstRoundFailsAsItStarts(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        // No waiting room: the experiment's own OnJoinStep starts the game.
+        ObjectNode s = settings(experiment, 2);
+        ((ObjectNode) s.get("waitingRoom")).put("enabled", false);
+        assertEquals(OK, status(post(researcher, s)));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its steps", () -> engineValue("roundStep") != null);
+        final ExperimentInstance session = sessions(experiment).get(0);
+        final AdminSocketsTest.Tab tab = watching(researcher);
+
+        engine().eval("g.addPlayer('roundfails-1'); null");
+        await("the first OnJoinStep", () -> tab.count(from("OnJoinStep")) == 1);
+        engine().eval("g.addPlayer('roundfails-2'); null");
+
+        // InitStep's start came back with an error from its first round: nothing got going, and
+        // nothing would carry the game on.
+        await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        assertNull("nobody new is let in", Autopilot.openInstance(experiment.id));
+        JsonNode status = state(researcher).get("status");
+        assertTrue(status.toString(), status.get("paused").asBoolean());
+        String problem = status.get("problem").asText();
+        assertTrue(problem, problem.contains("the step \"RoundStep\" failed during its session \"" + session.name + "\""));
+        assertTrue(problem, problem.contains("line 4: No such property: roundd"));
+        List<Event> failed = events(session, "stepFailed");
+        assertEquals(1, failed.size());
+        assertEquals("RoundStep", value(failed.get(0), "step"));
+        watchdog();
+        Thread.sleep(500);
+        assertEquals("nothing opens until Resume", 1, sessions(experiment).size());
+    }
+
+    @Test
+    public void aFirstRoundThatFailsAsItStartsInASessionRunByHandHandsTheStartBack() throws Exception {
+        final User researcher = user("roundfailshand");
+        final Experiment experiment = createExperiment("First round fails as it starts, by hand");
+        startsOnJoinAndTheFirstRoundFailsAsItStarts(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+        final AdminSocketsTest.Tab tab = console(researcher, experiment);
+        tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
+        await("the session", () -> running(experiment) == 1);
+        await("its steps", () -> engineValue("roundStep") != null);
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        engine().eval("g.addPlayer('roundfailshand-1'); null");
+        await("the first OnJoinStep", () -> tab.count(from("OnJoinStep")) == 1);
+        engine().eval("g.addPlayer('roundfailshand-2'); null");
+        await("the event", () -> events(session, "stepFailed").size() == 1);
+        assertEquals("RoundStep", value(events(session, "stepFailed").get(0), "step"));
+        // The game never got going: its start is taken back, people may come in again, and Start can
+        // try again.
+        await("the start taken back", () -> tab.count(AdminSocketsTest.notify("GameStartFailed")) == 1);
+        Thread.sleep(500);
+        ExperimentInstance now = ExperimentInstance.findById(session.id);
+        assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, now.status);
+        assertEquals("newcomers are let in again", Boolean.FALSE, now.hasStarted);
+        assertNull(engine().get("initStep.start()"));
+        assertFalse(User.findByEmail(researcher.email).toJson().get("engine").get("gameStarted").asBoolean());
+
+        tab.send("SendScript", "script", "roundStep.run = { }");
+        await("fixed", () -> tab.count(f -> f.has("request") && "SendScript".equals(f.get("request").asText())
+            && f.has("output")) == 1);
+        tab.send("RunGame");
+        await("started", () -> tab.count(f -> f.has("request") && "RunGame".equals(f.get("request").asText())
+            && f.has("error") && f.get("error").asText().isEmpty()) == 1);
+        assertEquals(0, tab.count(f -> f.has("error") && f.get("error").asText().contains("started already")));
+        assertEquals(Boolean.TRUE, ExperimentInstance.findById(session.id).hasStarted);
+    }
+
+    // InitStep's done starts the first round (a minute long), which gets going, then has a typo on its
+    // line 5.
+    private void theFirstRoundGetsGoingThenInitStepFails(Experiment experiment) {
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = {\n"
+            + "  roundStep.start()\n"
+            + "  println \"round ${roundd} started\"\n"
+            + "}");
+        createStep(experiment, "RoundStep", "roundStarts = 0\n"
+            + "roundStep = stepFactory.createStep('RoundStep')\n"
+            + "roundStep.duration = 60\n"
+            + "roundStep.run = { roundStarts++ }\n"
+            + "roundStep.done = { }");
+    }
+
+    @Test
+    public void aStartByItsWaitingRoomWhoseFirstRoundGotGoingGoesOnAfterAMistakeInInitStep() throws Exception {
+        final User researcher = user("roomround");
+        final Experiment experiment = createExperiment("First round begun by the waiting room");
+        theFirstRoundGetsGoingThenInitStepFails(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+        assertEquals(OK, status(post(researcher, startsAtOnce(experiment))));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its waiting room", () -> Integer.valueOf(1).equals(engineValue("autopilot.room?.maxPlayers")));
+        final ExperimentInstance session = sessions(experiment).get(0);
+        final AdminSocketsTest.Tab tab = watching(researcher);
+
+        arrives("roomround-1");
+        await("the event", () -> events(session, "stepFailed").size() == 1);
+        Event failed = events(session, "stepFailed").get(0);
+        assertEquals("InitStep", value(failed, "step"));
+        assertTrue(value(failed, "error"), value(failed, "error").startsWith("line 5: No such property: roundd"));
+        await("the consoles are told", () -> tab.count(f -> from("InitStep").matches(f) && f.has("error")
+            && f.get("error").asText().contains("roundd")) == 1);
+        Thread.sleep(1000);
+
+        // Its first round is under way: nothing stalls, so nothing is ended, and the start stays.
+        ExperimentInstance now = ExperimentInstance.findById(session.id);
+        assertEquals("the game goes on", ExperimentInstance.Status.RUNNING, now.status);
+        assertEquals("closed to newcomers", Boolean.TRUE, now.hasStarted);
+        assertEquals(Boolean.TRUE, engine().get("initStep.start()"));
+        assertEquals(1, engineValue("roundStarts"));
+        assertEquals(1, events(session, "stepFailed").size());
+        JsonNode status = state(researcher).get("status");
+        assertFalse(status.toString(), status.get("paused").asBoolean());
+        assertEquals(session.id.longValue(), status.get("instance").get("id").asLong());
+    }
+
+    @Test
+    public void theConsolesStartWhoseFirstRoundGotGoingKeepsTheGameStartedAfterAMistakeInInitStep() throws Exception {
+        final User researcher = user("startround");
+        final Experiment experiment = createExperiment("First round begun by Start");
+        theFirstRoundGetsGoingThenInitStepFails(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+        final AdminSocketsTest.Tab tab = console(researcher, experiment);
+        tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
+        await("the session", () -> running(experiment) == 1);
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        tab.send("RunGame");
+        await("the error", () -> tab.count(f -> f.has("request") && "RunGame".equals(f.get("request").asText())
+            && f.has("error") && f.get("error").asText().contains("roundd")) == 1);
+        Thread.sleep(500);
+
+        // The first round runs: the session stays closed to newcomers in the middle of it (it used to
+        // take them again), and the consoles learn the game started.
+        ExperimentInstance now = ExperimentInstance.findById(session.id);
+        assertEquals(ExperimentInstance.Status.RUNNING, now.status);
+        assertEquals("closed to newcomers", Boolean.TRUE, now.hasStarted);
+        assertEquals(Boolean.TRUE, engine().get("initStep.start()"));
+        assertEquals(1, engineValue("roundStarts"));
+        assertTrue(User.findByEmail(researcher.email).toJson().get("engine").get("gameStarted").asBoolean());
+        assertEquals(1, tab.count(AdminSocketsTest.notify("GameStarted")));
+        assertEquals(0, tab.count(AdminSocketsTest.notify("GameStartFailed")));
+        tab.send("RunGame");
+        await("a second Start refused", () -> tab.count(f -> f.has("error") && f.get("error").asText().contains("started already")) == 1);
+        assertEquals(1, engineValue("roundStarts"));
+    }
+
+    @Test
+    public void aDoneOnATimerThatStartedTheNextRoundBeforeItFailedLeavesTheAutopilotsGameGoing() throws Exception {
+        final User researcher = user("nextround");
+        final Experiment experiment = createExperiment("Next round begun on a timer");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { roundStep.start() }");
+        // RoundStep ends on its timer; its done starts the next round, which gets going, then has a typo
+        // on its line 7.
+        createStep(experiment, "RoundStep", "round2Starts = 0\n"
+            + "roundStep = stepFactory.createStep('RoundStep')\n"
+            + "roundStep.duration = 0.3\n"
+            + "roundStep.run = { }\n"
+            + "roundStep.done = {\n"
+            + "  round2Step.start()\n"
+            + "  println \"round ${roundd} done\"\n"
+            + "}\n"
+            + "round2Step = stepFactory.createStep('Round2Step')\n"
+            + "round2Step.duration = 60\n"
+            + "round2Step.run = { round2Starts++ }\n"
+            + "round2Step.done = { }");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+        assertEquals(OK, status(post(researcher, startsAtOnce(experiment))));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its waiting room", () -> Integer.valueOf(1).equals(engineValue("autopilot.room?.maxPlayers")));
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        arrives("nextround-1");
+        await("the event", () -> events(session, "stepFailed").size() == 1);
+        Event failed = events(session, "stepFailed").get(0);
+        assertEquals("RoundStep", value(failed, "step"));
+        assertTrue(value(failed, "error"), value(failed, "error").startsWith("line 7: No such property: roundd"));
+        Thread.sleep(1000);
+
+        // The next round is under way: the game goes on.
+        assertEquals("the game goes on", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertEquals(1, engineValue("round2Starts"));
+        assertEquals(1, events(session, "stepFailed").size());
+        assertFalse(state(researcher).get("status").get("paused").asBoolean());
+    }
+
+    // The OnJoinStep has a typo on its line 3, before it would start the game once two people are in.
+    private void anOnJoinStepThatFailsBeforeItsStart(Experiment experiment) {
+        createStep(experiment, "OnJoinStep", "onJoinStep = stepFactory.createNoUserActionStep()\n"
+            + "onJoinStep.run = { playerId ->\n"
+            + "  g.getVertex(playerId).text = \"Welcome, ${playerId} ${welcomee}\"\n"
+            + "  if (g.V.count() >= 2) initStep.start()\n"
+            + "}\n"
+            + "onJoinStep.done = { }");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { }");
+    }
+
+    @Test
+    public void anOnJoinStepThatFailsBeforeTheGameStartsEndsTheAutopilotsSessionWithNoWaitingRoomToStartIt() throws Exception {
+        final User researcher = user("joinfails");
+        final Experiment experiment = createExperiment("OnJoinStep fails, no waiting room");
+        anOnJoinStepThatFailsBeforeItsStart(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        // No waiting room: only the OnJoinStep would start the game.
+        ObjectNode s = settings(experiment, 2);
+        ((ObjectNode) s.get("waitingRoom")).put("enabled", false);
+        assertEquals(OK, status(post(researcher, s)));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its steps", () -> engineValue("onJoinStep") != null);
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        engine().eval("g.addPlayer('joinfails-1'); null");
+        await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        JsonNode status = state(researcher).get("status");
+        assertTrue(status.toString(), status.get("paused").asBoolean());
+        String problem = status.get("problem").asText();
+        assertTrue(problem, problem.contains("the step \"onJoinStep\" failed during its session \"" + session.name + "\""));
+        assertTrue(problem, problem.contains("line 3: No such property: welcomee"));
+        assertEquals(1, events(session, "stepFailed").size());
+        watchdog();
+        Thread.sleep(500);
+        assertEquals("nothing opens until Resume", 1, sessions(experiment).size());
+    }
+
+    @Test
+    public void anOnJoinStepThatFailsWhileItsWaitingRoomFillsIsRecordedAndTheSessionGoesOn() throws Exception {
+        final User researcher = user("joinroom");
+        final Experiment experiment = createExperiment("OnJoinStep fails, waiting room on");
+        anOnJoinStepThatFailsBeforeItsStart(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        // The waiting room (two people) starts the game.
+        assertEquals(OK, status(post(researcher, settings(experiment, 2))));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its waiting room", () -> Integer.valueOf(2).equals(engineValue("autopilot.room?.minPlayers")));
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        arrives("joinroom-1");
+        await("the event", () -> events(session, "stepFailed").size() == 1);
+        assertEquals("onJoinStep", value(events(session, "stepFailed").get(0), "step"));
+        Thread.sleep(1000);
+        assertEquals("it waits for the next person", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertFalse(state(researcher).get("status").get("paused").asBoolean());
+        assertEquals(session.id, Autopilot.openInstance(experiment.id).id);
+    }
+
+    @Test
+    public void theComputerPlaysNoMoreOfASessionAFailureEnded() throws Exception {
+        final User researcher = user("noai");
+        final Experiment experiment = createExperiment("Ended with choices on screen");
+        // RoundStep offers each player a choice that ends the game, then has a typo on its line 4: the
+        // round never gets going.
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { roundStep.start() }");
+        createStep(experiment, "RoundStep", "finishes = 0\n"
+            + "roundStep = stepFactory.createStep('RoundStep')\n"
+            + "roundStep.run = {\n"
+            + "  g.V.filter { !it.id.startsWith('_') }.each { p -> a.add(p, [name: 'End', result: { finishStep.start() }]) }\n"
+            + "  println \"round ${roundd}\"\n"
+            + "}\n"
+            + "finishStep = stepFactory.createNoUserActionStep()\n"
+            + "finishStep.run = { finishes++ }\n"
+            + "finishStep.done = { finishStep.finish() }\n"
+            + "// a computer player that picks the first choice at once\n"
+            + "picksAtOnce = { p -> a.ai.pickLater(p, 50) { a.ai.chooseFor(p, p.choices[0]) } }");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        // Two places, no countdown; the computer takes over a seat a moment after its person leaves.
+        ObjectNode s = settings(experiment, 2);
+        ((ObjectNode) s.get("waitingRoom")).put("maxPlayers", 2);
+        ((ObjectNode) s.get("waitingRoom")).put("countdownSeconds", 0);
+        ((ObjectNode) s.get("replaceDisconnected")).put("enabled", false);
+        assertEquals(OK, status(post(researcher, s)));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its waiting room", () -> Integer.valueOf(2).equals(engineValue("autopilot.room?.maxPlayers")));
+        engine().eval("autopilot.replaceDisconnected([afterSeconds: 0.2, behavior: picksAtOnce]); null");
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        arrives("noai-1");
+        arrives("noai-2");
+        await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        assertEquals("their choices are still on screen", 2, ((Number) engineValue("a.actions.size()")).intValue());
+
+        // One leaves (the takeover is due), and a script makes the other a computer player: neither
+        // picks, so the stopped game isn't played on to its finish.
+        engine().eval("def v = g.getVertex('noai-1'); v._system.connected = false; autopilot.onConnection('noai-1', false); null");
+        engine().eval("a.ai.add(g.getVertex('noai-2'), picksAtOnce); null");
+        Thread.sleep(1500);
+        assertEquals(Integer.valueOf(1), engineValue("g.getVertex('noai-1').ai"));
+        assertEquals(0, engineValue("finishes"));
+        assertEquals(2, ((Number) engineValue("a.actions.size()")).intValue());
+        assertEquals("still stopped, so it can be resumed", ExperimentInstance.Status.STOPPED,
+            ExperimentInstance.findById(session.id).status);
+    }
+
+    @Test
+    public void aStepOfAnEngineSinceReplacedDoesNotFinishTheSessionRunningNow() throws Exception {
+        final User researcher = user("latefinish");
+        final Experiment experiment = createExperiment("Finishes after the rebuild");
+        createStep(experiment, "FinishStep", "finishStep = stepFactory.createNoUserActionStep()\n"
+            + "finishStep.run = { }\n"
+            + "finishStep.done = { finishStep.finish() }");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+        final AdminSocketsTest.Tab tab = console(researcher, experiment);
+        tab.send("LaunchGame", "name", "first", "parameters", Json.newObject());
+        await("the first session", () -> named(experiment, "first") != null && running(experiment) == 1);
+        await("its steps", () -> engineValue("finishStep") != null);
+        final ScriptEngine first = engine();
+        final groovy.lang.GroovyObject oldStep = (groovy.lang.GroovyObject) first.get("finishStep");
+
+        // The same account launches the next session: a new engine, with the same game listener.
+        tab.send("LaunchGame", "name", "second", "parameters", Json.newObject());
+        await("the second session", () -> named(experiment, "second") != null
+            && named(experiment, "second").status == ExperimentInstance.Status.RUNNING && engine() != first
+            && engineValue("finishStep") != null);
+        final ExperimentInstance second = named(experiment, "second");
+
+        // The first engine's step finishes, its code running on after the rebuild: not the second's game.
+        oldStep.invokeMethod("finish", null);
+        Thread.sleep(500);
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(second.id).status);
+        assertTrue(events(second, "Finished").isEmpty());
+
+        // Its own steps still finish it.
+        ((groovy.lang.GroovyObject) engine().get("finishStep")).invokeMethod("finish", null);
+        await("finished", () -> ExperimentInstance.findById(second.id).status == ExperimentInstance.Status.FINISHED);
+        assertEquals(1, events(second, "Finished").size());
     }
 
     @Test

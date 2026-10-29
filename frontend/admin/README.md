@@ -67,7 +67,8 @@ to a production build.
   for a player are answered with their `choiceUID`.
 - The User JSON's `engine` says what the shared engine runs, and `gameStarted` whether its game
   has started since the engine was last built. Every console hears `{"notify": {"GameStarted": …}}`
-  (or `GameStartFailed`) when a game starts without a console asking, and then asks again.
+  (or `GameStartFailed`) when a game starts without a console asking, or when a Start answered
+  with an error got the game going all the same, and then asks again.
 - Participant pages shown as a researcher (Preview) use a token from `POST /preview-token` in
   `#bbt=`, with `?preview=1`, inside a sandbox without `allow-same-origin`.
 - Steps, content, parameters, images, the participant page, experiments, data downloads,

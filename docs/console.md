@@ -291,6 +291,18 @@ name that isn't defined), the autopilot stops that session before anyone can joi
 page, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
 next session it opens uses what you save there.
 
+**A step that fails during the game.** When a step's code throws while the game runs (on a timer,
+after a choice, or in OnJoinStep or OnLeaveStep), every open console shows the error in its Output
+panel, and the session records a `stepFailed` event naming the step and the line. The failure
+*stalls* the game when it kept the next step from getting going; a step gets going when its start
+finishes without an error. In the autopilot's own session (also one of its experiment that was open
+when you pressed **Resume** or saved its settings), a failure that stalls ends the session, telling
+its participants, and pauses the autopilot, and this page names the step and line; so does an
+OnJoinStep that fails before the game starts when no waiting room is set. A failure that doesn't
+stall, such as a typo after the next round has started, is only recorded and shown, and the game
+goes on. In a session you run by hand nothing is ended: a start of the game that didn't get going is
+taken back, so newcomers can join and **Start the game** works again once you fix the step.
+
 Settings saved on this page take precedence over `application.conf`. Until some are saved, a
 `breadboard.autopilot.experiment` line in `application.conf` turns the autopilot on, and the page
 only shows the settings

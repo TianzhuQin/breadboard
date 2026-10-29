@@ -34,9 +34,9 @@ import java.util.concurrent.TimeUnit;
  * session unless a save asks it to ({@code takeOver}), doesn't take the engine by itself from a
  * researcher who has another experiment loaded in it and a console open, and pauses when a
  * researcher's action ends its session (Stop, or selecting, launching or reloading something else),
- * or when a step fails during the game of its own session (one it opened, or the one of its
+ * or when a step failure stalls the game of its own session (one it opened, or the one of its
  * experiment that was open when Resume was pressed or its settings saved), which then ends
- * (ScriptBoard.stepFailed; a session a researcher runs by hand, even of its experiment, goes on). It
+ * (ScriptBoard.gameFailed; a session a researcher runs by hand, even of its experiment, goes on). It
  * opens none while the disk that holds the database is almost full (diskFull). The game starts when
  * the waiting room says so (groovy/autopilot.groovy; its values can be set in the console, see
  * {@link AutopilotHooks}). A
@@ -406,12 +406,13 @@ public final class Autopilot {
   }
 
   /**
-   * A step threw during the game of the engine's session, or as its game started
-   * (ScriptBoard.stepFailed, gameStartFailed, joinOrLeaveStep): {@code error} is "line N: what went
-   * wrong". When it is the autopilot's own session (isOwnSession, and it is still on), the
-   * autopilot pauses until someone fixes the step and presses Resume, and true: ScriptBoard ends the
-   * session, whose participants would otherwise wait for good. Any other session, even of its
-   * experiment, is left to the researcher running it, and so is the reason it is paused (false).
+   * A step failure stalled the game of the engine's session: it kept the next step from getting
+   * going (ScriptBoard.gameFailed, from stepFailed, gameStartFailed or joinOrLeaveStep). {@code error}
+   * is "line N: what went wrong". When it is the autopilot's own session (isOwnSession, and it is
+   * still on), the autopilot pauses until someone fixes the step and presses Resume, and true:
+   * ScriptBoard ends the session, whose participants would otherwise wait for good. Any other
+   * session, even of its experiment, is left to the researcher running it, and so is the reason it
+   * is paused (false).
    */
   static boolean gameFailed(ExperimentInstance instance, String step, String error) {
     if (instance == null || instance.experiment == null) {

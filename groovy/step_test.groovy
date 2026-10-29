@@ -123,18 +123,27 @@ test("a step that doesn't throw reports nothing, and start() answers what done a
 }
 
 // Marks every step's start, as the server marks the game's (ScriptBoard.stepStarting), and keeps what
-// was taken back and what was reported. Inside a script the server runs, a failure is thrown on.
+// was taken back, which steps got going and what was reported, with whether it stalls the game (no
+// step got going since the failing code began). Inside a script the server runs, a failure is thrown
+// on. (One count for every thread: each case runs one thread's steps at a time.)
 class MarkingListener extends models.GameListener {
   boolean inScript = false
   List takenBack = []
+  List gotGoing = []
   List reported = []
+  List stalls = []
 
   Object stepStarting(Object step) { return "the start of " + step.name }
 
+  void stepStarted(Object step) { gotGoing << step.name }
+
+  Long stepsStarted() { return (long) gotGoing.size() }
+
   void stepStartFailed(Object mark) { takenBack << mark }
 
-  boolean stepFailed(Object step, Throwable failure) {
+  boolean stepFailed(Object step, Throwable failure, Long going) {
     reported << failure.message
+    stalls << (going == stepsStarted())
     return !inScript
   }
 }
@@ -193,4 +202,110 @@ test("a step whose listener isn't the server's throws as before") {
     thrown = e
   }
   assert thrown?.message == "plain"
+}
+
+test("a step gets going once its start() returns without having thrown") {
+  def listener = new MarkingListener()
+  def p = g.addPlayer('sf-going')
+  def fine = marked("DoneAtOnce", listener)
+  fine.run = { }
+  fine.done = { }
+  fine.start()
+  def timed = marked("WaitsForItsTime", listener)
+  timed.duration = 60
+  timed.run = { }
+  timed.start()
+  def brokenRun = marked("RunThrows", listener)
+  brokenRun.run = { throw new IllegalStateException("broken run") }
+  brokenRun.start()
+  def brokenDone = marked("DoneThrows", listener)
+  brokenDone.run = { }
+  brokenDone.done = { throw new IllegalStateException("broken done") }
+  brokenDone.start()
+  // (last: while a choice is pending anywhere, every step that starts waits for the choices)
+  def waiting = marked("WaitsForAChoice", listener)
+  waiting.run = { a.add(p, [name: "OK", result: { }]) }
+  waiting.done = { }
+  waiting.start()
+  assert listener.gotGoing == ["DoneAtOnce", "WaitsForItsTime", "WaitsForAChoice"]
+  assert listener.reported == ["broken run", "broken done"]
+  assert listener.stalls == [true, true]
+  a.choose(p.choices[0].uid)
+  assert listener.gotGoing.size() == 3 : "making the choice starts nothing new"
+}
+
+test("inside a script, an init step whose done starts a round that throws as it starts gets nothing going") {
+  def listener = new MarkingListener(inScript: true)
+  def round = marked("Round", listener)
+  round.duration = 60
+  round.run = { throw new IllegalStateException("round broke") }
+  def init = marked("Init", listener)
+  init.run = { }
+  init.done = { round.start() }
+  def thrown = null
+  try {
+    init.start()
+  } catch (IllegalStateException e) {
+    thrown = e
+  }
+  assert thrown?.message == "round broke"
+  assert listener.gotGoing.isEmpty()
+  assert listener.takenBack == ["the start of Round", "the start of Init"]
+}
+
+test.async("a done on a timer that starts the next round before it throws doesn't stall the game", 3000) { done ->
+  def listener = new MarkingListener()
+  def next = marked("NextRound", listener)
+  next.duration = 60
+  next.run = { }
+  def round = marked("Round", listener)
+  round.duration = 0.1
+  round.run = { }
+  round.done = {
+    next.start()
+    throw new IllegalStateException("after the next round started")
+  }
+  round.start()
+  timers.newTimer().runAfter(500) {
+    done {
+      assert listener.gotGoing == ["Round", "NextRound"]
+      assert listener.reported == ["after the next round started"]
+      assert listener.stalls == [false]
+    }
+  }
+}
+
+test.async("a done on a timer that throws before the next round gets going stalls the game", 3000) { done ->
+  def listener = new MarkingListener()
+  def next = marked("NextRound", listener)
+  next.run = { throw new IllegalStateException("the next round broke") }
+  def round = marked("Round", listener)
+  round.duration = 0.1
+  round.run = { }
+  round.done = { next.start() }
+  round.start()
+  timers.newTimer().runAfter(500) {
+    done {
+      assert listener.gotGoing == ["Round"]
+      assert listener.reported == ["the next round broke"]
+      assert listener.stalls == [true]
+    }
+  }
+}
+
+test("a step of an engine since replaced doesn't finish the session running now") {
+  // (the server's listener, which serves another engine: this step's isn't the one running)
+  def listener = new models.GameListener()
+  listener.engine = [:] as javax.script.ScriptEngine
+  def finished = []
+  def tracker = [track: { String name, data -> finished << name }]
+  def step = new Step(name: "Replaced", playerActions: a, gameListener: listener, eventTracker: tracker)
+  step.finish()
+  assert finished.isEmpty()
+
+  // A listener of no server engine (this harness's) finishes as before.
+  def own = new Step(name: "Own", playerActions: a, gameListener: gameListener, eventTracker: tracker)
+  own.finish()
+  assert finished == ["Finished"]
+  assert gameListener.finished()
 }
