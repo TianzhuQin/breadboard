@@ -1,54 +1,132 @@
 # Changelog
 
-### [v3.1.0] - 2026-10-28
-Easier to install, safer to leave running, and ready for a lab of several researchers.
+### [v3.1.0] - 2026-10-29
+Easier to install, safe to leave running by itself, steadier for participants on weak connections,
+and ready for a lab of several researchers. Existing experiments keep working; to upgrade from 3.0,
+see [docs/install.md](docs/install.md#upgrading).
 
-#### Added
+#### Installing and running
 - Downloads for macOS (Apple silicon and Intel), Windows and Linux that carry their own Java 8:
-  nothing else to install. On a Mac, `Start Breadboard.command` starts it with a double-click; the
-  launchers open the console in the browser once the server is up.
-- Researcher accounts: Settings → Researchers adds, removes and gives new passwords to the lab's
-  accounts (passwords are shown once, to pass on). Every account works on every experiment on the
-  server.
+  nothing else to install. The Java is a pinned Azul Zulu 8 build (`release/jre.lock`), with its
+  licence files in `jre/`. On a Mac, `Start Breadboard.command` starts it with a double-click; the
+  launchers open the console in the browser once the server is up, and print the addresses it is
+  reached at, on this computer and on this network.
+- Settings go in `conf/local.conf`, which the launchers create (readable only by the server's
+  account on macOS and Linux) and which you copy into each new release when you upgrade; a release
+  replaces `conf/application-prod.conf`. A `conf/local.conf` the server can't read is refused at
+  start, with the reason.
+- While the server runs, the computer doesn't go to sleep by itself (macOS and Windows; on Linux the
+  launcher asks systemd, and GNOME, to keep it awake).
+- Keep-running mode: the launcher starts the server again after a crash or when it runs out of
+  memory (`logs/out-of-memory.hprof` tells you it did). Ready-made recipes for starting it with the
+  computer: launchd (macOS), a Task Scheduler task (`breadboard-task.xml`, Windows) and systemd
+  (Linux); as a Windows service, Java's own errors go to `logs/service-errors.log`. `GET /health`
+  for uptime monitors.
+- A stop that hangs ends after 20 seconds, and the database is always closed properly at the end of
+  a stop, so nothing committed in its last moments is lost.
+- The launchers work behind a proxy set in `http_proxy` (common in China), accept `JAVA8_HOME` as
+  the folder Finder shows for a JDK, say when the port is taken (and by Breadboard itself, if so),
+  and no longer hold participants up when the server's window stops taking output (a click in a
+  Windows console, Ctrl+S in a terminal). The Windows launcher refuses to run from inside the zip.
+- On a new server, the first account can be created from another computer (or through a proxy) only
+  with the setup code the server prints in its window and log.
 - Automatic backups of the database while the server runs: every day and before an upgrade, the
   newest 14 kept in `backups/`. Settings → Backups lists them, backs up on request and downloads
   them; [docs/install.md](docs/install.md#backups) says how to go back to one.
-- `GET /health` for uptime monitors and service managers; examples for starting Breadboard again by
-  itself with systemd, launchd (macOS) and Task Scheduler (Windows).
+- The docs cover Gatekeeper on macOS 15, Windows' Unblock and firewall prompt, running from a
+  read-only folder, and what to do when something goes wrong.
+
+#### Running studies by itself (the autopilot)
+- A session the autopilot opens never hangs on a mistake in the steps: when they don't load, it is
+  stopped before anyone joins; when a step fails during the game in a way that keeps the next step
+  from starting, the session ends and participants are told. Either way the autopilot pauses and
+  its page names the step and line. A mistake that leaves the game going is recorded (`stepFailed`)
+  and shown, and the game goes on. Sessions a researcher runs by hand are never ended this way: a
+  start that didn't get going is taken back, so Start works again.
+- **Longest session** (Autopilot page): the autopilot's own session is ended when its game runs
+  longer, participants are told it ran out of time (a completion code stays on screen), and the next
+  one opens; three in a row and the autopilot pauses. New settings start at 2 hours; settings saved
+  with 3.0, and a settings-file autopilot without `maxSessionMinutes`, keep no limit.
+- A backstop for games that stall after a mistake: once a step has failed, a game with nothing left
+  to wait for during a minute is ended and the autopilot pauses, naming the step.
+- Participants see an honest end screen: that the session ran out of time, had to stop because of a
+  problem with the study, or ended because the server restarted; a researcher's Stop keeps its own.
+- A stopped session stays stopped: computer players no longer play it on to its end, so it can be
+  resumed.
+- Sessions that were running when the server stopped are marked Stopped when it starts again, with
+  a `sessionInterrupted` event, and the autopilot opens the next one; participants' pages stop
+  reconnecting and say the session isn't running. Resume starts a stopped session's game again.
+- Prolific participants who already took part are shown their completion code again instead of
+  being given a second seat, also after a restart.
+- The autopilot opens no new session while the disk that holds the database is almost full.
+- Memory stays level over long unattended runs: replaced script engines are freed, computer players
+  share one timer, and seats of finished sessions are released.
+- The Autopilot page leaves the waiting room and takeover to the steps of an experiment that sets
+  them, and suggests giving a lone participant ten minutes before calling the session off.
+
+#### Participants' connections
+- A page reconnects within a second after a short drop, backs off up to 30 seconds while the network
+  is down, and tries again at once when the network or the page comes back.
+- Connections that die without closing are noticed: the page says so within about 20 seconds, and
+  the server counts the participant as gone after 30, so the computer takes over after the usual
+  delay.
+- Two tabs of one participant no longer take the seat from each other: the older one says the study
+  is open elsewhere, with **Use it here**. A network that blocks the live connection is told so.
+- While the page is reconnecting, its buttons are disabled with a note, and answers that waited too
+  long are dropped instead of being sent late.
+- Someone whose browser was closed gets back to their seat for 24 hours, from the study link or the
+  page's address.
+- People away for a moment as the game starts keep their seat (the computer plays it until they are
+  back); someone away longer sees that the session went ahead without them. A drop of a few seconds
+  in the waiting room no longer restarts the wait.
+- A researcher's preview of a participant only watches: their own page is never disturbed, and if
+  they leave, the computer takes over as usual. Previews of the test players a researcher creates
+  still play them.
+- The study's shared link asks a browser that already has a seat whether to continue as that person
+  or join as someone else, so a study can be tried in several tabs of one browser.
+- Identical updates are no longer sent again, which helps weak connections keep up.
+- The participant's network keeps everyone in their place when ties change; a newcomer sits next to
+  someone they are tied to.
+
+#### The console and the lab
+- Researcher accounts: Settings → Researchers adds, removes and gives new passwords to the lab's
+  accounts (passwords are shown once, to pass on). Every account works on every experiment on the
+  server.
+- Work on any experiment while the autopilot or a colleague runs another: its Build pages and data
+  are there, and the Run pages say what the engine runs and how to run yours. Every console hears
+  when a session opens or ends, and follows the sessions of the experiment it works on (the
+  previous console too).
 - Sessions & data: **Download all data**, every listed session's events in one file, each row with
   its session and launch parameters.
 - The console says where computers on the same network reach the server, wherever it shows
   participant links while it was opened at localhost (links that work on this computer only).
 - Help in the menu under your email: the console's guide, the Chinese quick start, troubleshooting.
-
-#### Changed
-- The autopilot no longer sends participants into a broken session: when the steps of a session it
-  opens don't load, it stops that session before anyone joins and pauses, naming the step and line
-  (`stepsFailedToLoad`). While it runs an experiment, that experiment's Steps page says so.
-- On a new server, the first account can be created from another computer (or through a proxy) only
-  with the setup code the server prints in its window and log.
-- The study's shared link asks a browser that already has a seat whether to continue as that person
-  or join as someone else, so a study can be tried in several tabs of one browser.
 - The network game example: its network size and waiting room are launch parameters, and
   everything participants read is on the Content page; it is offered first when there is no
   experiment yet.
-- The Autopilot page leaves the waiting room and takeover to the steps of an experiment that sets
-  them, and suggests giving a lone participant ten minutes before calling the session off.
+- Experiment names are unique on the server, can't contain `/` or `\`, and every open console
+  updates its experiment list when anyone makes, imports, renames or deletes an experiment.
 - No "Reload needed" after saving steps while no session runs: the next session loads them.
-- Sessions that were running when the server stopped are marked Stopped when it starts again, with a
-  `sessionInterrupted` event; Resume starts their game again.
-- Experiment names are unique on the server, and every open console updates its experiment list
-  when anyone makes, imports, renames or deletes an experiment.
-- The participant's network keeps everyone in their place when ties change; a newcomer sits next to
-  someone they are tied to.
-- The launchers say when the port is taken (and by Breadboard itself, if so) instead of printing a
-  stack trace; the Windows launcher keeps the jars in the build's order.
+- Computer players are named alike everywhere in the console ("AI 6 (_6)").
 - The events drawer says in plain words what the well-known events mean, and engine errors on the
   Live session and Autopilot pages are explained as on the Steps page.
 - The sidebar fits laptop screens; Live session says when the console isn't connected; the sign-in
   page says how to get a new password; the previous console opens in a new tab and links back.
 - Participant pages no longer print Vue's notices for developers in the browser console, and their
   scripts and styles are sent compressed.
+
+#### For experiment authors
+Details are in [docs/whats-new.md](docs/whats-new.md).
+- Forms and chat stop listening once they are done: a finished form, and a chat switched off with
+  `disableTextChat` (which now really switches it off), leave no listeners behind. Turning chat on
+  again, or starting a form again, no longer handles each message twice, and ending a form no
+  longer runs `onDone` again for someone who had finished it.
+- The page's connection: `Breadboard.connection` and the `bb:connection` event; `ConnectionStatus`
+  passes `state`, `tryNow` and `useHere` to its slot.
+- New events in the data: `stepFailed`, `sessionTooLong`, `sessionStalled`, `missedStart`,
+  `aiChoice` (the computer's picks); `clientConnected` and `clientDisconnected` only on real
+  changes, marked when a preview caused them. `_system.disconnectedAt` and the waiting room's
+  `departureGraceSeconds`.
 
 ### [v3.0.0] - 2026-10-28
 The first release of this fork ([TianzhuQin/breadboard](https://github.com/TianzhuQin/breadboard)),
