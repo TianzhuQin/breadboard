@@ -127,6 +127,11 @@ export function playerName (id: string): string {
   return ai ? `${ai} (${id})` : id
 }
 
+/** The id to show under a name, unless the name shows it already ("AI 6 (_6)" does): '' then. */
+export function idUnder (name: string, id: string): string {
+  return name !== id && name !== playerName(id) ? id : ''
+}
+
 /** labelOf, with playerName where it would show the bare id. */
 export function displayName (n: GraphNode | undefined | null, labelBy?: string | null, degree?: (id: string) => number): string {
   if (!n) return ''

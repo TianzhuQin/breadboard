@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { aiName, displayName, playerName } from '../src/network/players'
+import { aiName, displayName, idUnder, playerName } from '../src/network/players'
+import { editTie, editHistory } from '../src/network/tieEdits'
+import { toasts } from '../src/ui/toast'
+import { actions } from '../src/store/admin'
 import { matchesPlayer } from '../src/pages/preview/preview'
 import { graph, __receive } from '../src/store/admin'
 import { LiveGraph, type GraphNode } from '../src/lib/graph'
@@ -33,6 +36,13 @@ describe('what the console calls a computer player', () => {
     expect(displayName(node('_6', { name: 'Robo' }), 'name')).toBe('Robo')
     expect(displayName(node('p1', { name: 'Ann' }), 'name')).toBe('Ann')
     expect(displayName(node('p1'), null)).toBe('p1')
+  })
+
+  it('shows an id under a name only when the name doesn\'t show it (the network\'s hover card)', () => {
+    expect(idUnder('AI 6 (_6)', '_6')).toBe('')
+    expect(idUnder('p1', 'p1')).toBe('')
+    expect(idUnder('Robo', '_6')).toBe('_6')
+    expect(idUnder('Ann', 'p1')).toBe('p1')
   })
 
   it('finds them on the Preview page by the name the list shows', () => {
@@ -76,6 +86,24 @@ describe('computer players in the Players and Network views', () => {
     await flushPromises()
     expect(w.findAll('.plist__id-text').map(s => s.text())).toEqual(['p1', 'p2', 'AI 1 (_1)', 'AI 6 (_6)'])
     w.unmount()
+  })
+
+  it('names them in the notice of a tie change taken back with Ctrl+Z on the Players page', async () => {
+    const PlayersPage = (await import('../src/pages/players/PlayersPage.vue')).default
+    const spy = vi.spyOn(actions, 'editTie').mockImplementation(async (op, a, b) => ({ ok: true, op, a, b }))
+    editHistory.value = []
+    const w = mount(PlayersPage, { attachTo: document.body })
+    await tick()
+    try {
+      await editTie('remove', '_6', 'p1', { name: playerName })
+      __receive({ action: 'removeLink', id: 'e2' })
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }))
+      await vi.waitFor(() => expect(spy).toHaveBeenLastCalledWith('add', '_6', 'p1'))
+      await vi.waitFor(() => expect(toasts[toasts.length - 1].title).toBe('Put back the tie between AI 6 (_6) and p1'))
+    } finally {
+      spy.mockRestore()
+      w.unmount()
+    }
   })
 
   it('names them in the details panel beside their id, after the people they are tied to', async () => {
