@@ -27,6 +27,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -477,9 +478,8 @@ public class Global extends GlobalSettings {
 
   /**
    * Closes the server's database (db.default) when it is an H2 file of its own (not one in memory,
-   * nor one on a database server) that is still open: H2 keeps its lock file, db/breadboard.lock.db,
-   * while it is, and deletes it when it closes the database. True when it is closed (in time: see
-   * closeDatabase) or was already; otherwise the log says why.
+   * nor one on a database server) that this process still has open (see openHere). True when it is
+   * closed (in time: see closeDatabase) or was already; otherwise the log says why.
    */
   static boolean closeOwnDatabase(Configuration config, long waitMs) {
     return closeOwnDatabase(config, waitMs, Global::logWarning);
@@ -489,11 +489,73 @@ public class Global extends GlobalSettings {
   static boolean closeOwnDatabase(Configuration config, long waitMs, Consumer<String> say) {
     String url = config.getString("db.default.url", "");
     File data = models.Backups.databaseFile(config.getString("db.default.driver", ""), url);
-    if (data == null || !new File(data.getPath().replaceFirst("\\.h2\\.db$", ".lock.db")).exists()) {
+    if (data == null || !openHere(data)) {
       return true;
     }
     return closeDatabase(url, config.getString("db.default.user", ""),
         config.getString("db.default.password", config.getString("db.default.pass", "")), waitMs, say);
+  }
+
+  // How long openHere waits for H2's own answer before it goes by the lock file.
+  private static final long ASK_H2_MS = 500;
+
+  /**
+   * Whether this process has the H2 database with the data file {@code data} (…/breadboard.h2.db)
+   * open. H2 is asked (org.h2.engine.Engine keeps the databases it has open), not its lock file:
+   * H2 1.3 deletes that file as it closes a database, but doesn't wait for its lock watchdog, which
+   * can write the file again just after. A close of a database closed already then took that file
+   * for an open one: it opened the database again just to close it, waited for the stale lock to age
+   * and logged that it didn't close in time. When H2 can't say (another version, or not in time),
+   * the lock file does, as before.
+   */
+  static boolean openHere(File data) {
+    String path = data.getPath().replaceFirst("\\.h2\\.db$", "");
+    Boolean open = openInH2(new File(path));
+    return open != null ? open : new File(path + ".lock.db").exists();
+  }
+
+  /**
+   * H2's answer for openHere ({@code database}: the data file without ".h2.db"), or null when it
+   * can't be had. Its list of open databases is read under the lock H2 opens them under (the engine's
+   * own: Engine.openSession), on a thread of its own and for at most ASK_H2_MS: a connection stuck
+   * on a busy database holds that lock, and a stop cut short must never wait for it.
+   */
+  static Boolean openInH2(final File database) {
+    final Object engine;
+    final java.lang.reflect.Field databases;
+    try {
+      Class<?> h2 = Class.forName("org.h2.engine.Engine");
+      databases = h2.getDeclaredField("DATABASES");
+      databases.setAccessible(true);
+      engine = h2.getMethod("getInstance").invoke(null);
+    } catch (Throwable e) {
+      return null;
+    }
+    FutureTask<List<Object>> read = new FutureTask<>(() -> {
+      synchronized (engine) {
+        return new ArrayList<Object>(((Map<?, ?>) databases.get(null)).values());
+      }
+    });
+    Thread reader = new Thread(read, "breadboard-ask-h2");
+    reader.setDaemon(true);
+    reader.start();
+    try {
+      File wanted = database.getCanonicalFile();
+      for (Object open : read.get(ASK_H2_MS, TimeUnit.MILLISECONDS)) {
+        // (null for a database in memory)
+        Object path = open.getClass().getMethod("getDatabasePath").invoke(open);
+        if (path != null && new File(path.toString()).getCanonicalFile().equals(wanted)) {
+          return true;
+        }
+      }
+      return false;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return null;
+    } catch (Throwable e) {
+      // (not in time, a database closing meanwhile, or an H2 that has these no more)
+      return null;
+    }
   }
 
   /**

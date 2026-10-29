@@ -75,11 +75,18 @@ public class StuckStopTest {
     }
 
     /**
-     * Closed: no lock file. H2 deletes it as the database closes, but its lock watchdog can write it
-     * again just then (H2 1.3; a busy machine shows it now and then). A file nobody keeps up is taken
-     * away here: an open database's watchdog would write it again within a second.
+     * Closed: no lock file. H2 deletes it as the database closes, but doesn't wait for its lock
+     * watchdog (H2 1.3), which can write it again just after: a missing file is trusted only once
+     * that thread has ended (H2 names it after the file), and 300 ms on. A file nobody keeps up is
+     * taken away here: an open database's watchdog would write it again within a second.
      */
     private boolean closed() throws InterruptedException {
+        for (Thread t : Thread.getAllStackTraces().keySet()) {
+            if (t.getName().startsWith("H2 File Lock Watchdog") && t.getName().contains(folder.getName())) {
+                t.join(3000);
+            }
+        }
+        Thread.sleep(300);
         if (!lock.exists()) {
             return true;
         }
