@@ -215,7 +215,8 @@ class Autopilot {
     } finally {
       // A start that failed (a mistake in InitStep, or in a step it starts) is taken back, and with
       // launched set nothing would start it again: everyone would stay on "Starting in…" for good,
-      // with newcomers let in. ScriptBoard ends the autopilot's session instead, and says why.
+      // with newcomers let in. ScriptBoard says why, and ends the session if the autopilot opened it
+      // (one a researcher runs by hand is left to them).
       def failed = startGame()
       if (failed instanceof String && startFailed != null) startFailed(failed)
     }

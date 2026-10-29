@@ -34,9 +34,11 @@ import java.util.concurrent.TimeUnit;
  * session unless a save asks it to ({@code takeOver}), doesn't take the engine by itself from a
  * researcher who has another experiment loaded in it and a console open, and pauses when a
  * researcher's action ends its session (Stop, or selecting, launching or reloading something else),
- * or when a step fails during its session's game, which then ends (ScriptBoard.stepFailed). It opens
- * none while the disk that holds the database is almost full (diskFull). The game starts when the waiting room says
- * so (groovy/autopilot.groovy; its values can be set in the console, see {@link AutopilotHooks}). A
+ * or when a step fails during the game of the session it opened, which then ends
+ * (ScriptBoard.stepFailed; a session a researcher runs by hand, even of its experiment, goes on). It
+ * opens none while the disk that holds the database is almost full (diskFull). The game starts when
+ * the waiting room says so (groovy/autopilot.groovy; its values can be set in the console, see
+ * {@link AutopilotHooks}). A
  * researcher who logs in with the autopilot's account sees the session, unless they have another
  * experiment selected (their selection is left alone; the engine info in the User JSON names it).
  *
@@ -97,6 +99,10 @@ public final class Autopilot {
   private static volatile String doneBecause = null;
   // When a finished session's pause (nextSessionDelaySeconds) ends and the next one opens; 0 when none is due.
   private static volatile long nextOpenAt = 0L;
+  // The session it opened last (launchCarriedOut), until it pauses or is done (setHalt): the one a
+  // failing step ends (gameFailed). Any other session of its experiment, e.g. one a researcher
+  // launched by hand to take over, or its own resumed by hand later, is the researcher's.
+  private static volatile Long ownSession = null;
 
   /** Opens a session (see openSession for the arguments). */
   public interface Opener {
@@ -399,11 +405,11 @@ public final class Autopilot {
 
   /**
    * A step threw during the game of the engine's session, or as its game started
-   * (ScriptBoard.stepFailed, gameStartFailed): {@code error} is "line N: what went wrong". When the
-   * session is of the experiment the autopilot runs (and it is on), the autopilot pauses until
-   * someone fixes the step and presses Resume, and true: ScriptBoard ends the session, whose
-   * participants would otherwise wait for good. A session of another experiment is left to the
-   * researcher running it (false).
+   * (ScriptBoard.stepFailed, gameStartFailed, joinOrLeaveStep): {@code error} is "line N: what went
+   * wrong". When it is the session the autopilot opened (isOwnSession, and it is still on), the
+   * autopilot pauses until someone fixes the step and presses Resume, and true: ScriptBoard ends the
+   * session, whose participants would otherwise wait for good. Any other session, even of its
+   * experiment, is left to the researcher running it, and so is the reason it is paused (false).
    */
   static boolean gameFailed(ExperimentInstance instance, String step, String error) {
     if (instance == null || instance.experiment == null) {
@@ -411,7 +417,11 @@ public final class Autopilot {
     }
     // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
     Long experimentId = instance.experiment.id;
+    Long id = instance.id;
     String name = instance.name;
+    if (!isOwnSession(id)) {
+      return false;
+    }
     Effective e;
     try {
       e = effective();
@@ -427,6 +437,16 @@ public final class Autopilot {
     Logger.warn("Autopilot: the step " + step + " failed during session " + name + " (" + error
         + "); the session was stopped and the autopilot paused");
     return true;
+  }
+
+  /**
+   * Whether this is the session the autopilot opened, and it has been neither paused nor done since.
+   * A researcher's Launch while its session runs pauses it first, so the session they take over with
+   * is not its own, nor is one they launch to test after a pause, one after the single session of a
+   * run that isn't continuous, or its own session resumed by hand.
+   */
+  static boolean isOwnSession(Long sessionId) {
+    return sessionId != null && sessionId.equals(ownSession) && pausedBecause == null && doneBecause == null;
   }
 
   /** Run {@code task} soon on the autopilot's own thread; nothing once the application is stopping. */
@@ -713,12 +733,13 @@ public final class Autopilot {
   }
 
   /**
-   * The engine actor has carried out the launch it was asked for. Until then launchUnderWay says so;
-   * after it, the engine's session tells (judged by the session alone, a session that had since
-   * ended looked like a launch still under way for half a minute).
+   * The engine actor has carried out the launch it was asked for, opening session {@code sessionId}.
+   * Until then launchUnderWay says so; after it, the engine's session tells (judged by the session
+   * alone, a session that had since ended looked like a launch still under way for half a minute).
    */
-  static void launchCarriedOut() {
+  static void launchCarriedOut(Long sessionId) {
     launchRequestedAt = 0L;
+    ownSession = sessionId;
   }
 
   /** Whether the last launch asked for hasn't been carried out yet (see launchRequestedAt). */
@@ -738,8 +759,10 @@ public final class Autopilot {
     pausedBecause = paused;
     doneBecause = done;
     if (paused != null || done != null) {
-      // A next session counting down after a finished one doesn't open (its task then does nothing).
+      // A next session counting down after a finished one doesn't open (its task then does nothing),
+      // and the session it opened is no longer its own: whoever resumes it does so by hand.
       nextOpenAt = 0L;
+      ownSession = null;
     }
     try {
       AutopilotSettings.saveHalt(paused == null && done == null ? null : experimentId, paused, done);

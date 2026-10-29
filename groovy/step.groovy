@@ -92,18 +92,24 @@ class Step {
 
         playerActions.addActionPropertyChangeListener(emptyListener)
       } else {
-        callDone(player)
+        callDone(player, startMark)
       }
     } else {
-      callDone(player)
+      callDone(player, startMark)
     }
   }
 
-  // done(player), and what it returns; what it throws goes to reportFailure.
-  private def callDone(String player) {
+  // done(player), and what it returns; what it throws goes to reportFailure. Called as the step
+  // starts (with what its start marked), a done that throws takes the start back too, as a run that
+  // throws does: an init step whose done fails at once (e.g. a typo in the next step's name) never
+  // got the game going, and the start may be tried again, as when the console's Start fails.
+  private def callDone(String player, startMark = null) {
     try {
       return done(player)
     } catch (Throwable t) {
+      if (startMark != null) {
+        gameListener.stepStartFailed(startMark)
+      }
       reportFailure(t)
       return null
     }
@@ -112,8 +118,9 @@ class Step {
   // The step's own code (run, done, onTimeout) threw. On a timer, a participant's choice or a
   // computer player's, that used to end the thread, with the error only in the server's output, and
   // the game waited for good: the server reports it now (ScriptBoard.stepFailed). Inside a script
-  // the server runs (the console's Start, the autopilot's start, a step run from the Steps page) it
-  // is thrown on to that script, which reports it, as before.
+  // the server runs (the console's Start, a step run from the Steps page, the autopilot's start,
+  // OnJoinStep and OnLeaveStep) it is thrown on to that script, whose error reports it; for the last
+  // three, which nobody waits on, the server then deals with it as above.
   private void reportFailure(Throwable t) {
     if (!(gameListener instanceof models.GameListener) || !gameListener.stepFailed(this, t)) {
       throw t

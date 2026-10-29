@@ -122,6 +122,67 @@ test("a step that doesn't throw reports nothing, and start() answers what done a
   assert gameListener.stepFailures.isEmpty()
 }
 
+// Marks every step's start, as the server marks the game's (ScriptBoard.stepStarting), and keeps what
+// was taken back and what was reported. Inside a script the server runs, a failure is thrown on.
+class MarkingListener extends models.GameListener {
+  boolean inScript = false
+  List takenBack = []
+  List reported = []
+
+  Object stepStarting(Object step) { return "the start of " + step.name }
+
+  void stepStartFailed(Object mark) { takenBack << mark }
+
+  boolean stepFailed(Object step, Throwable failure) {
+    reported << failure.message
+    return !inScript
+  }
+}
+
+def marked(String name, MarkingListener listener) {
+  return new Step(name: name, playerActions: a, gameListener: listener, eventTracker: eventTracker)
+}
+
+test("a done that throws as the step starts takes its start back, as a run that throws does") {
+  def listener = new MarkingListener()
+  def broken = marked("BrokenAtOnce", listener)
+  broken.run = { }
+  broken.done = { throw new IllegalStateException("broken at once") }
+  broken.start()
+  def throwing = marked("BrokenRun", listener)
+  throwing.run = { throw new IllegalStateException("broken run") }
+  throwing.start()
+  assert listener.takenBack == ["the start of BrokenAtOnce", "the start of BrokenRun"]
+  assert listener.reported == ["broken at once", "broken run"]
+}
+
+test("inside a script, a done that throws as the step starts takes its start back and is thrown on") {
+  def listener = new MarkingListener(inScript: true)
+  def step = marked("BrokenInScript", listener)
+  step.run = { }
+  step.done = { throw new IllegalStateException("thrown on") }
+  def thrown = null
+  try {
+    step.start()
+  } catch (IllegalStateException e) {
+    thrown = e
+  }
+  assert thrown?.message == "thrown on"
+  assert listener.takenBack == ["the start of BrokenInScript"]
+}
+
+test("a done that throws once the step is under way leaves its start alone") {
+  def listener = new MarkingListener()
+  def p = g.addPlayer('sf-under-way')
+  def step = marked("UnderWay", listener)
+  step.run = { a.add(p, [name: "OK", result: { }]) }
+  step.done = { throw new IllegalStateException("broken later") }
+  step.start()
+  a.choose(p.choices[0].uid)
+  assert listener.reported == ["broken later"]
+  assert listener.takenBack.isEmpty()
+}
+
 test("a step whose listener isn't the server's throws as before") {
   def step = new Step(name: "Plain", playerActions: a, gameListener: [:], eventTracker: eventTracker)
   step.run = { throw new IllegalStateException("plain") }
