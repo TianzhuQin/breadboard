@@ -3974,6 +3974,22 @@ public class ScriptBoard extends UntypedActor {
     return meta.hasProperty(owner, "CHAT_KEY") == null;
   }
 
+  /**
+   * What the participants of a session see when the server stops while it runs (ServerStop): its
+   * game lived in the server's memory and ends with it, and the next start marks the session stopped.
+   * The "stopped" screen said the researcher stopped it, also when the server was only restarted.
+   */
+  static ObjectNode serverStoppedScreen() {
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "serverStopped");
+    player.put("text", "<h3>This session has ended</h3><p>It ended because the study's server was stopped or restarted. "
+        + "Thank you for taking part. You can close this page; if you have any questions, please contact the researcher.</p>");
+    return frame;
+  }
+
   /** What the participants of a session that ran out of time see (Autopilot's longest session). */
   static ObjectNode outOfTimeScreen() {
     ObjectNode frame = Json.newObject();

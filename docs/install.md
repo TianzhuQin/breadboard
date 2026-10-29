@@ -90,7 +90,8 @@ When the server runs out of memory it stops at once rather than limping on, and 
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
 that file is gone). A server whose shutdown is stuck (an experiment's script that never ends) is
 stopped after 20 seconds. When it stops normally, the participants of a running session are told
-the session has stopped, and a `serverStopping` event is recorded in it.
+the session ended because the server was stopped or restarted (someone given a completion code
+keeps it on screen), and a `serverStopping` event is recorded in it.
 
 On first start the launcher creates:
 
