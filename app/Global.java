@@ -38,6 +38,14 @@ public class Global extends GlobalSettings {
   @Override
   public void onStart(Application app) {
 
+    // For the server's own process (a release, bin/run-local), not the tests' or sbt's.
+    if (app.isProd()) {
+      logUncaughtErrors();
+      stopIfShutdownHangs();
+      exitIfActorsStop();
+      keepEbeanThroughTheStop();
+    }
+
     backUpBeforeUpgrade(app);
     applyNewEvolutions(app);
     // Before anything reads Experiment, which maps this column: a database built from evolutions
@@ -195,6 +203,8 @@ public class Global extends GlobalSettings {
       Ebean.createSqlUpdate("update breadboard_version set version = :version").setParameter("version", version).execute();
     }
 
+    widenEventValues();
+
     // Interpolated Groovy strings must reach browsers as text.
     models.JsonSetup.install();
 
@@ -328,10 +338,152 @@ public class Global extends GlobalSettings {
     Ebean.createSqlUpdate(sql).execute();
   }
 
+  /**
+   * event_data.value was varchar(255) (evolution 1), so an event value longer than that (a free-text
+   * answer, a JSON value) threw inside the experiment's script. It holds EventTracker.VALUE_LIMIT
+   * characters (1 MiB), for databases built from the evolutions and older ones alike. Changed only
+   * while it is shorter, since H2 copies the table to change a column; and not while the disk lacks
+   * room for that copy (tried again at the next start; until then EventTracker keeps long values cut
+   * short).
+   */
+  static void widenEventValues() {
+    try {
+      SqlRow column = Ebean.createSqlQuery("select type_name as type_name, character_maximum_length as max_length "
+          + "from information_schema.columns where lower(table_name) = 'event_data' and lower(column_name) = 'value'")
+          .findUnique();
+      if (column == null) {
+        return;
+      }
+      Long length = column.getLong("max_length");
+      if (!"varchar".equalsIgnoreCase(column.getString("type_name")) || length == null || length >= EventTracker.VALUE_LIMIT) {
+        // already long enough (or a text column, which has no limit)
+        return;
+      }
+      File database = models.Backups.databaseFile();
+      if (database != null && models.Backups.freeSpace(database) < models.Backups.roomNeeded(database.length())) {
+        Logger.warn("Not widening event_data.value now: the disk has too little free space to copy the table. "
+            + "Event values longer than " + length + " characters are kept cut short until it has.");
+        return;
+      }
+      Logger.info("Widening event_data.value to keep event values of up to " + EventTracker.VALUE_LIMIT
+          + " characters (once; on a large database this takes a while)");
+      Ebean.createSqlUpdate("alter table event_data alter column value varchar(" + EventTracker.VALUE_LIMIT + ")").execute();
+    } catch (Exception e) {
+      Logger.warn("Could not widen event_data.value; event values longer than 255 characters are kept cut short: " + e.getMessage());
+    }
+  }
+
+  /** How long a stop may take before the process ends anyway (see stopIfShutdownHangs). */
+  static final long SHUTDOWN_LIMIT_MS = 20000;
+  private static boolean shutdownLimitSet = false;
+
+  /**
+   * SIGTERM and Ctrl+C run Play's stop, which waits, with no time limit, for every actor to finish:
+   * a script that never ends (while (true) in the Script console or a step) held it up for good,
+   * with the server still answering and RUNNING_PID already deleted, so the next start couldn't
+   * bind. When a stop is still going after SHUTDOWN_LIMIT_MS, the process ends anyway (exit code 1).
+   * Once per process: the timer starts with the stop and dies with the process when the stop ends in
+   * time (a daemon thread).
+   */
+  static synchronized void stopIfShutdownHangs() {
+    if (shutdownLimitSet) {
+      return;
+    }
+    shutdownLimitSet = true;
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      Thread limit = new Thread(() -> {
+        try {
+          Thread.sleep(SHUTDOWN_LIMIT_MS);
+        } catch (InterruptedException e) {
+          return;
+        }
+        String why = "Breadboard: shutdown is taking too long (a script may be stuck); stopping now";
+        System.out.println(why);
+        System.out.flush();
+        try {
+          Logger.warn(why);
+        } catch (Throwable ignored) {
+          // the console has it
+        }
+        Runtime.getRuntime().halt(1);
+      }, "breadboard-shutdown-limit");
+      limit.setDaemon(true);
+      limit.start();
+    }, "breadboard-shutdown-watch"));
+  }
+
+  /**
+   * An exception nothing caught ends its thread; Java prints it on the console only, so a timer that
+   * died (java.util.Timer threads, the experiment's own) left no trace in logs/application.log. (Akka's
+   * threads have a handler of their own: conf/application-prod.conf sends what it says to the log.)
+   */
+  static void logUncaughtErrors() {
+    Thread.setDefaultUncaughtExceptionHandler((thread, e) -> {
+      if (e instanceof ThreadDeath) {
+        return;
+      }
+      try {
+        Logger.error("Uncaught error in thread " + thread.getName() + ": it has stopped", e);
+      } catch (Throwable logging) {
+        System.err.println("Uncaught error in thread " + thread.getName() + ":");
+        e.printStackTrace();
+      }
+    });
+  }
+
+  /**
+   * Ebean stops itself in a JVM shutdown hook of its own, which runs beside Play's stop (onStop, then
+   * the actors): what a stop records (serverStopping, participants disconnecting) was saved, but each
+   * save logged "NotifyOfCommit failed ... Pool is stopping". Play never stops Ebean otherwise, so the
+   * hook is taken back and Ebean ends with the process. (The database itself is closed by Play's
+   * connection pool, last: DB_CLOSE_ON_EXIT=FALSE in conf/application-prod.conf.) Ebean is the one
+   * Play 2.2 comes with (3.2.2); with any other, nothing is changed.
+   */
+  static void keepEbeanThroughTheStop() {
+    try {
+      java.lang.reflect.Field hook = Class.forName("com.avaje.ebeaninternal.server.lib.ShutdownManager")
+          .getDeclaredField("shutdownHook");
+      hook.setAccessible(true);
+      Runtime.getRuntime().removeShutdownHook((Thread) hook.get(null));
+    } catch (Exception e) {
+      Logger.debug("Ebean's shutdown hook stays: " + e);
+    }
+  }
+
+  /** Set once the application is being stopped (see exitIfActorsStop). */
+  private static volatile boolean stopping = false;
+
+  /**
+   * Akka stops its actor system when an actor fails with an error it doesn't handle (a script's
+   * StackOverflowError, from runaway recursion, did: "guardian failed, shutting down system"). The
+   * server then went on answering, /health said ok, and nothing worked: no engine, no console. The
+   * process ends instead (exit code 1), so that the launcher (BREADBOARD_KEEP_RUNNING) or the service
+   * manager starts it again.
+   */
+  static void exitIfActorsStop() {
+    play.libs.Akka.system().registerOnTermination(() -> {
+      if (stopping) {
+        return;
+      }
+      Logger.error("The actor system that runs the engine and the console has stopped after an error (above): "
+          + "stopping the server so that it can be started again");
+      // (not on this thread: the actor system finishes stopping only once this returns)
+      new Thread(() -> System.exit(1), "breadboard-exit").start();
+    });
+  }
+
   @Override
   public void onStop(Application app){
+    stopping = true;
     if(process != null){
       process.destroy();
+    }
+    // A session in progress ends with the server: its data says so and its participants are told,
+    // first (the autopilot, stopped below, must not open another meanwhile).
+    try {
+      models.ServerStop.endLiveSession();
+    } catch (Throwable t) {
+      Logger.error("Could not end the running session for its participants", t);
     }
     models.Backups.stop();
     // Its periodic check would otherwise outlive this application (in dev mode, a reload) and open
@@ -347,11 +499,20 @@ public class Global extends GlobalSettings {
    * A forgotten password: start the server with -Dbreadboard.resetPassword=<email> (e.g.
    * ./breadboard.sh -Dbreadboard.resetPassword=me@lab.org) and the account gets a new random
    * password, printed on the server's console (not written to the log). Every browser signed in to
-   * it is signed out. Start the server without the option afterwards.
+   * it is signed out. Start the server without the option afterwards. (Not when a launcher started
+   * the server again after it stopped by itself: see below.)
    */
   static void resetPasswordIfAsked() {
     String email = System.getProperty("breadboard.resetPassword");
     if (email == null || email.trim().isEmpty()) {
+      return;
+    }
+    // The launchers start the server again, with the same options, when it stops by itself
+    // (BREADBOARD_KEEP_RUNNING): the password was reset at the first start, and stays as it was then.
+    String restarted = System.getenv("BREADBOARD_RESTARTED");
+    if (restarted != null && !restarted.trim().isEmpty() && !"0".equals(restarted.trim())) {
+      System.out.println("breadboard.resetPassword: not reset again after an automatic restart; the password is "
+          + "the one shown when the server first started with this option.");
       return;
     }
     User user = User.findByEmail(email);

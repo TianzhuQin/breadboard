@@ -1,3 +1,5 @@
+import com.avaje.ebean.Ebean;
+import com.avaje.ebean.SqlRow;
 import com.fasterxml.jackson.databind.JsonNode;
 import models.*;
 import org.junit.Test;
@@ -28,6 +30,52 @@ public class BackupsAndHealthTest extends BaseTest {
         JsonNode body = Json.parse(contentAsString(health));
         assertEquals("ok", body.get("status").asText());
         assertEquals("ok", body.get("database").asText());
+        assertFalse("no reason while it is well", body.has("reason"));
+        assertTrue(body.toString(), body.get("diskFreeMb").isIntegralNumber());
+        assertTrue(body.toString(), body.get("diskFreeMb").asLong() >= 100);
+        assertTrue(body.has("version"));
+        assertTrue(body.has("uptimeSeconds"));
+    }
+
+    @Test
+    public void eachHealthCheckWritesItsHeartbeatRow() throws Exception {
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        SqlRow first = Ebean.createSqlQuery("select count(*) as row_count, max(checked_at) as checked_at from health_check").findUnique();
+        assertEquals("one row, however many checks", 1, first.getInteger("row_count").intValue());
+        Thread.sleep(20);
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        SqlRow second = Ebean.createSqlQuery("select count(*) as row_count, max(checked_at) as checked_at from health_check").findUnique();
+        assertEquals(1, second.getInteger("row_count").intValue());
+        assertTrue("updated by the second check", second.getTimestamp("checked_at").after(first.getTimestamp("checked_at")));
+    }
+
+    /**
+     * A full disk left H2 holding a lock it never released ("Timeout trying to lock table USERS"),
+     * while select 1 still answered: here another connection holds the accounts locked.
+     */
+    @Test
+    public void healthFailsWhileTheDatabaseKeepsTheAccountsLocked() throws Exception {
+        Language lang = createLanguage("eng", "English");
+        createUser("pi@lab.org", "PI", "password123", lang);
+        try (Connection stuck = DriverManager.getConnection("jdbc:h2:mem:breadboard-test;MODE=MYSQL;DB_CLOSE_DELAY=-1", "", "")) {
+            stuck.setAutoCommit(false);
+            try (Statement s = stuck.createStatement()) {
+                s.executeUpdate("update users set name = name");
+            }
+            long started = System.currentTimeMillis();
+            Result health = route(fakeRequest(GET, "/health"));
+            long took = System.currentTimeMillis() - started;
+            assertEquals(contentAsString(health), SERVICE_UNAVAILABLE, status(health));
+            JsonNode body = Json.parse(contentAsString(health));
+            assertEquals("failing", body.get("status").asText());
+            assertEquals("failing", body.get("database").asText());
+            assertTrue(body.toString(), body.get("reason").asText().contains("the database is failing"));
+            assertTrue(body.toString(), body.get("reason").asText().toLowerCase().contains("lock"));
+            assertTrue("it doesn't hang: " + took + " ms", took < 8000);
+            stuck.rollback();
+        }
+        Result again = route(fakeRequest(GET, "/health"));
+        assertEquals(contentAsString(again), OK, status(again));
     }
 
     @Test
