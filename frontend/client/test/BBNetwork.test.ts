@@ -609,3 +609,72 @@ describe('BBNetwork editing', () => {
     w.destroy()
   })
 })
+
+// Changes sent while the connection was down used to wait in a queue and arrive much later, or never.
+describe('BBNetwork while the connection is down', () => {
+  /** The page's connection changes (Breadboard's CONNECTION_EVENT) */
+  async function become (w: any, state: string) {
+    ;(window as any).Breadboard.connection = state
+    handlers['bb:connection']()
+    await w.vm.$nextTick()
+  }
+
+  it('offers no change, says why, and lets a confirmation wait for the connection', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    expect(w.find('.bb-network__confirm').text()).toContain('Cut the tie between Ana and Ben?')
+
+    await become(w, 'lost')
+    const confirm = w.find('.bb-network__confirm .bb-network__btn--danger')
+    expect((confirm.element as HTMLButtonElement).disabled).toBe(true)
+    ;(w.vm as any).confirmProposal()
+    expect(sendEdgeEdit).not.toHaveBeenCalled()
+    await w.find('.bb-network__confirm .bb-network__btn--ghost').trigger('click')
+    expect(w.find('.bb-network__hint').text()).toBe('Reconnecting… you can change ties once the connection is back.')
+    // nothing to click on, nor in the list
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+    expect(nodeWithId(w, 'nz').classes()).not.toContain('is-selectable')
+    expect((w.vm as any).moves.every((m: any) => !m.available)).toBe(true)
+    ;(w.vm as any).propose('remove', 'nx', 'ny')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+
+    await become(w, 'open')
+    expect(w.find('.bb-network__hint').text()).not.toContain('Reconnecting')
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    await w.find('.bb-network__confirm .bb-network__btn--danger').trigger('click')
+    expect(sendEdgeEdit).toHaveBeenCalledWith('remove', 'nx', 'ny')
+  })
+
+  it('offers no change on a researcher\'s preview that only watches the player, and says why', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    expect(w.find('.bb-network__confirm').exists()).toBe(true)
+    // their own page comes back: the question can't be answered here any more
+    await become(w, 'watching')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+    ;(w.vm as any).confirmProposal()
+    expect(sendEdgeEdit).not.toHaveBeenCalled()
+    expect(w.find('.bb-network__hint').text()).toBe('Watching only: their own page is connected, so you can’t change their ties.')
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+    expect((w.vm as any).moves.every((m: any) => !m.available)).toBe(true)
+  })
+
+  it('says nothing of reconnecting once the page is done with (another page has the seat)', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    await become(w, 'elsewhere')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+    expect(w.find('.bb-network__hint').exists()).toBe(false)
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+  })
+
+  it('is editable as before where no page connection says otherwise', async () => {
+    const w = mountNetwork({ enabled: true, remove: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    await w.find('.bb-network__confirm .bb-network__btn--danger').trigger('click')
+    expect(sendEdgeEdit).toHaveBeenCalledWith('remove', 'nx', 'ny')
+  })
+})

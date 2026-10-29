@@ -48,7 +48,7 @@
       </div>
 
       <div class="pd__actions">
-        <BButton size="sm" :icon="MonitorSmartphone" :href="`#/preview?player=${encodeURIComponent(id)}`">Preview their screen</BButton>
+        <BButton size="sm" :icon="MonitorSmartphone" :href="`#/preview?player=${encodeURIComponent(id)}`" :title="previewTitle">Preview their screen</BButton>
         <BButton v-if="context === 'players'" size="sm" :icon="Share2" @click="emit('locate', id)">Show on network</BButton>
         <BButton v-else size="sm" :icon="Crosshair" @click="emit('locate', id)">Centre on them</BButton>
       </div>
@@ -223,6 +223,10 @@ const nameFor = (id: string) => labelOf(graph.nodes.get(id) || { id, data: {} },
 const name = computed(() => { void graph.version.value; return nameFor(props.id) })
 const ai = computed(() => isAi(node.value))
 const connection = computed(() => connectionOf(node.value))
+// A preview of someone whose own page is connected only watches it; anyone else's acts for them.
+const previewTitle = computed(() => connection.value === 'connected'
+  ? 'Opens their page on the Preview page, read-only: their own page is connected, and is left alone.'
+  : 'Opens their page on the Preview page. Choices made in the preview count as theirs.')
 const recruitment = computed(() => recruitmentOf(node.value))
 const autopilot = computed(() => autopilotOf(node.value))
 const group = computed(() => {

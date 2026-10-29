@@ -4,7 +4,7 @@
     size="full"
     flush
     :title="playerId ? `What ${playerId} sees` : ''"
-    subtitle="Live and interactive: clicks here are real choices for this player and are recorded."
+    subtitle="Live: clicks here are real choices for this player, and are recorded. Read-only while their own page is connected."
     @update:open="(v: boolean) => { if (!v) emit('close') }"
   >
     <div v-if="playerId" class="pfx">

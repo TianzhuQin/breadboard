@@ -24,7 +24,10 @@ export function truthyFlag (v: unknown): boolean {
 export const isTestPlayer = (p: PlayerLike) => truthyFlag(p.data?.testmode)
 /** A computer seat: created as AI (id starting with "_"), or a person's seat the computer took over (ai = 1). */
 export const isAIPlayer = (p: PlayerLike) => p.id.startsWith('_') || truthyFlag(p.data?.ai)
-/** The player's own browser is connected right now (_system.connected). */
+/**
+ * The player's own browser is connected right now (_system.connected). A preview that holds their
+ * seat (they had left) counts too, so this speaks of their own page only before they are shown.
+ */
 export const isConnected = (p: PlayerLike) => p.data?._system?.connected === true
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
@@ -52,11 +55,11 @@ export function quickPick<T extends PlayerLike> (players: readonly T[], pick: Qu
 }
 
 /**
- * Of the players about to be previewed, those whose own browser is connected: a preview takes
- * over their connection (ScriptBoard.addClient closes the older socket, and their page keeps
- * reconnecting and taking it back), so the researcher is asked first.
+ * Of the players about to be previewed, those whose own browser is connected: the server lets a
+ * preview only watch them (it shows what their page gets, and leaves their page alone), so their
+ * previews are read-only, which the researcher is told.
  */
-export function wouldDisplace<T extends PlayerLike> (adding: readonly T[], alreadyShown: ReadonlySet<string>): T[] {
+export function shownReadOnly<T extends PlayerLike> (adding: readonly T[], alreadyShown: ReadonlySet<string>): T[] {
   return adding.filter(p => !alreadyShown.has(p.id) && isConnected(p))
 }
 

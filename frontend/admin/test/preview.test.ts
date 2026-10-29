@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { reactive } from 'vue'
 import {
   DEVICES, MAX_PREVIEWS, frameGeometry, isAIPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth,
-  previewMemory, previewPageUrl, quickPick, sortPlayers, tileWidth, truthyFlag, widthToFit, wouldDisplace,
+  previewMemory, previewPageUrl, quickPick, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
 } from '../src/pages/preview/preview'
 import { fetchPreviewToken } from '../src/pages/preview/previewLink'
 import { HttpError } from '../src/lib/http'
@@ -38,7 +39,10 @@ vi.mock('@/ui', async (orig) => {
   }
 })
 const push = vi.fn()
-vi.mock('vue-router', () => ({ useRouter: () => ({ push }), useRoute: () => ({ query: {} }) }))
+// the page's address (?player=... comes from the player panel's "Preview their screen")
+const route = reactive({ query: {} as Record<string, any> })
+const replace = vi.fn((to: any) => { route.query = to.query || {} })
+vi.mock('vue-router', () => ({ useRouter: () => ({ push, replace }), useRoute: () => route }))
 
 const store = await import('@/store/admin') as any
 const ui = await import('@/ui') as any
@@ -84,9 +88,9 @@ describe('quick picks', () => {
     expect(quickPick(players, 'first', 0)).toEqual([])
     expect(quickPick(players, 'first', 99)).toHaveLength(5)
   })
-  it('flags connected players not already shown (a preview would take their connection)', () => {
+  it('finds connected players not already shown (their previews only watch them)', () => {
     const list = [P('a', { _system: { connected: true } }), P('b', { _system: { connected: true } }), P('c')]
-    expect(wouldDisplace(list, new Set(['b'])).map(p => p.id)).toEqual(['a'])
+    expect(shownReadOnly(list, new Set(['b'])).map(p => p.id)).toEqual(['a'])
   })
 })
 
@@ -176,6 +180,7 @@ describe('PreviewPage', () => {
     Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false, device: 'desktop', size: 'M', interactive: false })
     store.admin.experiment = { id: 7, name: 'Trust game', instances: [] }
     store.admin.instance = { id: 44, name: 'pilot', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] }
+    route.query = {}
     try { localStorage.clear() } catch (e) { /* ignore */ }
   })
   afterEach(() => { document.body.innerHTML = '' })
@@ -207,7 +212,8 @@ describe('PreviewPage', () => {
     w.unmount()
   })
 
-  it('shows the test players at once, but not ones whose own browser is open', async () => {
+  // (ones whose own browser is open used to be left out: a preview took their seat)
+  it('shows the test players at once, those whose own browser is open too', async () => {
     addPlayer('p1', { testmode: true })
     addPlayer('p2', { testmode: true, _system: { connected: true } })
     addPlayer('p3')
@@ -215,10 +221,12 @@ describe('PreviewPage', () => {
     const w = await mountPage()
     await settle()
     const frames = w.findAll('iframe')
-    expect(frames).toHaveLength(1)
+    expect(frames).toHaveLength(2)
     expect(http.post).toHaveBeenCalledWith('/preview-token', { experimentId: 7, experimentInstanceId: 44, clientId: 'p1' })
     expect(frames[0].attributes('src')).toBe(`${window.location.origin}/game/7/44/p1/connected?preview=1#bbt=tok-p1-1`)
     expect(frames[0].attributes('title')).toBe('Participant page of p1')
+    expect(frames[1].attributes('title')).toBe('Participant page of p2')
+    expect(ui.confirm).not.toHaveBeenCalled()
     w.unmount()
   })
 
@@ -241,8 +249,10 @@ describe('PreviewPage', () => {
     // with the page isolated, the warning that previews run with the researcher's rights is gone
     expect(w.find('.pv__warn').exists()).toBe(false)
     expect(w.text()).not.toMatch(/researcher sign-in/)
-    // what stays true is said once and can be put away: a preview is a live seat
+    // what stays true is said once and can be put away: a preview is a live seat, or only watches
     expect(w.find('.pv__notice').text()).toMatch(/Previews are live/)
+    expect(w.find('.pv__notice').text()).toMatch(/A player whose own page is connected is shown read-only/)
+    expect(w.find('.pv__notice').text()).not.toMatch(/taking the connection/)
     await w.find('.pv__notice button').trigger('click')
     expect(w.find('.pv__notice').exists()).toBe(false)
     w.unmount()
@@ -339,24 +349,65 @@ describe('PreviewPage', () => {
     }
   })
 
-  it('asks before previewing a connected participant, and respects no', async () => {
+  // A preview of a connected participant used to take their seat, after a warning; the server now
+  // lets it only watch, so there is nothing to ask.
+  it('previews a connected participant without asking, and says the preview is read-only', async () => {
     addPlayer('p1')
     addPlayer('p2', { _system: { connected: true } })
     await settle()
     const w = await mountPage()
-    ui.confirm.mockResolvedValueOnce(false)
     const box = w.findAll('.pp__item').find(li => li.text().includes('p2'))!.find('input[type="checkbox"]')
     await box.setValue(true)
     await flushPromises()
-    expect(ui.confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'p2 is connected right now', danger: true }))
-    expect(previewMemory.ids).toEqual([])
+    expect(ui.confirm).not.toHaveBeenCalled()
+    expect(previewMemory.ids).toEqual(['p2'])
+    expect(ui.notify.info).toHaveBeenCalledWith('p2 is connected right now', expect.stringMatching(/^Their preview is read-only: you see what they see, but can’t answer for them\./))
 
-    // a player nobody is using is added without a question
+    // a player nobody is using is added without a word
     const box1 = w.findAll('.pp__item').find(li => li.text().includes('p1'))!.find('input[type="checkbox"]')
     await box1.setValue(true)
     await flushPromises()
-    expect(ui.confirm).toHaveBeenCalledTimes(1)
-    expect(previewMemory.ids).toEqual(['p1'])
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
+    expect(previewMemory.ids).toEqual(['p2', 'p1'])
+    w.unmount()
+  })
+
+  it('says once which players of a quick pick are shown read-only', async () => {
+    addPlayer('p1', { _system: { connected: true } })
+    addPlayer('p2', { _system: { connected: true } })
+    addPlayer('p3')
+    await settle()
+    const w = await mountPage()
+    await w.find('.pp__n-input input').setValue(3)
+    await w.findAll('.pp__first button')[0].trigger('click')
+    await flushPromises()
+    expect(previewMemory.ids).toEqual(['p1', 'p2', 'p3'])
+    expect(ui.confirm).not.toHaveBeenCalled()
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
+    expect(ui.notify.info).toHaveBeenCalledWith('2 of these players are connected right now', expect.stringMatching(/^Their previews are read-only/))
+    w.unmount()
+  })
+
+  // It used to be a single look at a connected participant, ended (and their seat given back) as
+  // the full-size view closed.
+  it('opens a player full size from the player panel, and keeps their tile afterwards', async () => {
+    addPlayer('p1')
+    addPlayer('p2', { _system: { connected: true } })
+    await settle()
+    route.query = { player: 'p2' }
+    const w = await mountPage()
+    await settle()
+    expect(replace).toHaveBeenCalled()
+    expect(route.query.player).toBeUndefined()
+    expect(previewMemory.ids).toEqual(['p2'])
+    expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).toContain('/game/7/44/p2/connected')
+    expect(ui.notify.info).toHaveBeenCalledWith('p2 is connected right now', expect.any(String))
+    const PreviewFocus = (await import('../src/pages/preview/PreviewFocus.vue')).default
+    w.findComponent(PreviewFocus).vm.$emit('close')
+    await settle()
+    expect(previewMemory.ids).toEqual(['p2'])
+    expect(w.find('.pt iframe').exists()).toBe(true)
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
     w.unmount()
   })
 

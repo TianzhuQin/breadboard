@@ -2,7 +2,7 @@ import { http } from './http'
 import { Mutex } from 'async-mutex'
 import { Emitter } from 'goodish'
 import { BreadboardConfig, BreadboardMessages, Loadable, SimpleMap } from './breadboard.types'
-import { Socket } from './socket'
+import { Socket, SocketState } from './socket'
 
 const MAKE_CHOICE = 'MakeChoice'
 const CUSTOM_EVENT = 'CustomEvent'
@@ -14,6 +14,23 @@ const GROUP_CHOICE_EVENT = 'group-action-submit'
 // Editing ties from the network view. Must stay in sync with groovy/edge_edits.groovy.
 const EDGE_EDIT_EVENT = 'bb:edge-edit'
 export const EDGE_EDIT_RESULT_EVENT = 'bb:edge-edit-result'
+// A choice or tie change still waiting for the connection after this long (ms) is dropped instead
+// of sent: the participant has moved on, and the screen may no longer ask for it.
+const ANSWER_MAX_AGE_MS = 5000
+// The heartbeat of a participant's socket: the server answers {"action":"Ping"} with {"pong": <time>}
+// (servers before 3.1 ignore it).
+const PING = JSON.stringify({ action: 'Ping' })
+
+/** Whether a frame is the server's answer to PING (every frame passes here: most are not parsed) */
+function isPong (text: any): boolean {
+  if (typeof text !== 'string' || text.length > 100 || text.indexOf('"pong"') < 0) return false
+  try {
+    const data = JSON.parse(text)
+    return !!data && typeof data === 'object' && 'pong' in data
+  } catch (e) {
+    return false
+  }
+}
 
 // Participant credentials. After login the server redirects to the participant page with the
 // seat token in the URL fragment (it is also set as an HttpOnly cookie). Keep it in session
@@ -24,9 +41,15 @@ export const EDGE_EDIT_RESULT_EVENT = 'bb:edge-edit-result'
 // and cookies throw, as they also do where a browser blocks storage. So the token is kept in
 // memory as well, and in the history entry, which a reload keeps where storage is blocked (but
 // not in an opaque origin, where browsers drop it: a reloaded preview has to be opened again).
+// A participant's token is also kept in local storage for a day, as long as the server's cookie
+// lasts, so a browser that was closed or crashed finds the seat again: session storage ends with
+// the tab. Every page of the origin can read local storage, so it is forgotten as soon as it is no
+// longer needed: the participant is done, or the session is over. Not a preview's, which isn't a
+// participant's to keep.
 const TOKEN_HEADER = 'X-Breadboard-Token'
 const TOKEN_FRAGMENT_KEY = 'bbt'
 const PREVIEW_QUERY = 'preview'
+const KEEP_TOKEN_MS = 24 * 60 * 60 * 1000
 
 /** The token this page was given, once found */
 let pageToken: string | null = null
@@ -44,19 +67,25 @@ export function socketUrl (configured: string | undefined): string {
   return configured
 }
 
+/** Where this page's token is stored: one per experiment, session and participant */
+function tokenKey (): string {
+  return 'breadboard-token:' + window.location.pathname
+}
+
 export function participantToken (): string | null {
   if (typeof window === 'undefined') return null
-  const storageKey = 'breadboard-token:' + window.location.pathname
+  const storageKey = tokenKey()
   const fromFragment = takeFragmentToken(storageKey)
   if (fromFragment) {
     pageToken = fromFragment
     try {
       window.sessionStorage.setItem(storageKey, fromFragment)
     } catch (e) {}
+    keepToken(storageKey, fromFragment)
     return fromFragment
   }
   if (!pageToken) {
-    pageToken = sessionToken(storageKey) || historyToken(storageKey)
+    pageToken = sessionToken(storageKey) || historyToken(storageKey) || keptToken(storageKey)
   }
   return pageToken
 }
@@ -98,6 +127,39 @@ function historyToken (storageKey: string): string | null {
   } catch (e) {
     return null
   }
+}
+
+/** Keep a participant's token in local storage (see KEEP_TOKEN_MS) */
+function keepToken (storageKey: string, token: string) {
+  if (isPreview()) return
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify({ token, until: Date.now() + KEEP_TOKEN_MS }))
+  } catch (e) {}
+}
+
+/** The token kept in local storage, unless it has expired (then it is removed) */
+function keptToken (storageKey: string): string | null {
+  if (isPreview()) return null
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return null
+    const kept = JSON.parse(raw)
+    if (kept && typeof kept.token === 'string' && kept.token && Date.now() < kept.until) return kept.token
+    window.localStorage.removeItem(storageKey)
+  } catch (e) {}
+  return null
+}
+
+/**
+ * Forget the token kept in local storage: the participant is done, the session is over for this
+ * page, or the server no longer takes it. Not on a preview, which keeps none, and must leave a
+ * participant's alone.
+ */
+function forgetToken () {
+  if (isPreview()) return
+  try {
+    window.localStorage.removeItem(tokenKey())
+  } catch (e) {}
 }
 
 /** Whether the researcher console opened this page as a preview */
@@ -147,6 +209,7 @@ function leavePage (login: string): string {
   }
   // A participant page opened without this seat's credentials (e.g. someone else's URL), or whose
   // seat the server has forgotten since (e.g. in a restart).
+  forgetToken()
   window.location.href = login
   return 'Not logged in'
 }
@@ -177,10 +240,29 @@ function isOwnEnd (player: any): boolean {
  */
 export const ENDED_EVENT = 'bb:ended'
 
+/**
+ * The page's live connection, as the participant should hear of it:
+ * - 'connecting': the first attempt is under way
+ * - 'open'
+ * - 'lost': it dropped, or an attempt failed; it is reconnecting
+ * - 'blocked': it has never opened, after several attempts: the network may not let it through
+ * - 'elsewhere': another page took the seat: the study was opened in another tab or window (or, on
+ *   a preview, the researcher opened another preview of this player); see useHere
+ * - 'ended': the session is over for this page; it no longer reconnects
+ * - 'watching': open, but only to watch: a researcher's preview of a player whose own page is
+ *   connected sees what they see, and can't answer for them (see `watching`)
+ */
+export type ConnectionState = 'connecting' | 'open' | 'lost' | 'blocked' | 'elsewhere' | 'ended' | 'watching'
+
+/** Emitted whenever `connection` may have changed */
+export const CONNECTION_EVENT = 'bb:connection'
+
 export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /** The session is over for this page (stopped, not running, ...): it no longer reconnects */
   public ended = false
+  /** Another page took the seat (see 'elsewhere' in ConnectionState): this one no longer reconnects */
+  public replaced = false
   private socket!: Socket
   private config!: BreadboardConfig | null
   private socketMutex = new Mutex()
@@ -189,6 +271,39 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private ownEnd = false
   /** recheckSeat() is waiting for the server */
   private checkingSeat = false
+  /** The connection has dropped (or an attempt failed) at least once */
+  private dropped = false
+  /** The server said the current connection only watches; every new connection starts without */
+  private watchingNow = false
+
+  /** Whether the live connection is open: what the page sends now reaches the server now */
+  get isOpen (): boolean {
+    return !!this.socket && this.socket.state === SocketState.OPEN
+  }
+
+  /** See ConnectionState */
+  get connection (): ConnectionState {
+    if (this.ended) return 'ended'
+    if (this.replaced) return 'elsewhere'
+    if (this.isOpen) return this.watchingNow ? 'watching' : 'open'
+    if (this.socket && this.socket.blocked) return 'blocked'
+    return this.dropped ? 'lost' : 'connecting'
+  }
+
+  /** Whether the researcher console opened this page as a preview, rather than a participant */
+  get preview (): boolean {
+    return typeof window !== 'undefined' && isPreview()
+  }
+
+  /**
+   * Whether this page only watches its player: a researcher's preview of a player whose own page
+   * is connected. The server sends it what the player's page gets, and ignores what it sends; it
+   * sends no choices, tie changes or other messages for them. The server decides again for every
+   * new connection (the player's page may have gone by then).
+   */
+  get watching (): boolean {
+    return this.watchingNow
+  }
 
   /**
    * Load the client config.
@@ -226,10 +341,18 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     }
     try {
       const config = await this.loadConfig()
-      this.socket = new Socket(socketUrl(config.connectSocket))
+      // A participant's socket has a heartbeat; the console's (the previous console uses this class
+      // too) would answer the ping with an error.
+      this.socket = new Socket(socketUrl(config.connectSocket), undefined, config.clientId ? { ping: PING, isPong } : {})
+      this.socket.on('close', () => { this.dropped = true })
+      // (before CONNECTION_EVENT below: a new connection is the player's own until the server says)
+      this.socket.on('connect', () => { this.watchingNow = false })
       // Propagate all socket events out to the Breadboard object
       for (const event of ['connect', 'open', 'close', 'error', 'retry']) {
         this.socket.on(event, (...args: any) => this.emit(event, ...args))
+      }
+      for (const event of ['connect', 'open', 'close', 'blocked']) {
+        this.socket.on(event, () => this.emit(CONNECTION_EVENT))
       }
       // Taken and closed again without a word, time after time: ask what is going on.
       this.socket.on('refused', () => this.recheckSeat())
@@ -252,15 +375,40 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   }
 
   /**
+   * Connect again now instead of waiting for the next attempt (the participant's "Try now")
+   */
+  reconnectNow () {
+    if (this.socket && !this.ended && !this.replaced) this.socket.reconnectNow()
+  }
+
+  /**
+   * Take the seat back after another page took it (connection 'elsewhere'): connect again, once
+   * (the other page is then told so), and go on as before.
+   */
+  useHere () {
+    if (!this.socket || this.ended || !this.replaced) return
+    this.replaced = false
+    this.socket.resume()
+    this.emit(CONNECTION_EVENT)
+  }
+
+  /**
    * Send data to breadboard server
    * @param action
    * @param data
+   * @param maxAge if the connection is down: how long (ms) it may wait for it before it is dropped
+   * instead of sent; by default it waits as long as it takes
    */
-  sendType (action: string, data: SimpleMap<any> = {}) {
+  sendType (action: string, data: SimpleMap<any> = {}, maxAge?: number) {
+    // A page that only watches answers nothing for its player (the server would ignore it anyway).
+    if (this.watchingNow) {
+      console.debug(`Not sent while watching: ${action}`)
+      return
+    }
     const d = Object.assign(data, {
       action
     })
-    this.socket.send(JSON.stringify(d))
+    this.socket.send(JSON.stringify(d), maxAge)
   }
 
   /**
@@ -277,7 +425,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     if (params && typeof params !== 'string') {
       data.params = JSON.stringify(params)
     }
-    return this.sendType(MAKE_CHOICE, data)
+    return this.sendType(MAKE_CHOICE, data, ANSWER_MAX_AGE_MS)
   }
 
   /**
@@ -294,7 +442,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     if (params) {
       data.params = params
     }
-    return this.send(GROUP_CHOICE_EVENT, data)
+    return this.send(GROUP_CHOICE_EVENT, data, ANSWER_MAX_AGE_MS)
   }
 
   /**
@@ -304,7 +452,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    * change was offered: the server refuses it once the experiment has moved on to another turn.
    */
   sendEdgeEdit (op: 'add' | 'remove', a: string, b: string, turn?: number) {
-    return this.send(EDGE_EDIT_EVENT, turn == null ? { op, a, b } : { op, a, b, turn })
+    return this.send(EDGE_EDIT_EVENT, turn == null ? { op, a, b } : { op, a, b, turn }, ANSWER_MAX_AGE_MS)
   }
 
   getCustomParams () {
@@ -338,24 +486,26 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   }
 
   /**
-   * Shortcut for sending a custom event via breadboard. 
-   * @param params 
+   * Shortcut for sending a custom event via breadboard.
+   * @param params
+   * @param maxAge see sendType
    */
-  sendCustom (params?: SimpleMap<any>) {
-    return this.sendType(CUSTOM_EVENT, params)
+  sendCustom (params?: SimpleMap<any>, maxAge?: number) {
+    return this.sendType(CUSTOM_EVENT, params, maxAge)
   }
 
   /**
    * Send a custom event scoped to the current player. This will also trigger any global custom event handlers.
-   * @param params 
+   * @param params
+   * @param maxAge see sendType
    */
-  async send (eventName: string, data: SimpleMap<any> = {}) {
+  async send (eventName: string, data: SimpleMap<any> = {}, maxAge?: number) {
     const config = await this.loadConfig()
     return this.sendCustom({
       playerId: config.clientId,
       eventName: eventName,
       data: data
-    })
+    }, maxAge)
   }
 
   /**
@@ -459,13 +609,16 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   }
 
   /**
-   * The session is over for this page: it stops reconnecting, and tells its listeners (ENDED_EVENT)
+   * The session is over for this page: it stops reconnecting, forgets the token it kept for a
+   * browser that comes back, and tells its listeners (ENDED_EVENT)
    */
   private end () {
     this.socket.stopReconnecting()
+    forgetToken()
     if (!this.ended) {
       this.ended = true
       this.emit(ENDED_EVENT)
+      this.emit(CONNECTION_EVENT)
     }
   }
 
@@ -503,6 +656,27 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     this.socket.on('message', (d: string) => {
       this.emit('message', d)
       const data = JSON.parse(d)
+      if (data && data.bbClosed === 'replaced') {
+        // Another page took the seat: the participant's own, in another tab or window, or another
+        // preview of the researcher's. Taking it back by reconnecting would have that page take it
+        // back in turn, for ever: only useHere().
+        this.socket.stopReconnecting()
+        if (!this.replaced && !this.ended) {
+          this.replaced = true
+          this.emit(CONNECTION_EVENT)
+        }
+        return
+      }
+      if (data && data.bbWatching === true) {
+        // A preview of a player whose own page is connected: the server mirrors what that page gets
+        // and leaves it alone. Sent first, or once the player's page comes back and takes the seat
+        // from a preview that had it.
+        if (!this.watchingNow) {
+          this.watchingNow = true
+          this.emit(CONNECTION_EVENT)
+        }
+        return
+      }
       if (data && data.reauth) {
         // The session runs, but the server has forgotten this page's seat (e.g. it restarted since):
         // find out where to sign in again.
@@ -527,7 +701,10 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         // Someone who had come to their own end keeps it on the screen, with any completion code.
         if (this.ownEnd) return
       } else if (player && typeof player === 'object') {
-        this.ownEnd = isOwnEnd(player)
+        const ownEnd = isOwnEnd(player)
+        // Done: a browser that comes back has no seat to find (this tab keeps its own copy).
+        if (ownEnd && !this.ownEnd) forgetToken()
+        this.ownEnd = ownEnd
       }
       this.emit('data', data)
       for (const key of ['graph', 'player', 'style']) {

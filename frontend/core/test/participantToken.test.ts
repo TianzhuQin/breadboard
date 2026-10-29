@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryStorage } from './memoryStorage'
 
 // The participant page has to work in an opaque origin: the researcher console's previews run
 // in a sandboxed iframe without allow-same-origin (or a tab the server sandboxes with CSP), where
@@ -52,6 +53,7 @@ let undo: (() => void) | null = null
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
   try { window.sessionStorage.clear() } catch (e) {}
+  vi.stubGlobal('localStorage', new MemoryStorage())
   document.body.innerHTML = '<div id="app">Loading…</div>'
   FakeSocket.urls = []
   vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -60,6 +62,7 @@ beforeEach(() => {
 afterEach(() => {
   if (undo) undo()
   undo = null
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -150,5 +153,69 @@ describe('Breadboard in a sandboxed preview', () => {
     const { Breadboard } = await freshCore()
     await expect(Breadboard.loadConfig()).rejects.toThrow('Not logged in')
     expect(location.href).toBe('/login/1/2')
+  })
+})
+
+// A participant whose browser was closed or crashed couldn't get back to their seat: the page kept
+// its token only in session storage, which ends with the tab.
+describe('participantToken in a browser that comes back', () => {
+  const KEY = 'breadboard-token:' + PAGE
+
+  it('keeps a participant\'s token in local storage too, and finds it there', async () => {
+    window.history.replaceState(null, '', PAGE + '#bbt=tok')
+    expect((await freshCore()).participantToken()).toBe('tok')
+    expect(JSON.parse(localStorage.getItem(KEY)!).token).toBe('tok')
+    // the browser was closed: the tab's session storage and history entry are gone
+    window.sessionStorage.clear()
+    window.history.replaceState(null, '', PAGE)
+    expect((await freshCore()).participantToken()).toBe('tok')
+  })
+
+  it('keeps it for a day, as long as the server\'s cookie', async () => {
+    vi.useFakeTimers()
+    window.history.replaceState(null, '', PAGE + '#bbt=tok')
+    expect((await freshCore()).participantToken()).toBe('tok')
+    window.sessionStorage.clear()
+    window.history.replaceState(null, '', PAGE)
+    vi.setSystemTime(Date.now() + 23 * 60 * 60 * 1000)
+    expect((await freshCore()).participantToken()).toBe('tok')
+    vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000)
+    expect((await freshCore()).participantToken()).toBe(null)
+    expect(localStorage.getItem(KEY)).toBe(null)
+  })
+
+  it('prefers the tab\'s own token', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ token: 'kept', until: Date.now() + 60000 }))
+    window.history.replaceState(null, '', PAGE)
+    window.sessionStorage.setItem(KEY, 'mine')
+    expect((await freshCore()).participantToken()).toBe('mine')
+  })
+
+  it('keeps no preview\'s token, and a preview never takes a participant\'s', async () => {
+    window.history.replaceState(null, '', PAGE + '?preview=1#bbt=preview-tok')
+    expect((await freshCore()).participantToken()).toBe('preview-tok')
+    expect(localStorage.getItem(KEY)).toBe(null)
+    // a participant's seat on the same page, kept in this browser
+    localStorage.setItem(KEY, JSON.stringify({ token: 'participant-tok', until: Date.now() + 60000 }))
+    window.sessionStorage.clear()
+    window.history.replaceState(null, '', PAGE + '?preview=1')
+    expect((await freshCore()).participantToken()).toBe(null)
+  })
+
+  it('forgets it when the server no longer takes it', async () => {
+    const location = { pathname: PAGE, search: '', hash: '', href: 'http://lab.example' + PAGE, protocol: 'http:', host: 'lab.example' }
+    vi.stubGlobal('location', location)
+    localStorage.setItem(KEY, JSON.stringify({ token: 'stale', until: Date.now() + 60000 }))
+    vi.stubGlobal('fetch', answer(401, { error: 'not-logged-in', login: '/login/1/2' }))
+    const { Breadboard } = await freshCore()
+    await expect(Breadboard.loadConfig()).rejects.toThrow('Not logged in')
+    expect(location.href).toBe('/login/1/2')
+    expect(localStorage.getItem(KEY)).toBe(null)
+  })
+
+  it('does without where local storage throws', async () => {
+    window.history.replaceState(null, '', PAGE + '#bbt=tok')
+    undo = blockStorage()
+    expect((await freshCore()).participantToken()).toBe('tok')
   })
 })

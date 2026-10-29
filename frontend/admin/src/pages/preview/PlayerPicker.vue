@@ -79,7 +79,7 @@ const aiCount = computed(() => props.players.filter(isAIPlayer).length)
 
 function connectionText (p: PlayerLike) {
   if (props.selected.has(p.id)) return 'shown here'
-  return isConnected(p) ? 'browser connected' : 'not connected'
+  return isConnected(p) ? 'browser connected, so a preview is read-only' : 'not connected'
 }
 </script>
 
