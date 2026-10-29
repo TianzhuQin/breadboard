@@ -64,7 +64,8 @@ class Step {
       if (startMark != null) {
         gameListener.stepStartFailed(startMark)
       }
-      throw t
+      reportFailure(t)
+      return
     }
 
     boolean hasUserActions = !playerActions.actions.isEmpty()
@@ -84,17 +85,38 @@ class Step {
             //println("playerActions.actions.size() = " + playerActions.actions.size())
             if (playerActions.actions.isEmpty()) {
               playerActions.removeActionPropertyChangeListener(emptyListener)
-              done(player)
+              callDone(player)
             }
           }
         } as PropertyChangeListener
 
         playerActions.addActionPropertyChangeListener(emptyListener)
       } else {
-        done(player)
+        callDone(player)
       }
     } else {
-      done(player)
+      callDone(player)
+    }
+  }
+
+  // done(player), and what it returns; what it throws goes to reportFailure.
+  private def callDone(String player) {
+    try {
+      return done(player)
+    } catch (Throwable t) {
+      reportFailure(t)
+      return null
+    }
+  }
+
+  // The step's own code (run, done, onTimeout) threw. On a timer, a participant's choice or a
+  // computer player's, that used to end the thread, with the error only in the server's output, and
+  // the game waited for good: the server reports it now (ScriptBoard.stepFailed). Inside a script
+  // the server runs (the console's Start, the autopilot's start, a step run from the Steps page) it
+  // is thrown on to that script, which reports it, as before.
+  private void reportFailure(Throwable t) {
+    if (!(gameListener instanceof models.GameListener) || !gameListener.stepFailed(this, t)) {
+      throw t
     }
   }
 
@@ -113,33 +135,38 @@ class Step {
     }
   }
 
-  // Ends a timed step exactly once, whichever of "all chosen" and "time is up" happens first.
+  // Ends a timed step exactly once, whichever of "all chosen" and "time is up" happens first. It
+  // runs on the step's own timer or a participant's choice: what it throws goes to reportFailure.
   private void endOnce(String player, boolean timedOut) {
     if (!ended.compareAndSet(false, true)) {
       return
     }
-    if (emptyListener != null) {
-      playerActions.removeActionPropertyChangeListener(emptyListener)
-      emptyListener = null
-    }
-    if (durationTimer != null) {
-      durationTimer.cancel()
-      durationTimer = null
-    }
-    if (timedOut) {
-      if (name != null) {
-        eventTracker.track(name + "Timeout", ["step": name])
+    try {
+      if (emptyListener != null) {
+        playerActions.removeActionPropertyChangeListener(emptyListener)
+        emptyListener = null
       }
-      if (onTimeout != null) {
-        onTimeout(player)
+      if (durationTimer != null) {
+        durationTimer.cancel()
+        durationTimer = null
       }
-      if (clearChoicesOnTimeout) {
-        playerActions.pendingActions().collect { it.player?.getId()?.toString() }.findAll { it != null }.unique().each {
-          playerActions.remove(it)
+      if (timedOut) {
+        if (name != null) {
+          eventTracker.track(name + "Timeout", ["step": name])
+        }
+        if (onTimeout != null) {
+          onTimeout(player)
+        }
+        if (clearChoicesOnTimeout) {
+          playerActions.pendingActions().collect { it.player?.getId()?.toString() }.findAll { it != null }.unique().each {
+            playerActions.remove(it)
+          }
         }
       }
+      done(player)
+    } catch (Throwable t) {
+      reportFailure(t)
     }
-    done(player)
   }
 
   def finish() {

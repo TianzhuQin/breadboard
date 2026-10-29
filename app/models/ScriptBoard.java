@@ -99,6 +99,21 @@ public class ScriptBoard extends UntypedActor {
     ScriptEngine startPending;
   }
   private static final ThreadLocal<ResearcherRun> RESEARCHER_RUN = new ThreadLocal<ResearcherRun>();
+
+  /**
+   * A script processScript runs on this thread (the innermost, when one script runs another). A step
+   * that throws in it is left to processScript, which tells whoever ran the script (see stepFailed);
+   * the first one is kept, to name it, with what the script then threw.
+   */
+  private static final class ScriptRun {
+    String step;
+    Throwable stepFailure;
+    Throwable thrown;
+  }
+  private static final ThreadLocal<ScriptRun> SCRIPT_RUN = new ThreadLocal<ScriptRun>();
+  // The last script processScript ran on this thread, when it failed (else nothing): for
+  // gameStartFailed, which the autopilot calls right after its start, on the same thread.
+  private static final ThreadLocal<ScriptRun> FAILED_RUN = new ThreadLocal<ScriptRun>();
   // True while resetEngine empties the old graph: those removals are the old session ending, not
   // players leaving, so OnLeaveStep doesn't run for them against the new engine.
   private static volatile boolean resetting = false;
@@ -2191,8 +2206,13 @@ public class ScriptBoard extends UntypedActor {
     out.write(jsonOutput);
   }
 
-  public static void processScript(String script, ThrottledWebSocketOut out, String scriptName) {
-    processScript(script, out, scriptName, null, null);
+  /**
+   * Run a script in the engine, writing its output or its error to {@code out} (if any). Returns what
+   * went wrong, briefly (see below), or null when the script ran: the autopilot's start of the game
+   * (groovy/autopilot.groovy) acts on it.
+   */
+  public static String processScript(String script, ThrottledWebSocketOut out, String scriptName) {
+    return processScript(script, out, scriptName, null, null);
   }
 
   /**
@@ -2200,14 +2220,14 @@ public class ScriptBoard extends UntypedActor {
    * already"), e.g. {@code "request": "RunGame"} or {@code "source": "OnJoinStep"}, so a console can
    * tell whose answer a frame is. No tag when {@code tag} is null.
    */
-  static void processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue) {
-    processScript(script, out, scriptName, tag, tagValue, null);
+  static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue) {
+    return processScript(script, out, scriptName, tag, tagValue, null);
   }
 
   /** As above, with {@code "requestId": requestId} on every frame too when it is not null (see Breadboard.echoed). */
-  static void processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
-                            String requestId) {
-    processScript(script, out, scriptName, tag, tagValue, requestId, false);
+  static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
+                              String requestId) {
+    return processScript(script, out, scriptName, tag, tagValue, requestId, false);
   }
 
   /**
@@ -2216,11 +2236,14 @@ public class ScriptBoard extends UntypedActor {
    * initStep.start() (e.g. an OnJoinStep that starts the game once enough people are in). Its text
    * says nothing then: whether the game starts is seen when the init step actually starts
    * (stepStarting). Returns what went wrong, briefly (ScriptBoardSupport.briefError), or null when
-   * the script ran.
+   * the script ran. A step that throws while the script runs is reported here, as the script's error
+   * (stepFailed leaves it to this method).
    */
   static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
                               String requestId, boolean stepCode) {
     if (scriptName == null) scriptName = "Unnamed Script";
+    // (FAILED_RUN is about this run from here on)
+    FAILED_RUN.remove();
 
     ObjectNode jsonOutput = Json.newObject();
     if (tag != null) {
@@ -2297,6 +2320,9 @@ public class ScriptBoard extends UntypedActor {
     } else {
       RESEARCHER_RUN.remove();
     }
+    ScriptRun outerScript = SCRIPT_RUN.get();
+    ScriptRun thisScript = new ScriptRun();
+    SCRIPT_RUN.set(thisScript);
     String failure = null;
     try {
       Object outputObject = running.eval(script);
@@ -2329,6 +2355,7 @@ public class ScriptBoard extends UntypedActor {
       Logger.error("Unable to compile the script. " + scriptName, cfe);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(cfe) + "\n");
       failure = ScriptBoardSupport.briefError(cfe);
+      thisScript.thrown = cfe;
       if (initStep) {
         startFailed(running, closedBy, startedBefore);
       }
@@ -2337,14 +2364,18 @@ public class ScriptBoard extends UntypedActor {
       Logger.error("Script Error. " + scriptName, se);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(se) + "\n");
       failure = ScriptBoardSupport.briefError(se);
+      thisScript.thrown = se;
       if (initStep) {
         startFailed(running, closedBy, startedBefore);
       }
-    } catch (Exception e) {
+    } catch (Throwable e) {
+      // (Throwable: the engine passes an Error, e.g. a failed assert in a step, on as it is, and a
+      // step that throws one leaves it to this method like any other)
       ScriptLoader.humanizeStackTrace(e);
       Logger.error("Failed to process the script. " + scriptName, e);
       jsonOutput.put("error", "Caught error: " + ScriptBoardSupport.describeError(e) + "\n");
       failure = ScriptBoardSupport.briefError(e);
+      thisScript.thrown = e;
       if (initStep) {
         startFailed(running, closedBy, startedBefore);
       }
@@ -2354,11 +2385,39 @@ public class ScriptBoard extends UntypedActor {
       } else {
         RESEARCHER_RUN.remove();
       }
+      if (outerScript != null) {
+        SCRIPT_RUN.set(outerScript);
+      } else {
+        SCRIPT_RUN.remove();
+      }
       if (out != null) {
         out.write(jsonOutput);
       }
     }
+    if (failure != null) {
+      // A step that threw counts only if its failure is what the script failed with (code in
+      // between may have caught it).
+      if (thisScript.stepFailure != null && !causedBy(thisScript.thrown, thisScript.stepFailure)) {
+        thisScript.step = null;
+        thisScript.stepFailure = null;
+      }
+      FAILED_RUN.set(thisScript);
+    } else {
+      // (nor one this script ran, which failed)
+      FAILED_RUN.remove();
+    }
     return failure;
+  }
+
+  /** Whether {@code cause} is {@code thrown} or one of its causes. */
+  private static boolean causedBy(Throwable thrown, Throwable cause) {
+    Set<Throwable> seen = new HashSet<Throwable>();
+    for (Throwable t = thrown; t != null && seen.add(t); t = t.getCause()) {
+      if (t == cause) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** The script that starts the game. */
@@ -2481,6 +2540,157 @@ public class ScriptBoard extends UntypedActor {
         Logger.error("Could not reopen the session to newcomers after its start failed", e);
       }
     }
+  }
+
+  /**
+   * A step's own code (run, done, onTimeout) threw (groovy/step.groovy). Inside a script processScript
+   * runs, the script fails and processScript tells whoever ran it (the console's Start, the Steps
+   * page; the autopilot's start, see gameStartFailed): false, the step throws it on. Anywhere else (a
+   * timer, a participant's choice, a computer player's) it used to end that thread, with the error
+   * only in the server's output, while the game waited for good: it is reported here instead (see
+   * gameFailed), and true, it goes no further. Never throws.
+   */
+  static boolean stepFailed(GameListener listener, Object step, Throwable failure) {
+    String name = stepName(listener, step);
+    ScriptRun run = SCRIPT_RUN.get();
+    if (run != null) {
+      // (the innermost step, when a step's done starts the next one)
+      if (run.stepFailure == null) {
+        run.step = name;
+        run.stepFailure = failure;
+      }
+      return false;
+    }
+    try {
+      ScriptLoader.humanizeStackTrace(failure);
+      Logger.error("The step " + name + " failed", failure);
+      gameFailed(listener, name, ScriptBoardSupport.briefError(failure), ScriptBoardSupport.describeError(failure));
+    } catch (Throwable e) {
+      Logger.error("Could not report the failure of the step " + name, e);
+    }
+    return true;
+  }
+
+  /**
+   * The autopilot's waiting room started the game, and the start failed with {@code error}, what
+   * processScript answered (groovy/autopilot.groovy's launch calls this right after, on the same
+   * thread). Its participants would stay on the countdown for good, with newcomers let in again:
+   * reported as for stepFailed, naming the step that threw (or initStep, which the start runs), and
+   * the autopilot's session ends. Nothing when the game has started after all (another start came
+   * first). Never throws.
+   */
+  static void gameStartFailed(GameListener listener, String error) {
+    ScriptRun failed = FAILED_RUN.get();
+    FAILED_RUN.remove();
+    try {
+      ScriptEngine running = engine;
+      if (error == null || listener == null || running == null || listener.engine != running
+          || running.get(START_COMMAND) != null) {
+        return;
+      }
+      String step = "initStep";
+      String brief = error;
+      String details = failed != null && failed.thrown != null ? ScriptBoardSupport.describeError(failed.thrown) : error;
+      if (failed != null && failed.stepFailure != null) {
+        step = failed.step;
+        brief = ScriptBoardSupport.briefError(failed.stepFailure);
+        details = ScriptBoardSupport.describeError(failed.stepFailure);
+      }
+      Logger.warn("The autopilot could not start the game: the step " + step + " failed (" + brief + ")");
+      gameFailed(listener, step, brief, details);
+    } catch (Throwable e) {
+      Logger.error("Could not report that the game failed to start", e);
+    }
+  }
+
+  /**
+   * A step of the engine's game failed where no one would see it (stepFailed, gameStartFailed). It is
+   * recorded (the event "stepFailed": step, error), every open console is told as processScript tells
+   * of an error ({"error": "Caught error: ...", "source": the step}), so the Live session page shows
+   * it, and the autopilot's session ends (endAutopilotSession). A session a researcher runs goes on:
+   * they see the error and decide. Nothing for a step of an engine that has been replaced since.
+   */
+  private static void gameFailed(GameListener listener, String step, String brief, String details) {
+    ScriptEngine failedIn = listener == null ? null : listener.engine;
+    if (failedIn == null || failedIn != engine) {
+      return;
+    }
+    try {
+      LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+      data.put("step", step);
+      data.put("error", brief);
+      trackEvent("stepFailed", data);
+    } catch (Exception e) {
+      Logger.error("Could not record the failure of the step " + step, e);
+    }
+    ObjectNode frame = Json.newObject();
+    frame.put("source", step);
+    frame.put("error", "Caught error: " + details + "\n");
+    toAllAdmins(frame);
+    endAutopilotSession(listener, failedIn, step, brief);
+  }
+
+  /**
+   * The game of the engine's session failed (gameFailed). When it is the autopilot's session, its
+   * participants would wait for good and no new session would open: it ends as when its steps don't
+   * load (stepsFailedToLoad: participants get the ended screen, the game's timers stop, nothing more
+   * is recorded, the session is stopped), and the autopilot pauses, saying where (Autopilot.gameFailed).
+   * On the autopilot's thread, under the engine lock, which the failing thread may not wait for: it
+   * can hold the autopilot's own lock (groovy/autopilot.groovy), which an engine change can wait for.
+   */
+  private static void endAutopilotSession(final GameListener listener, final ScriptEngine failedIn, final String step,
+                                          final String error) {
+    final Long sessionId = instanceIdOf(listener);
+    if (sessionId == null || Experiment.TEST_INSTANCE_ID.equals(sessionId)) {
+      return;
+    }
+    Autopilot.later(new Runnable() {
+      public void run() {
+        synchronized (REBUILD_LOCK) {
+          // Still that session, in that engine? (Someone may have stopped or replaced it meanwhile.)
+          if (engine != failedIn || engineGameListener != listener || !sessionId.equals(instanceIdOf(listener))) {
+            return;
+          }
+          ExperimentInstance live = Autopilot.liveEngineSession();
+          if (live == null || !sessionId.equals(live.id) || !Autopilot.gameFailed(live, step, error)) {
+            return;
+          }
+          stopSession(listener);
+          endParticipants(sessionId);
+          cancelEngineTimers();
+          eventTracker.disable();
+          // The console tabs of the account running it show it stopped, as after Stop.
+          User owner = listener.user == null ? null : User.findByEmail(listener.user.email);
+          if (owner != null) {
+            toAccount(owner.email, owner.toJson());
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * What to call a step: its name (stepFactory.createStep("RoundStep")), else the variable the
+   * experiment keeps it in ("finishStep" for finishStep = stepFactory.createNoUserActionStep()).
+   */
+  static String stepName(GameListener listener, Object step) {
+    try {
+      Object name = step instanceof groovy.lang.GroovyObject ? ((groovy.lang.GroovyObject) step).getProperty("name") : null;
+      if (name != null && !name.toString().trim().isEmpty()) {
+        return name.toString();
+      }
+      ScriptEngine in = listener == null ? null : listener.engine;
+      if (in != null && step != null) {
+        for (Map.Entry<String, Object> binding : in.getBindings(ScriptContext.ENGINE_SCOPE).entrySet()) {
+          if (binding.getValue() == step) {
+            return binding.getKey();
+          }
+        }
+      }
+    } catch (Exception e) {
+      // (the experiment's code may change the variables while they are read) named as below
+    }
+    return "Step";
   }
 
   /**

@@ -110,4 +110,32 @@ public class ScriptBoardSupportTest {
         String desc = ScriptBoardSupport.describeError(wrapper);
         assertTrue("should surface the cause's groovy frame", desc.contains("actions.groovy:269"));
     }
+
+    @Test
+    public void briefErrorNamesTheLineOfTheStepAndWhatWentWrong() {
+        IllegalStateException e = new IllegalStateException("No such property: roundz for class: Script34");
+        e.setStackTrace(new StackTraceElement[]{
+            new StackTraceElement("org.codehaus.groovy.runtime.ScriptBytecodeAdapter", "unwrap", "ScriptBytecodeAdapter.java", 53),
+            new StackTraceElement("Script34$_run_closure1", "doCall", "Script34.groovy", 8),
+            new StackTraceElement("Step", "start", "step.groovy", 62)
+        });
+        assertEquals("line 8: No such property: roundz", ScriptBoardSupport.briefError(e));
+    }
+
+    @Test
+    public void briefErrorTakesTheLineWhereItWentWrongNotWhereItWasWrapped() {
+        // A step's error, wrapped as the engine passes it on by a script running inside another one
+        // (the autopilot's start of the game from the bb:connection handler or a step being loaded):
+        // the wrapper's own frames are the outer script's.
+        IllegalStateException inner = new IllegalStateException("No such property: roundStepp");
+        inner.setStackTrace(new StackTraceElement[]{
+            new StackTraceElement("Script45$_run_closure2", "doCall", "Script45.groovy", 4)
+        });
+        RuntimeException wrapper = new RuntimeException("javax.script.ScriptException: " + inner, inner);
+        wrapper.setStackTrace(new StackTraceElement[]{
+            new StackTraceElement("com.tinkerpop.gremlin.groovy.jsr223.GremlinGroovyScriptEngine", "eval", "GremlinGroovyScriptEngine.java", 219),
+            new StackTraceElement("Script50", "run", "Script50.groovy", 1)
+        });
+        assertEquals("line 4: No such property: roundStepp", ScriptBoardSupport.briefError(wrapper));
+    }
 }

@@ -11,6 +11,7 @@ import play.libs.Akka;
 import play.libs.Json;
 import play.mvc.WebSocket;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -32,7 +33,9 @@ import java.util.concurrent.TimeUnit;
  * a periodic check finds the engine running no session. It never ends another experiment's live
  * session unless a save asks it to ({@code takeOver}), doesn't take the engine by itself from a
  * researcher who has another experiment loaded in it and a console open, and pauses when a
- * researcher's action ends its session (Stop, or selecting, launching or reloading something else). The game starts when the waiting room says
+ * researcher's action ends its session (Stop, or selecting, launching or reloading something else),
+ * or when a step fails during its session's game, which then ends (ScriptBoard.stepFailed). It opens
+ * none while the disk that holds the database is almost full (diskFull). The game starts when the waiting room says
  * so (groovy/autopilot.groovy; its values can be set in the console, see {@link AutopilotHooks}). A
  * researcher who logs in with the autopilot's account sees the session, unless they have another
  * experiment selected (their selection is left alone; the engine info in the User JSON names it).
@@ -395,6 +398,58 @@ public final class Autopilot {
   }
 
   /**
+   * A step threw during the game of the engine's session, or as its game started
+   * (ScriptBoard.stepFailed, gameStartFailed): {@code error} is "line N: what went wrong". When the
+   * session is of the experiment the autopilot runs (and it is on), the autopilot pauses until
+   * someone fixes the step and presses Resume, and true: ScriptBoard ends the session, whose
+   * participants would otherwise wait for good. A session of another experiment is left to the
+   * researcher running it (false).
+   */
+  static boolean gameFailed(ExperimentInstance instance, String step, String error) {
+    if (instance == null || instance.experiment == null) {
+      return false;
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long experimentId = instance.experiment.id;
+    String name = instance.name;
+    Effective e;
+    try {
+      e = effective();
+    } catch (Exception ex) {
+      Logger.error("Autopilot: could not read its settings", ex);
+      return false;
+    }
+    if (!e.isOn() || !e.settings.experimentId.equals(experimentId)) {
+      return false;
+    }
+    setHalt(experimentId, "the step \"" + step + "\" failed during its session \"" + name + "\" (" + error
+        + "), so that session was stopped. Fix the step on the Steps page first", doneBecause);
+    Logger.warn("Autopilot: the step " + step + " failed during session " + name + " (" + error
+        + "); the session was stopped and the autopilot paused");
+    return true;
+  }
+
+  /** Run {@code task} soon on the autopilot's own thread; nothing once the application is stopping. */
+  static void later(final Runnable task) {
+    if (stopped) {
+      return;
+    }
+    try {
+      scheduler.execute(new Runnable() {
+        public void run() {
+          try {
+            task.run();
+          } catch (Throwable t) {
+            Logger.error("Autopilot: a task failed", t);
+          }
+        }
+      });
+    } catch (java.util.concurrent.RejectedExecutionException stopping) {
+      Logger.debug("Autopilot: the application is stopping; a task was not run");
+    }
+  }
+
+  /**
    * An experiment's steps loaded without an error (a launch, a reload, a session selected): an error
    * the autopilot kept from an earlier load of its experiment is out of date.
    */
@@ -480,6 +535,14 @@ public final class Autopilot {
         Logger.debug("Autopilot: " + why + ", but " + notNow + "; not opening one");
         return;
       }
+      String full = diskFull();
+      if (full != null) {
+        if (!full.equals(lastProblem)) {
+          Logger.warn("Autopilot: " + full);
+        }
+        lastProblem = full;
+        return;
+      }
       opener.open(why, onlyIfIdle, automatic);
     } catch (Exception ex) {
       Logger.error("Autopilot: could not decide whether to open a session", ex);
@@ -508,6 +571,70 @@ public final class Autopilot {
       }
     }
     return null;
+  }
+
+  // ---- room on the disk ----------------------------------------------------------------------------
+
+  // A session records its data as it goes, and with the disk full the database stops in the middle
+  // of one. No new session opens while less than this is free where the database is kept.
+  static final long MIN_FREE_BYTES = 100L * 1024 * 1024;
+
+  // The bytes free on the disk that holds the database, or null when that can't be told (a database
+  // in memory or on a database server). A field only so tests can pretend the disk is full.
+  static volatile java.util.function.Supplier<Long> freeDiskBytes = new java.util.function.Supplier<Long>() {
+    public Long get() {
+      Configuration conf = Play.application().configuration();
+      File folder = conf.getString("db.default.driver", "").contains("h2")
+          ? databaseFolder(conf.getString("db.default.url", "")) : null;
+      return folder == null ? null : folder.getUsableSpace();
+    }
+  };
+
+  /** Why no session may open for lack of room on the database's disk, or null (also when it can't be told). */
+  static String diskFull() {
+    Long free;
+    try {
+      free = freeDiskBytes.get();
+    } catch (Exception ex) {
+      Logger.debug("Autopilot: could not tell how much room the disk has: " + ex);
+      return null;
+    }
+    if (free == null || free >= MIN_FREE_BYTES) {
+      return null;
+    }
+    return "The disk is almost full (" + free / (1024 * 1024) + " MB free where the database is kept): sessions record "
+        + "their data there, so no new session opens until there is room. Free up some space on that disk.";
+  }
+
+  /**
+   * The folder of the H2 database file a JDBC url names (jdbc:h2:db/breadboard: db/ in the folder the
+   * server runs in, as H2 reads it), or the nearest one above it that exists; null for a database in
+   * memory or on a server, and for anything but H2.
+   */
+  static File databaseFolder(String url) {
+    if (url == null || !url.startsWith("jdbc:h2:")) {
+      return null;
+    }
+    String path = url.substring("jdbc:h2:".length());
+    int options = path.indexOf(';');
+    if (options >= 0) {
+      path = path.substring(0, options);
+    }
+    if (path.startsWith("file:")) {
+      path = path.substring("file:".length());
+    }
+    // mem:, tcp://, ssl://, zip: and the like (one letter and a colon is a Windows drive)
+    if (path.isEmpty() || path.matches("[A-Za-z][A-Za-z0-9]+:.*")) {
+      return null;
+    }
+    if (path.startsWith("~")) {
+      path = System.getProperty("user.home") + path.substring(1);
+    }
+    File folder = new File(path).getAbsoluteFile().getParentFile();
+    while (folder != null && !folder.isDirectory()) {
+      folder = folder.getParentFile();
+    }
+    return folder;
   }
 
   /**

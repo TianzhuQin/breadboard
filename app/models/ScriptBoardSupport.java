@@ -1,7 +1,9 @@
 package models;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -54,16 +56,20 @@ public final class ScriptBoardSupport {
             message = message.substring("javax.script.ScriptException: ".length());
         }
         message = message.replaceFirst("^[a-z][\\w.]*\\.(\\w+(Exception|Error)): ", "");
+        // The line from the innermost cause first, where it went wrong: an outer exception's frames are
+        // where it was wrapped, which can be in another script (one that ran this one, e.g. a step
+        // that started the game).
+        List<Throwable> chain = new ArrayList<Throwable>();
+        for (Throwable cur = t; cur != null && !chain.contains(cur); cur = cur.getCause()) {
+            chain.add(cur);
+        }
         Integer line = null;
-        for (Throwable cur = t; cur != null && line == null; cur = cur.getCause()) {
-            for (StackTraceElement f : cur.getStackTrace()) {
+        for (int i = chain.size() - 1; i >= 0 && line == null; i--) {
+            for (StackTraceElement f : chain.get(i).getStackTrace()) {
                 if (f.getFileName() != null && f.getFileName().matches("Script\\d+\\.groovy") && f.getLineNumber() > 0) {
                     line = f.getLineNumber();
                     break;
                 }
-            }
-            if (cur.getCause() == cur) {
-                break;
             }
         }
         if (message.length() > 300) {

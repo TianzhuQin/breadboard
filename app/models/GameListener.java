@@ -53,6 +53,19 @@ public class GameListener {
     ScriptBoard.stepStartFailed(mark);
   }
 
+  /**
+   * A step's own code threw (groovy/step.groovy); see ScriptBoard.stepFailed. True when it has been
+   * reported, false when the step throws it on to the script the server is running.
+   */
+  public boolean stepFailed(Object step, Throwable failure) {
+    return ScriptBoard.stepFailed(this, step, failure);
+  }
+
+  /** The autopilot's start of the game failed (groovy/autopilot.groovy); see ScriptBoard.gameStartFailed. */
+  public void gameStartFailed(String error) {
+    ScriptBoard.gameStartFailed(this, error);
+  }
+
   public void start() {
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.start();

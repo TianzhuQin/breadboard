@@ -41,7 +41,7 @@ public class AutopilotSessionTest extends BaseTest {
         Field launch = Autopilot.class.getDeclaredField("launchRequestedAt");
         launch.setAccessible(true);
         launch.set(null, 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem"}) {
             Field f2 = Autopilot.class.getDeclaredField(name);
             f2.setAccessible(true);
             f2.set(null, null);
@@ -163,6 +163,190 @@ public class AutopilotSessionTest extends BaseTest {
         watchdog();
         Thread.sleep(500);
         assertEquals(1, sessions(experiment).size());
+    }
+
+    /** Settings whose waiting room starts the game as soon as one person is here. */
+    private static ObjectNode startsAtOnce(Experiment experiment) {
+        ObjectNode s = settings(experiment, 1);
+        ObjectNode room = (ObjectNode) s.get("waitingRoom");
+        room.put("maxPlayers", 1);
+        room.put("countdownSeconds", 0);
+        return s;
+    }
+
+    /** As if a participant's page had connected: the autopilot's waiting room counts them. */
+    private static void arrives(String id) throws Exception {
+        engine().eval("def v = g.addPlayer('" + id + "'); v._system.connected = true; autopilot.onConnection('" + id + "', true); null");
+    }
+
+    private static List<Event> events(ExperimentInstance session, String name) {
+        return Event.find.where().eq("experimentInstance.id", session.id).eq("name", name).findList();
+    }
+
+    private static String value(Event event, String name) {
+        for (EventData d : event.eventData) {
+            if (name.equals(d.name)) return d.value;
+        }
+        return null;
+    }
+
+    private static Result resume(User user) {
+        return callAction(controllers.routes.ref.AutopilotController.resume(),
+            fakeRequest(POST, "/autopilot/resume").withSession("uid", user.uid));
+    }
+
+    // InitStep starts RoundStep, whose time limit ends it on its timer, and its done starts FinishStep,
+    // which has a typo on its line 3: that threw on the timer's thread, and the session waited for good.
+    private void stepsWithATypoInFinishStep(Experiment experiment) {
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { roundStep.start() }");
+        createStep(experiment, "RoundStep", "roundStep = stepFactory.createStep('RoundStep')\n"
+            + "roundStep.duration = 0.3\n"
+            + "roundStep.run = { }\n"
+            + "roundStep.done = { finishStep.start() }");
+        createStep(experiment, "FinishStep", "finishStep = stepFactory.createNoUserActionStep()\n"
+            + "finishStep.run = {\n"
+            + "  println \"Thank you for playing ${roundz} rounds\"\n"
+            + "}\n"
+            + "finishStep.done = { finishStep.finish() }");
+    }
+
+    @Test
+    public void aStepThatFailsDuringTheGameEndsTheAutopilotsSessionAndPausesItSayingWhere() throws Exception {
+        final User researcher = user("midgame");
+        final Experiment experiment = createExperiment("Fails mid-game");
+        stepsWithATypoInFinishStep(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        assertEquals(OK, status(post(researcher, startsAtOnce(experiment))));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its waiting room", () -> Integer.valueOf(1).equals(engineValue("autopilot.room?.maxPlayers")));
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        arrives("midgame-1");
+        assertEquals("the game started", Boolean.TRUE, ExperimentInstance.findById(session.id).hasStarted);
+        await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+
+        JsonNode status = state(researcher).get("status");
+        assertTrue(status.toString(), status.get("paused").asBoolean());
+        String problem = status.get("problem").asText();
+        // (FinishStep has no name of its own: it is called by the variable that holds it)
+        assertTrue(problem, problem.contains("the step \"finishStep\" failed during its session \"" + session.name + "\""));
+        assertTrue(problem, problem.contains("line 3: No such property: roundz"));
+        assertTrue(problem, problem.contains("Steps page"));
+        List<Event> failed = events(session, "stepFailed");
+        assertEquals(1, failed.size());
+        assertEquals("finishStep", value(failed.get(0), "step"));
+        assertTrue(value(failed.get(0), "error"), value(failed.get(0), "error").startsWith("line 3: No such property: roundz"));
+        assertNull("the link leads nowhere now", Autopilot.openInstance(experiment.id));
+
+        // Not even the watchdog opens another until Resume
+        watchdog();
+        Thread.sleep(500);
+        assertEquals(1, sessions(experiment).size());
+        Result resumed = resume(researcher);
+        assertEquals(contentAsString(resumed), OK, status(resumed));
+        await("the next session", () -> sessions(experiment).size() == 2 && running(experiment) == 1);
+    }
+
+    @Test
+    public void aGameThatFailsToStartEndsTheAutopilotsSessionInsteadOfLeavingItOnTheCountdown() throws Exception {
+        final User researcher = user("nostart");
+        final Experiment experiment = createExperiment("Fails to start");
+        // InitStep's done starts a step that doesn't exist (a typo): the start of the game throws.
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = {\n"
+            + "  roundStepp.start()\n"
+            + "}");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        assertEquals(OK, status(post(researcher, startsAtOnce(experiment))));
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        await("its waiting room", () -> Integer.valueOf(1).equals(engineValue("autopilot.room?.maxPlayers")));
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        arrives("nostart-1");
+        await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        assertNull("nobody new is let in", Autopilot.openInstance(experiment.id));
+
+        JsonNode status = state(researcher).get("status");
+        assertTrue(status.toString(), status.get("paused").asBoolean());
+        String problem = status.get("problem").asText();
+        assertTrue(problem, problem.contains("the step \"InitStep\" failed during its session"));
+        assertTrue(problem, problem.contains("line 4: No such property: roundStepp"));
+        List<Event> failed = events(session, "stepFailed");
+        assertEquals(1, failed.size());
+        assertEquals("InitStep", value(failed.get(0), "step"));
+
+        watchdog();
+        Thread.sleep(500);
+        assertEquals(1, sessions(experiment).size());
+        assertEquals(OK, status(resume(researcher)));
+        await("the next session", () -> sessions(experiment).size() == 2 && running(experiment) == 1);
+    }
+
+    @Test
+    public void aStepThatFailsInASessionRunByHandIsShownOnTheConsolesAndTheSessionGoesOn() throws Exception {
+        final User researcher = user("byhand");
+        final Experiment experiment = createExperiment("Fails by hand");
+        stepsWithATypoInFinishStep(experiment);
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(researcher.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", experiment.id);
+        await("the selection", () -> selected(researcher, experiment));
+        tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
+        await("the session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+        final ExperimentInstance session = sessions(experiment).get(0);
+
+        tab.send("RunGame");
+        // As processScript tells of an error, from the step: the Live session page shows it.
+        await("the error on the console", () -> tab.count(f -> f.has("error") && f.has("source")
+            && "finishStep".equals(f.get("source").asText()) && f.get("error").asText().startsWith("Caught error: ")
+            && f.get("error").asText().contains("roundz")) == 1);
+        await("the event", () -> events(session, "stepFailed").size() == 1);
+        Thread.sleep(500);
+        assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertFalse(state(researcher).get("status").get("paused").asBoolean());
+    }
+
+    @Test
+    public void noSessionOpensWhileTheDiskIsAlmostFull() throws Exception {
+        final User researcher = user("fulldisk");
+        final Experiment experiment = createExperiment("No room");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+        Field free = Autopilot.class.getDeclaredField("freeDiskBytes");
+        free.setAccessible(true);
+        Object before = free.get(null);
+        try {
+            free.set(null, (java.util.function.Supplier<Long>) () -> 50L * 1024 * 1024);
+            assertEquals(OK, status(post(researcher, settings(experiment, 2))));
+            await("the problem", () -> state(researcher).get("status").get("problem").asText().contains("disk"));
+            JsonNode status = state(researcher).get("status");
+            assertEquals("error", status.get("problemKind").asText());
+            assertTrue(status.get("problem").asText(), status.get("problem").asText().startsWith("The disk is almost full (50 MB free"));
+            assertTrue(status.get("problem").asText(), status.get("problem").asText().contains("no new session opens until there is room"));
+            watchdog();
+            Thread.sleep(500);
+            assertTrue(sessions(experiment).isEmpty());
+
+            // Room again: the next check opens one.
+            free.set(null, (java.util.function.Supplier<Long>) () -> 500L * 1024 * 1024);
+            watchdog();
+            await("a session", () -> sessions(experiment).size() == 1 && running(experiment) == 1);
+            await("no problem", () -> state(researcher).get("status").get("problem").isNull());
+        } finally {
+            free.set(null, before);
+        }
     }
 
     @Test
