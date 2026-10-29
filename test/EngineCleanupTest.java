@@ -1,9 +1,11 @@
 import com.fasterxml.jackson.databind.type.TypeFactory;
 import groovy.lang.GroovyClassLoader;
+import groovy.lang.GroovySystem;
 import groovy.lang.MetaClass;
 import models.EngineCleanup;
 import models.JsonSetup;
 import org.codehaus.groovy.reflection.ClassInfo;
+import org.codehaus.groovy.util.ManagedReference;
 import org.junit.Test;
 
 import javax.script.ScriptEngine;
@@ -63,6 +65,18 @@ public class EngineCleanupTest {
             assertEquals("engine " + i, ofScripts, keptMetaClassesOfScripts());
             assertEquals("engine " + i, all, modifiedExpandos().size());
         }
+    }
+
+    @Test
+    public void releasingEnginesDoesNotGrowGroovysRegistryList() throws Exception {
+        // Each changed metaclass removed through Groovy's registry (six or more per engine) left an
+        // entry that holds nothing in a list of the registry's, for good.
+        replaced(played(new ScriptTestHarness(false)));
+        int before = emptyRegistryEntries();
+        for (int i = 1; i <= 3; i++) {
+            replaced(played(new ScriptTestHarness(false)));
+        }
+        assertEquals("entries that hold nothing, after 3 more engines", before, emptyRegistryEntries());
     }
 
     @Test
@@ -171,6 +185,40 @@ public class EngineCleanupTest {
             if (mc != null) classes.add(mc.getTheClass());
         }
         return classes;
+    }
+
+    /**
+     * The entries of the registry's list of metaclasses (MetaClassRegistryImpl.metaClassInfo) that
+     * hold none and never will, so never leave it. (One whose metaclass was collected is queued to
+     * leave, and doesn't count.) Counted after collecting garbage, so that all those are queued:
+     * the least of a few counts, should one come between a collection and the queueing.
+     */
+    private static int emptyRegistryEntries() throws Exception {
+        Object registry = GroovySystem.getMetaClassRegistry();
+        Field list = registry.getClass().getDeclaredField("metaClassInfo");
+        list.setAccessible(true);
+        Object entries = list.get(registry);
+        Field head = entries.getClass().getDeclaredField("head");
+        head.setAccessible(true);
+        Field next = Class.forName("org.codehaus.groovy.util.ManagedLinkedList$Element").getDeclaredField("next");
+        next.setAccessible(true);
+        Field ref = ManagedReference.class.getDeclaredField("ref");
+        ref.setAccessible(true);
+        int least = Integer.MAX_VALUE;
+        for (int round = 0; round < 3; round++) {
+            System.gc();
+            Thread.sleep(100);
+            int n = 0;
+            synchronized (entries) { // as the registry adds to and reads the list
+                for (Object e = head.get(entries); e != null; e = next.get(e)) {
+                    Object r = ref.get(e);
+                    boolean queued = r instanceof Reference && ((Reference<?>) r).isEnqueued();
+                    if (((ManagedReference<?>) e).get() == null && !queued) n++;
+                }
+            }
+            least = Math.min(least, n);
+        }
+        return least;
     }
 
     /**

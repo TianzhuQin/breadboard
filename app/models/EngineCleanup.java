@@ -6,6 +6,7 @@ import groovy.lang.GroovyClassLoader;
 import groovy.lang.GroovySystem;
 import groovy.lang.MetaClass;
 import groovy.lang.MetaClassRegistry;
+import org.codehaus.groovy.reflection.ClassInfo;
 import play.Logger;
 
 import javax.script.ScriptEngine;
@@ -75,11 +76,28 @@ public final class EngineCleanup {
       }
     }
     for (Class<?> c : changed) {
-      registry.removeMetaClass(c);
+      forgetMetaClass(c);
     }
     for (Class<?> c : scripts.getLoadedClasses()) {
-      registry.removeMetaClass(c);
+      forgetMetaClass(c);
       forgetCallSites(c);
+    }
+  }
+
+  /**
+   * What {@code registry.removeMetaClass(c)} does, without the event it sends when {@code c} had a
+   * metaclass a script changed: the registry's own listener adds an entry for it to a list of the
+   * registry's, one that holds no metaclass and so never leaves the list (six or more for every
+   * engine released, for good). The event's other work (a flag the class's compiled code checks, a
+   * note for Integer and the like) matters only for classes that go on running.
+   */
+  private static void forgetMetaClass(Class<?> c) {
+    ClassInfo info = ClassInfo.getClassInfo(c);
+    info.lock();
+    try {
+      info.setStrongMetaClass(null);
+    } finally {
+      info.unlock();
     }
   }
 

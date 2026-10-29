@@ -23,6 +23,11 @@ public class EngineReplacementTest extends BaseTest {
     @After
     public void closeTabs() throws Throwable {
         for (AdminSocketsTest.Tab t : tabs) t.close();
+        // The engine is shared with the next test: without the players and timers played here (a
+        // console logging in there was sent a player 'p1' of this game, and its timer's updates).
+        try {
+            engine().eval("g.empty(); timers.cancel(); null");
+        } catch (Exception ignored) {}
     }
 
     @Test

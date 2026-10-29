@@ -54,9 +54,7 @@ public class ScriptBoard extends UntypedActor {
           if (size() <= ENDED_SESSIONS_KEPT) {
             return false;
           }
-          // The session's seat tokens go too (they used to be kept for good): someone coming back to
-          // it now gets the general "isn't running" page, as they would without a last screen.
-          security.ParticipantAuth.releaseInstance(String.valueOf(eldest.getKey()));
+          releaseSeatsIfOver(eldest.getKey());
           return true;
         }
       });
@@ -191,6 +189,25 @@ public class ScriptBoard extends UntypedActor {
         }
         screens.put(client.id, client.lastFrame);
       }
+    }
+  }
+
+  /**
+   * A session whose last screens are forgotten: its seat tokens go too (they used to be kept for
+   * good), unless it can still be resumed. Someone coming back to it then gets the general "isn't
+   * running" page, as they would without a last screen. A stopped session can be resumed, and takes
+   * back those who held a seat by their tokens: those stay until it is deleted
+   * (ExperimentInstance.delete), or its screens are forgotten again once it has finished.
+   */
+  private static void releaseSeatsIfOver(Long instanceId) {
+    try {
+      ExperimentInstance session = ExperimentInstance.findById(instanceId);
+      if (session == null || session.status == null || !session.status.isRunnable()) {
+        security.ParticipantAuth.releaseInstance(String.valueOf(instanceId));
+      }
+    } catch (Exception e) {
+      // (its seats stay, as they always used to)
+      Logger.warn("Could not tell whether session " + instanceId + " can still be resumed: " + e);
     }
   }
 
@@ -1104,10 +1121,11 @@ public class ScriptBoard extends UntypedActor {
         Graph wholeGraph = (Graph) engine.get("g");
         Vertex clientVertex = wholeGraph.getVertex(clientId);
         if (clientVertex == null && !experimentInstance.hasStarted) {
-          // graph.groovy adds players one at a time now; a player missing here would wait for good.
-          Logger.error("addClient: " + clientId + " was missing from the network after joining; adding them again");
-          graphInterface.addPlayer(clientId);
-          clientVertex = wholeGraph.getVertex(clientId);
+          // Taken out again as they joined (graph.groovy no longer loses a player added at the
+          // same time as another): e.g. by the autopilot's launch, which leaves out whoever isn't
+          // connected yet, as they aren't until setConnected below. That stands; adding them back
+          // would undo it and run OnJoinStep for them twice.
+          Logger.info("addClient: " + clientId + " was taken out of the network as they joined");
         }
         Recruitment.applyTo(clientVertex);
         // After addPlayer, so a new participant's vertex exists to record it on.

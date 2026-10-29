@@ -46,6 +46,52 @@ test.async("the computer's picks don't start a thread each", 8000) { done ->
   } as GroovyTimerTask, 100, 100)
 }
 
+test.async("the computer still answers the rounds offered after every timer was stopped", 8000) { done ->
+  // timers.cancel() (the console's "Stop every timer", an experiment's own call) cancels the timer
+  // the picks wait on too. Every pick after it was dropped: a seat the computer had taken over from
+  // someone who left never answered again, and the game waited for good.
+  a.ai.r = new ScriptedRandom()
+  def players = (0..<3).collect { g.addPlayer("ai-after-cancel-" + it) }
+  players.each { a.ai.add(it) }   // a pick each, for no choices yet, which the cancel drops
+  timers.cancel()
+  def answered = new AtomicInteger()
+  players.each { p ->
+    a.add(p, [name: "Next round", result: {
+      if (answered.incrementAndGet() == players.size()) {
+        done {
+          assert timers.timers.size() == 1 : "one new timer for the picks, not one each"
+          assert a.ai.pendingPicks.isEmpty() : "the picks the cancel dropped are still remembered"
+        }
+      }
+    }])
+  }
+}
+
+test("no pick starts a timer once the computer players are off and the timers cancelled") {
+  // As in an engine being replaced: ScriptBoard turns them off, then cancels the timers. A pick
+  // asked for just before (past the check that they are on) must not start a timer nothing cancels.
+  def p = g.addPlayer('ai-engine-replaced')
+  a.add(p, [name: "Go", result: { }])
+  def cancelled = a.ai.timer
+  a.turnAIOff()
+  timers.cancel()
+  a.ai.defaultBehavior.call(p)
+  assert a.ai.timer.is(cancelled) : "a timer was started for the pick"
+  assert timers.timers.isEmpty()
+  assert a.ai.pendingPicks.isEmpty()
+}
+
+test("the computer players a.empty() replaced start no timer again") {
+  def p = g.addPlayer('ai-emptied')
+  def old = a.ai
+  def cancelled = old.timer
+  a.empty()
+  int registered = timers.timers.size()
+  old.defaultBehavior.call(p)   // a pick they were asked for as they were replaced
+  assert old.timer.is(cancelled) : "a timer was started for the pick"
+  assert timers.timers.size() == registered
+}
+
 test.async("a pick the computer scheduled is not made once the person has the seat back", 5000) { done ->
   a.ai.r = new ScriptedRandom()
   def p = g.addPlayer('ai-came-back')
