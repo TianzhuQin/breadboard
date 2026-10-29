@@ -14,7 +14,7 @@ import static org.junit.Assert.*;
 
 /**
  * A stop that a stuck script holds up is cut short (Global.stopIfShutdownHangs), and closes the
- * database first: Play's connection pool, which closes it in a normal stop, stops after the actors,
+ * database first: a normal stop closes it at its very end (CloseDatabasePlugin), after the actors,
  * so the file was left open, for H2 to recover at the next start.
  */
 public class StuckStopTest {

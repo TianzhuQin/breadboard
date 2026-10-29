@@ -24,13 +24,13 @@ import play.mvc.Http;
 import java.io.*;
 import java.lang.reflect.Method;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
@@ -394,23 +394,17 @@ public class Global extends GlobalSettings {
    * SIGTERM and Ctrl+C run Play's stop, which waits, with no time limit, for every actor to finish:
    * a script that never ends (while (true) in the Script console or a step) held it up for good,
    * with the server still answering and RUNNING_PID already deleted, so the next start couldn't
-   * bind. When a stop is still going after SHUTDOWN_LIMIT_MS, the database is closed (Play's
-   * connection pool, which closes it otherwise, stops after the actors: the file was left open, for
-   * H2 to recover at the next start) and the process ends anyway, with stuckStopExitCode. Once per
-   * process: the timer starts with the stop and dies with the process when the stop ends in time (a
-   * daemon thread).
+   * bind. When a stop is still going after SHUTDOWN_LIMIT_MS, the database is closed (otherwise
+   * CloseDatabasePlugin closes it at the very end of the stop, after the actors: the file was left
+   * open, for H2 to recover at the next start) and the process ends anyway, with stuckStopExitCode.
+   * Once per process: the timer starts with the stop and dies with the process when the stop ends in
+   * time (a daemon thread).
    */
   static synchronized void stopIfShutdownHangs(Configuration config) {
     if (shutdownLimitSet) {
       return;
     }
     shutdownLimitSet = true;
-    String driver = config.getString("db.default.driver", "");
-    String url = config.getString("db.default.url", "");
-    String user = config.getString("db.default.user", "");
-    String password = config.getString("db.default.password", config.getString("db.default.pass", ""));
-    // (an H2 file of its own: not one in memory, nor one another server holds)
-    boolean ownFile = models.Backups.databaseFile(driver, url) != null;
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       Thread limit = new Thread(() -> {
         try {
@@ -419,7 +413,7 @@ public class Global extends GlobalSettings {
           return;
         }
         stopNote("Breadboard: shutdown is taking too long (a script may be stuck); stopping now");
-        if (ownFile && !closeDatabase(url, user, password, CLOSE_DATABASE_MS)) {
+        if (!closeOwnDatabase(config, CLOSE_DATABASE_MS)) {
           stopNote("Breadboard: the database did not close in time; H2 recovers it at the next start");
         }
         Runtime.getRuntime().halt(stuckStopExitCode);
@@ -441,16 +435,36 @@ public class Global extends GlobalSettings {
   }
 
   /**
+   * Closes the server's database (db.default) when it is an H2 file of its own (not one in memory,
+   * nor one on a database server) that is still open: H2 keeps its lock file, db/breadboard.lock.db,
+   * while it is, and deletes it when it closes the database. True when it is closed (in time: see
+   * closeDatabase) or was already.
+   */
+  static boolean closeOwnDatabase(Configuration config, long waitMs) {
+    String url = config.getString("db.default.url", "");
+    File data = models.Backups.databaseFile(config.getString("db.default.driver", ""), url);
+    if (data == null || !new File(data.getPath().replaceFirst("\\.h2\\.db$", ".lock.db")).exists()) {
+      return true;
+    }
+    return closeDatabase(url, config.getString("db.default.user", ""),
+        config.getString("db.default.password", config.getString("db.default.pass", "")), waitMs);
+  }
+
+  /**
    * Closes the H2 database at {@code url} for every connection to it (SHUTDOWN, on one of its own),
    * waiting at most {@code waitMs}: true when it was closed in time. A statement running meanwhile
    * holds it up, and one that never ends would for good, hence the limit (the attempt goes on, on its
-   * own daemon thread).
+   * own daemon thread). It connects through H2's driver itself: once Play's connection pool has
+   * stopped, DriverManager has no driver left (BoneCPPlugin.onStop takes every one out).
    */
   static boolean closeDatabase(String url, String user, String password, long waitMs) {
     // (IFEXISTS: a database that isn't there is not made, empty, just to be closed)
     String existing = url.replaceAll(";+$", "") + ";IFEXISTS=TRUE";
+    Properties login = new Properties();
+    login.setProperty("user", user);
+    login.setProperty("password", password);
     FutureTask<Boolean> close = new FutureTask<>(() -> {
-      try (Connection connection = DriverManager.getConnection(existing, user, password);
+      try (Connection connection = new org.h2.Driver().connect(existing, login);
            Statement statement = connection.createStatement()) {
         statement.execute("shutdown");
       }
@@ -489,10 +503,10 @@ public class Global extends GlobalSettings {
    * Ebean stops itself in a JVM shutdown hook of its own, which runs beside Play's stop (onStop, then
    * the actors): what a stop records (serverStopping, participants disconnecting) was saved, but each
    * save logged "NotifyOfCommit failed ... Pool is stopping". Play never stops Ebean otherwise, so the
-   * hook is taken back and Ebean ends with the process. (The database itself is closed by Play's
-   * connection pool, last, or by stopIfShutdownHangs when the stop is cut short: DB_CLOSE_ON_EXIT=FALSE
-   * in conf/application-prod.conf.) Ebean is the one Play 2.2 comes with (3.2.2); with any other,
-   * nothing is changed.
+   * hook is taken back and Ebean ends with the process. (The database itself is closed last, once
+   * Play's connection pool has stopped, by CloseDatabasePlugin, or by stopIfShutdownHangs when the
+   * stop is cut short: DB_CLOSE_ON_EXIT=FALSE in conf/application-prod.conf.) Ebean is the one Play
+   * 2.2 comes with (3.2.2); with any other, nothing is changed.
    */
   static void keepEbeanThroughTheStop() {
     try {
