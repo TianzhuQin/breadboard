@@ -3,9 +3,10 @@
 # start it on an empty database, create the first account, sign in, load the consoles and the
 # participant pages, back up the database, then restart it on the same database and sign in again.
 # The restart has a proxy set for the internet (http_proxy, as many researchers have) and a
-# conf/local.conf, whose setting must be in effect. It also checks what the launcher says to a
-# second copy (from the same folder, and on the same port) and about folders it can't write to, and
-# that a read-only folder runs with -Dpidfile.path. A release that carries its own Java
+# conf/local.conf, whose setting must be in effect and which only its owner may read once the
+# launcher has started. It also checks what the launcher says to a second copy (from the same
+# folder, and on the same port), about folders it can't write to and a conf/local.conf it can't
+# read, and that a read-only folder runs with -Dpidfile.path. A release that carries its own Java
 # (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while the
 # server runs.
 #
@@ -262,8 +263,15 @@ stop
 # proxy set for the internet, as many researchers have (here one that isn't there, on port 9): the
 # launcher's requests to this computer must not go through it.
 printf '%s\n' '# the settings this install changes' 'breadboard.wsUrl="ws://local-conf.smoke.test"' > "$APP/conf/local.conf"
+# (readable by anyone, as a copy brought from an earlier release may be)
+chmod 644 "$APP/conf/local.conf"
 PROXY=http://127.0.0.1:9
 start "same database again, with conf/local.conf and a proxy set"
+# It may hold keys: the launcher lets only its owner read it.
+case "$(ls -l "$APP/conf/local.conf")" in
+  -rw-------*) pass "the launcher lets only its owner read conf/local.conf" ;;
+  *) fail "others can read conf/local.conf: $(ls -l "$APP/conf/local.conf")" ;;
+esac
 pages
 if [ -n "$SIGN_IN" ]; then
   sign_in
@@ -295,6 +303,18 @@ if [ "$(id -u)" != 0 ]; then
   chmod u+w "$APP/db"
   grep -q "db/ can't be written by" "$WORK/read-only.log" || fail "a db/ it can't write to wasn't reported: $(cat "$WORK/read-only.log")"
   pass "a db/ that can't be written is reported, with how to fix it"
+
+  # So is a conf/local.conf it can't read (made or copied by another account): Java would take it for
+  # missing, and the server would run without its settings.
+  printf '%s\n' 'breadboard.wsUrl="ws://local-conf.smoke.test"' > "$APP/conf/local.conf"
+  chmod a-r "$APP/conf/local.conf"
+  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/unreadable.log" 2>&1 < /dev/null; then
+    fail "it started with a conf/local.conf it can't read"
+  fi
+  rm -f "$APP/conf/local.conf"
+  grep -q "conf/local.conf can't be read by" "$WORK/unreadable.log" \
+    || fail "a conf/local.conf it can't read wasn't reported: $(cat "$WORK/unreadable.log")"
+  pass "a conf/local.conf that can't be read is reported, with how to fix it"
 
   # A folder kept read-only (root's, under /opt) runs with a db/ and logs/ it can write and its pid
   # file elsewhere; without -Dpidfile.path, RUNNING_PID would go into it, and that is reported.

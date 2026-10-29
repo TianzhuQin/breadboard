@@ -11,6 +11,8 @@
 # (which signs sign-ins and invitation links) in conf/application.secret, and the settings you change
 # in conf/local.conf. Run in a terminal, it opens the console in the browser once it is up
 # (BREADBOARD_NO_BROWSER=1 stops that). On macOS it keeps the computer awake while the server runs.
+# On Linux, in a desktop session, it asks the desktop and systemd to keep the computer awake; if the
+# computer still suspends (some older desktops), turn off automatic suspend in the power settings.
 #
 # Keep running: run in a terminal, or with BREADBOARD_KEEP_RUNNING=1 (Start Breadboard.command sets
 # it), a server that stops by itself (it ran out of memory, Java crashed, it was killed) is started
@@ -151,7 +153,11 @@ fi
 ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
 cannot_write() {
   echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
-  echo "  sudo chown -R $ME \"$2\"" >&2
+  if [ -d "$2" ]; then
+    echo "  sudo chown -R $ME \"$2\"" >&2
+  else
+    echo "  sudo chown $ME \"$2\"" >&2
+  fi
   exit 1
 }
 if [ ! -d db ] || [ ! -d logs ] || [ "$(dirname "$PID_FILE")" = . ]; then
@@ -194,6 +200,16 @@ if [ ! -e conf/local.conf ]; then
 # doesn't come with this file: copy it into the new release's conf folder when you upgrade.
 EOF
 fi
+# A copy brought from an earlier release (each release is a folder of its own) is made private too,
+# at every start, when the file is this account's: chmod takes the group's and others' access away.
+# Another account's file is left as it is.
+if [ -O conf/local.conf ]; then
+  chmod go-rwx conf/local.conf 2>/dev/null || true
+fi
+# One the server can't read (made or copied by another account, often root) would be left out
+# without a word, as if there were none: the server would run without those settings (its address,
+# HTTPS-only cookies, AWS keys). Say so instead.
+[ ! -e conf/local.conf ] || [ -r conf/local.conf ] || cannot_write "conf/local.conf" "$HERE/conf/local.conf" read
 
 # Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
 remove_pid_file() {
@@ -245,26 +261,58 @@ if [ -t 1 ] && [ -z "${BREADBOARD_NO_BROWSER:-}" ] && command -v curl >/dev/null
   fi
 fi
 if [ -n "$OPENER" ]; then
-  (
+  open_console() {
     i=0
     while [ $i -lt 180 ]; do
       if curl -s --noproxy '*' -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/health"; then
         "$OPENER" "$URL" >/dev/null 2>&1 || true
-        exit 0
+        return 0
       fi
       sleep 1
       i=$((i + 1))
     done
-  ) &
-  OPENER_PID=$!
+  }
+  if [ -n "$KEEP_RUNNING" ]; then
+    # (this script stops it when it ends)
+    open_console &
+    OPENER_PID=$!
+  else
+    # (not as a child of this process, which Java takes over below: see the next part)
+    (open_console &)
+  fi
 fi
 
-# macOS: the computer stays awake while the server runs (a study left to run by itself stopped when
-# it went to sleep). caffeinate holds that until this process ends: Java, which takes it over (exec)
-# below, or this script, which ends with Java. A laptop on battery still sleeps when its lid is
-# closed.
+# The computer stays awake while the server runs (a study left to run by itself stopped when it went
+# to sleep), until this process ends: Java, which takes it over (exec) below, or this script, which
+# ends with Java. On macOS, caffeinate holds that. On Linux, the launcher asks systemd and the
+# desktop. systemd-inhibit holds a lock in a desktop session, where systemd lets anyone logged in at
+# the computer take one without a password; elsewhere (under a service manager, over SSH) it is
+# refused, and nothing is held. With systemd 256 or older (Ubuntu 22.04 and 24.04, Debian 12), that
+# lock doesn't stop GNOME's automatic suspend: GNOME heeds only gnome-session's inhibitors, and asks
+# systemd to suspend as the same account, whose own locks such a systemd lets past. So in a GNOME
+# session, gnome-session-inhibit asks gnome-session too (for suspend only: idle would also keep the
+# screen from blanking and locking, which caffeinate and breadboard.bat leave alone). A laptop still
+# sleeps when its lid is closed. Both are started from a subshell that ends at once, so that they
+# aren't this process's children (they watch it all the same): one that is refused ends at once, and
+# Java, which never collects a child it didn't start (wait), would keep it as a zombie for as long as
+# the server runs.
 if [ "$(uname)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
   caffeinate -i -s -w $$ >/dev/null 2>&1 &
+else
+  # (input from /dev/null: neither ever asks for a password)
+  AWAKE_WHILE_RUNNING='while kill -0 "$1" 2>/dev/null; do sleep 5; done'
+  if command -v systemd-inhibit >/dev/null 2>&1; then
+    (systemd-inhibit --what=idle:sleep --who=Breadboard --why="Breadboard is running" --mode=block \
+      sh -c "$AWAKE_WHILE_RUNNING" breadboard-awake $$ </dev/null >/dev/null 2>&1 &)
+  fi
+  case ":${XDG_CURRENT_DESKTOP:-}:" in
+    *:GNOME:*)
+      if command -v gnome-session-inhibit >/dev/null 2>&1; then
+        (gnome-session-inhibit --app-id Breadboard --reason "Breadboard is running" --inhibit suspend \
+          sh -c "$AWAKE_WHILE_RUNNING" breadboard-awake $$ </dev/null >/dev/null 2>&1 &)
+      fi
+      ;;
+  esac
 fi
 
 # The server's command line, in "$@" (the settings given to this script go before the main class).

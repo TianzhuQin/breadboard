@@ -427,6 +427,12 @@ describe('Recruitment page', () => {
     expect(vi.mocked(http.get)).toHaveBeenCalledWith('/amtadmin/getAccountBalance?sandbox=true')
     expect(w.text()).toContain('Connect Breadboard to Mechanical Turk')
     expect(w.text()).toContain('AMT_ACCESS_KEY')
+    // the keys go in the server's own settings file, not in conf/application-prod.conf, which each
+    // release replaces and anyone can read; a new release comes without conf/local.conf, so the note
+    // says to copy it over
+    expect(w.text()).toContain('conf/local.conf')
+    expect(w.text()).toContain('copy conf/local.conf into each new release when you upgrade')
+    expect(w.text()).not.toContain('application-prod.conf')
     w.unmount()
   })
 })

@@ -16,8 +16,10 @@ REM stopped. On when the window is someone's (double-clicked, or typed in a Comm
 REM when its input is redirected (a script). SET BREADBOARD_KEEP_RUNNING=1 or 0 decides instead.
 REM
 REM As a service (SET BREADBOARD_SERVICE=1, as breadboard-task.xml has Task Scheduler do), nobody
-REM reads the window: it never waits for a key (PAUSE), no browser is opened, and keep running is on
-REM and never gives up (after 5 restarts in 10 minutes it goes on, once a minute).
+REM reads the window: it never waits for a key (PAUSE), no browser is opened, keep running is on and
+REM never gives up (after 5 restarts in 10 minutes it goes on, once a minute), why it can't start, if
+REM it can't, goes into logs\application.log too, and what Java prints as errors (such as a mistake
+REM in conf\local.conf, found before the server's log starts) goes into logs\service-errors.log.
 CD /D "%~dp0"
 REM (set below for the server when this script starts it again)
 SET "BREADBOARD_RESTARTED="
@@ -32,10 +34,13 @@ IF /I "%BREADBOARD_SERVICE%"=="off" SET "SERVICE="
 REM Opened from inside the zip, Explorer runs this file alone, from a temporary folder: the rest of
 REM Breadboard isn't there.
 IF EXIST "lib\classpath.txt" GOTO unpacked
-ECHO Extract the whole zip first: right-click it, Extract All, then open breadboard.bat in the new folder.
-CALL :pause
+CALL :refuse say_zipped
 EXIT /B 1
 :unpacked
+REM (db\ and logs\ for the server, made now so that, as a service, what stops it below can be kept in
+REM logs\application.log)
+IF NOT EXIST db MKDIR db 2>NUL
+IF NOT EXIST logs MKDIR logs 2>NUL
 
 REM Java 8 (see the top). JAVA8_HOME is often given in quotes: they go.
 SET "JAVA="
@@ -50,13 +55,7 @@ CALL :tryjava "%CD%\jre\bin\java.exe"
 IF DEFINED JAVA_HOME CALL :tryjava "%JAVA_HOME%\bin\java.exe"
 FOR %%J IN (java.exe) DO IF NOT "%%~$PATH:J"=="" CALL :tryjava "%%~$PATH:J"
 IF DEFINED JAVA GOTO havejava
-IF NOT DEFINED OTHER_JAVA GOTO nojava8
-ECHO Breadboard needs Java 8, but "%OTHER_JAVA%" is:
-"%OTHER_JAVA%" -version
-:nojava8
-ECHO Breadboard needs Java 8. Download the Breadboard release that includes Java ^(its name ends
-ECHO in -windows-x64^), or install a Java 8 JDK ^(for example Azul Zulu 8^) and set JAVA8_HOME to it.
-CALL :pause
+CALL :refuse say_nojava
 EXIT /B 1
 :havejava
 
@@ -76,8 +75,7 @@ REM One already running from this folder, on whatever port, has the database ope
 REM of the database's stack trace.
 CALL :runninghere
 IF DEFINED RUNNING (
-  ECHO Breadboard is already running from this folder ^(process %RUNNING%^): open http://localhost:%RUNNING_PORT%, or stop it first.
-  CALL :pause
+  CALL :refuse say_running
   EXIT /B 1
 )
 
@@ -85,16 +83,12 @@ REM Something already answering on the port (often Breadboard itself, started ea
 REM instead of a stack trace.
 powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %PORT%); $c.Close(); exit 0 } catch { exit 1 }" >NUL 2>&1
 IF NOT ERRORLEVEL 1 (
-  ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
-  ECHO To start another one, choose another port, e.g.  breadboard.bat -Dhttp.port=9001
-  CALL :pause
+  CALL :refuse say_port
   EXIT /B 1
 )
 
 REM A folder Breadboard can't write to (unpacked into Program Files, or by another account) makes the
 REM database fail with a stack trace: say how to fix it instead.
-IF NOT EXIST db MKDIR db 2>NUL
-IF NOT EXIST logs MKDIR logs 2>NUL
 SET "UNWRITABLE="
 (TYPE NUL >"logs\write-check.tmp") 2>NUL || SET "UNWRITABLE=logs\"
 IF EXIST "logs\write-check.tmp" DEL "logs\write-check.tmp"
@@ -103,10 +97,10 @@ IF EXIST "db\write-check.tmp" DEL "db\write-check.tmp"
 IF EXIST "db\breadboard.h2.db" (
   (TYPE NUL >>"db\breadboard.h2.db") 2>NUL || SET "UNWRITABLE=db\breadboard.h2.db"
 )
-REM (Its message is under a label: cmd reads a parenthesized block whole, with the folder's path and
-REM the account's name put in, and a ")" in them, as in "...\breadboard-v3.1.0-windows-x64 (1)",
-REM would end it early. They are shown in quotes, which keep a "&" in them from starting a command.)
-IF DEFINED UNWRITABLE GOTO unwritable
+IF DEFINED UNWRITABLE (
+  CALL :refuse say_unwritable
+  EXIT /B 1
+)
 
 REM application.secret must not be a published value. Use APPLICATION_SECRET if set; otherwise
 REM generate one on first start and keep it in conf\application.secret. The server reads it from
@@ -118,8 +112,7 @@ IF NOT DEFINED APPLICATION_SECRET (
   SET /P APPLICATION_SECRET=<conf\application.secret
 )
 IF NOT DEFINED APPLICATION_SECRET (
-  ECHO Could not create conf\application.secret. Set APPLICATION_SECRET to a long random text instead.
-  CALL :pause
+  CALL :refuse say_secret
   EXIT /B 1
 )
 
@@ -132,6 +125,17 @@ IF NOT EXIST "conf\local.conf" (
   ECHO # They win over conf/application-prod.conf, which lists every setting and what it does. A new release
   ECHO # doesn't come with this file: copy it into the new release's conf folder when you upgrade.
 ) 2>NUL >"conf\local.conf"
+REM One the server can't read (made or copied by another account) would be left out without a word,
+REM as if there were none: the server would run without those settings (its address, HTTPS-only
+REM cookies, AWS keys). Say so instead.
+SET "UNREADABLE="
+IF EXIST "conf\local.conf" (
+  (TYPE "conf\local.conf" >NUL) 2>NUL || SET "UNREADABLE=1"
+)
+IF DEFINED UNREADABLE (
+  CALL :refuse say_unreadable
+  EXIT /B 1
+)
 
 REM Play refuses to start while RUNNING_PID exists: one left behind by a crash goes.
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
@@ -168,11 +172,15 @@ IF NOT DEFINED BREADBOARD_NO_BROWSER (
 )
 
 REM The computer stays awake while the server runs (a study left to run by itself stopped when it went
-REM to sleep): a helper in the background asks Windows for that (SetThreadExecutionState) as long as
-REM this window runs a Java, and ends two minutes after the last one stopped. (A laptop still sleeps
-REM when its lid is closed, if its lid is set to do so.) 2147483649 is ES_CONTINUOUS and
-REM ES_SYSTEM_REQUIRED; 2147483648, ES_CONTINUOUS alone, lets the computer sleep again.
-START "" /B powershell -NoProfile -Command "$q = [char]34; $power = Add-Type -Name Power -Namespace Breadboard -PassThru -MemberDefinition ('[DllImport(' + $q + 'kernel32.dll' + $q + ')] public static extern uint SetThreadExecutionState(uint flags);'); $window = (Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID)).ParentProcessId; $idle = 0; while ($idle -lt 12) { $idle++; if (Get-CimInstance Win32_Process -Filter ('ParentProcessId = ' + $window + ' AND Name = ''java.exe''')) { $idle = 0; [void]$power::SetThreadExecutionState(2147483649) } else { [void]$power::SetThreadExecutionState(2147483648) }; Start-Sleep -Seconds 10 }" >NUL 2>&1
+REM to sleep): a helper in the background asks Windows for that (SetThreadExecutionState) whenever
+REM this window runs a Java, and lets the computer sleep again while it runs none. It lasts as long as
+REM the window (or a Java of it), however long the restarts below wait: one that gave up after a few
+REM idle minutes left a service that failed for a while unable to keep the computer awake once it ran
+REM again. One helper serves a window: a second one (this script run again in the same Command Prompt)
+REM leaves it to the first. (A laptop still sleeps when its lid is closed, if its lid is set to do so.)
+REM 2147483649 is ES_CONTINUOUS and ES_SYSTEM_REQUIRED; 2147483648, ES_CONTINUOUS alone, lets the
+REM computer sleep again. (The percent signs of LIKE are doubled, as a batch file writes them.)
+START "" /B powershell -NoProfile -Command "$window = (Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID)).ParentProcessId; if (Get-CimInstance Win32_Process -Filter ('ParentProcessId = ' + $window + ' AND ProcessId <> ' + $PID + ' AND CommandLine LIKE ''%%SetThreadExecutionState%%''')) { exit }; $q = [char]34; $power = Add-Type -Name Power -Namespace Breadboard -PassThru -MemberDefinition ('[DllImport(' + $q + 'kernel32.dll' + $q + ')] public static extern uint SetThreadExecutionState(uint flags);'); do { $java = Get-CimInstance Win32_Process -Filter ('ParentProcessId = ' + $window + ' AND Name = ''java.exe'''); if ($java) { [void]$power::SetThreadExecutionState(2147483649) } else { [void]$power::SetThreadExecutionState(2147483648) }; Start-Sleep -Seconds 10 } while ($java -or (Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $window)))" >NUL 2>&1
 
 REM When the last 5 restarts were (in seconds), oldest first: a sixth within 10 minutes is not made
 REM (as a service: it is, a minute later).
@@ -184,12 +192,24 @@ SET "R5=-100000"
 SET "TO_STOP=close this window to leave it stopped"
 IF DEFINED SERVICE SET "TO_STOP=end its task in Task Scheduler to leave it stopped"
 
+REM As a service, what Java prints as errors (stderr) goes into logs\service-errors.log: a mistake in
+REM conf\local.conf is said only there, before the server's log starts, and nobody reads the window.
+REM (Not into logs\application.log: the server renames that every day, which Windows doesn't allow
+REM while Java has it open as its stderr.) Kept in a variable, the redirection works as if it were
+REM written where the variable is put in below: cmd puts in variables before it looks for
+REM redirections.
+SET "JAVA_ERRORS="
+IF DEFINED SERVICE SET "JAVA_ERRORS=2>>logs\service-errors.log"
+
 :start
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.) MaxMetaspaceSize:
 REM the classes made for the experiments' scripts (anew at every engine reload) may take that much
 REM memory besides the heap, so that a leak of them ends in a restart (out of memory) instead of
-REM taking all the computer's memory.
-"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\."
+REM taking all the computer's memory. ERRORLEVEL is 1 until Java sets it: if cmd can't open
+REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
+REM purpose (0).
+CMD /D /C EXIT 1
+"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\." %JAVA_ERRORS%
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
@@ -199,6 +219,7 @@ IF "%EXIT_CODE%"=="143" EXIT /B 143
 IF NOT DEFINED KEEP_RUNNING GOTO failed
 
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
+IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
 IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. SET JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
 CALL :now
 SET /A "SINCE=NOW-(R1)"
@@ -218,7 +239,7 @@ SET "R4=%R5%"
 SET "R5=%NOW%"
 CALL :runninghere
 IF DEFINED RUNNING (
-  ECHO Breadboard was started from this folder meanwhile ^(process %RUNNING%^): leaving it to that one.
+  CALL :note "Breadboard was started from this folder meanwhile (process %RUNNING%): leaving it to that one."
   EXIT /B %EXIT_CODE%
 )
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
@@ -235,12 +256,66 @@ REM IF ERRORLEVEL 1 doesn't catch.)
 CALL :pause
 EXIT /B %EXIT_CODE%
 
-:unwritable
+:refuse
+REM Says why Breadboard can't start (what the subroutine %1 says) and keeps the window open (:pause).
+REM As a service nobody reads the window, so it goes into logs\application.log too, when that can be
+REM written (Task Scheduler itself shows only the exit code, 1, as the task's Last Run Result).
+CALL :%~1
+CALL :pause
+IF NOT DEFINED SERVICE GOTO :EOF
+(
+  ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
+  CALL :%~1
+  ECHO.
+) >>"logs\application.log" 2>NUL
+GOTO :EOF
+
+REM What :refuse says. Each is a subroutine of its own, not a parenthesized block: cmd reads a block
+REM whole, with the folder's path and the account's name put in, and a ")" in them, as in
+REM "...\breadboard-v3.1.0-windows-x64 (1)" or "C:\Program Files (x86)\...", would end it early.
+REM They are shown in quotes, which keep a "&" in them from starting a command.
+:say_zipped
+ECHO Extract the whole zip first: right-click it, Extract All, then open breadboard.bat in the new folder.
+GOTO :EOF
+
+:say_nojava
+IF NOT DEFINED OTHER_JAVA GOTO say_install_java8
+ECHO Breadboard needs Java 8, but "%OTHER_JAVA%" is:
+"%OTHER_JAVA%" -version 2>&1
+:say_install_java8
+ECHO Breadboard needs Java 8. Download the Breadboard release that includes Java ^(its name ends
+ECHO in -windows-x64^), or install a Java 8 JDK ^(for example Azul Zulu 8^) and set JAVA8_HOME to it.
+GOTO :EOF
+
+:say_running
+ECHO Breadboard is already running from this folder ^(process %RUNNING%^): open http://localhost:%RUNNING_PORT%, or stop it first.
+GOTO :EOF
+
+:say_port
+ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
+ECHO To start another one, choose another port, e.g.  breadboard.bat -Dhttp.port=9001
+GOTO :EOF
+
+:say_unwritable
 ECHO %UNWRITABLE% can't be written by the account "%USERNAME%", so Breadboard can't start. Move the
 ECHO Breadboard folder somewhere your account can write to (such as Documents), or give that account
 ECHO write access to "%CD%" (right-click it, Properties, Security).
-CALL :pause
-EXIT /B 1
+GOTO :EOF
+
+:say_secret
+IF EXIST "conf\application.secret" GOTO say_secret_unread
+ECHO Could not create conf\application.secret. Set APPLICATION_SECRET to a long random text instead.
+GOTO :EOF
+:say_secret_unread
+ECHO conf\application.secret is empty or can't be read by the account "%USERNAME%". Give that account
+ECHO read access to it, or set APPLICATION_SECRET to a long random text instead.
+GOTO :EOF
+
+:say_unreadable
+ECHO conf\local.conf can't be read by the account "%USERNAME%", so Breadboard can't start: it would
+ECHO run without your settings. Give that account read access to "%CD%\conf\local.conf" (right-click
+ECHO it, Properties, Security).
+GOTO :EOF
 
 :pause
 REM Keeps the window open after a message, until a key is pressed, so that the message can be read;

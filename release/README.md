@@ -40,10 +40,13 @@ researcher account; add your colleagues' accounts in Settings → Researchers. S
 Ctrl+C in its window, or by closing the window. If it stops by itself (it ran out of memory, say),
 it is started again after a few seconds.
 
-While the server runs, the computer doesn't go to sleep by itself. For a long study, keep a laptop
-plugged in with its lid open: on battery with the lid closed, it sleeps anyway. On a Mac, also turn
-on **Prevent automatic sleeping … when the display is off** (System Settings → Battery → Options;
-on a Mac mini or iMac, System Settings → Energy).
+While the server runs, a Mac or a Windows computer doesn't go to sleep by itself. On Linux, started
+in a desktop session (not over SSH or as a service), the launcher asks the desktop and systemd to
+keep the computer awake; if the computer still suspends (some older desktops), turn off automatic
+suspend in the power settings. For a long study, keep a laptop plugged in with its lid open: with
+the lid closed, it sleeps anyway. On a Mac, also turn on **Prevent automatic sleeping … when the
+display is off** (System Settings → Battery → Options; on a Mac mini or iMac, System Settings →
+Energy).
 
 Another port: `./breadboard.sh -Dhttp.port=8080` (or `breadboard.bat -Dhttp.port=8080`).
 
