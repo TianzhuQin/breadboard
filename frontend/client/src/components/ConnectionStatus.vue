@@ -13,7 +13,7 @@
 
 <script lang="ts">
   import Vue from 'vue'
-  import { SocketState } from '@human-nature-lab/breadboard-core'
+  import { ENDED_EVENT, SocketState } from '@human-nature-lab/breadboard-core'
 
   // On the page while the banner shows: the timers dim, since they only keep time while connected.
   const DISCONNECTED = 'bb-disconnected'
@@ -69,7 +69,7 @@
       window.Breadboard.on('retry', this.onRetry)
       window.Breadboard.on('open', this.onOpen)
       window.Breadboard.on('player', this.onPlayer)
-      window.Breadboard.on('ended', this.onEnded)
+      window.Breadboard.on(ENDED_EVENT, this.onEnded)
       this.listening = true
     },
     destroyed () {
@@ -79,7 +79,7 @@
         window.Breadboard.off('retry', this.onRetry)
         window.Breadboard.off('open', this.onOpen)
         window.Breadboard.off('player', this.onPlayer)
-        window.Breadboard.off('ended', this.onEnded)
+        window.Breadboard.off(ENDED_EVENT, this.onEnded)
       }
       this.stopCountdown()
       document.documentElement.classList.remove(DISCONNECTED)
@@ -96,6 +96,8 @@
         this.stopCountdown()
       },
       onEnded () {
+        // (only the page's own end: an event of this name from anywhere else changes nothing)
+        if (!window.Breadboard.ended) return
         this.ended = true
         this.stopCountdown()
       },

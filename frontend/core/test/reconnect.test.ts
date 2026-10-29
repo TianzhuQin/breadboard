@@ -10,7 +10,8 @@ const SOCKET = 'ws://lab.example/game/1/2/p1/connect'
 const CONFIG = { clientId: 'p1', connectSocket: SOCKET }
 const SIGN_IN = { error: 'not-logged-in', login: '/game/1/2/login' }
 /** What the server sends a page whose session it doesn't run (any more) */
-const NOT_RUNNING = { player: { _system: {}, finished: true, ended: 'notRunning', text: '<h3>This session isn\'t running right now</h3>' } }
+// what the server sends a page it turns away whose session isn't running (ClientController.notRunningScreen)
+const NOT_RUNNING = { sessionOver: { player: { _system: {}, finished: true, ended: 'notRunning', text: '<h3>This session isn\'t running right now</h3>' } } }
 
 /** A WebSocket that the test, as the server, accepts, writes to and drops. */
 class FakeSocket {
@@ -66,11 +67,11 @@ afterEach(() => {
 async function openPage (fetch: ReturnType<typeof stateAnswers>) {
   vi.stubGlobal('fetch', fetch)
   vi.resetModules()
-  const { Breadboard } = await import('../src/breadboard')
+  const { Breadboard, ENDED_EVENT } = await import('../src/breadboard')
   const players: any[] = []
   let ended = 0
   Breadboard.on('player', (p: any) => players.push(p))
-  Breadboard.on('ended', () => ended++)
+  Breadboard.on(ENDED_EVENT, () => ended++)
   await Breadboard.connect()
   FakeSocket.all[0].accept()
   return { Breadboard, players, ended: () => ended }
@@ -83,13 +84,20 @@ async function reconnect (k: number) {
   FakeSocket.all[k].accept()
 }
 
+describe('a page from before 3.1, or the AngularJS client', () => {
+  it('finds no player in the notice, so a completion code on its screen stays', async () => {
+    // they read frame.player; the notice is under sessionOver
+    expect((NOT_RUNNING as any).player).toBeUndefined()
+  })
+})
+
 describe('a page whose session is over', () => {
   it('shows what the server says and never reconnects again', async () => {
     const page = await openPage(stateAnswers([200, CONFIG]))
     await reconnect(1)
     FakeSocket.all[1].frame(NOT_RUNNING)
     FakeSocket.all[1].drop()
-    expect(page.players).toEqual([NOT_RUNNING.player])
+    expect(page.players).toEqual([NOT_RUNNING.sessionOver.player])
     expect(page.ended()).toBe(1)
     expect(page.Breadboard.ended).toBe(true)
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000)

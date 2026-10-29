@@ -65,6 +65,10 @@ public class ParticipantReconnectTest extends BaseTest {
 
     /** Open the participant websocket with this handshake, as the page reconnecting does. */
     private Page reconnect(String clientId, String token) {
+        return reconnect(e, i, clientId, token);
+    }
+
+    private Page reconnect(String e, String i, String clientId, String token) {
         FakeRequest handshake = fakeRequest(GET, "/game/" + e + "/" + i + "/" + clientId + "/connect?"
             + ParticipantAuth.QUERY_PARAM + "=" + token);
         Http.Context.current.set(play.core.j.JavaHelpers$.MODULE$.createJavaContext(handshake.getWrappedRequest()));
@@ -97,7 +101,9 @@ public class ParticipantReconnectTest extends BaseTest {
         Page page = reconnect("P1", token);
         assertTrue("still closed", page.closed);
         assertEquals(page.frames.toString(), 1, page.frames.size());
-        JsonNode player = page.frames.get(0).get("player");
+        // (not a "player" frame: pages from before 3.1 would show it over a completion code)
+        assertNull(page.frames.get(0).get("player"));
+        JsonNode player = page.frames.get(0).path("sessionOver").get("player");
         assertNotNull(page.frames.toString(), player);
         // the last screen of a session that is over for this page: it shows it and stops reconnecting
         assertTrue(player.get("finished").asBoolean());
@@ -122,10 +128,29 @@ public class ParticipantReconnectTest extends BaseTest {
         Page page = reconnect("P2", "a-token-from-before");
         assertTrue(page.closed);
         assertEquals(page.frames.toString(), 1, page.frames.size());
-        assertEquals("notRunning", page.frames.get(0).get("player").get("ended").asText());
+        assertEquals("notRunning", page.frames.get(0).path("sessionOver").path("player").path("ended").asText());
         // where a reload ends up: the sign-in page, which says so
         Result signIn = route(fakeRequest(GET, "/game/" + e + "/" + i + "/login"));
         assertTrue(contentAsString(signIn).contains("running right now"));
+    }
+
+    @Test
+    public void theNoticeHasTheWordsAReloadShowsForAHitOrASessionThatIsGone() throws Exception {
+        restart();
+        // a session that doesn't exist (any more)
+        Page gone = reconnect(e, "987654", "P5", "a-token-from-before");
+        String goneText = gone.frames.get(0).path("sessionOver").path("player").path("text").asText();
+        assertTrue(goneText, goneText.contains(controllers.ClientLogin.INVALID_LINK[0]));
+        // a Mechanical Turk session: the worker is asked to return the HIT, as on a reload
+        AMTHit hit = new AMTHit();
+        hit.experimentInstance = instance;
+        hit.creationDate = new java.util.Date();
+        hit.save();
+        Page amt = reconnect("P6", "a-token-from-before");
+        String amtText = amt.frames.get(0).path("sessionOver").path("player").path("text").asText();
+        assertTrue(amtText, amtText.contains(controllers.ClientLogin.AMT_NOT_RUNNING[1]));
+        Result reload = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P6/connected"));
+        assertTrue(contentAsString(reload).contains(controllers.ClientLogin.AMT_NOT_RUNNING[1]));
     }
 
     @Test
@@ -155,6 +180,7 @@ public class ParticipantReconnectTest extends BaseTest {
         assertFalse(page.frames.isEmpty());
         for (JsonNode frame : page.frames) {
             assertNull(frame.toString(), frame.get("reauth"));
+            assertNull(frame.toString(), frame.get("sessionOver"));
             assertFalse(frame.toString(), frame.path("player").path("text").asText().contains("running right now"));
         }
         assertTrue("the seat is still theirs", ParticipantAuth.verify(i, clientId, token));

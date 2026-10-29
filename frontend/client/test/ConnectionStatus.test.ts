@@ -100,7 +100,8 @@ describe('ConnectionStatus', () => {
     const w = await mountStatus()
     await drop(5000)
     expect(w.find('.bb-connection').exists()).toBe(true)
-    breadboard.emit('ended')
+    breadboard.ended = true
+    breadboard.emit('bb:ended')
     await settle()
     expect(w.find('.bb-connection').exists()).toBe(false)
     await drop(5000)

@@ -329,7 +329,7 @@ public class ClientController extends Controller
     private static void refuse(String experimentId, String experimentInstanceId, String clientId, WebSocket.Out<JsonNode> out) {
         Logger.debug("Refused websocket for client " + clientId + " in instance " + experimentInstanceId + ": no valid token");
         try {
-            out.write(ScriptBoard.runsSession(experimentId, experimentInstanceId) ? signInAgain() : notRunningScreen());
+            out.write(ScriptBoard.runsSession(experimentId, experimentInstanceId) ? signInAgain() : notRunningScreen(experimentId, experimentInstanceId));
         } catch (RuntimeException e) {
             // (then closed without a word, as before)
             Logger.debug("Could not tell client " + clientId + " why its websocket was refused: " + e);
@@ -339,19 +339,32 @@ public class ClientController extends Controller
     }
 
     /**
-     * The last screen of a page whose session the engine doesn't run (any more): the words a reload
-     * of the page shows (ClientLogin.notRunning()), marked finished and ended like the screens of
-     * sessions that have ended.
+     * The last screen of a page whose session the engine doesn't run (any more), with the words a
+     * reload of the page shows (index: the notice for a Mechanical Turk HIT, for a session that
+     * doesn't exist, or ClientLogin.notRunning()), marked finished and ended like the screens of
+     * sessions that have ended. Under "sessionOver", not "player": pages from before 3.1 (and the
+     * AngularJS client) render every player frame, and a completion code on their screen would be
+     * replaced; they ignore this and go on retrying quietly, as they did.
      */
-    private static ObjectNode notRunningScreen() {
+    static ObjectNode notRunningScreen(String experimentId, String experimentInstanceId) {
+        String[] words;
+        ExperimentInstance instance = null;
+        try {
+            instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+        } catch (NumberFormatException ignored) {}
+        if (instance != null && instance.getHit() != null) {
+            words = ClientLogin.AMT_NOT_RUNNING;
+        } else if (!ClientLogin.sessionExists(experimentId, experimentInstanceId)) {
+            words = ClientLogin.INVALID_LINK;
+        } else {
+            words = ClientLogin.NOT_RUNNING;
+        }
         ObjectNode frame = Json.newObject();
-        ObjectNode player = frame.putObject("player");
+        ObjectNode player = frame.putObject("sessionOver").putObject("player");
         player.putObject("_system");
         player.put("finished", true);
         player.put("ended", "notRunning");
-        player.put("text", "<h3>This session isn't running right now</h3><p>It has finished, or was interrupted "
-            + "(for example by a server restart). If you were given a link to the study, open it again to join "
-            + "the session that is open now; otherwise, please contact the researcher.</p>");
+        player.put("text", "<h3>" + words[0] + "</h3><p>" + words[1] + "</p>");
         return frame;
     }
 

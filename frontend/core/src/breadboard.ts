@@ -170,6 +170,13 @@ function isOwnEnd (player: any): boolean {
   return !!player.finished || !!(recruitment && recruitment.completed)
 }
 
+/**
+ * Emitted once the session is over for this page and it stopped reconnecting. Prefixed like the
+ * other events of Breadboard's own ('bb:edge-edit-result'), so an experiment's custom events
+ * (player.send(name, ...)) can't be taken for it.
+ */
+export const ENDED_EVENT = 'bb:ended'
+
 export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /** The session is over for this page (stopped, not running, ...): it no longer reconnects */
@@ -452,13 +459,13 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   }
 
   /**
-   * The session is over for this page: it stops reconnecting, and tells its listeners ('ended')
+   * The session is over for this page: it stops reconnecting, and tells its listeners (ENDED_EVENT)
    */
   private end () {
     this.socket.stopReconnecting()
     if (!this.ended) {
       this.ended = true
-      this.emit('ended')
+      this.emit(ENDED_EVENT)
     }
   }
 
@@ -500,6 +507,17 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         // The session runs, but the server has forgotten this page's seat (e.g. it restarted since):
         // find out where to sign in again.
         this.recheckSeat()
+        return
+      }
+      if (data && data.sessionOver && typeof data.sessionOver === 'object') {
+        // The server turned the socket away: the session isn't running (any more). Pages from before
+        // 3.1 ignore this key; this one shows the screen inside, unless the participant's own end
+        // (a completion code) is on the screen.
+        this.end()
+        if (!this.ownEnd && data.sessionOver.player) {
+          this.emit('data', data.sessionOver)
+          this.emit('player', data.sessionOver.player)
+        }
         return
       }
       const player = data && data.player

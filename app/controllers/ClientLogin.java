@@ -72,11 +72,19 @@ public class ClientLogin extends Controller {
    * (e.g. /play/{experimentId}/login, or the one on Prolific) leads to whichever session is open.
    */
   static play.api.templates.Html notRunning() {
-    return participantMessage.render("This session isn't running right now",
-        "It has finished, or was interrupted (for example by a server restart). If you were given a "
-        + "link to the study, open it again to join the session that is open now; otherwise, please "
-        + "contact the researcher.");
+    return participantMessage.render(NOT_RUNNING[0], NOT_RUNNING[1]);
   }
+
+  /** The heading and words of that page (also sent to pages left open, ClientController.notRunningScreen). */
+  public static final String[] NOT_RUNNING = {"This session isn't running right now",
+      "It has finished, or was interrupted (for example by a server restart). If you were given a "
+      + "link to the study, open it again to join the session that is open now; otherwise, please "
+      + "contact the researcher."};
+
+  /** The heading and words of the Mechanical Turk page for a game that isn't running (amtError). */
+  public static final String[] AMT_NOT_RUNNING = {"This game isn't running",
+      "The game you are trying to join has finished, or is having technical difficulties. Please return "
+      + "this HIT. We hope you will take part in another of our games in the future."};
 
   /** notRunning(), or, for a session that doesn't exist at all (a mistyped or cut-off link), invalidLink(). */
   static play.api.templates.Html notRunning(String experimentId, String experimentInstanceId) {
@@ -89,10 +97,13 @@ public class ClientLogin extends Controller {
   }
 
   static play.api.templates.Html invalidLink() {
-    return participantMessage.render("This link isn't valid",
-        "There is no study session at this address. Please check that you opened the whole link you "
-        + "were given, or contact the researcher.");
+    return participantMessage.render(INVALID_LINK[0], INVALID_LINK[1]);
   }
+
+  /** The heading and words of that page. */
+  public static final String[] INVALID_LINK = {"This link isn't valid",
+      "There is no study session at this address. Please check that you opened the whole link you "
+      + "were given, or contact the researcher."};
 
   /** Whether the experiment has a session with this id. */
   static boolean sessionExists(String experimentId, String experimentInstanceId) {
