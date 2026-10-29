@@ -361,9 +361,10 @@ its waiting room no longer starts the game.
 which session it was until you save or press **Resume**. After three such sessions in a row the
 autopilot pauses instead; a game that comes to its end starts the count again. And once a step has
 failed in its game, a game that has had nothing to wait for during a minute (no choice on anyone's
-screen, no step or timer waiting for its time, no form someone has yet to finish, no chat that is on,
-no other input it listens for) is ended as a failure that stalls it, with a `sessionStalled` event,
-and the autopilot pauses, naming the step. A session you run by hand is never ended this way.
+screen, no step or timer waiting for its time, no form someone has yet to finish, no other input it
+listens for; a chat isn't one, as nothing written there moves a game on) is ended as a failure that
+stalls it, with a `sessionStalled` event, and the autopilot pauses, naming the step. A session you
+run by hand is never ended this way.
 
 Settings saved on this page take precedence over the server's settings file, `conf/local.conf`.
 Until some are saved, a `breadboard.autopilot.experiment` line in `conf/local.conf` turns the

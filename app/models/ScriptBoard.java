@@ -3836,8 +3836,8 @@ public class ScriptBoard extends UntypedActor {
    * (PlayerActions; not one left to a player removed since, which nobody can make), a task on one of
    * the engine's timers (a timed step waiting for its time, a computer player's pick, a takeover, the
    * experiment's own timers) or on an AMT timer, or an input from a participant it listens for
-   * (player.on in groovy/events.groovy: a form they have yet to finish, a chat that is on for them,
-   * tie edits; see waitsFor). True when that can't be told: the stall backstop then ends nothing. A
+   * (player.on in groovy/events.groovy: a form they have yet to finish, tie edits; not the chat, see
+   * waitsFor). True when that can't be told: the stall backstop then ends nothing. A
    * step whose code is running right now is not seen.
    */
   static boolean somethingPending() {
@@ -3955,9 +3955,10 @@ public class ScriptBoard extends UntypedActor {
   /**
    * Whether a listener for an input of {@code player} is something the game waits for. A form's
    * (groovy/form.groovy: its owner has formsKey) only while the player has that form still to finish
-   * (their private[formsKey] has the form's name: finishing it takes that out), the chat's
-   * (groovy/chat.groovy: CHAT_KEY) only while chat is on for them (private[CHAT_KEY]); any other one
-   * always. Both take their listeners off when done; this is for one left on all the same.
+   * (their private[formsKey] has the form's name: finishing it takes that out; a form takes its
+   * listeners off when it is done, and this is for one left on all the same). The chat's
+   * (groovy/chat.groovy: CHAT_KEY) never: it only keeps and records the messages, and nothing a
+   * participant writes there moves the game on. Any other one always.
    */
   private static boolean waitsFor(Object listener, Vertex player) {
     Object owner = listener instanceof Closure ? ((Closure<?>) listener).getOwner() : null;
@@ -3965,16 +3966,12 @@ public class ScriptBoard extends UntypedActor {
       return true;
     }
     groovy.lang.MetaClass meta = ((groovy.lang.GroovyObject) owner).getMetaClass();
-    Object state = player.getProperty("private");
     if (meta.hasProperty(owner, "formsKey") != null) {
+      Object state = player.getProperty("private");
       Object forms = state instanceof Map ? ((Map<?, ?>) state).get(property(owner, "formsKey")) : null;
       return forms instanceof Map && ((Map<?, ?>) forms).containsKey(property(owner, "name"));
     }
-    if (meta.hasProperty(owner, "CHAT_KEY") != null) {
-      return state instanceof Map && org.codehaus.groovy.runtime.typehandling.DefaultTypeTransformation.castToBoolean(
-          ((Map<?, ?>) state).get(property(owner, "CHAT_KEY")));
-    }
-    return true;
+    return meta.hasProperty(owner, "CHAT_KEY") == null;
   }
 
   /** What the participants of a session that ran out of time see (Autopilot's longest session). */

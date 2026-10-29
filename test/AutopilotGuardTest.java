@@ -29,8 +29,8 @@ import static play.test.Helpers.*;
  * pause it, and a game that comes to its end starts the count again. Once a step failure has been
  * recorded in it, a game that has nothing left to wait for is ended as a failure that stalls it is,
  * its participants told it had to stop because of a problem with the study; one that waits for a
- * round's time, a timer, a choice or a participant's input (a form they have yet to finish, a chat
- * that is on) goes on, and a form they finished or a chat switched off is nothing to wait for. A start
+ * round's time, a timer, a choice or a participant's input (a form they have yet to finish) goes on,
+ * and a form they finished or a chat, on or off, is nothing to wait for. A start
  * the console's Start made in its own session that didn't get going ends that session. Stop, and a
  * session stopped because its steps didn't load, turn the computer players off, so a takeover after
  * it never plays the stopped game on. The clock and the stall time are moved here, not waited for.
@@ -888,7 +888,7 @@ public class AutopilotGuardTest extends BaseTest {
         + "noticeStep.done = { }";
 
     @Test
-    public void aFormStillToFinishOrAChatThatIsOnKeepsItWaitingButListenersLeftOnAfterwardsDoNot() throws Exception {
+    public void aFormStillToFinishKeepsItWaitingButAChatOrAFinishedFormsListenerDoesNot() throws Exception {
         final User researcher = user("waitsfor");
         final Experiment experiment = createExperiment("Survey and chat");
         createStep(experiment, "InitStep", SHOWS_A_SURVEY_THEN_FAILS);
@@ -901,22 +901,19 @@ public class AutopilotGuardTest extends BaseTest {
         await("the failure", () -> events(session, "stepFailed").size() == 1);
         assertEquals("RoundStep", value(events(session, "stepFailed").get(0), "step"));
 
-        // The survey is still to be finished.
-        watchWhileRunning("the survey is still to be finished", session, 1000);
-        // Chat is on for them, and they finish the survey (its listeners come off): the chat is still on.
+        // The survey is still to be finished, with chat on for them too.
         engine().eval("chat.enableTextChat(g.getVertex('waits-1')); null");
+        watchWhileRunning("the survey is still to be finished", session, 1000);
+        // They finish it (its listeners come off). The chat is still on, and the finished survey's own
+        // listener is put back on all the same: neither is anything the game waits for (the chat
+        // keeps and records messages, and nothing written there moves the game on).
         engine().eval("events.emit('CustomEvent', [playerId: 'waits-1', eventName: 'f-next', data: [name: 'survey', results: [:]]], "
             + "[clientId: 'waits-1']); null");
         for (String event : FORM_EVENTS) assertEquals(event, 0, listening("waits-1", event));
-        assertEquals(1, listening("waits-1", "chat"));
-        watchWhileRunning("chat is on for them", session, 1000);
-
-        // Listeners left on all the same count for nothing: the finished survey's own one put back on,
-        // and the chat's once chat is off for them (its state taken away, not by disableTextChat).
-        engine().eval("def v = g.getVertex('waits-1'); v.on('f-next', survey.navigationListeners['f-next']); "
-            + "v.private.remove('chatState'); null");
+        engine().eval("def v = g.getVertex('waits-1'); v.on('f-next', survey.navigationListeners['f-next']); null");
         assertEquals(1, listening("waits-1", "f-next"));
         assertEquals(1, listening("waits-1", "chat"));
+        assertEquals(Boolean.TRUE, engineValue("g.getVertex('waits-1').private.chatState.isEnabled"));
         watchUntil("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
         assertEquals(1, events(session, "sessionStalled").size());
         assertTrue(autopilotStatus(researcher).get("paused").asBoolean());
