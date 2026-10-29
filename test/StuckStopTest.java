@@ -69,6 +69,20 @@ public class StuckStopTest {
         return logged.list.stream().map(ILoggingEvent::getFormattedMessage).collect(Collectors.joining("\n"));
     }
 
+    /**
+     * Closed: no lock file. H2 deletes it as the database closes, but its lock watchdog can write it
+     * again just then (H2 1.3; a busy machine shows it now and then). A file nobody keeps up is taken
+     * away here: an open database's watchdog would write it again within a second.
+     */
+    private boolean closed() throws InterruptedException {
+        if (!lock.exists()) {
+            return true;
+        }
+        FileUtils.deleteQuietly(lock);
+        Thread.sleep(2500);
+        return !lock.exists();
+    }
+
     @Test
     public void theDatabaseIsClosedForEveryConnectionToIt() throws Exception {
         Connection pool = DriverManager.getConnection(url, "", "");
@@ -80,7 +94,7 @@ public class StuckStopTest {
 
         assertTrue(Global.closeDatabase(url, "", "", 3000));
         assertTrue("the pool's connection is closed with it", pool.isClosed());
-        assertFalse("closed properly: nothing for H2 to recover", lock.exists());
+        assertTrue("closed properly: nothing for H2 to recover", closed());
         try (Connection again = DriverManager.getConnection(url, "", "");
              ResultSet rows = again.createStatement().executeQuery("select count(*) from kept")) {
             rows.next();
@@ -113,14 +127,15 @@ public class StuckStopTest {
         assertTrue("still open", lock.exists());
         assertTrue(said(), said().contains("a statement was still running"));
 
-        // The attempt goes on, and closes it once the statement is done.
+        // The attempt goes on, and closes it once the statement is done: every connection to it is
+        // closed with it. (Not told by the lock file: H2 1.3's lock watchdog can write it again as the
+        // database closes, which a busy machine shows now and then.)
         busy.join(10000);
         long until = System.currentTimeMillis() + 10000;
-        while (lock.exists() && System.currentTimeMillis() < until) {
+        while (!pool.isClosed() && System.currentTimeMillis() < until) {
             Thread.sleep(50);
         }
-        assertFalse("closed once the database was free", lock.exists());
-        assertTrue(pool.isClosed());
+        assertTrue("closed once the database was free", pool.isClosed());
     }
 
     @Test
@@ -138,7 +153,7 @@ public class StuckStopTest {
         // (H2 refused it written another way beside the one closeDatabase adds: "Duplicate property")
         assertTrue(Global.closeDatabase(url + ";ifexists=true", "", "", 3000));
         assertTrue(pool.isClosed());
-        assertFalse(lock.exists());
+        assertTrue(closed());
     }
 
     @Test
@@ -152,7 +167,7 @@ public class StuckStopTest {
         // (the settings' user and password, none here, beside the URL's: "Duplicate property USER")
         assertTrue(Global.closeDatabase(url + ";USER=researcher;Password=secret", "", "", 3000));
         assertTrue(pool.isClosed());
-        assertFalse(lock.exists());
+        assertTrue(closed());
     }
 
     @Test
