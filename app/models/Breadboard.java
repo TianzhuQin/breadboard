@@ -786,17 +786,23 @@ public class Breadboard extends UntypedActor {
     // An account that has the experiment of the engine's live session selected follows that session,
     // as when it selects the experiment: its console showed "No session is open" beside it, and
     // offered to restart it.
+    boolean followed = false;
     try {
-      ScriptBoard.followLiveSession(user, ScriptBoard.sessionKeptBySelection());
+      followed = ScriptBoard.followLiveSession(user, ScriptBoard.sessionKeptBySelection());
     } catch (Exception e) {
       // (signing in goes on: the account just keeps the session it had)
       Logger.warn("LogIn: " + user.email + " could not follow the live session: " + e);
     }
     // User JSON first, then the network (the ScriptBoard actor writes it after this).
-    out.write(user.toJson());
+    ObjectNode userJson = user.toJson();
+    out.write(userJson);
     // Registered now, not only when the engine actor gets to it (it may be busy for seconds), so
     // this tab already hears of changes made in the account's other tabs.
     ScriptBoard.registerAdmin(user, scriptBoard, out);
+    if (followed) {
+      // The account's other tabs show the session it follows now too, not the one it had.
+      ScriptBoard.toOtherTabs(user.email, userJson, out);
+    }
     scriptBoard.tell(new AddAdmin(user, scriptBoard, out), null);
 
     if (firstIntoEngine) {

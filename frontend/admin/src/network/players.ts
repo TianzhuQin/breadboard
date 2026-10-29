@@ -102,6 +102,32 @@ export function labelOf (n: GraphNode | undefined | null, labelBy?: string | nul
   return typeof v === 'object' ? JSON.stringify(v) : String(v)
 }
 
+/**
+ * The console's name for a computer player g.addAI added: `_6` is "AI 6", as they are AI players on
+ * its badges and filters. Null for anyone else. (A participant's page calls the people around them
+ * Person A, Person B, … in the order that page first shows them, so no one letter is a player's.)
+ */
+export function aiName (id: string): string | null {
+  return /^_\d+$/.test(id) ? `AI ${id.slice(1)}` : null
+}
+
+/**
+ * What to call someone where one line of text names them (the network, the Players table, the
+ * Preview page): "AI 6 (_6)" for a computer player, with the id that scripts, filters and the data
+ * use; anyone else's id.
+ */
+export function playerName (id: string): string {
+  const ai = aiName(id)
+  return ai ? `${ai} (${id})` : id
+}
+
+/** labelOf, with playerName where it would show the bare id. */
+export function displayName (n: GraphNode | undefined | null, labelBy?: string | null, degree?: (id: string) => number): string {
+  if (!n) return ''
+  const label = labelOf(n, labelBy, degree)
+  return label === n.id ? playerName(n.id) : label
+}
+
 export interface PropertyInfo {
   key: string
   label: string

@@ -140,7 +140,7 @@
                     @click.stop="toggle(r.id)"
                   >
                     <span class="plist__dot" :class="`is-${r.tone}`" aria-hidden="true" />
-                    <span class="plist__id-text">{{ r.id }}</span>
+                    <span class="plist__id-text">{{ r.name }}</span>
                   </button>
                 </td>
                 <td><span v-if="r.status" class="plist__status-text" :class="`is-${r.tone}`">{{ r.status }}</span><span v-else class="plist__none" aria-label="unknown">—</span></td>
@@ -159,7 +159,7 @@
         </nav>
       </div>
 
-      <PlayerPanel v-if="selectedPlayer" v-model:width="prefs.panelWidth" variant="sticky" :label="`Details of ${selectedPlayer}`">
+      <PlayerPanel v-if="selectedPlayer" v-model:width="prefs.panelWidth" variant="sticky" :label="`Details of ${playerName(selectedPlayer)}`">
         <PlayerDetails
           :id="selectedPlayer"
           context="players"
@@ -183,7 +183,7 @@ import { uid } from '@/ui/uid'
 import { admin, graph, running } from '@/store/admin'
 import { selectedPlayer, selectPlayer, networkPrefs as prefs, loadColumns, saveColumns } from '@/network/selection'
 import { parseFilter, matchFilter, describeFilter } from '@/network/filter'
-import { columnProperties, connectionOf, discoverProperties, formatValue, isAi, statusOf, choicesOf, valueOf } from '@/network/players'
+import { columnProperties, connectionOf, discoverProperties, formatValue, isAi, playerName, statusOf, choicesOf, valueOf } from '@/network/players'
 import { undoLast } from '@/network/tieEdits'
 import { download } from '@/network/exporters'
 import PlayerPanel from './PlayerPanel.vue'
@@ -296,6 +296,8 @@ function sortBy (key: string) {
 
 interface Row {
   id: string
+  /** As the network and the Preview page name them: "AI 6 (_6)" for a computer player. */
+  name: string
   tone: 'ai' | 'on' | 'off' | 'none'
   status: string
   ties: number
@@ -317,6 +319,7 @@ const rows = computed<Row[]>(() => sorted.value.map(n => {
   const conn = connectionOf(n)
   return {
     id: n.id,
+    name: playerName(n.id),
     tone: isAi(n) ? 'ai' : conn === 'connected' ? 'on' : conn === 'disconnected' ? 'off' : 'none',
     status: statusOf(n),
     ties: degree(n.id),

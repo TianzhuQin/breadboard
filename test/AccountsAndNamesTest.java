@@ -10,7 +10,7 @@ import static play.test.Helpers.*;
 /**
  * Researcher accounts and experiment names: sign-in ignores the email's case and doesn't sign out
  * the account's other browsers; the first account needs a real email address; experiments can be
- * renamed.
+ * renamed; no experiment is created, imported or renamed with a "/" or "\" in its name.
  */
 public class AccountsAndNamesTest extends BaseTest {
 
@@ -116,6 +116,46 @@ public class AccountsAndNamesTest extends BaseTest {
 
         body.put("name", "Not mine");
         assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/experiment/" + a.id + "/name").withJsonBody(body))));
+    }
+
+    @Test
+    public void aNameWithASlashIsRefusedWhereverAnExperimentIsNamed() {
+        Language lang = createLanguage("eng", "English");
+        User user = createUser("slashes@test.org", "Slashes", "password123", lang);
+        Experiment a = createExperiment("Pilot");
+        user.ownedExperiments.add(a);
+        user.update();
+        user.saveManyToManyAssociations("ownedExperiments");
+        final String why = "Names can't contain / or \\ or line breaks.";
+
+        // Created (from the template, as a copy, from an example), as renaming refuses them: the name
+        // makes folders in file mode, dev/Pilot-A/B_<id>/.
+        for (String name : new String[]{"Pilot A/B", "Pilot A\\B", "Two\nline\nbreaks"}) {
+            for (String copy : new String[]{null, String.valueOf(a.id)}) {
+                ObjectNode body = Json.newObject();
+                body.put("newExperimentName", name);
+                if (copy != null) body.put("copyExperimentId", Long.valueOf(copy));
+                Result made = route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(body, PUT));
+                assertEquals(name, BAD_REQUEST, status(made));
+                assertEquals(why, contentAsString(made));
+            }
+        }
+        ObjectNode example = Json.newObject();
+        example.put("newExperimentName", "Game 1/2");
+        example.put("example", "network-game");
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(example, PUT))));
+        // Imported (the name is a path segment, so a "/" in it comes encoded)
+        Result imported = route(fakeRequest(POST, "/experiment/import/Pilot%20A%2FB").withSession("uid", user.uid));
+        assertEquals(BAD_REQUEST, status(imported));
+        assertEquals(why, contentAsString(imported));
+        // Renamed: line breaks anywhere in it, not only one
+        ObjectNode rename = Json.newObject();
+        rename.put("name", "Two\nline\nbreaks");
+        Result renamed = route(fakeRequest(POST, "/experiment/" + a.id + "/name").withSession("uid", user.uid).withJsonBody(rename));
+        assertEquals(BAD_REQUEST, status(renamed));
+        assertEquals(why, contentAsString(renamed));
+        assertEquals("nothing was made", 1, Experiment.findAll().size());
+        assertEquals("Pilot", Experiment.findById(a.id).name);
     }
 
     @Test

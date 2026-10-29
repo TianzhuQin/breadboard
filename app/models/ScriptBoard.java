@@ -1304,7 +1304,17 @@ public class ScriptBoard extends UntypedActor {
           }
           // Save script in database
           breadboardMessage.user.currentScript = sendScript.script;
-          breadboardMessage.user.update();
+          try {
+            breadboardMessage.user.update();
+          } catch (javax.persistence.OptimisticLockException changedMeanwhile) {
+            // The account changed since this copy was loaded (e.g. it followed a session that went live
+            // while this waited for the lock): Ebean refuses a stale copy, and the script didn't run.
+            User fresh = User.findByEmail(breadboardMessage.user.email);
+            if (fresh != null) {
+              fresh.currentScript = sendScript.script;
+              fresh.update();
+            }
+          }
 
           // Process script
           processScript(sendScript.script, breadboardMessage.out, null, "request", "SendScript", sendScript.requestId);
@@ -1591,18 +1601,108 @@ public class ScriptBoard extends UntypedActor {
    * The account selected an experiment (or signed in with one selected) while the engine runs the live
    * session {@code live}: only its selection changes (the caller saves it). When that session is of
    * the experiment selected, the account follows it, as one whose selection the autopilot's session
-   * is of does, so its consoles show the session the engine runs rather than an older one.
+   * is of does, so its consoles show the session the engine runs rather than an older one. Returns
+   * whether the account's session changed (its other tabs then need its User JSON).
    */
-  static void followLiveSession(User user, ExperimentInstance live) {
+  static boolean followLiveSession(User user, ExperimentInstance live) {
     if (user == null || user.selectedExperiment == null || live == null || live.id == null || live.isTestInstance()) {
-      return;
+      return false;
     }
     Long of = live.experiment == null ? null : live.experiment.id;
     if (of == null || !of.equals(user.selectedExperiment.id) || live.id.equals(user.experimentInstanceId)) {
-      return;
+      return false;
     }
     user.setExperimentInstanceId(live.id);
     user.update();
+    return true;
+  }
+
+  /**
+   * A session has gone live in the engine (launched, or resumed or taken up again by SelectInstance):
+   * every account that has its experiment selected follows it (followLiveSession), as when it selects
+   * the experiment or signs in. Those used to be the only times, so once the session it followed had
+   * ended, a researcher who isn't the autopilot's account kept the finished one, with New session
+   * offered, while the autopilot ran its next one; nor did a session of their experiment that went
+   * live while their console was open reach it. An account's own session has ended by now, if it had
+   * one: the engine runs one at a time, and this one now. Under the engine lock, so no other change of
+   * the engine comes in between. Returns the accounts in it now (those that followed it already too,
+   * whose previous console showed it stopped), for tellAccounts; not {@code actor}, the account that
+   * launched or selected it, which gets its User JSON anyway.
+   */
+  private static List<String> moveFollowersTo(ExperimentInstance live, User actor) {
+    List<String> following = new ArrayList<String>();
+    if (live == null || live.id == null || live.isTestInstance() || live.experiment == null) {
+      return following;
+    }
+    sawLiveSession(live.id);
+    for (User user : User.find.where().eq("selectedExperiment.id", live.experiment.id).findList()) {
+      if (actor != null && actor.email != null && actor.email.equalsIgnoreCase(user.email)) {
+        continue;
+      }
+      try {
+        followLiveSession(user, live);
+        if (live.id.equals(user.experimentInstanceId)) {
+          following.add(user.email);
+        }
+      } catch (Exception e) {
+        // (that account keeps the session it had; the others follow all the same)
+        Logger.warn("Could not move " + user.email + " to session " + live.id + ": " + e);
+      }
+    }
+    return following;
+  }
+
+  /** Every open console tab of these accounts gets its User JSON again: their session changed. */
+  static void tellAccounts(Collection<String> emails) {
+    for (String email : emails) {
+      if (!consoleOpen(email)) {
+        continue;
+      }
+      try {
+        User fresh = User.findByEmail(email);
+        if (fresh != null) {
+          toAccount(email, fresh.toJson());
+        }
+      } catch (Exception e) {
+        Logger.warn("Could not send " + email + " its User JSON: " + e);
+      }
+    }
+  }
+
+  /** Whether the account has a console tab open. */
+  private static boolean consoleOpen(String email) {
+    for (Admin admin : admins) {
+      User user = admin.getUser();
+      if (user != null && user.email != null && user.email.equalsIgnoreCase(email)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The engine's live session {@code ended} has ended (finished, stopped, ended by the autopilot or a
+   * guard, or replaced): every account with a console open whose session it is gets its User JSON,
+   * which shows how it ended. The new console asks for it when it hears the engine news; the previous
+   * one (/legacy-admin) doesn't read that news, and kept showing a followed session running after it
+   * finished or another account stopped it.
+   */
+  private static void tellWhoseSessionEnded(Long ended) {
+    Set<String> asked = new HashSet<String>();
+    for (Admin admin : admins) {
+      User user = admin.getUser();
+      if (user == null || user.email == null || !asked.add(user.email.toLowerCase(Locale.ENGLISH))) {
+        continue;
+      }
+      try {
+        User fresh = User.findByEmail(user.email);
+        if (fresh != null && ended.equals(fresh.experimentInstanceId)) {
+          toAccount(fresh.email, fresh.toJson());
+        }
+      } catch (Exception e) {
+        Logger.warn("Could not tell " + user.email + " that session " + ended + " ended: " + e);
+      }
+    }
   }
 
   /**
@@ -1886,6 +1986,19 @@ public class ScriptBoard extends UntypedActor {
   private static final java.util.concurrent.atomic.AtomicBoolean engineNewsDue = new java.util.concurrent.atomic.AtomicBoolean(false);
   // One push at a time, so the last one out says what runs now.
   private static final Object ENGINE_NEWS_LOCK = new Object();
+  // The live session the engine was last seen to run (as one went live, and at each push), and those
+  // seen live that have ended since, whose accounts are still to be told (tellWhoseSessionEnded). Seen
+  // at both: a session that went live and ended between two pushes was in none. Under REBUILD_LOCK.
+  private static Long liveSessionSeen = null;
+  private static final Set<Long> endedUntold = new LinkedHashSet<Long>();
+
+  /** The engine runs this live session now (null: none). Under REBUILD_LOCK. */
+  private static void sawLiveSession(Long live) {
+    if (liveSessionSeen != null && !liveSessionSeen.equals(live)) {
+      endedUntold.add(liveSessionSeen);
+    }
+    liveSessionSeen = live;
+  }
 
   /**
    * The engine's session or experiment has changed: a session launched, resumed, started, stopped,
@@ -1915,18 +2028,31 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
-  /** {@code {"engine": ...}} to every open console, read under the engine lock (never half-way through a change). */
+  /**
+   * {@code {"engine": ...}} to every open console, read under the engine lock (never half-way through a
+   * change). When a live session has ended since the last push, the accounts whose session it is get
+   * their User JSON first (tellWhoseSessionEnded).
+   */
   private static void tellEngineNews() {
     synchronized (ENGINE_NEWS_LOCK) {
       engineNewsDue.set(false);
       ObjectNode news = Json.newObject();
+      List<Long> ended;
       try {
         synchronized (REBUILD_LOCK) {
-          news.put("engine", engineJson());
+          ObjectNode engineNow = engineJson();
+          news.put("engine", engineNow);
+          JsonNode sessionId = engineNow.get("sessionId");
+          sawLiveSession(sessionId != null && sessionId.isNumber() ? sessionId.asLong() : null);
+          ended = new ArrayList<Long>(endedUntold);
+          endedUntold.clear();
         }
       } catch (Exception e) {
         Logger.warn("Could not tell the consoles what the engine runs: " + e);
         return;
+      }
+      for (Long session : ended) {
+        tellWhoseSessionEnded(session);
       }
       toAllAdmins(news);
     }
@@ -2029,6 +2155,8 @@ public class ScriptBoard extends UntypedActor {
       user.setSelectedExperiment(experiment);
     }
 
+    // The other accounts working on this experiment, which follow the new session.
+    List<String> following = Collections.emptyList();
     synchronized (REBUILD_LOCK) {
       // Asked a moment ago: still wanted now that it runs? (A researcher may have paused it,
       // launched a session or loaded another experiment meanwhile.)
@@ -2070,7 +2198,13 @@ public class ScriptBoard extends UntypedActor {
           Autopilot.stepsFailed(instance, failed);
         }
       }
+      // (not into a session the autopilot stopped already, above)
+      if (!byAutopilot || failed == null) {
+        following = moveFollowersTo(instance, user);
+      }
     }
+    // Their consoles show it, before the engine news reaches them (they needn't ask then).
+    tellAccounts(following);
     engineChanged();
 
     // Update User JSON (in every tab of the account)
@@ -2184,6 +2318,8 @@ public class ScriptBoard extends UntypedActor {
     }
     boolean resuming = target.status == ExperimentInstance.Status.STOPPED;
 
+    // The other accounts working on its experiment, which follow it once it is live again.
+    List<String> following = Collections.emptyList();
     synchronized (REBUILD_LOCK) {
       // The engine's current session ends (the account that started it may be another one), and so
       // does this actor's own; the selected one carries on (restarted) if it still can.
@@ -2196,7 +2332,20 @@ public class ScriptBoard extends UntypedActor {
       rebuildScriptBoard(experiment, builtFor(selectInstance));
       loadSteps(experiment, selectInstance.out);
       user.setExperimentInstanceId(target.id);
-      user.update();
+      try {
+        user.update();
+      } catch (javax.persistence.OptimisticLockException changedMeanwhile) {
+        // As in startGame: the account changed since this copy was loaded (e.g. it followed a session
+        // that went live while this waited for the lock), and the selection stopped half-way, with the
+        // engine rebuilt and no session in it. Saved on a fresh copy instead.
+        User fresh = User.findByEmail(user.email);
+        if (fresh == null) {
+          throw changedMeanwhile;
+        }
+        fresh.setExperimentInstanceId(target.id);
+        fresh.setSelectedExperiment(user.selectedExperiment);
+        fresh.update();
+      }
 
       stopSession(gameListener);
       if (previous != null && previous != gameListener) {
@@ -2224,12 +2373,14 @@ public class ScriptBoard extends UntypedActor {
         }
 
         instanceData.addPropertyChangeListener(new UserDataChangeListener(instance));
+        following = moveFollowersTo(instance, user);
       } else {
         // A finished session is shown, not restarted: the engine runs no session now.
         gameListener.experimentInstance = null;
       }
       engineChanged();
     }
+    tellAccounts(following);
     //don't know why... ebean bug? if don't do this, the instances in the selectedExperiment doesn't get updated
     //which is causing the launch button still shows up (because the status isn't updated) instead of the stop button for the instance
     user.selectedExperiment = Experiment.findById(experiment.id);

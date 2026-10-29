@@ -132,8 +132,11 @@ public class FileWatcher {
   }
 
   /**
-   * The experiment in file mode whose folder (dev/&lt;name&gt;_&lt;id&gt;/) holds this file, or null. The
-   * whole folder name must match: matching part of the path took dev/Big-Trust_12/ for dev/Trust_1/.
+   * The experiment in file mode whose folder (dev/&lt;name&gt;_&lt;id&gt;/) holds this file, or null. Whole
+   * folder names must match: matching part of one took dev/Big-Trust_12/ for dev/Trust_1/. The folder
+   * can be more than one deep: a name with a "/" in it (older databases and the API took them) makes
+   * dev/Pilot-A/B_7/, whose step files were never loaded when only the first folder was compared. When
+   * two folders hold the file, the deeper one is the experiment's.
    */
   static Experiment experimentOf(Path devDir, Path file) {
     Path relative;
@@ -145,13 +148,25 @@ public class FileWatcher {
     if (relative.getNameCount() < 2 || relative.startsWith("..")) {
       return null;
     }
-    String folder = relative.getName(0).toString();
+    Experiment found = null;
+    int depth = 0;
     for (Experiment experiment : Experiment.find.where().eq("fileMode", true).findList()) {
-      if (folder.equals(experiment.getDirectoryName())) {
-        return experiment;
+      Path folder;
+      try {
+        folder = devDir.getFileSystem().getPath(experiment.getDirectoryName()).normalize();
+      } catch (InvalidPathException notAFolderName) {
+        continue;
+      }
+      if (folder.isAbsolute() || folder.startsWith("..") || folder.getNameCount() <= depth) {
+        continue;
+      }
+      // (a file inside the folder, not the folder itself)
+      if (relative.getNameCount() > folder.getNameCount() && relative.startsWith(folder)) {
+        found = experiment;
+        depth = folder.getNameCount();
       }
     }
-    return null;
+    return found;
   }
 
   /** The consoles working on one of these experiments get their User JSON again, to show its files. */

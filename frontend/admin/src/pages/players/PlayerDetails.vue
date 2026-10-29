@@ -178,7 +178,7 @@ import { uid } from '@/ui/uid'
 import { admin, engineElsewhere, ensureConnected, graph, NOT_CONNECTED } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import {
-  NOISY_LINK_KEYS, autopilotOf, choicesOf, compareIds, connectionOf, isAi, isTie, labelOf, recruitmentOf, type Choice,
+  NOISY_LINK_KEYS, aiName, autopilotOf, choicesOf, compareIds, connectionOf, displayName, isAi, isTie, labelOf, recruitmentOf, type Choice,
 } from '@/network/players'
 import { editTie, isPending, tieEditsBlocked } from '@/network/tieEdits'
 import ParticipantScreen from './ParticipantScreen.vue'
@@ -219,7 +219,15 @@ const node = computed(() => {
   const n = graph.nodes.get(props.id)
   return n ? { id: n.id, data: n.data } : null
 })
-const nameFor = (id: string) => labelOf(graph.nodes.get(id) || { id, data: {} }, props.labelBy)
+// A computer player is "AI 6" here, with its id beside it as for anyone with a name ("AI 6 (_6)" in
+// one line elsewhere); people with no name are their id.
+const nameFor = (id: string) => {
+  const label = labelOf(graph.nodes.get(id) || { id, data: {} }, props.labelBy)
+  return (label === id && aiName(id)) || label
+}
+// people first, then computer players (as compareIds puts their ids), each by the name shown
+const byName = (a: { id: string, label: string }, b: { id: string, label: string }) =>
+  (Number(a.id.startsWith('_')) - Number(b.id.startsWith('_'))) || compareIds(a.label, b.label)
 const name = computed(() => { void graph.version.value; return nameFor(props.id) })
 const ai = computed(() => isAi(node.value))
 const connection = computed(() => connectionOf(node.value))
@@ -295,7 +303,7 @@ const neighbors = computed<Neighbor[]>(() => {
     nb.props += data.length
     nb.links[tie ? 'unshift' : 'push']({ id: l.id, kind, data })
   }
-  return Array.from(byId.values()).sort((a, b) => compareIds(a.label, b.label))
+  return Array.from(byId.values()).sort(byName)
 })
 const openTies = ref(new Set<string>())
 function toggleTie (other: string) {
@@ -312,7 +320,7 @@ const candidates = computed<TieCandidate[]>(() => {
     if (other === props.id || tied.has(other)) continue
     out.push({ id: other, label: nameFor(other), tone: toneOf(other) })
   }
-  return out.sort((a, b) => compareIds(a.label, b.label))
+  return out.sort(byName)
 })
 
 // ---- properties ----------------------------------------------------------------------------------
@@ -391,11 +399,13 @@ async function choose (c: Choice) {
 const canEdit = computed(() => !tieEditsBlocked.value)
 const editBlockedReason = tieEditsBlocked
 
+// (what the edit says once done, away from this panel: names in one line, as on the network)
+const lineName = (id: string) => displayName(graph.nodes.get(id) || { id, data: {} }, props.labelBy)
 function cut (other: string) {
-  void editTie('remove', props.id, other, { name: nameFor })
+  void editTie('remove', props.id, other, { name: lineName })
 }
 function tieTo (other: string) {
-  void editTie('add', props.id, other, { name: nameFor })
+  void editTie('add', props.id, other, { name: lineName })
 }
 
 // a different player: start from the top, without the old search

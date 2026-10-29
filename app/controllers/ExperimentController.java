@@ -53,6 +53,10 @@ public class ExperimentController extends Controller {
       return badRequest("Please provide a name for the new experiment.");
     }
     newExperimentName = newExperimentName.trim();
+    String refused = nameRefused(newExperimentName);
+    if (refused != null) {
+      return badRequest(refused);
+    }
     String taken = nameTaken(newExperimentName, null);
     if (taken != null) {
       return badRequest("There is already an experiment called \"" + taken + "\".");
@@ -101,6 +105,20 @@ public class ExperimentController extends Controller {
   }
 
   /**
+   * Why an experiment can't be called {@code name}, or null when it can. The name makes folder names
+   * (dev/&lt;name&gt;_&lt;id&gt;/ in file mode), where a "/" (on Windows "\" too) makes a folder in a
+   * folder. Checked wherever an experiment is named: created, imported or renamed (only renaming used
+   * to check).
+   */
+  static String nameRefused(String name) {
+    // ((?s) lets "." match line breaks too: without it, a name with two of them got through)
+    if (name.contains("/") || name.contains("\\") || name.matches("(?s).*\\p{Cntrl}.*")) {
+      return "Names can't contain / or \\ or line breaks.";
+    }
+    return null;
+  }
+
+  /**
    * The name of the experiment already called {@code name} (ignoring case and outer spaces), other
    * than the one with id {@code exceptId}; null when there is none. Names are unique on a server:
    * every researcher works on every experiment, and some tools find experiments by name.
@@ -136,8 +154,9 @@ public class ExperimentController extends Controller {
     if (name.length() > 120) {
       return badRequest("Keep the name under 120 characters.");
     }
-    if (name.contains("/") || name.contains("\\") || name.matches(".*\\p{Cntrl}.*")) {
-      return badRequest("Names can't contain / or \\ or line breaks.");
+    String refused = nameRefused(name);
+    if (refused != null) {
+      return badRequest(refused);
     }
     if (Boolean.TRUE.equals(experiment.fileMode)) {
       return badRequest("Leave file mode first: in file mode, the experiment's folder is named after it.");
@@ -168,6 +187,10 @@ public class ExperimentController extends Controller {
     String name = experimentName == null ? "" : experimentName.trim();
     if (name.isEmpty()) {
       return badRequest("Please provide a name for the imported experiment.");
+    }
+    String refused = nameRefused(name);
+    if (refused != null) {
+      return badRequest(refused);
     }
     String taken = nameTaken(name, null);
     if (taken != null) {
