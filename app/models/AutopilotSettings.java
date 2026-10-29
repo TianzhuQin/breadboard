@@ -25,7 +25,7 @@ public final class AutopilotSettings {
   public static final int MAX_PLAYERS = 10000;
   /** The longest session that can be set: a day, in minutes. */
   public static final int MAX_SESSION_MINUTES = 1440;
-  /** What a session's game may run by default before the autopilot ends it (see maxSessionMinutes). */
+  /** What new settings allow a session's game to run before the autopilot ends it (see maxSessionMinutes). */
   public static final int DEFAULT_SESSION_MINUTES = 120;
 
   public boolean enabled = false;
@@ -34,7 +34,9 @@ public final class AutopilotSettings {
   public int nextSessionDelaySeconds = 10;
   // How long the game of the autopilot's own session may run, in minutes, before it is ended
   // (Autopilot.watchdog); null: no limit. A game that never ends (a script waiting for something
-  // that never comes) otherwise held the engine, and the study, for good.
+  // that never comes) otherwise held the engine, and the study, for good. New settings start with
+  // two hours; settings saved before there was a limit have none (the column has no default), so an
+  // unattended study whose games run longer goes on as it was after an upgrade.
   public Integer maxSessionMinutes = DEFAULT_SESSION_MINUTES;
 
   public boolean waitingRoomEnabled = true;
@@ -252,7 +254,8 @@ public final class AutopilotSettings {
   /**
    * The table as evolutions 31 and 34 make it. Installs that run with evolutions off
    * (application-prod.conf) ship a ready-made database, so the table is also created here, the first
-   * time it is needed; Global adds evolution 34's column to one an older release made.
+   * time it is needed; Global adds evolution 34's column to one an older release made
+   * (ADD_LONGEST_SESSION).
    */
   static final String CREATE_TABLE =
       "create table if not exists autopilot_settings (\n"
@@ -262,7 +265,7 @@ public final class AutopilotSettings {
           + "  operator_email              varchar(255),\n"
           + "  continuous                  boolean default true not null,\n"
           + "  next_session_delay_seconds  integer default 10 not null,\n"
-          + "  max_session_minutes         integer default " + DEFAULT_SESSION_MINUTES + ",\n"
+          + "  max_session_minutes         integer,\n"
           + "  waiting_room_enabled        boolean default true not null,\n"
           + "  min_players                 integer default 2 not null,\n"
           + "  max_players                 integer,\n"
@@ -274,6 +277,13 @@ public final class AutopilotSettings {
           + "  return_to_human             boolean default true not null,\n"
           + "  updated_at                  timestamp,\n"
           + "  constraint pk_autopilot_settings primary key (id))";
+
+  /**
+   * Evolution 34's statement, which Global also runs at startup for a table an older release made.
+   * No default: settings saved before read back null, no limit (see maxSessionMinutes).
+   */
+  public static final String ADD_LONGEST_SESSION =
+      "alter table autopilot_settings add column if not exists max_session_minutes integer";
 
   private static void ensureTable() {
     if (!tableChecked) {

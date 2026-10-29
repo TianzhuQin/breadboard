@@ -27,9 +27,11 @@ import static play.test.Helpers.*;
  * may run maxSessionMinutes at most: a longer one is ended, its participants told it ran out of time
  * (a completion code on screen stays), the session finished, and the next one opens; three in a row
  * pause it, and a game that comes to its end starts the count again. Once a step failure has been
- * recorded in it, a game that has nothing left to wait for is ended as a failure that stalls it is;
- * one that waits for a round's time, a timer, a choice or a participant's input goes on. A start the
- * console's Start made in its own session that didn't get going ends that session. Stop, and a
+ * recorded in it, a game that has nothing left to wait for is ended as a failure that stalls it is,
+ * its participants told it had to stop because of a problem with the study; one that waits for a
+ * round's time, a timer, a choice or a participant's input (a form they have yet to finish, a chat
+ * that is on) goes on, and a form they finished or a chat switched off is nothing to wait for. A start
+ * the console's Start made in its own session that didn't get going ends that session. Stop, and a
  * session stopped because its steps didn't load, turn the computer players off, so a takeover after
  * it never plays the stopped game on. The clock and the stall time are moved here, not waited for.
  */
@@ -238,6 +240,30 @@ public class AutopilotGuardTest extends BaseTest {
         void socketClosed() throws Throwable {
             for (F.Callback0 cb : in.closeCallbacks) cb.invoke();
         }
+
+        /** The page sends a player event, as Breadboard.send(eventName, data) does (frontend/core). */
+        void send(String playerId, String eventName, ObjectNode data) throws Throwable {
+            ObjectNode message = Json.newObject();
+            message.put("action", "CustomEvent");
+            message.put("playerId", playerId);
+            message.put("eventName", eventName);
+            message.set("data", data);
+            for (F.Callback<JsonNode> cb : in.callbacks) cb.invoke(message);
+        }
+    }
+
+    /** What a form's page sends when Next, or Done on its last page, is pressed (Form.vue). */
+    private static ObjectNode next(String form) {
+        ObjectNode data = Json.newObject();
+        data.put("name", form);
+        data.putObject("results");
+        return data;
+    }
+
+    /** How many listeners the scripts' event bus has for a player's event (events.groovy's "__player-<id>-<event>"). */
+    private static int listening(String playerId, String event) {
+        Object n = engineValue("events.events['__player-" + playerId + "-" + event + "']?.closures?.size() ?: 0");
+        return n == null ? -1 : ((Number) n).intValue();
     }
 
     /** What a page that comes back to a session that has ended is sent (ScriptBoard.endedSessionScreen). */
@@ -729,6 +755,131 @@ public class AutopilotGuardTest extends BaseTest {
         assertEquals(0, events(session, "sessionStalled").size());
     }
 
+    // A one-page consent form (groovy/form.groovy) for everyone; once a participant is done with it,
+    // a round whose done starts a side step and then fails before the next round, as above.
+    private static final String CONSENT_THEN_A_ROUND_THAT_FAILS = "consent = new Form([name: 'consent'])\n"
+        + "consent.addPage([title: 'Consent', blocks: [[type: 'html', content: 'Do you agree to take part?']]])\n"
+        + "consent.onDone { p -> roundStep.start() }\n"
+        + "initStep = stepFactory.createStep('InitStep')\n"
+        + "initStep.run = {\n"
+        + "  g.V.filter { !it.id.startsWith('_') }.each { consent.addPlayer(it) }\n"
+        + "  consent.start()\n"
+        + "}\n"
+        + "initStep.done = { }\n"
+        + "roundStep = stepFactory.createStep('RoundStep')\n"
+        + "roundStep.duration = 0.3\n"
+        + "roundStep.run = { }\n"
+        + "roundStep.done = {\n"
+        + "  noticeStep.start()\n"
+        + "  println \"round ${roundd} done\"\n"
+        + "  round2Step.start()\n"
+        + "}\n"
+        + "noticeStep = stepFactory.createStep('NoticeStep')\n"
+        + "noticeStep.duration = 0.5\n"
+        + "noticeStep.run = { }\n"
+        + "noticeStep.done = { }\n"
+        + "round2Step = stepFactory.createStep('Round2Step')\n"
+        + "round2Step.duration = 60\n"
+        + "round2Step.run = { }\n"
+        + "round2Step.done = { }";
+
+    private static final String[] FORM_EVENTS = {"f-next", "f-prev", "f-seek", "f-fetch"};
+
+    @Test
+    public void aParticipantWhoFinishedAConsentFormLeavesNothingToWaitForSoTheStalledGameEnds() throws Throwable {
+        final User researcher = user("consent");
+        final Experiment experiment = createExperiment("Consent first");
+        createStep(experiment, "InitStep", CONSENT_THEN_A_ROUND_THAT_FAILS);
+        own(researcher, experiment);
+        assertEquals(OK, status(post(researcher, settings(experiment, 1, 1, 120))));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        Page page = joins(experiment, session, "consent-1");
+        await("the consent form", () -> Boolean.TRUE.equals(engineValue("g.getVertex('consent-1')?.private?.forms?.consent != null")));
+        for (String event : FORM_EVENTS) assertEquals(event, 1, listening("consent-1", event));
+
+        // They press Done on its only page: the round starts, and its done fails after the notice got going.
+        page.send("consent-1", "f-next", next("consent"));
+        await("the failure", () -> events(session, "stepFailed").size() == 1);
+        assertEquals("RoundStep", value(events(session, "stepFailed").get(0), "step"));
+        // Done with the form, they have none of its listeners left.
+        assertEquals(Boolean.FALSE, engineValue("'forms' in g.getVertex('consent-1').private"));
+        for (String event : FORM_EVENTS) assertEquals(event, 0, listening("consent-1", event));
+
+        // Once the notice's time is over, the game has nothing left to wait for: the backstop ends it.
+        watchUntil("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        assertEquals(1, events(session, "sessionStalled").size());
+        JsonNode st = autopilotStatus(researcher);
+        assertTrue(st.toString(), st.get("paused").asBoolean());
+        String problem = st.get("problem").asText();
+        assertTrue(problem, problem.contains("the step \"RoundStep\" failed during its session \"" + session.name + "\"")
+            && problem.contains("No such property: roundd") && problem.contains("nothing left to do"));
+        // Its participant is told the session had to stop because of a problem with the study: no
+        // researcher stopped it. A page that comes back gets the same.
+        JsonNode screen = page.lastPlayer().get("player");
+        assertEquals(screen.toString(), "problem", screen.get("ended").asText());
+        assertTrue(screen.toString(), screen.get("text").asText().contains("It had to stop because of a problem with the study."));
+        assertFalse(screen.toString(), screen.get("text").asText().contains("researcher stopped"));
+        assertTrue(page.closed);
+        assertEquals("problem", endedScreen(session, "consent-1").get("player").get("ended").asText());
+    }
+
+    // A round whose done shows a one-page survey to everyone and starts a side step, then fails: from
+    // then on the game waits for nothing but what its participant does.
+    private static final String SHOWS_A_SURVEY_THEN_FAILS = "survey = new Form([name: 'survey'])\n"
+        + "survey.addPage([title: 'Survey', blocks: [[type: 'html', content: 'Thank you!']]])\n"
+        + "chat = new ChatManager()\n"
+        + "initStep = stepFactory.createStep('InitStep')\n"
+        + "initStep.run = { }\n"
+        + "initStep.done = { roundStep.start() }\n"
+        + "roundStep = stepFactory.createStep('RoundStep')\n"
+        + "roundStep.duration = 0.3\n"
+        + "roundStep.run = { }\n"
+        + "roundStep.done = {\n"
+        + "  g.V.filter { !it.id.startsWith('_') }.each { survey.addPlayer(it) }\n"
+        + "  survey.start()\n"
+        + "  noticeStep.start()\n"
+        + "  println \"round ${roundd} done\"\n"
+        + "}\n"
+        + "noticeStep = stepFactory.createStep('NoticeStep')\n"
+        + "noticeStep.duration = 0.3\n"
+        + "noticeStep.run = { }\n"
+        + "noticeStep.done = { }";
+
+    @Test
+    public void aFormStillToFinishOrAChatThatIsOnKeepsItWaitingButListenersLeftOnAfterwardsDoNot() throws Exception {
+        final User researcher = user("waitsfor");
+        final Experiment experiment = createExperiment("Survey and chat");
+        createStep(experiment, "InitStep", SHOWS_A_SURVEY_THEN_FAILS);
+        own(researcher, experiment);
+        ObjectNode s = settings(experiment, 1, 1, 120);
+        s.put("continuous", false);   // (no next session as the test ends)
+        assertEquals(OK, status(post(researcher, s)));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        arrives("waits-1");
+        await("the failure", () -> events(session, "stepFailed").size() == 1);
+        assertEquals("RoundStep", value(events(session, "stepFailed").get(0), "step"));
+
+        // The survey is still to be finished.
+        watchWhileRunning("the survey is still to be finished", session, 1000);
+        // Chat is on for them, and they finish the survey (its listeners come off): the chat is still on.
+        engine().eval("chat.enableTextChat(g.getVertex('waits-1')); null");
+        engine().eval("events.emit('CustomEvent', [playerId: 'waits-1', eventName: 'f-next', data: [name: 'survey', results: [:]]], "
+            + "[clientId: 'waits-1']); null");
+        for (String event : FORM_EVENTS) assertEquals(event, 0, listening("waits-1", event));
+        assertEquals(1, listening("waits-1", "chat"));
+        watchWhileRunning("chat is on for them", session, 1000);
+
+        // Listeners left on all the same count for nothing: the finished survey's own one put back on,
+        // and the chat's once chat is off for them (its state taken away, not by disableTextChat).
+        engine().eval("def v = g.getVertex('waits-1'); v.on('f-next', survey.navigationListeners['f-next']); "
+            + "v.private.remove('chatState'); null");
+        assertEquals(1, listening("waits-1", "f-next"));
+        assertEquals(1, listening("waits-1", "chat"));
+        watchUntil("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        assertEquals(1, events(session, "sessionStalled").size());
+        assertTrue(autopilotStatus(researcher).get("paused").asBoolean());
+    }
+
     // ---- the console's Start in the autopilot's own session ----------------------------------------
 
     @Test
@@ -746,7 +897,7 @@ public class AutopilotGuardTest extends BaseTest {
         assertEquals(OK, status(post(researcher, s)));
         final ExperimentInstance session = nextSession(experiment, 1);
         final AdminSocketsTest.Tab tab = watching(researcher);
-        arrives("cs-a");
+        Page page = joins(experiment, session, "cs-a");
 
         // A researcher watching presses Start on the console: its waiting room is told the game began.
         tab.send("RunGame");
@@ -762,6 +913,10 @@ public class AutopilotGuardTest extends BaseTest {
         assertEquals("InitStep", value(failed.get(0), "step"));
         assertEquals("the console that pressed Start has the error once", 1,
             tab.count(f -> f.has("error") && f.get("error").asText().contains("initt")));
+        // Its participant is told the session had to stop because of a problem with the study.
+        await("the participant told", () -> page.closed);
+        assertEquals(page.last().toString(), "problem", page.lastPlayer().get("player").get("ended").asText());
+        assertTrue(page.lastPlayer().get("player").get("text").asText().contains("because of a problem with the study"));
     }
 
     @Test
@@ -826,6 +981,9 @@ public class AutopilotGuardTest extends BaseTest {
         assertEquals("still stopped, so it can be resumed", ExperimentInstance.Status.STOPPED,
             ExperimentInstance.findById(session.id).status);
         assertTrue(second.closed);
+        // (a researcher stopped it, and its pages say so)
+        assertEquals("stopped", second.lastPlayer().get("player").get("ended").asText());
+        assertTrue(second.lastPlayer().get("player").get("text").asText().contains("The researcher stopped this session"));
     }
 
     @Test

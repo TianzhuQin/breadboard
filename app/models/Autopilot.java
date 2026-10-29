@@ -51,13 +51,14 @@ import java.util.concurrent.TimeUnit;
  * {@code /play/{experimentId}/login} and {@code /play/{experimentId}/prolific?PROLIFIC_PID=...}.
  *
  * <p>The settings come from the console (GET/POST /autopilot, kept in the database as
- * {@link AutopilotSettings}). Until they are saved there, application.conf can turn it on:
+ * {@link AutopilotSettings}). Until they are saved there, the server's settings file (conf/local.conf
+ * in a release) can turn it on:
  * <pre>
  * breadboard.autopilot.experiment = "My experiment"   # experiment name; unset = autopilot off
  * breadboard.autopilot.user = "researcher@lab.org"    # admin account it runs as (default: first user)
  * breadboard.autopilot.continuous = true              # open a new session when one finishes
  * breadboard.autopilot.nextSessionDelaySeconds = 10
- * breadboard.autopilot.maxSessionMinutes = 120        # longest a session's game may run; 0 = no limit
+ * breadboard.autopilot.maxSessionMinutes = 120        # longest a session's game may run; 0 or unset = no limit
  * </pre>
  */
 public final class Autopilot {
@@ -206,8 +207,9 @@ public final class Autopilot {
     s.experimentId = experiment == null ? null : experiment.id;
     s.continuous = conf.getBoolean("breadboard.autopilot.continuous", false);
     s.nextSessionDelaySeconds = Math.max(0, conf.getInt("breadboard.autopilot.nextSessionDelaySeconds", 10));
-    // (left out: the default; 0 or less: no limit)
-    int minutes = conf.getInt("breadboard.autopilot.maxSessionMinutes", AutopilotSettings.DEFAULT_SESSION_MINUTES);
+    // (left out, or 0 or less: no limit. A study set up in the file before there was a limit goes on as
+    // it was: its games may run longer than the 2 hours new settings start with.)
+    int minutes = conf.getInt("breadboard.autopilot.maxSessionMinutes", 0);
     s.maxSessionMinutes = minutes <= 0 ? null : Math.min(minutes, AutopilotSettings.MAX_SESSION_MINUTES);
     // The experiment's own scripts set the waiting room up; the file doesn't override them.
     s.waitingRoomEnabled = false;
@@ -535,8 +537,9 @@ public final class Autopilot {
 
   /**
    * Its own session's game stalled after a step failed (watchForStall): it ends as a failure that
-   * stalls a game ends it (ScriptBoard.gameFailed): stopped, its participants told, a sessionStalled
-   * event (step, error), and the autopilot pauses, naming the step and what went wrong there.
+   * stalls a game ends it (ScriptBoard.gameFailed): stopped, its participants told it had to stop
+   * because of a problem with the study (ScriptBoard.problemScreen; a completion code on screen stays),
+   * a sessionStalled event (step, error), and the autopilot pauses, naming the step and what went wrong.
    */
   private static void endStalled(ExperimentInstance live, final Long experimentId, final ScriptBoard.RecordedFailure failure,
                                  final long quietSeconds) {
@@ -564,7 +567,7 @@ public final class Autopilot {
             + " s after the step " + failure.step + " failed (" + failure.error + "); the session was stopped and the autopilot paused");
       }
     };
-    endOwnSession(id, "sessionStalled", data, null, false, stillWanted, after);
+    endOwnSession(id, "sessionStalled", data, ScriptBoard.problemScreen(), false, stillWanted, after);
   }
 
   /**
@@ -1324,7 +1327,7 @@ public final class Autopilot {
     }
     if (e.settings.experimentId == null) {
       return new Problem("error", CONFIG.equals(e.source)
-          ? "The server's settings file (conf/application-prod.conf) names the experiment \"" + configuredExperimentName()
+          ? "The server's settings file (conf/local.conf) names the experiment \"" + configuredExperimentName()
               + "\" (breadboard.autopilot.experiment), but there is no experiment with that name."
           : "No experiment is chosen.");
     }

@@ -9,7 +9,7 @@
       <BEmpty
         :icon="ServerCog"
         title="The autopilot needs a server update"
-        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file, conf/application-prod.conf (breadboard.autopilot.*)."
+        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file, conf/local.conf (breadboard.autopilot.*), which is kept across upgrades."
       >
         <template #actions>
           <BButton :icon="RefreshCw" :loading="refreshing" @click="load()">Check again</BButton>
@@ -46,7 +46,7 @@
         <div>
           <p class="ap-banner__title">These settings come from the server's configuration file</p>
           <p class="ap-banner__text">
-            <code>conf/application-prod.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
+            <code>conf/local.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
             and changes can't be made here. To manage the autopilot from this page, remove the
             <code>breadboard.autopilot.*</code> lines from the file and restart the server.
           </p>

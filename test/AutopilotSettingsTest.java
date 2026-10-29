@@ -3,6 +3,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.typesafe.config.ConfigFactory;
 import models.*;
+import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -10,6 +11,7 @@ import play.Configuration;
 import play.libs.Json;
 import play.mvc.Result;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.List;
@@ -430,23 +432,29 @@ public class AutopilotSettingsTest extends BaseTest {
     }
 
     @Test
-    public void theLongestSessionComesFromEvolution34AndSettingsSavedBeforeGetTheDefault() {
+    public void theLongestSessionComesFromEvolution34AndSettingsSavedBeforeKeepNoLimit() throws Exception {
         com.avaje.ebean.SqlRow row = Ebean.createSqlQuery("select state from play_evolutions where id = 34").findUnique();
         assertNotNull("evolution 34 was applied", row);
         assertEquals("applied", String.valueOf(row.values().iterator().next()));
-        // A row saved before the column was there gets two hours, as the column is added (the way
-        // evolution 34 and Global do it, which does nothing where the column exists).
+        // The evolution and the server's start (Global.addLongestSession) make the column the same way.
+        String evolution = FileUtils.readFileToString(new File("conf/evolutions/default/34.sql"), "UTF-8");
+        assertTrue(evolution, evolution.contains("# --- !Ups\n\n" + AutopilotSettings.ADD_LONGEST_SESSION + ";\n"));
+
+        // Settings an older release saved, before the column was there: the server's start adds it
+        // (twice: it does nothing where the column is), and they keep no limit, as before the upgrade.
         Ebean.createSqlUpdate("alter table autopilot_settings drop column if exists max_session_minutes").execute();
         try {
             Ebean.createSqlUpdate("insert into autopilot_settings (id, enabled, continuous, next_session_delay_seconds, "
                 + "waiting_room_enabled, min_players, wait_seconds, countdown_seconds, replace_enabled, replace_after_seconds, "
                 + "return_to_human) values (1, false, true, 10, true, 2, 60, 5, true, 30, true)").execute();
         } finally {
-            for (int i = 0; i < 2; i++) {
-                Ebean.createSqlUpdate("alter table autopilot_settings add column if not exists max_session_minutes integer default 120").execute();
-            }
+            Global.addLongestSession();
+            Global.addLongestSession();
         }
-        assertEquals(Integer.valueOf(120), AutopilotSettings.load().maxSessionMinutes);
+        assertNull("no limit", AutopilotSettings.load().maxSessionMinutes);
+        assertEquals(10, AutopilotSettings.load().nextSessionDelaySeconds);
+        // New settings start with two hours.
+        assertEquals(Integer.valueOf(120), new AutopilotSettings().maxSessionMinutes);
     }
 
     // ---- where the settings come from ------------------------------------------------------------
@@ -467,10 +475,14 @@ public class AutopilotSettingsTest extends BaseTest {
         assertEquals(experiment.id, fromFile.settings.experimentId);
         assertTrue(fromFile.settings.continuous);
         assertEquals(7, fromFile.settings.nextSessionDelaySeconds);
-        assertEquals("the default", Integer.valueOf(120), fromFile.settings.maxSessionMinutes);
+        // Left out: no limit, so a study the file set up before there was one goes on as it was.
+        assertNull("no limit", fromFile.settings.maxSessionMinutes);
         assertEquals("runner@lab.org", fromFile.settings.operatorEmail);
         file.put("breadboard.autopilot.maxSessionMinutes", 45);
         assertEquals(Integer.valueOf(45), Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(file))).settings.maxSessionMinutes);
+        file.put("breadboard.autopilot.maxSessionMinutes", 5000);
+        assertEquals("a day at most", Integer.valueOf(1440),
+            Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(file))).settings.maxSessionMinutes);
         file.put("breadboard.autopilot.maxSessionMinutes", 0);
         assertNull("no limit", Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(file))).settings.maxSessionMinutes);
         file.remove("breadboard.autopilot.maxSessionMinutes");

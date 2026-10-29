@@ -1055,7 +1055,7 @@ public class ScriptBoard extends UntypedActor {
         // either: the id is taken in the game the engine runs.
         Logger.info("addClient: " + clientId + " of instance " + experimentInstanceId + " refused: that id is a participant of "
             + (client.experimentInstance == null ? "another session" : "instance " + client.experimentInstance.id));
-        // (a stopped session counts as over here: its participants keep the "stopped" screen)
+        // (a stopped session counts as over here: its participants keep the screen it ended with)
         boolean over = experimentInstance.status != null
             && (!experimentInstance.status.isRunnable() || experimentInstance.status == ExperimentInstance.Status.STOPPED);
         out.write(over ? endedSessionScreen(experimentInstance.id, clientId) : sessionNotRunningScreen());
@@ -2080,7 +2080,8 @@ public class ScriptBoard extends UntypedActor {
             playerActions.turnAIOff();
           }
           stopSession(gameListener);
-          endParticipants(instance.id);
+          // (not the "stopped" screen: no researcher stopped it; a completion code on screen stays)
+          endParticipants(instance.id, problemScreen());
           cancelEngineTimers();
           eventTracker.disable();
           Autopilot.stepsFailed(instance, failed);
@@ -3204,8 +3205,9 @@ public class ScriptBoard extends UntypedActor {
    * session (Autopilot.gameFailed decides: one it opened, or was handed on Resume or a save; not one
    * a researcher launched or resumed by hand, even of its experiment), its participants would wait
    * for good and no new session would open: it ends as when its steps don't load (stepsFailedToLoad:
-   * participants get the ended screen, the computer players and the game's timers stop, nothing more
-   * is recorded, the session is stopped), and the autopilot pauses, saying where.
+   * participants are told it had to stop because of a problem with the study (problemScreen), the
+   * computer players and the game's timers stop, nothing more is recorded, the session is stopped),
+   * and the autopilot pauses, saying where.
    * On the autopilot's thread, under the engine lock, which the failing thread may not wait for: it
    * can hold the autopilot's own lock (groovy/autopilot.groovy), which an engine change can wait for.
    */
@@ -3234,7 +3236,7 @@ public class ScriptBoard extends UntypedActor {
             playerActions.turnAIOff();
           }
           stopSession(listener);
-          endParticipants(sessionId);
+          endParticipants(sessionId, problemScreen());
           cancelEngineTimers();
           eventTracker.disable();
           // The console tabs of the account running it show it stopped, as after Stop.
@@ -3304,8 +3306,9 @@ public class ScriptBoard extends UntypedActor {
    * (PlayerActions; not one left to a player removed since, which nobody can make), a task on one of
    * the engine's timers (a timed step waiting for its time, a computer player's pick, a takeover, the
    * experiment's own timers) or on an AMT timer, or an input from a participant it listens for
-   * (player.on in groovy/events.groovy: a form, a chat, tie edits). True when that can't be told: the
-   * stall backstop then ends nothing. A step whose code is running right now is not seen.
+   * (player.on in groovy/events.groovy: a form they have yet to finish, a chat that is on for them,
+   * tie edits; see waitsFor). True when that can't be told: the stall backstop then ends nothing. A
+   * step whose code is running right now is not seen.
    */
   static boolean somethingPending() {
     ScriptEngine running = engine;
@@ -3391,32 +3394,57 @@ public class ScriptBoard extends UntypedActor {
     return false;
   }
 
-  /** Whether a script listens for an input of a player in the game (not a computer player's: "_..."). */
+  /** Whether a script waits for an input of a player in the game (not a computer player's: "_..."). */
   private static boolean listensToPlayers(ScriptEngine running) throws Exception {
     Object g = running.get("g");
     if (BUS_EVENTS == null || !(g instanceof Graph)) {
       return true;
     }
-    List<String> prefixes = new ArrayList<String>();
+    Map<?, ?> listened = (Map<?, ?>) BUS_EVENTS.get(eventBus);
     for (Vertex v : ((Graph) g).getVertices()) {
       String id = String.valueOf(v.getId());
-      if (!id.startsWith("_")) {
-        prefixes.add(PLAYER_EVENT + id + "-");
-      }
-    }
-    for (Map.Entry<?, ?> listened : ((Map<?, ?>) BUS_EVENTS.get(eventBus)).entrySet()) {
-      String name = String.valueOf(listened.getKey());
-      Object handler = listened.getValue();
-      if (!name.startsWith(PLAYER_EVENT) || !(handler instanceof EventHandler) || ((EventHandler<?>) handler).closures.isEmpty()) {
+      if (id.startsWith("_")) {
         continue;
       }
-      for (String prefix : prefixes) {
-        if (name.startsWith(prefix)) {
-          return true;
+      String prefix = PLAYER_EVENT + id + "-";
+      for (Map.Entry<?, ?> entry : listened.entrySet()) {
+        Object handler = entry.getValue();
+        if (!String.valueOf(entry.getKey()).startsWith(prefix) || !(handler instanceof EventHandler)) {
+          continue;
+        }
+        for (Object listener : ((EventHandler<?>) handler).closures) {
+          if (waitsFor(listener, v)) {
+            return true;
+          }
         }
       }
     }
     return false;
+  }
+
+  /**
+   * Whether a listener for an input of {@code player} is something the game waits for. A form's
+   * (groovy/form.groovy: its owner has formsKey) only while the player has that form still to finish
+   * (their private[formsKey] has the form's name: finishing it takes that out), the chat's
+   * (groovy/chat.groovy: CHAT_KEY) only while chat is on for them (private[CHAT_KEY]); any other one
+   * always. Both take their listeners off when done; this is for one left on all the same.
+   */
+  private static boolean waitsFor(Object listener, Vertex player) {
+    Object owner = listener instanceof Closure ? ((Closure<?>) listener).getOwner() : null;
+    if (!(owner instanceof groovy.lang.GroovyObject)) {
+      return true;
+    }
+    groovy.lang.MetaClass meta = ((groovy.lang.GroovyObject) owner).getMetaClass();
+    Object state = player.getProperty("private");
+    if (meta.hasProperty(owner, "formsKey") != null) {
+      Object forms = state instanceof Map ? ((Map<?, ?>) state).get(property(owner, "formsKey")) : null;
+      return forms instanceof Map && ((Map<?, ?>) forms).containsKey(property(owner, "name"));
+    }
+    if (meta.hasProperty(owner, "CHAT_KEY") != null) {
+      return state instanceof Map && org.codehaus.groovy.runtime.typehandling.DefaultTypeTransformation.castToBoolean(
+          ((Map<?, ?>) state).get(property(owner, "CHAT_KEY")));
+    }
+    return true;
   }
 
   /** What the participants of a session that ran out of time see (Autopilot's longest session). */
@@ -3428,6 +3456,22 @@ public class ScriptBoard extends UntypedActor {
     player.put("ended", "outOfTime");
     player.put("text", "<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. You can close "
         + "this page; if you have any questions, please contact the researcher.</p>");
+    return frame;
+  }
+
+  /**
+   * What the participants of the autopilot's own session see when it ends that session itself because
+   * of a problem with the study: a step failure that stalls its game (endAutopilotSession, the stall
+   * backstop) or steps that don't load. The "stopped" screen would say a researcher stopped it.
+   */
+  static ObjectNode problemScreen() {
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "problem");
+    player.put("text", "<h3>This session has ended</h3><p>It had to stop because of a problem with the study. Thank you for "
+        + "taking part. You can close this page; if you have any questions, please contact the researcher.</p>");
     return frame;
   }
 
@@ -3505,11 +3549,11 @@ public class ScriptBoard extends UntypedActor {
    * ran longer than the longest session allowed, or had nothing left to do after a step failed. Under
    * the engine lock, if the engine still runs that session live and {@code stillWanted} (asked there)
    * agrees, it ends as the other paths end a session: the computer players off first (see Stop),
-   * {@code event} recorded, the participants told ({@code screen}, see endParticipants(Long, ObjectNode);
-   * null: the "stopped" screen), the game's timers cancelled and nothing more recorded; then the
-   * session is marked finished ({@code finished}: the autopilot opens the next one after its pause, as
-   * when a game ends) or stopped, and every console hears of it. Returns whether it ended it. Waits for
-   * the engine lock as long as it takes: the autopilot calls it on a thread of its own.
+   * {@code event} recorded, the participants told ({@code screen}, see endParticipants(Long,
+   * ObjectNode)), the game's timers cancelled and nothing more recorded; then the session is marked
+   * finished ({@code finished}: the autopilot opens the next one after its pause, as when a game ends)
+   * or stopped, and every console hears of it. Returns whether it ended it. Waits for the engine lock
+   * as long as it takes: the autopilot calls it on a thread of its own.
    */
   static boolean endForGuard(Long sessionId, String event, LinkedHashMap<Object, Object> data, ObjectNode screen,
                              boolean finished, java.util.concurrent.Callable<Boolean> stillWanted) {
@@ -3526,11 +3570,7 @@ public class ScriptBoard extends UntypedActor {
         playerActions.turnAIOff();
       }
       trackEvent(event, data);
-      if (screen == null) {
-        endParticipants(sessionId);
-      } else {
-        endParticipants(sessionId, screen);
-      }
+      endParticipants(sessionId, screen);
       cancelEngineTimers();
       eventTracker.disable();
       if (finished) {

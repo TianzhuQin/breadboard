@@ -28,7 +28,8 @@ public class AutopilotController extends Controller {
    * session of the experiment opens now unless one is open, or the engine runs a live session of
    * another experiment (then it waits for that one to end, unless the body has {@code takeOver: true});
    * turned off, no new sessions open (a running one continues). A save also lifts a pause. 400
-   * {message} for a value that can't be accepted; 409 {message} while application.conf is in charge.
+   * {message} for a value that can't be accepted; 409 {message} while the server's settings file is
+   * in charge.
    */
   @Security.Authenticated(Secured.class)
   public static Result save() {
@@ -42,7 +43,7 @@ public class AutopilotController extends Controller {
     }
     Autopilot.Effective current = Autopilot.effective();
     if (Autopilot.CONFIG.equals(current.source)) {
-      return status(CONFLICT, message("The autopilot is set in the server's settings file, conf/application-prod.conf (breadboard.autopilot.*), "
+      return status(CONFLICT, message("The autopilot is set in the server's settings file, conf/local.conf (breadboard.autopilot.*), "
           + "so it can't be changed here. Remove those lines and restart the server to manage it from the console."));
     }
     AutopilotSettings next;
