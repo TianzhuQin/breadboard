@@ -2,9 +2,12 @@
 # Check a release the way someone installing it would use it: unzip it into a temporary directory,
 # start it on an empty database, create the first account, sign in, load the consoles and the
 # participant pages, back up the database, then restart it on the same database and sign in again.
-# It also checks what the launcher says to a second copy and about folders it can't write to, and
+# The restart has a proxy set for the internet (http_proxy, as many researchers have) and a
+# conf/local.conf, whose setting must be in effect. It also checks what the launcher says to a
+# second copy (from the same folder, and on the same port) and about folders it can't write to, and
 # that a read-only folder runs with -Dpidfile.path. A release that carries its own Java
-# (bin/bundle-java) is started on that Java.
+# (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while the
+# server runs.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -33,6 +36,10 @@ fi
 ZIP="$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")"
 PORT="${PORT:-19000}"
 BASE="http://localhost:$PORT"
+# Its own requests go to this computer: no proxy. (The launcher is given one where that is checked.)
+unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY
+# The proxy the launcher starts with (start, below): none, or one that lets nothing through.
+PROXY=""
 
 WORK="$(mktemp -d)"
 SERVER=""
@@ -70,8 +77,15 @@ if ls "$APP"/groovy/*_test.groovy >/dev/null 2>&1; then fail "the zip carries te
   || fail "lib/classpath.txt doesn't list every jar in lib/"
 [ -f "$APP/docs/install.md" ] || fail "the zip has no docs/"
 [ -f "$APP/conf/logger.xml" ] || fail "the zip has no conf/logger.xml"
+[ ! -e "$APP/conf/local.conf" ] || fail "the zip has a conf/local.conf (the researcher's own settings)"
 if [ -f "$APP/breadboard.bat" ]; then
   grep -q "$(printf '\r')$" "$APP/breadboard.bat" || fail "breadboard.bat doesn't have Windows line endings"
+  # Task Scheduler's task, as Windows saves one: UTF-16 with a byte order mark
+  [ -f "$APP/breadboard-task.xml" ] || fail "the zip has breadboard.bat but no breadboard-task.xml"
+  [ "$(head -c 2 "$APP/breadboard-task.xml" | od -An -tx1 | tr -d ' \n')" = fffe ] \
+    || fail "breadboard-task.xml isn't UTF-16 with a byte order mark"
+  python3 -c 'import sys, xml.dom.minidom; xml.dom.minidom.parse(sys.argv[1])' "$APP/breadboard-task.xml" \
+    || fail "breadboard-task.xml isn't well-formed XML"
 fi
 case "$(basename "$ZIP")" in
   *-linux-*) ;;
@@ -79,6 +93,10 @@ case "$(basename "$ZIP")" in
 esac
 if [ -d "$APP/jre" ]; then
   [ -x "$APP/jre/bin/java" ] || fail "the zip's jre/ has no bin/java"
+  # Zulu's licence and notices go with it (LICENSE.md says they are there)
+  for notice in LICENSE ASSEMBLY_EXCEPTION THIRD_PARTY_README DISCLAIMER readme.txt; do
+    [ -f "$APP/jre/$notice" ] || fail "the zip's jre/ has no $notice"
+  done
   # the launcher must find it by itself
   unset JAVA8_HOME JAVA_HOME
 fi
@@ -87,16 +105,32 @@ if [ -n "$OLD_DB" ]; then
   cp "$OLD_DB" "$APP/db/breadboard.h2.db"
 fi
 
+# In the launcher's subshell: PROXY, if set, as the proxy for the internet
+use_proxy () {
+  if [ -n "$PROXY" ]; then
+    export http_proxy="$PROXY" all_proxy="$PROXY"
+  fi
+}
+
+# The caffeinate that keeps this Mac awake for the process $1, if one does
+awake_for () {
+  pgrep -f "^caffeinate -i -s -w $1\$" 2>/dev/null || true
+}
+
 # start "what this start is" [more settings for the server]
 start () {
-  local what="$1"
+  local what="$1" from
   shift
-  (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT" "$@") >> "$WORK/server.log" 2>&1 &
+  touch "$WORK/server.log"
+  from=$(( $(wc -l < "$WORK/server.log") + 1 ))
+  (cd "$APP" && use_proxy && exec ./breadboard.sh -Dhttp.port="$PORT" "$@") >> "$WORK/server.log" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 180); do
     if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi
     if [ "$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' "$BASE/" || true)" = "200" ]; then
       pass "server started ($what)"
+      tail -n +"$from" "$WORK/server.log" | grep -qF "On this computer: http://localhost:$PORT" \
+        || fail "the launcher didn't say where the server is reached"
       if [ -d "$APP/jre" ]; then
         ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF "$APP/jre/bin/java" \
           || fail "the server doesn't run on the Java in jre/"
@@ -107,6 +141,9 @@ start () {
         && ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF "$(cat "$APP/conf/application.secret")"; then
         fail "application.secret is visible on the server's command line"
       fi
+      if [ "$(uname)" = Darwin ]; then
+        [ -n "$(awake_for "$SERVER")" ] || fail "nothing keeps this Mac awake while the server runs (caffeinate)"
+      fi
       return
     fi
     sleep 1
@@ -115,10 +152,15 @@ start () {
 }
 
 stop () {
+  local was="$SERVER"
   kill "$SERVER"
   wait "$SERVER" 2>/dev/null || true
   SERVER=""
   [ ! -f "$APP/RUNNING_PID" ] || rm -f "$APP/RUNNING_PID"
+  if [ "$(uname)" = Darwin ]; then
+    sleep 1
+    [ -z "$(awake_for "$was")" ] || fail "the Mac is still kept awake after the server stopped"
+  fi
 }
 
 # GET a path; fail unless the status is $2 (default 200). The body goes to $WORK/body.
@@ -207,7 +249,8 @@ else
   fail "creating the first account answered $code: $(cat "$WORK/body")"
 fi
 # A second copy started from the same folder, on another port, is turned away with the first's address.
-if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$((PORT + 1))") > "$WORK/second.log" 2>&1; then
+# (Its input, like that of the launchers below, is no terminal: with one, the launcher keeps running.)
+if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$((PORT + 1))") > "$WORK/second.log" 2>&1 < /dev/null; then
   fail "a second copy started from the same folder"
 fi
 grep -q "already running from this folder" "$WORK/second.log" && grep -qF "http://localhost:$PORT," "$WORK/second.log" \
@@ -215,18 +258,37 @@ grep -q "already running from this folder" "$WORK/second.log" && grep -qF "http:
 pass "a second copy from the same folder says where the first one is"
 stop
 
-start "same database again"
+# Again, with a conf/local.conf, whose settings win over conf/application-prod.conf's, and with a
+# proxy set for the internet, as many researchers have (here one that isn't there, on port 9): the
+# launcher's requests to this computer must not go through it.
+printf '%s\n' '# the settings this install changes' 'breadboard.wsUrl="ws://local-conf.smoke.test"' > "$APP/conf/local.conf"
+PROXY=http://127.0.0.1:9
+start "same database again, with conf/local.conf and a proxy set"
 pages
 if [ -n "$SIGN_IN" ]; then
   sign_in
+  get /state
+  [ "$(json "d.get('connectSocket')")" = "ws://local-conf.smoke.test" ] || fail "conf/local.conf's setting isn't in effect"
+  pass "conf/local.conf's settings are in effect"
 fi
+# Another Breadboard started on the same port (with a pid file of its own, as another copy has) is
+# told that this one runs there. Through the proxy, the port would have seemed free.
+if (cd "$APP" && use_proxy && exec ./breadboard.sh -Dhttp.port="$PORT" -Dpidfile.path="$WORK/other.pid") \
+    > "$WORK/same-port.log" 2>&1 < /dev/null; then
+  fail "another Breadboard started on the port this one uses"
+fi
+grep -qF "Breadboard is already running on port $PORT" "$WORK/same-port.log" \
+  || fail "another Breadboard on the same port, with a proxy set, wasn't told this one runs there: $(cat "$WORK/same-port.log")"
+pass "another Breadboard on the same port, with a proxy set, is told this one runs there"
+PROXY=""
 stop
+rm -f "$APP/conf/local.conf"
 
 # A db/ that can't be written is reported, with how to fix it, before Java starts. (Not as root,
 # who can write anything.)
 if [ "$(id -u)" != 0 ]; then
   chmod a-w "$APP/db"
-  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/read-only.log" 2>&1; then
+  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/read-only.log" 2>&1 < /dev/null; then
     chmod u+w "$APP/db"
     fail "it started with a db/ it can't write to"
   fi
@@ -238,7 +300,7 @@ if [ "$(id -u)" != 0 ]; then
   # file elsewhere; without -Dpidfile.path, RUNNING_PID would go into it, and that is reported.
   # (cleanup makes it writable again if a check fails)
   chmod a-w "$APP"
-  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/read-only-folder.log" 2>&1; then
+  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/read-only-folder.log" 2>&1 < /dev/null; then
     fail "it started in a read-only folder, with nowhere to write RUNNING_PID"
   fi
   grep -q "The Breadboard folder (.*) can't be written by" "$WORK/read-only-folder.log" \
@@ -259,9 +321,16 @@ if { sed "s/${ESC}\[[0-9;]*m//g" "$WORK/server.log"; cat "$APP"/logs/*.log 2>/de
   fail "the server logged errors"
 fi
 pass "no errors in the server's output"
+# Logback says so when it can't use a part of conf/logger.xml (|-ERROR in ..., |-WARN in ...).
+if grep -E '\|-(ERROR|WARN) in ' "$WORK/server.log" > "$WORK/errors"; then
+  head -20 "$WORK/errors" >&2
+  fail "conf/logger.xml has a problem"
+fi
 # Debug output would log researchers' session tokens.
 if grep -q '\[DEBUG\]' "$APP"/logs/*.log 2>/dev/null; then
   fail "the server logged debug output (conf/logger.xml is not in effect)"
 fi
-pass "no debug output in the logs"
+pass "no debug output in the logs, and conf/logger.xml loads without a problem"
+# H2's own log (TRACE_LEVEL_FILE=0 in conf/application-prod.conf)
+[ ! -e "$APP/db/breadboard.trace.db" ] || fail "H2 wrote db/breadboard.trace.db: $(head -5 "$APP/db/breadboard.trace.db")"
 echo "The release in $(basename "$ZIP") works."

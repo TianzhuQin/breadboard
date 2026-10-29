@@ -393,12 +393,19 @@ public class AutopilotSessionTest extends BaseTest {
         await("the autopilot's session", () -> sessions(auto).size() == 1 && running(auto) == 1);
         final ExperimentInstance first = sessions(auto).get(0);
 
-        // A researcher runs another experiment (the autopilot's session ends, it pauses), and presses
-        // Resume while that session is live: the autopilot waits for the engine...
-        final AdminSocketsTest.Tab tab = console(researcher, other);
-        await("paused", () -> state(researcher).get("status").get("paused").asBoolean());
+        // A researcher runs another experiment (selecting it leaves the autopilot's session alone;
+        // launching a session of it ends that one, and the autopilot pauses), and presses Resume while
+        // their session is live: the autopilot waits for the engine...
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(researcher.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", other.id);
+        await("the selection", () -> selected(researcher, other));
+        assertEquals("selecting it ended nothing", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(first.id).status);
         tab.send("LaunchGame", "name", "meanwhile", "parameters", Json.newObject());
         await("their session", () -> running(other) == 1);
+        await("paused", () -> state(researcher).get("status").get("paused").asBoolean());
         assertEquals(OK, status(resume(researcher)));
         // ...and they resume the autopilot's old session themselves.
         tab.send("SelectInstance", "id", first.id);

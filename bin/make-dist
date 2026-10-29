@@ -5,8 +5,9 @@
 #   JAVA8_HOME=/path/to/jdk8 bin/make-dist
 #
 # It builds the front end (pnpm), packages the server (sbt dist), and adds the launchers
-# (release/breadboard.sh, release/breadboard.bat), the Groovy engine scripts, the production
-# settings and the docs. SKIP_FRONTEND=1 reuses the front end already in public/.
+# (release/breadboard.sh, release/breadboard.bat, with breadboard-task.xml for Task Scheduler), the
+# Groovy engine scripts, the production settings and the docs. SKIP_FRONTEND=1 reuses the front end
+# already in public/.
 # Check the result with bin/smoke-dist.
 set -euo pipefail
 
@@ -79,6 +80,12 @@ cp release/breadboard.sh "release/Start Breadboard.command" "$R/"
 chmod +x "$R/breadboard.sh" "$R/Start Breadboard.command"
 # Windows line endings for cmd.exe, whatever the checkout has.
 perl -pe 's/\r?\n/\r\n/' release/breadboard.bat > "$R/breadboard.bat"
+# The Task Scheduler task, as Windows itself saves one (UTF-16 with a byte order mark, Windows line
+# endings), which is what schtasks /XML surely reads.
+{
+  printf '\377\376'
+  sed 's/encoding="UTF-8"/encoding="UTF-16"/' release/breadboard-task.xml | perl -pe 's/\r?\n/\r\n/' | iconv -f UTF-8 -t UTF-16LE
+} > "$R/breadboard-task.xml"
 cp release/README.md "$R/README.md"
 cp LICENSE.md CHANGELOG.md "$R/"
 # CHANGELOG.md and the README link to these.

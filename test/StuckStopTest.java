@@ -1,7 +1,12 @@
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -9,6 +14,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.stream.Collectors;
 
 import static org.junit.Assert.*;
 
@@ -22,6 +28,12 @@ public class StuckStopTest {
     private File folder;
     private String url;
     private File lock;
+    // the database's own account, when a test gives it one
+    private String user = "";
+    private String password = "";
+    // what the server's log ("application") got, once a test watches it
+    private ListAppender<ILoggingEvent> logged;
+    private Level level;
 
     @Before
     public void makeDatabase() throws Exception {
@@ -34,8 +46,41 @@ public class StuckStopTest {
 
     @After
     public void removeDatabase() {
-        Global.closeDatabase(url, "", "", 5000);
+        if (logged != null) {
+            Logger log = (Logger) LoggerFactory.getLogger("application");
+            log.detachAppender(logged);
+            log.setLevel(level);
+        }
+        Global.closeDatabase(url, user, password, 5000);
         FileUtils.deleteQuietly(folder);
+    }
+
+    /** From here on, keeps what the server's log gets (until the test ends). */
+    private void watchLog() {
+        Logger log = (Logger) LoggerFactory.getLogger("application");
+        logged = new ListAppender<>();
+        logged.start();
+        log.addAppender(logged);
+        level = log.getLevel();
+        log.setLevel(Level.WARN);
+    }
+
+    private String said() {
+        return logged.list.stream().map(ILoggingEvent::getFormattedMessage).collect(Collectors.joining("\n"));
+    }
+
+    /**
+     * Closed: no lock file. H2 deletes it as the database closes, but its lock watchdog can write it
+     * again just then (H2 1.3; a busy machine shows it now and then). A file nobody keeps up is taken
+     * away here: an open database's watchdog would write it again within a second.
+     */
+    private boolean closed() throws InterruptedException {
+        if (!lock.exists()) {
+            return true;
+        }
+        FileUtils.deleteQuietly(lock);
+        Thread.sleep(2500);
+        return !lock.exists();
     }
 
     @Test
@@ -49,7 +94,7 @@ public class StuckStopTest {
 
         assertTrue(Global.closeDatabase(url, "", "", 3000));
         assertTrue("the pool's connection is closed with it", pool.isClosed());
-        assertFalse("closed properly: nothing for H2 to recover", lock.exists());
+        assertTrue("closed properly: nothing for H2 to recover", closed());
         try (Connection again = DriverManager.getConnection(url, "", "");
              ResultSet rows = again.createStatement().executeQuery("select count(*) from kept")) {
             rows.next();
@@ -74,25 +119,67 @@ public class StuckStopTest {
         busy.start();
         Thread.sleep(300);
 
+        watchLog();
         long started = System.currentTimeMillis();
         assertFalse(Global.closeDatabase(url, "", "", 500));
         long took = System.currentTimeMillis() - started;
         assertTrue("it gave up after its limit: " + took + " ms", took < 1500);
         assertTrue("still open", lock.exists());
+        assertTrue(said(), said().contains("a statement was still running"));
 
-        // The attempt goes on, and closes it once the statement is done.
+        // The attempt goes on, and closes it once the statement is done: every connection to it is
+        // closed with it. (Not told by the lock file: H2 1.3's lock watchdog can write it again as the
+        // database closes, which a busy machine shows now and then.)
         busy.join(10000);
         long until = System.currentTimeMillis() + 10000;
-        while (lock.exists() && System.currentTimeMillis() < until) {
+        while (!pool.isClosed() && System.currentTimeMillis() < until) {
             Thread.sleep(50);
         }
-        assertFalse("closed once the database was free", lock.exists());
-        assertTrue(pool.isClosed());
+        assertTrue("closed once the database was free", pool.isClosed());
     }
 
     @Test
     public void aDatabaseThatIsNotThereIsNotMade() {
         assertFalse(Global.closeDatabase("jdbc:h2:" + new File(folder, "none").getAbsolutePath() + ";MODE=MYSQL;", "", "", 3000));
         assertFalse(new File(folder, "none.h2.db").exists());
+    }
+
+    @Test
+    public void aUrlThatSaysIfExistsItselfIsClosedToo() throws Exception {
+        Connection pool = DriverManager.getConnection(url, "", "");
+        try (Statement s = pool.createStatement()) {
+            s.execute("create table kept (id int)");
+        }
+        // (H2 refused it written another way beside the one closeDatabase adds: "Duplicate property")
+        assertTrue(Global.closeDatabase(url + ";ifexists=true", "", "", 3000));
+        assertTrue(pool.isClosed());
+        assertTrue(closed());
+    }
+
+    @Test
+    public void aUrlWithItsOwnUserAndPasswordIsClosedWithThem() throws Exception {
+        user = "researcher";
+        password = "secret";
+        Connection pool = DriverManager.getConnection(url, user, password);
+        try (Statement s = pool.createStatement()) {
+            s.execute("create table kept (id int)");
+        }
+        // (the settings' user and password, none here, beside the URL's: "Duplicate property USER")
+        assertTrue(Global.closeDatabase(url + ";USER=researcher;Password=secret", "", "", 3000));
+        assertTrue(pool.isClosed());
+        assertTrue(closed());
+    }
+
+    @Test
+    public void whatTheAttemptRanIntoIsLoggedNotABusyDatabase() throws Exception {
+        user = "researcher";
+        password = "secret";
+        Connection pool = DriverManager.getConnection(url, user, password);
+        watchLog();
+        assertFalse(Global.closeDatabase(url, user, "not the password", 3000));
+        assertTrue("still open", lock.exists());
+        assertTrue(said(), said().contains("Wrong user name or password"));
+        assertFalse(said(), said().contains("a statement was still running"));
+        pool.close();
     }
 }

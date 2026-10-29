@@ -5,28 +5,20 @@
 #
 #   bin/bundle-java                         # every platform
 #   bin/bundle-java macos-arm64 linux-x64   # some of them
+#   bin/bundle-java --update                # pin the newest Zulu 8 JREs in release/jre.lock
 #
-# Platforms: macos-arm64, macos-x64, linux-x64, windows-x64. Each JRE comes from Azul's metadata
-# API (api.azul.com, the newest Zulu 8 JRE), is checked against the SHA-256 Azul publishes, and is
-# kept in target/jre-cache for the next run. JRE_<PLATFORM>=<archive> (e.g. JRE_MACOS_ARM64=...)
-# uses a JRE or JDK archive already on disk instead.
+# Platforms: macos-arm64, macos-x64, linux-x64, windows-x64. Each JRE is the one release/jre.lock
+# pins, the same at every build: downloaded once into target/jre-cache and checked against the
+# SHA-256 there. --update changes them on purpose: it looks up the newest Zulu 8 JRE for each
+# platform in Azul's metadata API (api.azul.com), with the SHA-256 Azul publishes, and writes them
+# into release/jre.lock (then build, check with bin/smoke-dist, and commit it). JRE_<PLATFORM>=<archive>
+# (e.g. JRE_MACOS_ARM64=...) uses a JRE or JDK archive already on disk instead, unchecked.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-VERSION="$(sed -n 's/.*appVersion *= *"\(.*\)".*/\1/p' project/Build.scala)"
-NAME="breadboard-$VERSION"
-OUT="$ROOT/target/release"
-CACHE="$ROOT/target/jre-cache"
-if [ ! -f "$OUT/$NAME.zip" ]; then
-  echo "bin/bundle-java: $OUT/$NAME.zip is missing; run bin/make-dist first." >&2
-  exit 1
-fi
-PLATFORMS=("$@")
-if [ ${#PLATFORMS[@]} -eq 0 ]; then
-  PLATFORMS=(macos-arm64 macos-x64 linux-x64 windows-x64)
-fi
-mkdir -p "$CACHE"
+LOCK="$ROOT/release/jre.lock"
+ALL_PLATFORMS=(macos-arm64 macos-x64 linux-x64 windows-x64)
 
 # os arch archive_type for Azul's API
 azul_query () {
@@ -39,6 +31,46 @@ azul_query () {
   esac
 }
 
+if [ "${1:-}" = --update ]; then
+  api="https://api.azul.com/metadata/v1/zulu/packages"
+  new="$(mktemp)"
+  trap 'rm -f "$new"' EXIT
+  grep '^#' "$LOCK" > "$new"
+  for platform in "${ALL_PLATFORMS[@]}"; do
+    read -r os arch type <<< "$(azul_query "$platform")"
+    uuid="$(curl -fsSL "$api/?java_version=8&os=$os&arch=$arch&archive_type=$type&java_package_type=jre&javafx_bundled=false&release_status=ga&availability_types=CA&latest=true&page=1&page_size=1" \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["package_uuid"])')"
+    read -r sha url <<< "$(curl -fsSL "$api/$uuid" \
+      | python3 -c 'import json,sys; d = json.load(sys.stdin); print(d["sha256_hash"], d["download_url"])')"
+    if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || [[ "$url" != https://* ]]; then
+      echo "bin/bundle-java: Azul's API gave no SHA-256 and https address for the $platform JRE." >&2
+      exit 1
+    fi
+    printf '%-14s %s  %s\n' "$platform" "$sha" "$url" >> "$new"
+  done
+  cat "$new" > "$LOCK"
+  echo "release/jre.lock pins:"
+  grep -v '^#' "$LOCK"
+  exit 0
+fi
+
+VERSION="$(sed -n 's/.*appVersion *= *"\(.*\)".*/\1/p' project/Build.scala)"
+NAME="breadboard-$VERSION"
+OUT="$ROOT/target/release"
+CACHE="$ROOT/target/jre-cache"
+if [ ! -f "$OUT/$NAME.zip" ]; then
+  echo "bin/bundle-java: $OUT/$NAME.zip is missing; run bin/make-dist first." >&2
+  exit 1
+fi
+PLATFORMS=("$@")
+if [ ${#PLATFORMS[@]} -eq 0 ]; then
+  PLATFORMS=("${ALL_PLATFORMS[@]}")
+fi
+for platform in "${PLATFORMS[@]}"; do
+  azul_query "$platform" > /dev/null
+done
+mkdir -p "$CACHE"
+
 # Prints the path of the platform's JRE archive, downloading it when needed.
 jre_archive () {
   local platform="$1" var given
@@ -48,26 +80,22 @@ jre_archive () {
     echo "$given"
     return
   fi
-  local os arch type
-  read -r os arch type <<< "$(azul_query "$platform")"
-  local api="https://api.azul.com/metadata/v1/zulu/packages"
-  local listing
-  listing="$(curl -fsSL "$api/?java_version=8&os=$os&arch=$arch&archive_type=$type&java_package_type=jre&javafx_bundled=false&release_status=ga&availability_types=CA&latest=true&page=1&page_size=1")"
-  local uuid url file
-  uuid="$(printf '%s' "$listing" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["package_uuid"])')"
-  url="$(printf '%s' "$listing" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["download_url"])')"
+  local sha url file got
+  read -r sha url <<< "$(awk -v p="$platform" '$1 == p { print $2, $3 }' "$LOCK")"
+  if [ -z "$sha" ] || [ -z "$url" ]; then
+    echo "bin/bundle-java: release/jre.lock pins no JRE for $platform." >&2
+    return 1
+  fi
   file="$CACHE/$(basename "$url")"
   if [ ! -s "$file" ]; then
     echo "   downloading $url" >&2
     curl -fsSL -o "$file.part" "$url"
     mv "$file.part" "$file"
   fi
-  local want got
-  want="$(curl -fsSL "$api/$uuid" | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha256_hash"])')"
   got="$( (command -v sha256sum >/dev/null && sha256sum "$file" || shasum -a 256 "$file") | cut -d' ' -f1)"
-  if [ "$want" != "$got" ]; then
+  if [ "$got" != "$sha" ]; then
     rm -f "$file"
-    echo "bin/bundle-java: $(basename "$url") doesn't match the SHA-256 Azul publishes." >&2
+    echo "bin/bundle-java: $(basename "$url") doesn't match its SHA-256 in release/jre.lock." >&2
     return 1
   fi
   echo "$file"
@@ -101,10 +129,22 @@ for platform in "${PLATFORMS[@]}"; do
   cp -R "$home" "$work/$NAME/jre"
   # Not needed to run Breadboard, and large.
   rm -rf "$work/$NAME/jre/man" "$work/$NAME/jre/demo" "$work/$NAME/jre/sample" "$work/$NAME/jre/src.zip"
+  # Its licence (GPLv2 with the Classpath Exception) and notices go with it, from wherever the
+  # archive keeps them: with the runtime, or (macOS) at the top of the archive. (LICENSE.md and the
+  # README say they are in jre/.)
+  for notice in LICENSE ASSEMBLY_EXCEPTION THIRD_PARTY_README DISCLAIMER readme.txt; do
+    [ ! -f "$work/$NAME/jre/$notice" ] || continue
+    found="$(find "$work/unpacked" -type f -name "$notice" | awk '{ print length, $0 }' | sort -n | cut -d' ' -f2- | sed -n 1p)"
+    if [ -z "$found" ]; then
+      echo "bin/bundle-java: $archive has no $notice, which must go with its Java." >&2
+      exit 1
+    fi
+    cp "$found" "$work/$NAME/jre/$notice"
+  done
   if [ "${platform%%-*}" = windows ]; then
     rm -f "$work/$NAME/breadboard.sh" "$work/$NAME/Start Breadboard.command"
   else
-    rm -f "$work/$NAME/breadboard.bat"
+    rm -f "$work/$NAME/breadboard.bat" "$work/$NAME/breadboard-task.xml"
     [ "${platform%%-*}" = macos ] || rm -f "$work/$NAME/Start Breadboard.command"
   fi
   rm -f "$OUT/$NAME-$platform.zip"
