@@ -136,6 +136,10 @@ class ChatManager extends BaseChatManager {
       // switched off kept its state)
       if (removeExisting && v.private != null && self.CHAT_KEY in v.private) {
         v.private.remove(self.CHAT_KEY)
+      } else if (v.private != null && v.private[self.CHAT_KEY] instanceof Map) {
+        // The messages stay on their screen, but the page no longer offers to write one: nothing
+        // listens any more, so what was sent would be lost. A new map, so the page is sent it.
+        v.private[self.CHAT_KEY] = v.private[self.CHAT_KEY] + [isEnabled: false]
       }
       v.off(self.CHAT_EVENT, self.chatListener)
       self.addEvent("chat-removed", [player: v.id])
