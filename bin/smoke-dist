@@ -2,7 +2,9 @@
 # Check a release the way someone installing it would use it: unzip it into a temporary directory,
 # start it on an empty database, create the first account, sign in, load the consoles and the
 # participant pages, back up the database, then restart it on the same database and sign in again.
-# A release that carries its own Java (bin/bundle-java) is started on that Java.
+# It also checks what the launcher says to a second copy and about folders it can't write to, and
+# that a read-only folder runs with -Dpidfile.path. A release that carries its own Java
+# (bin/bundle-java) is started on that Java.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -39,6 +41,8 @@ cleanup () {
     kill "$SERVER" 2>/dev/null || true
     wait "$SERVER" 2>/dev/null || true
   fi
+  # (a check below makes folders read-only)
+  chmod -R u+w "$WORK" 2>/dev/null || true
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -83,13 +87,16 @@ if [ -n "$OLD_DB" ]; then
   cp "$OLD_DB" "$APP/db/breadboard.h2.db"
 fi
 
+# start "what this start is" [more settings for the server]
 start () {
-  (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") >> "$WORK/server.log" 2>&1 &
+  local what="$1"
+  shift
+  (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT" "$@") >> "$WORK/server.log" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 180); do
     if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi
     if [ "$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' "$BASE/" || true)" = "200" ]; then
-      pass "server started ($1)"
+      pass "server started ($what)"
       if [ -d "$APP/jre" ]; then
         ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF "$APP/jre/bin/java" \
           || fail "the server doesn't run on the Java in jre/"
@@ -124,6 +131,7 @@ get () {
 pages () {
   get /health
   grep -q '"status":"ok"' "$WORK/body" || fail "/health doesn't say ok: $(cat "$WORK/body")"
+  grep -q '"diskFreeMb":[0-9]' "$WORK/body" || fail "/health doesn't say how much disk space is free: $(cat "$WORK/body")"
   get /
   grep -q 'admin/admin.js' "$WORK/body" || fail "the console page doesn't load admin.js"
   get /legacy-admin
@@ -198,6 +206,13 @@ elif [ -n "$OLD_DB" ] && grep -q "already exists" "$WORK/body"; then
 else
   fail "creating the first account answered $code: $(cat "$WORK/body")"
 fi
+# A second copy started from the same folder, on another port, is turned away with the first's address.
+if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$((PORT + 1))") > "$WORK/second.log" 2>&1; then
+  fail "a second copy started from the same folder"
+fi
+grep -q "already running from this folder" "$WORK/second.log" && grep -qF "http://localhost:$PORT," "$WORK/second.log" \
+  || fail "a second copy from the same folder didn't say where the first one is: $(cat "$WORK/second.log")"
+pass "a second copy from the same folder says where the first one is"
 stop
 
 start "same database again"
@@ -206,6 +221,35 @@ if [ -n "$SIGN_IN" ]; then
   sign_in
 fi
 stop
+
+# A db/ that can't be written is reported, with how to fix it, before Java starts. (Not as root,
+# who can write anything.)
+if [ "$(id -u)" != 0 ]; then
+  chmod a-w "$APP/db"
+  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/read-only.log" 2>&1; then
+    chmod u+w "$APP/db"
+    fail "it started with a db/ it can't write to"
+  fi
+  chmod u+w "$APP/db"
+  grep -q "db/ can't be written by" "$WORK/read-only.log" || fail "a db/ it can't write to wasn't reported: $(cat "$WORK/read-only.log")"
+  pass "a db/ that can't be written is reported, with how to fix it"
+
+  # A folder kept read-only (root's, under /opt) runs with a db/ and logs/ it can write and its pid
+  # file elsewhere; without -Dpidfile.path, RUNNING_PID would go into it, and that is reported.
+  # (cleanup makes it writable again if a check fails)
+  chmod a-w "$APP"
+  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/read-only-folder.log" 2>&1; then
+    fail "it started in a read-only folder, with nowhere to write RUNNING_PID"
+  fi
+  grep -q "The Breadboard folder (.*) can't be written by" "$WORK/read-only-folder.log" \
+    || fail "a read-only folder wasn't reported: $(cat "$WORK/read-only-folder.log")"
+  start "read-only folder, -Dpidfile.path elsewhere" -Dpidfile.path="$WORK/breadboard.pid"
+  [ -s "$WORK/breadboard.pid" ] || fail "the server didn't write its process id where -Dpidfile.path says"
+  get /health
+  stop
+  chmod u+w "$APP"
+  pass "a read-only folder runs with -Dpidfile.path elsewhere, and is reported without it"
+fi
 
 # Play colours the level in its console output; logs/application.log has none.
 ESC="$(printf '\033')"
