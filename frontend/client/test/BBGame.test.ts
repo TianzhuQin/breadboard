@@ -164,6 +164,17 @@ describe('BBWaiting', () => {
     expect(timed.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. That\'s enough to begin: the session starts in about 18 s, or as soon as 8 are here.')
   })
 
+  it('does not add a second when the clock ticks while the page is set up', () => {
+    let t = 1_000_000
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t++)
+    try {
+      const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 2, min: 2, max: 8, startsIn: 18 } } } } })
+      expect(w.find('.bb-waiting__count').text()).toContain('in about 18 s')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('counts down before the start', () => {
     const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'starting', seconds: 5, here: 3, min: 3 } } } } })
     expect(w.find('.bb-waiting__title').text()).toBe('Starting in 5…')
