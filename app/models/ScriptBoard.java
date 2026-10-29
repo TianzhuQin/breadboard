@@ -51,7 +51,13 @@ public class ScriptBoard extends UntypedActor {
       new LinkedHashMap<Long, Map<String, ObjectNode>>() {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Long, Map<String, ObjectNode>> eldest) {
-          return size() > ENDED_SESSIONS_KEPT;
+          if (size() <= ENDED_SESSIONS_KEPT) {
+            return false;
+          }
+          // The session's seat tokens go too (they used to be kept for good): someone coming back to
+          // it now gets the general "isn't running" page, as they would without a last screen.
+          security.ParticipantAuth.releaseInstance(String.valueOf(eldest.getKey()));
+          return true;
         }
       });
 
@@ -439,6 +445,9 @@ public class ScriptBoard extends UntypedActor {
       // Cancel any pending AMT lifecycle timers from a previous session so they don't
       // fire against the rebuilt engine or outlive it (MEMORY_LEAKS.md L6).
       cancelAmtTimers();
+      // Let go of what kept every replaced engine in memory for good (Groovy's caches of its
+      // classes, Jackson's), before the next one is built.
+      EngineCleanup.release(engine);
     }
 
     // Global events used to communicate via the groovy scripting
@@ -1094,6 +1103,12 @@ public class ScriptBoard extends UntypedActor {
         }
         Graph wholeGraph = (Graph) engine.get("g");
         Vertex clientVertex = wholeGraph.getVertex(clientId);
+        if (clientVertex == null && !experimentInstance.hasStarted) {
+          // graph.groovy adds players one at a time now; a player missing here would wait for good.
+          Logger.error("addClient: " + clientId + " was missing from the network after joining; adding them again");
+          graphInterface.addPlayer(clientId);
+          clientVertex = wholeGraph.getVertex(clientId);
+        }
         Recruitment.applyTo(clientVertex);
         // After addPlayer, so a new participant's vertex exists to record it on.
         setConnected(clientId, true);
