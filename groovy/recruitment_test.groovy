@@ -64,6 +64,50 @@ test("completeProlific refuses a non-prolific player") {
   assert threw : 'completeProlific on an mturk player must throw'
 }
 
+// --- completeProlific: the completion in the session's data --------------------------------------
+// The harness's own eventTracker records nothing, so a recording double stands in for the binding
+// (recruitment.groovy reads it when completeProlific runs).
+
+test("completeProlific records a prolificComplete event with the player, the code and the bonus") {
+  def tracked = []
+  eventTracker = [track: { name, data -> tracked << [name: name, data: data] }]
+  def v = g.addPlayer('rec-prolific-5')
+  recruitment.registerProlific(v)
+  recruitment.completeProlific(v, [completionCode: 'CODE5', bonus: 0.5])
+  assert tracked.size() == 1
+  assert tracked[0].name == 'prolificComplete'
+  assert tracked[0].data.keySet() as List == ['player', 'completionCode', 'bonus']
+  assert tracked[0].data.player == 'rec-prolific-5'
+  assert tracked[0].data.completionCode == 'CODE5'
+  assert tracked[0].data.bonus == 0.5
+}
+
+test("completeProlific leaves the bonus out of the event when there is none") {
+  def tracked = []
+  eventTracker = [track: { name, data -> tracked << data }]
+  def v = g.addPlayer('rec-prolific-6')
+  recruitment.registerProlific(v)
+  recruitment.completeProlific(v, [completionCode: 'CODE6'])
+  assert tracked.size() == 1
+  assert tracked[0].keySet() as List == ['player', 'completionCode']
+}
+
+test("completeProlific completes the player even when the event can't be recorded") {
+  eventTracker = [track: { name, data -> throw new RuntimeException('the database is unreachable') }]
+  def v = g.addPlayer('rec-prolific-7')
+  recruitment.registerProlific(v)
+  recruitment.completeProlific(v, [completionCode: 'CODE7'])
+  assert v._system.recruitment.completed == true
+  assert v._system.recruitment.completionCode == 'CODE7'
+
+  // nor without an event tracker at all
+  eventTracker = null
+  def w = g.addPlayer('rec-prolific-8')
+  recruitment.registerProlific(w)
+  recruitment.completeProlific(w, [completionCode: 'CODE8'])
+  assert w._system.recruitment.completionCode == 'CODE8'
+}
+
 // --- completeMturk -------------------------------------------------------------------------------
 
 test("completeMturk marks the player completed and records its bonus") {
