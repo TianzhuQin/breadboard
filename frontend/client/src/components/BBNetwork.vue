@@ -156,7 +156,7 @@
 
 <script lang="ts">
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force'
-import { LinkAware } from '../lib/connection'
+import { LinkAware, computerPlayer } from '../lib/connection'
 
 type Point = { x: number, y: number }
 type AnyNode = { id: string, data: any, [key: string]: any }
@@ -519,7 +519,11 @@ export default LinkAware.extend({
     hint (): string {
       const e = this.edits
       if (!e.enabled) return ''
-      if (this.link === 'watching') return 'Watching only: their own page is connected, so you can’t change their ties.'
+      if (this.link === 'watching') {
+        return computerPlayer()
+          ? 'Watching only: the computer plays this seat, so you can’t change its ties.'
+          : 'Watching only: their own page is connected, so you can’t change their ties.'
+      }
       if (this.link === 'reconnecting') return 'Reconnecting… you can change ties once the connection is back.'
       // (nothing more on this page: the banner says why)
       if (!this.canSend) return ''

@@ -43,10 +43,13 @@ public class Client extends Model {
   private final List<Connection> watchers = new CopyOnWriteArrayList<Connection>();
   // Held while the seat changes hands, so two sockets arriving or closing at once can't both take it.
   private final Object seatLock = new Object();
-  // Held by ScriptBoard.recordConnection while it records whether the participant is connected, so
-  // those records follow each other in order; and what it recorded last (null before the first).
+  // Held by ScriptBoard.recordConnection while it records who is in the seat, so those records
+  // follow each other in order; and what it recorded last (null before the first).
   private final Object recordLock = new Object();
-  private Boolean recordedConnected;
+  private Presence recordedPresence;
+  // A computer player's (see isComputer): nobody holds its seat, which the computer plays, and a
+  // researcher's preview of it only watches. One used to take the seat, which switched the computer off.
+  private final boolean computer;
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
   private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
@@ -67,6 +70,9 @@ public class Client extends Model {
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile long lastHeard = System.currentTimeMillis();
     private volatile boolean pinged;
+    // A preview that took the seat because the participant's own page went (seatAWatcher): it may act
+    // for them, but nobody counts as being there, so they are away as for anyone who leaves.
+    private volatile boolean standIn;
     // The text of the full view written last; null once any other frame has been written since.
     private String lastView;
 
@@ -78,6 +84,11 @@ public class Client extends Model {
 
     public boolean isOpen() {
       return !closed.get();
+    }
+
+    /** Whether it holds the seat only because the participant's own page went (Client.seatAWatcher). */
+    public boolean standsIn() {
+      return standIn;
     }
 
     /** It sent something at {@code now} (ms); {@code ping}: a {"action": "Ping"}. */
@@ -165,22 +176,54 @@ public class Client extends Model {
     TOOK_OVER,
     /** It holds the seat: the participant is back, and the preview that held it watches from now on. */
     PREVIEW_WATCHES,
-    /** A researcher's preview of a player whose own page holds the seat: it only watches. */
+    /** A researcher's preview of a player whose own page holds the seat, or of a computer player: it only watches. */
     WATCHING
+  }
+
+  /** Who is in the seat, as the session counts it (see ScriptBoard.recordConnection). */
+  public enum Presence {
+    /**
+     * Nobody: their page went. A preview that took the seat then (seatAWatcher) may act for them, but
+     * they are away all the same: the computer takes their seat after the usual wait.
+     */
+    AWAY,
+    /** A researcher's preview that took the seat while it was free (a test player, someone who had left): it plays it. */
+    PREVIEW,
+    /** The participant's own page. */
+    HERE
   }
 
   public Client(String id, ExperimentInstance experimentInstance, WebSocket.In<JsonNode> in, ThrottledWebSocketOut out) {
     this(id, experimentInstance, new Connection(in, out, false));
   }
 
-  /** A participant's first socket, which holds the seat. */
-  public Client(String id, ExperimentInstance experimentInstance, Connection first) {
+  /** A participant whose first socket is yet to come (see connect). */
+  public Client(String id, ExperimentInstance experimentInstance) {
     this.id = id;
     this.experimentInstance = experimentInstance;
-    take(first);
+    this.computer = isComputer(id);
   }
 
-  // (under seatLock, but for the constructor)
+  /** A participant's first socket, which holds the seat. */
+  public Client(String id, ExperimentInstance experimentInstance, Connection first) {
+    this(id, experimentInstance);
+    connect(first);
+  }
+
+  /**
+   * Whether this id is a computer player's: g.addAI makes _1, _2, …, and nobody may sign in with an id
+   * starting with "_" (ClientLogin).
+   */
+  public static boolean isComputer(String id) {
+    return id != null && id.startsWith("_");
+  }
+
+  /** Whether this is a computer player, whose seat nobody holds (see isComputer). */
+  public boolean computer() {
+    return computer;
+  }
+
+  // (under seatLock)
   private void take(Connection holder) {
     this.seat = holder;
     this.in = holder.in;
@@ -194,23 +237,26 @@ public class Client extends Model {
    * page of the participant, or a preview replaced by a preview, it is told ({"bbClosed": "replaced"})
    * and closed, so it doesn't reconnect and take the seat back, as two tabs used to, for ever; a
    * preview that held it for a participant who comes back watches from now on ({"bbWatching": true});
-   * a socket that had closed already is just left.
+   * a socket that had closed already is just left. Any socket of a computer player only watches
+   * what the computer does.
    */
   public Arrival connect(Connection incoming) {
     synchronized (seatLock) {
+      if (computer) {
+        return watch(incoming);
+      }
       Connection previous = seat;
       if (previous == null || previous == incoming || !previous.isOpen()) {
         take(incoming);
         return Arrival.SEATED;
       }
       if (incoming.preview && !previous.preview) {
-        // Told first, before any of the participant's frames reach it.
-        incoming.writeAside(WATCHING);
-        watchers.add(incoming);
-        return Arrival.WATCHING;
+        return watch(incoming);
       }
       take(incoming);
       if (previous.preview && !incoming.preview) {
+        // (it may have stood in for them: it only watches again)
+        previous.standIn = false;
         previous.writeAside(WATCHING);
         watchers.add(previous);
         return Arrival.PREVIEW_WATCHES;
@@ -218,6 +264,13 @@ public class Client extends Model {
       previous.close(REPLACED);
       return Arrival.TOOK_OVER;
     }
+  }
+
+  // (under seatLock) Told first, before any of the player's frames reach it.
+  private Arrival watch(Connection incoming) {
+    incoming.writeAside(WATCHING);
+    watchers.add(incoming);
+    return Arrival.WATCHING;
   }
 
   /**
@@ -237,19 +290,24 @@ public class Client extends Model {
 
   /**
    * The seat is empty (the participant's page went): a researcher's preview watching it takes it, the
-   * one that came last, and is told it no longer only watches ({"bbWatching": false}). It acts for the
-   * player from now on, as a preview of someone who has left does, until their own page comes back.
-   * Null when the seat is held again, or no open preview watches.
+   * one that came last, and is told it no longer only watches ({"bbWatching": false}). Its choices
+   * count, as a preview's always did, until their own page comes back; but it only stands in
+   * (Presence.AWAY): they have left all the same, so the computer takes their seat after the usual
+   * wait, and a waiting room no longer counts them. It used to count as them being back, and nobody
+   * played the seat for as long as the preview stayed open. Null when the seat is held again, no
+   * open preview watches, or the seat is a computer player's.
    */
   public Connection seatAWatcher() {
     synchronized (seatLock) {
-      if (seatOpen()) {
+      if (computer || seatOpen()) {
         return null;
       }
       for (int i = watchers.size() - 1; i >= 0; i--) {
         Connection watcher = watchers.get(i);
         if (watcher.isOpen()) {
           watchers.remove(i);
+          // (marked first: whoever sees it in the seat sees it standing in)
+          watcher.standIn = true;
           take(watcher);
           watcher.writeAside(NOT_WATCHING);
           return watcher;
@@ -264,10 +322,28 @@ public class Client extends Model {
     return seat;
   }
 
-  /** Whether an open socket holds the seat: the participant (or a preview standing in) is connected. */
+  /** Whether an open socket holds the seat: the participant's page, or a preview. */
   public boolean seatOpen() {
     Connection holder = seat;
     return holder != null && holder.isOpen();
+  }
+
+  /**
+   * Who is in the seat now: the participant's own page (HERE), a researcher's preview that took it
+   * while it was free (PREVIEW), or nobody (AWAY), a preview standing in for them included.
+   */
+  public Presence presence() {
+    Connection holder = seat;
+    if (holder == null || !holder.isOpen() || holder.standIn) {
+      return Presence.AWAY;
+    }
+    return holder.preview ? Presence.PREVIEW : Presence.HERE;
+  }
+
+  /** Whether a researcher's preview holds the seat, as a player or standing in for them. */
+  public boolean previewHolds() {
+    Connection holder = seat;
+    return holder != null && holder.isOpen() && holder.preview;
   }
 
   /** Whether this socket holds the seat now, open: what it sends acts for the participant. */
@@ -300,13 +376,11 @@ public class Client extends Model {
     return recordLock;
   }
 
-  // Whether {@code connected} differs from what was recorded last; it is now (under recordLock).
-  boolean connectionChanged(boolean connected) {
-    if (recordedConnected != null && recordedConnected == connected) {
-      return false;
-    }
-    recordedConnected = connected;
-    return true;
+  // What was recorded last (null before the first record); {@code now} is from now on (under recordLock).
+  Presence recordPresence(Presence now) {
+    Presence before = recordedPresence;
+    recordedPresence = now;
+    return before;
   }
 
   public synchronized void updateGraph(Vertex me) {

@@ -57,6 +57,9 @@ describe('players table', () => {
     expect(statusOf(node('p1', { _system: { connected: true } }))).toBe('Connected')
     expect(statusOf(node('p1', { _system: { connected: true, preview: true } }))).toBe('Preview connected')
     expect(statusOf(node('p1', { _system: { connected: false } }))).toBe('Disconnected')
+    // their page went while a preview watched it: the preview stands in, and they count as away
+    expect(statusOf(node('p1', { _system: { connected: false, preview: true } }))).toBe('Away: preview standing in')
+    expect(quickMatch(node('p1', { _system: { connected: false, preview: true } }), 'disconnected')).toBe(true)
     // still a connected seat for the quick filter
     expect(quickMatch(node('p1', { _system: { connected: true, preview: true } }), 'connected')).toBe(true)
   })
@@ -262,6 +265,19 @@ describe('PlayerDetails', () => {
     await tick()
     expect(w.find('.pd__badges').text()).toContain('Preview connected')
     expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs.')
+    // their page went while the preview watched it: it stands in, and they count as away
+    __receive({ action: 'nodePropertyChanged', id: 'p1', key: '_system', value: { connected: false, preview: true } })
+    await tick()
+    expect(w.find('.pd__badges').text()).toContain('Away: preview standing in')
+    expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs.')
+    w.unmount()
+  })
+
+  it('says a preview of a computer player only watches what the computer does', async () => {
+    const w = mount(PlayerDetails, { props: { id: '_1' } })
+    const previewButton = w.findAll('.pd__actions a, .pd__actions button').find(b => b.text().includes('Preview their screen'))!
+    expect(w.find('.pd__badges').text()).toContain('AI player')
+    expect(previewButton.attributes('title')).toBe('Opens its page on the Preview page, read-only: the computer plays this seat, and goes on playing.')
     w.unmount()
   })
 

@@ -661,6 +661,15 @@ describe('BBNetwork while the connection is down', () => {
     expect((w.vm as any).moves.every((m: any) => !m.available)).toBe(true)
   })
 
+  it('says on a preview of a computer player that the computer plays the seat', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    ;(window as any).Breadboard.computerPlayer = true
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await become(w, 'watching')
+    expect(w.find('.bb-network__hint').text()).toBe('Watching only: the computer plays this seat, so you can’t change its ties.')
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+  })
+
   it('says nothing of reconnecting once the page is done with (another page has the seat)', async () => {
     ;(window as any).Breadboard.connection = 'open'
     const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })

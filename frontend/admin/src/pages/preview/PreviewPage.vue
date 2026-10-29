@@ -51,8 +51,9 @@
         <Info :size="18" class="pv__notice-icon" aria-hidden="true" />
         <div class="pv__notice-text">
           <strong>Previews are live.</strong>
-          A player whose own page is connected is shown read-only: you see their screen, and their page is left alone.
+          A player whose own page is connected, and a computer player, are shown read-only: you see their screen, and their page (or the computer) carries on.
           Otherwise the preview signs in as that player, just as their own browser would: it counts as them being connected, and what you click is a real choice, recorded with the session’s data, until their own page comes back.
+          If their page goes while you watch, you can answer for them, but they count as away, as anyone who leaves does.
         </div>
         <BButton size="sm" variant="ghost" @click="dismissNotice">Got it</BButton>
       </div>
@@ -171,8 +172,8 @@ import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  MAX_PREVIEWS, autoPicked, isAIPlayer, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, quickPick,
-  shownReadOnly, sortPlayers, tileWidth, type PlayerLike, type PreviewTarget, type QuickPick,
+  MAX_PREVIEWS, autoPicked, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl,
+  quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 
@@ -216,16 +217,27 @@ function tooMany () {
 }
 
 /**
- * A preview never takes the seat of a player whose own page is connected: it only watches. Said as
- * they are added, so a researcher isn't left wondering why nothing there can be clicked.
+ * A preview never takes the seat of a player whose own page is connected, nor of a computer player:
+ * it only watches. Said as they are added, so a researcher isn't left wondering why nothing there can
+ * be clicked.
  */
 function noteReadOnly (list: PlayerLike[]) {
-  if (!list.length) return
-  const one = list.length === 1
-  notify.info(
-    one ? `${list[0].id} is connected right now` : `${list.length} of these players are connected right now`,
-    `${one ? 'Their preview is' : 'Their previews are'} read-only: you see what they see, but can’t answer for them. Their own page is left alone.`,
-  )
+  const people = list.filter(p => !isComputerPlayer(p))
+  const computers = list.filter(isComputerPlayer)
+  if (people.length) {
+    const one = people.length === 1
+    notify.info(
+      one ? `${people[0].id} is connected right now` : `${people.length} of these players are connected right now`,
+      `${one ? 'Their preview is' : 'Their previews are'} read-only: you see what they see, but can’t answer for them. Their own page is left alone.`,
+    )
+  }
+  if (computers.length) {
+    const one = computers.length === 1
+    notify.info(
+      one ? `${computers[0].id} is a computer player` : `${computers.length} of these are computer players`,
+      `${one ? 'Its preview is' : 'Their previews are'} read-only: you see what the computer does, and it goes on playing.`,
+    )
+  }
 }
 
 function toggle (id: string, on: boolean) {
@@ -380,8 +392,9 @@ watch(() => [route.query.player, players.value.length] as const, ([q]) => {
 // On narrow screens the list sits above the previews; once some are chosen it starts folded away.
 const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
 const pickerOpen = ref(!(narrow && memory.ids.length))
-// (a new key since previews of connected players became read-only: the notice says so once more)
-const NOTICE_KEY = 'bb.preview.liveNoticeSeen.2'
+// (a new key whenever what previews do changes, so the notice is shown once more: previews of
+// connected players became read-only, then those of computer players)
+const NOTICE_KEY = 'bb.preview.liveNoticeSeen.3'
 const noticeSeen = ref(readFlag(NOTICE_KEY))
 function dismissNotice () {
   noticeSeen.value = true

@@ -160,6 +160,17 @@ describe('ConnectionStatus', () => {
     expect(text(w)).toMatch(/^Watching only/)
   })
 
+  it('says on a preview of a computer player that the computer plays the seat', async () => {
+    breadboard = Object.assign(fakeBreadboard('open', true), { computerPlayer: true })
+    vi.stubGlobal('Breadboard', breadboard)
+    const w = await mountStatus()
+    await become('watching')
+    expect(text(w)).toBe('Watching only: the computer plays this seat, so you see what it does but can’t answer for it.')
+    // the other states say what they always do
+    await become('elsewhere')
+    expect(text(w)).toBe('This player is open in another preview or tab.')
+  })
+
   it('does the same for a 3.0 message without slot props', async () => {
     const w = await mountStatus({ slots: { default: '<span class="own">Reconnecting…</span>' } })
     await drop(3000)

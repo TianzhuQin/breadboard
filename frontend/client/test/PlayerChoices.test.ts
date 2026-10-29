@@ -87,6 +87,15 @@ describe('PlayerChoices', () => {
     expect(w.find('.bb-link-note').exists()).toBe(false)
   })
 
+  it('says on a preview of a computer player that the computer plays the seat', async () => {
+    ;(bb as any).computerPlayer = true
+    const w = mount(PlayerChoices, { propsData: { player }, stubs })
+    bb.become('watching')
+    await w.vm.$nextTick()
+    expect(enabled(w)).toEqual([false, false])
+    expect(w.find('.bb-link-note').text()).toBe('Watching only: the computer plays this seat, so you can’t answer for it.')
+  })
+
   it('answers nothing on a researcher\'s preview that only watches the player, and says why', async () => {
     const w = mount(PlayerChoices, { propsData: { player }, stubs })
     bb.become('watching')

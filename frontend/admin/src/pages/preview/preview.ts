@@ -25,12 +25,21 @@ export const isTestPlayer = (p: PlayerLike) => truthyFlag(p.data?.testmode)
 /** A computer seat: created as AI (id starting with "_"), or a person's seat the computer took over (ai = 1). */
 export const isAIPlayer = (p: PlayerLike) => p.id.startsWith('_') || truthyFlag(p.data?.ai)
 /**
+ * A computer player, created as one (g.addAI's _1, _2, …): a preview of it only watches what the
+ * computer does, read-only. (A person's seat the computer took over is still theirs to preview.)
+ */
+export const isComputerPlayer = (p: PlayerLike) => p.id.startsWith('_')
+/**
  * The player's seat is connected right now (_system.connected): their own page, or a researcher's
- * preview that holds it while their page is away (another console's, or this one's).
+ * preview that took it while it was free (another console's, or this one's).
  */
 export const isConnected = (p: PlayerLike) => p.data?._system?.connected === true
-/** A researcher's preview holds their seat (_system.preview): their own page isn't connected. */
-export const heldByPreview = (p: PlayerLike) => isConnected(p) && p.data?._system?.preview === true
+/**
+ * A researcher's preview holds their seat (_system.preview): their own page isn't connected. It plays
+ * the seat (connected), or stands in for someone whose page went while it watched (not connected:
+ * they count as away, and the computer takes over as usual).
+ */
+export const heldByPreview = (p: PlayerLike) => p.data?._system?.preview === true
 /** Their own page is connected: a preview of them only watches it, read-only. */
 export const ownPageConnected = (p: PlayerLike) => isConnected(p) && !heldByPreview(p)
 
@@ -59,21 +68,23 @@ export function quickPick<T extends PlayerLike> (players: readonly T[], pick: Qu
 }
 
 /**
- * Of the players about to be previewed, those whose own page is connected: the server lets a
- * preview only watch them (it shows what their page gets, and leaves their page alone), so their
- * previews are read-only, which the researcher is told. A seat another preview holds is not theirs.
+ * Of the players about to be previewed, those whose previews are read-only, which the researcher is
+ * told: those whose own page is connected (the server lets a preview only watch them: it shows what
+ * their page gets, and leaves their page alone), and computer players. A seat another preview holds
+ * is not theirs.
  */
 export function shownReadOnly<T extends PlayerLike> (adding: readonly T[], alreadyShown: ReadonlySet<string>): T[] {
-  return adding.filter(p => !alreadyShown.has(p.id) && ownPageConnected(p))
+  return adding.filter(p => !alreadyShown.has(p.id) && (ownPageConnected(p) || isComputerPlayer(p)))
 }
 
 /**
  * The test players shown on the first look at a session, as the old Testing panel did: not those
- * whose seat is connected, by their own page or by another console's preview, which a preview from
- * here would take the seat from (two consoles would take it from each other).
+ * whose seat is connected, by their own page or by another console's preview, nor those another
+ * preview stands in for: a preview from here would take the seat from it (two consoles would take
+ * it from each other).
  */
 export function autoPicked<T extends PlayerLike> (players: readonly T[]): T[] {
-  return quickPick(players, 'test').filter(p => !isConnected(p)).slice(0, MAX_PREVIEWS)
+  return quickPick(players, 'test').filter(p => !isConnected(p) && !heldByPreview(p)).slice(0, MAX_PREVIEWS)
 }
 
 // ---- addresses --------------------------------------------------------------------------------

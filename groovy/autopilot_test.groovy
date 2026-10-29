@@ -315,12 +315,13 @@ test("people who left well before the start are taken out of the network") {
   ap.stop()
 }
 
-test("someone away for a moment at the start keeps their seat") {
+test("someone away for a moment at the start keeps their seat, which the computer plays") {
   def hooks = [:]
   def started = []
   def ap = pilot('ap-seat-', hooks)
   try {
     ap.waitingRoom([minPlayers: 2, maxPlayers: 4, countdownSeconds: 0, onStart: { players -> started.addAll(players*.id) }])
+    ap.replaceDisconnected([afterSeconds: 30])
     arrive(ap, 'ap-seat-1'); arrive(ap, 'ap-seat-2'); arrive(ap, 'ap-seat-3')
     leave(ap, 'ap-seat-3', 5000)
     // a player whose page never connected (e.g. one a script added) still goes
@@ -330,7 +331,28 @@ test("someone away for a moment at the start keeps their seat") {
     assert g.getVertex('ap-seat-3') != null : "their seat was taken away as their page reconnected"
     assert g.getVertex('ap-seat-ghost') == null
     assert started.toSet() == ['ap-seat-1', 'ap-seat-2', 'ap-seat-3', 'ap-seat-4', 'ap-seat-5'].toSet()
-    // without replaceDisconnected the seat waits for them
+    assert ap.takeoverTimers.keySet() == ['ap-seat-3'] as Set : "nobody plays the kept seat"
+  } finally {
+    ap.stop()
+  }
+}
+
+test("without replaceDisconnected someone away at the start is taken out, however briefly") {
+  def hooks = [:]
+  def started = []
+  def told = []
+  def ap = pilot('ap-nokeep-', hooks)
+  ap.leftOut = { String id -> told << id }
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 4, countdownSeconds: 0, onStart: { players -> started.addAll(players*.id) }])
+    arrive(ap, 'ap-nokeep-1'); arrive(ap, 'ap-nokeep-2'); arrive(ap, 'ap-nokeep-3')
+    leave(ap, 'ap-nokeep-3', 2000)
+    arrive(ap, 'ap-nokeep-4'); arrive(ap, 'ap-nokeep-5')
+    assert hooks.started == 1
+    // Nobody would play a seat kept for them: they get the "started without you" screen if they come back.
+    assert g.getVertex('ap-nokeep-3') == null : "a seat was kept that nobody plays"
+    assert told == ['ap-nokeep-3']
+    assert started.toSet() == ['ap-nokeep-1', 'ap-nokeep-2', 'ap-nokeep-4', 'ap-nokeep-5'].toSet()
     assert ap.takeoverTimers.isEmpty()
   } finally {
     ap.stop()
@@ -344,6 +366,7 @@ test("whoever launch() takes out is passed on, so their page is told when it com
   ap.leftOut = { String id -> told << id }
   try {
     ap.waitingRoom([minPlayers: 2, maxPlayers: 3, countdownSeconds: 0])
+    ap.replaceDisconnected([afterSeconds: 30])
     arrive(ap, 'ap-out-1'); arrive(ap, 'ap-out-2')
     leave(ap, 'ap-out-2', 61000)
     arrive(ap, 'ap-out-3')
@@ -439,6 +462,34 @@ test.async("a player who leaves mid-game is replaced by the computer, and gets t
       assert returned : "the seat was not given back"
       ap.stop()
     }
+  }
+}
+
+test("a computer player's page coming and going leaves its seat to the computer") {
+  def hooks = [:]
+  def ap = pilot('ap-cpu-', hooks)
+  // As the global autopilot tells them apart: computer players (g.addAI) have ids starting with "_".
+  ap.isParticipant = new Autopilot().isParticipant
+  def behavior = { player -> }
+  def bot = g.addAI(a, 1, behavior)[0]
+  def id = bot.id.toString()
+  try {
+    ap.replaceDisconnected([afterSeconds: 30, behavior: { player -> }])
+    ap.onGameStart()
+    // a researcher's preview of it opens and closes
+    ap.onConnection(id, true)
+    assert bot.getProperty("ai") == 1 : "the computer was switched off"
+    ap.onConnection(id, false)
+    assert !ap.takeoverTimers.containsKey(id)
+    assert a.ai.behaviors[bot].is(behavior) : "the experiment's own behaviour was replaced"
+    // a person leaving is still handed to the computer
+    arrive(ap, 'ap-cpu-1')
+    leave(ap, 'ap-cpu-1')
+    assert ap.takeoverTimers.containsKey('ap-cpu-1')
+  } finally {
+    ap.stop()
+    a.ai.remove(bot)
+    g.removeVertex(bot)
   }
 }
 

@@ -545,5 +545,18 @@ describe('a researcher\'s preview of a player whose own page is connected', () =
     const page = await openPage(stateAnswers([200, CONFIG]))
     expect(page.Breadboard.preview).toBe(false)
     expect(page.Breadboard.watching).toBe(false)
+    expect(page.Breadboard.computerPlayer).toBe(false)
+  })
+
+  // A preview of a computer player (g.addAI's _1, _2, …) only watches what the computer does: the
+  // page's words say so instead of "their own page is connected".
+  it('knows when its player is a computer player', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, { ...CONFIG, clientId: '_1' }]))
+    expect(page.Breadboard.computerPlayer).toBe(true)
+    FakeSocket.all[0].frame(WATCHING)
+    expect(page.Breadboard.connection).toBe('watching')
+    await answerForThem(page.Breadboard)
+    expect(answers(FakeSocket.all[0])).toEqual([])
   })
 })

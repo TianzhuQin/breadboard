@@ -60,7 +60,10 @@
 import { computed, ref } from 'vue'
 import { Bot, FlaskConical, ListOrdered, Search } from 'lucide-vue-next'
 import { BButton, BCheckbox, BInput } from '@/ui'
-import { heldByPreview, isAIPlayer, isConnected, isTestPlayer, matchesPlayer, ownPageConnected, type PlayerLike, type QuickPick } from './preview'
+import {
+  heldByPreview, isAIPlayer, isComputerPlayer, isConnected, isTestPlayer, matchesPlayer, ownPageConnected, type PlayerLike,
+  type QuickPick,
+} from './preview'
 
 const props = defineProps<{
   players: PlayerLike[]
@@ -79,9 +82,12 @@ const aiCount = computed(() => props.players.filter(isAIPlayer).length)
 
 function connectionText (p: PlayerLike) {
   if (props.selected.has(p.id)) return 'shown here'
+  if (isComputerPlayer(p)) return 'played by the computer, so a preview is read-only'
   if (ownPageConnected(p)) return 'their own page is connected, so a preview is read-only'
   // (another console's preview, which a preview from here would take the seat from)
-  if (heldByPreview(p)) return 'a preview has their seat: their own page isn’t connected'
+  if (heldByPreview(p)) {
+    return isConnected(p) ? 'a preview has their seat: their own page isn’t connected' : 'away: a preview stands in for them'
+  }
   return 'not connected'
 }
 </script>

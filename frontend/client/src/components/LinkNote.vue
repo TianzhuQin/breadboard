@@ -1,17 +1,22 @@
 <template>
   <!-- Shown by the choices and forms while they can't send: they wait for the connection, or the page
-       only watches (a researcher's preview of a player whose own page is connected) -->
+       only watches (a researcher's preview of a player whose own page is connected, or of a computer
+       player) -->
   <p v-if="text" class="bb-link-note" :class="`bb-link-note--${link}`" role="status">{{ text }}</p>
 </template>
 
 <script lang="ts">
   import Vue from 'vue'
+  import { computerPlayer } from '../lib/connection'
 
   const TEXTS: Record<string, string> = {
     reconnecting: 'Reconnecting… you can answer once the connection is back.',
     // (only a researcher's preview watches)
     watching: 'Watching only: their own page is connected, so you can’t answer for them.',
   }
+  // A preview of a computer player watches what the computer does.
+  const COMPUTER_WATCHING = 'Watching only: the computer plays this seat, so you can’t answer for it.'
+
 
   /**
    * A short note next to controls that can't send now, saying why. Nothing for the other link
@@ -25,6 +30,7 @@
     },
     computed: {
       text (): string {
+        if (this.link === 'watching' && computerPlayer()) return COMPUTER_WATCHING
         return TEXTS[this.link] || ''
       }
     }

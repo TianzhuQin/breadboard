@@ -33,6 +33,7 @@
         <BBadge v-if="ai" tone="accent"><Bot :size="13" aria-hidden="true" />AI player</BBadge>
         <BBadge v-else-if="connection === 'connected' && previewHolds" tone="info" dot title="A researcher’s preview has their seat: their own page isn’t connected">Preview connected</BBadge>
         <BBadge v-else-if="connection === 'connected'" tone="success" dot>Connected</BBadge>
+        <BBadge v-else-if="connection === 'disconnected' && previewHolds" tone="warning" dot title="Their own page went while a researcher’s preview watched it: the preview can answer for them, but they count as away">Away: preview standing in</BBadge>
         <BBadge v-else-if="connection === 'disconnected'" tone="warning" dot>Disconnected</BBadge>
         <BBadge v-if="choices.length" tone="info">Has a choice to make</BBadge>
         <BBadge v-if="autopilot" tone="info">{{ autopilotLabel }}</BBadge>
@@ -224,12 +225,16 @@ const nameFor = (id: string) => labelOf(graph.nodes.get(id) || { id, data: {} },
 const name = computed(() => { void graph.version.value; return nameFor(props.id) })
 const ai = computed(() => isAi(node.value))
 const connection = computed(() => connectionOf(node.value))
-// A researcher's preview holds their seat (_system.preview): their own page isn't connected.
-const previewHolds = computed(() => connection.value === 'connected' && node.value?.data?._system?.preview === true)
-// A preview of someone whose own page is connected only watches it; anyone else's acts for them.
-const previewTitle = computed(() => connection.value === 'connected' && !previewHolds.value
-  ? 'Opens their page on the Preview page, read-only: their own page is connected, and is left alone.'
-  : 'Opens their page on the Preview page. Choices made in the preview count as theirs.')
+// A researcher's preview holds their seat (_system.preview): their own page isn't connected. Connected,
+// it plays the seat; otherwise it stands in for them, and they count as away.
+const previewHolds = computed(() => node.value?.data?._system?.preview === true)
+// A preview of someone whose own page is connected, or of a computer player, only watches; anyone
+// else's acts for them.
+const previewTitle = computed(() => props.id.startsWith('_')
+  ? 'Opens its page on the Preview page, read-only: the computer plays this seat, and goes on playing.'
+  : connection.value === 'connected' && !previewHolds.value
+    ? 'Opens their page on the Preview page, read-only: their own page is connected, and is left alone.'
+    : 'Opens their page on the Preview page. Choices made in the preview count as theirs.')
 const recruitment = computed(() => recruitmentOf(node.value))
 const autopilot = computed(() => autopilotOf(node.value))
 const group = computed(() => {

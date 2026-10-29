@@ -250,7 +250,7 @@ export const ENDED_EVENT = 'bb:ended'
  *   a preview, the researcher opened another preview of this player); see useHere
  * - 'ended': the session is over for this page; it no longer reconnects
  * - 'watching': open, but only to watch: a researcher's preview of a player whose own page is
- *   connected sees what they see, and can't answer for them (see `watching`)
+ *   connected, or of a computer player, sees what they see, and can't answer for them (see `watching`)
  */
 export type ConnectionState = 'connecting' | 'open' | 'lost' | 'blocked' | 'elsewhere' | 'ended' | 'watching'
 
@@ -297,13 +297,22 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /**
    * Whether this page only watches its player: a researcher's preview of a player whose own page
-   * is connected. The server sends it what the player's page gets, and ignores what it sends; it
-   * sends no choices, tie changes or other messages for them. The server decides again for every
-   * new connection, and hands the seat to a preview that watches when the player's page goes
-   * ({"bbWatching": false}).
+   * is connected, or of a computer player (see computerPlayer). The server sends it what the
+   * player's page gets, and ignores what it sends; it sends no choices, tie changes or other
+   * messages for them. The server decides again for every new connection, and hands the seat to a
+   * preview that watches when the player's page goes ({"bbWatching": false}).
    */
   get watching (): boolean {
     return this.watchingNow
+  }
+
+  /**
+   * Whether this page's player is a computer player (g.addAI's _1, _2, …; nobody signs in with an id
+   * starting with "_"). A researcher's preview of one only watches what the computer does.
+   */
+  get computerPlayer (): boolean {
+    const id = this.config && this.config.clientId
+    return typeof id === 'string' && id.charAt(0) === '_'
   }
 
   /**

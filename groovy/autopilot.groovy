@@ -29,10 +29,11 @@ import com.tinkerpop.blueprints.Vertex
 //   ])
 //
 // People who left before the start are taken out of the network before InitStep runs, so nobody
-// starts next to an empty seat, unless they have been gone less than a minute (or afterSeconds, if
-// that is longer): a connection that dropped for a moment. They keep their seat, which the computer
-// plays (with replaceDisconnected) until they are back. Those taken out are told so if they come
-// back (the event missedStart). Every start, cancellation and takeover is logged as an event.
+// starts next to an empty seat. With replaceDisconnected, those gone less than a minute (or
+// afterSeconds, if that is longer), whose connection dropped for a moment, keep their seat, which
+// the computer plays until they are back. Those taken out are told so if they come back (the event
+// missedStart). Every start, cancellation and takeover is logged as an event. A computer player's
+// seat (see isParticipant) stays the computer's, whoever looks at its page.
 //
 // The console's waiting room replaces the steps' own through replaceWaitingRoom, even for people
 // who are waiting already: its limits count from the first arrival, and from when the wait for more
@@ -50,7 +51,8 @@ class Autopilot {
                    // comes back, even after the engine was rebuilt (ScriptBoard.leftOutAtStart)
   // Which vertices are participants. AI players added with g.addAI have ids starting with "_".
   Closure isParticipant = { v -> !v.id.toString().startsWith("_") }
-  // Someone away at the start for less than this (or replace.afterSeconds, if longer) keeps their seat.
+  // With replaceDisconnected, someone away at the start for less than this (or replace.afterSeconds,
+  // if longer) keeps their seat.
   static final long KEEP_SEAT_MS = 60000L
 
   Map room = null
@@ -154,6 +156,10 @@ class Autopilot {
   }
 
   synchronized def onConnection(String clientId, boolean connected) {
+    def v = g.getVertex(clientId)
+    // A computer player's page, which a researcher's preview watches: the computer plays on. It used to
+    // count as a person coming back, which switched the computer off for good.
+    if (v != null && !isParticipant(v)) return
     if (finished && !launched) {
       if (connected) cancelLate(clientId)
     } else if (gameStarted()) {
@@ -291,10 +297,12 @@ class Autopilot {
     // onStart): with launched set, nothing else would start it, and everyone would wait for good.
     try {
       // Whoever left before the start doesn't get a seat in the network, unless they have been gone
-      // only a moment (_system.disconnectedAt, from ScriptBoard): they used to be left out as their
-      // page reconnected seconds later, which then waited for a game without them for good.
+      // only a moment (_system.disconnectedAt, from ScriptBoard) and the computer can play the seat
+      // until they are back (replaceDisconnected): they used to be left out as their page reconnected
+      // seconds later, which then waited for a game without them for good. Without it, nobody would
+      // play a seat kept for someone who doesn't come back.
       long now = System.currentTimeMillis()
-      long keepMs = Math.max(KEEP_SEAT_MS, replace == null ? 0L : Math.round(replace.afterSeconds * 1000))
+      long keepMs = replace == null ? 0L : Math.max(KEEP_SEAT_MS, Math.round(replace.afterSeconds * 1000))
       def away = []
       def gone = []
       participants().findAll { v -> v.getProperty("_system")?.connected != true }.each { v ->
@@ -313,7 +321,7 @@ class Autopilot {
       if (gone) data << [name: "leftOut", value: gone.size().toString()]
       track("autopilotStart", data)
       gone.each { id -> tellLeftOut(id) }
-      // With replaceDisconnected, the computer plays their seat until they are back.
+      // The computer plays their seat until they are back.
       away.each { v -> handleDeparture(v.id.toString(), false) }
       if (room?.onStart != null) room.onStart(players)
     } finally {
@@ -374,11 +382,12 @@ class Autopilot {
     if (room.onCancel != null) room.onCancel(players)
   }
 
-  // During the game: hand a departed player's seat to the computer after a grace period.
+  // During the game: hand a departed player's seat to the computer after a grace period. Not a
+  // computer player's (isParticipant), which the computer plays already.
   def handleDeparture(String clientId, boolean connected) {
     if (replace == null) return
     def v = g.getVertex(clientId)
-    if (v == null) return
+    if (v == null || !isParticipant(v)) return
     if (connected) {
       takeoverTimers.remove(clientId)?.cancel()
       if (replace.returnToHuman && v.getProperty("ai") == 1) {

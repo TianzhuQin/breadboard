@@ -19,9 +19,11 @@ import javax.script.ScriptEngine;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -35,7 +37,9 @@ import static play.test.Helpers.*;
  * fake sockets, in a session launched from a console): two tabs of one participant don't fight over
  * the seat, connections are recorded once per real change, pings are answered and a page that falls
  * silent counts as gone, someone the game started without is told so, the same view isn't sent
- * twice, a researcher's preview of a connected player only watches, and the seat cookie lasts a day.
+ * twice, a researcher's preview of a connected player or of a computer player only watches, one that
+ * stands in for someone who left doesn't count as them, pages at their final screen are answered and
+ * let go, and the seat cookie lasts a day.
  */
 public class ParticipantConnectionTest extends BaseTest {
 
@@ -78,6 +82,7 @@ public class ParticipantConnectionTest extends BaseTest {
         Map<String, Client> clients = (Map<String, Client>) field("clients").get(null);
         for (Client c : clients.values()) c.disconnect();
         clients.clear();
+        ((Set<?>) field("endedPages").get(null)).clear();
         ParticipantAuth.reset();
         Recruitment.reset();
         ((EventTracker) field("eventTracker").get(null)).setExperimentInstance(null);
@@ -167,13 +172,40 @@ public class ParticipantConnectionTest extends BaseTest {
 
     /** How many events of this name the session recorded for this participant. */
     private int events(String name, String clientId) {
+        return eventsWith(name, "clientId", clientId);
+    }
+
+    /** How many events of this name the session recorded with this data (e.g. playerId = p1). */
+    private int eventsWith(String name, String dataName, String value) {
         int n = 0;
         for (Event e : Event.find.where().eq("experimentInstance.id", session.id).eq("name", name).findList()) {
             for (EventData d : e.eventData) {
-                if ("clientId".equals(d.name) && clientId.equals(d.value)) n++;
+                if (dataName.equals(d.name) && value.equals(d.value)) n++;
             }
         }
         return n;
+    }
+
+    /** As events, counting only those a researcher's preview caused (preview = true), or only the others. */
+    private int events(String name, String clientId, boolean byPreview) {
+        int n = 0;
+        for (Event e : Event.find.where().eq("experimentInstance.id", session.id).eq("name", name).findList()) {
+            boolean theirs = false;
+            boolean preview = false;
+            for (EventData d : e.eventData) {
+                if ("clientId".equals(d.name) && clientId.equals(d.value)) theirs = true;
+                if ("preview".equals(d.name) && "true".equals(d.value)) preview = true;
+            }
+            if (theirs && preview == byPreview) n++;
+        }
+        return n;
+    }
+
+    /** What bb:connection announced (connected or not), while it listens. */
+    private static final class Announcements extends Closure {
+        final List<Object> heard = new CopyOnWriteArrayList<>();
+        Announcements() { super(null); }
+        public Object doCall(Object info) { heard.add(((Map<?, ?>) info).get("connected")); return null; }
     }
 
     private static void await(String what, Callable<Boolean> condition) throws Exception {
@@ -590,49 +622,190 @@ public class ParticipantConnectionTest extends BaseTest {
     }
 
     @Test
-    public void aPreviewHoldingTheSeatIsMarkedSoAndTakesItWhenTheirOwnPageGoes() throws Throwable {
-        // A preview of someone away holds their seat: connected, and marked as a preview's (for the
-        // console), which their neighbours never see.
+    public void aPreviewHoldingAFreeSeatIsConnectedAndMarkedSoInTheData() throws Throwable {
+        // A preview of someone away holds their seat: connected (that is how test players are
+        // played), and marked as a preview's, for the console, which their neighbours never see.
         Page neighbour = connect("p2");
         Page preview = connect("p1", true);
         assertEquals(Boolean.TRUE, system("p1").get("connected"));
         assertEquals(Boolean.TRUE, system("p1").get("preview"));
+        assertEquals("recorded as a preview's", 1, events("clientConnected", "p1", true));
+        assertEquals(0, events("clientConnected", "p1", false));
         engine().eval("g.addEdge(g.getVertex('p1'), g.getVertex('p2'), 'connected'); null");
         JsonNode nodes = neighbour.last().get("graph").get("nodes");
         assertEquals(nodes.toString(), 2, nodes.size());
         for (JsonNode node : nodes) assertFalse(nodes.toString(), node.has("_system") && !"p2".equals(node.path("id").asText()));
 
-        // Their own page comes back: the seat is theirs, the flag goes, the preview watches.
+        // Their own page comes back: the seat is theirs, the flag goes, the preview watches. The
+        // data says the preview went and they came.
         Page participant = connect("p1");
         assertEquals(1, preview.count(WATCHING));
         assertEquals(Boolean.TRUE, system("p1").get("connected"));
         assertNull(system("p1").get("preview"));
-        assertEquals("the seat never emptied", 1, events("clientConnected", "p1"));
+        assertEquals(1, events("clientDisconnected", "p1", true));
+        assertEquals(1, events("clientConnected", "p1", false));
+        assertEquals(0, events("clientDisconnected", "p1", false));
 
-        // Their page goes: the preview watching takes the seat, is told so, and can act for them.
-        participant.hangUp();
-        assertEquals(1, preview.count(NOT_WATCHING));
-        assertSame(preview.out, client("p1").out);
+        // The preview going while it only watches changes nothing.
+        Page second = connect("p1", true);
+        second.hangUp();
         assertEquals(Boolean.TRUE, system("p1").get("connected"));
-        assertEquals(Boolean.TRUE, system("p1").get("preview"));
-        assertNull(system("p1").get("disconnectedAt"));
-        assertEquals("their page went", 1, events("clientDisconnected", "p1"));
-        assertEquals("and a preview took the seat", 2, events("clientConnected", "p1"));
-        CustomEvents customEvents = new CustomEvents();
-        bus().on("CustomEvent", customEvents);
-        try {
-            preview.send("CustomEvent", "eventName", "from-the-preview");
-            assertEquals(1, customEvents.heard.size());
-        } finally {
-            bus().off("CustomEvent", customEvents);
-        }
+        assertEquals(1, events("clientConnected", "p1", true));
+        assertEquals(1, events("clientDisconnected", "p1", true));
 
-        // The preview going empties the seat, and the flag goes with it.
+        // Their page goes, and then the free seat's preview: recorded as a preview's.
+        participant.hangUp();
         preview.hangUp();
+        Page tile = connect("p1", true);
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(2, events("clientConnected", "p1", true));
+        tile.hangUp();
         assertEquals(Boolean.FALSE, system("p1").get("connected"));
         assertNull(system("p1").get("preview"));
-        assertNotNull(system("p1").get("disconnectedAt"));
-        assertEquals(2, events("clientDisconnected", "p1"));
+        assertEquals(2, events("clientDisconnected", "p1", true));
+        assertEquals(1, events("clientDisconnected", "p1", false));
+    }
+
+    @Test
+    public void aPreviewThatTakesTheSeatAsTheirPageGoesOnlyStandsInForThem() throws Throwable {
+        Page participant = connect("p1");
+        Page preview = connect("p1", true);
+        Announcements announced = new Announcements();
+        bus().on("bb:connection", announced);
+        try {
+            participant.hangUp();
+            // The preview takes the seat and is told so: its choices count from now on...
+            assertEquals(1, preview.count(NOT_WATCHING));
+            assertSame(preview.out, client("p1").out);
+            assertEquals(Boolean.TRUE, system("p1").get("preview"));
+            // ...but nobody is there: they have left, as for anyone whose page goes.
+            assertEquals(Boolean.FALSE, system("p1").get("connected"));
+            assertNotNull(system("p1").get("disconnectedAt"));
+            assertEquals(1, events("clientDisconnected", "p1"));
+            assertEquals("no connection recorded for the preview", 1, events("clientConnected", "p1"));
+            assertEquals(Arrays.<Object>asList(false), announced.heard);
+            CustomEvents customEvents = new CustomEvents();
+            bus().on("CustomEvent", customEvents);
+            try {
+                preview.send("CustomEvent", "eventName", "from-the-preview");
+                assertEquals(1, customEvents.heard.size());
+            } finally {
+                bus().off("CustomEvent", customEvents);
+            }
+
+            // Its going takes the flag with it, and records nothing.
+            preview.hangUp();
+            assertNull(system("p1").get("preview"));
+            assertEquals(Boolean.FALSE, system("p1").get("connected"));
+            assertEquals(1, events("clientDisconnected", "p1"));
+            assertEquals(Arrays.<Object>asList(false), announced.heard);
+        } finally {
+            bus().off("bb:connection", announced);
+        }
+    }
+
+    @Test
+    public void aWatchedParticipantWhoLeavesIsHandedToTheComputerAndThePreviewCanStillChooseForThem() throws Throwable {
+        Page participant = connect("p1");
+        Page preview = connect("p1", true);
+        // The game starts.
+        engine().eval("autopilot.replaceDisconnected([afterSeconds: 1]); autopilot.onGameStart(); "
+            + "picked = java.util.Collections.synchronizedList([]); null");
+        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+        participant.hangUp();
+        assertEquals(1, preview.count(NOT_WATCHING));
+        assertEquals("no connection recorded for the preview", 1, events("clientConnected", "p1"));
+
+        // The preview chooses for them: it counts, as a preview's choices always did.
+        engine().eval("a.add(g.getVertex('p1'), [name: 'Left', result: { picked << 'Left' }]); null");
+        String uid = String.valueOf(engine().eval("g.getVertex('p1').choices[0].uid"));
+        preview.send("MakeChoice", "choiceUID", uid);
+        assertEquals(1, preview.count(ANSWER));
+        assertEquals(Arrays.asList("Left"), engine().eval("new ArrayList(picked)"));
+
+        // The computer takes their seat after afterSeconds, as for anyone who leaves. It used to wait
+        // for as long as the preview was open.
+        await("the computer's takeover", () -> Integer.valueOf(1).equals(engine().eval("g.getVertex('p1').ai")));
+        assertEquals(1, eventsWith("aiTakeover", "playerId", "p1"));
+        assertEquals(Boolean.FALSE, system("p1").get("connected"));
+
+        // Their page comes back: the seat is theirs again, from the computer, and the preview watches.
+        Page back = connect("p1");
+        assertEquals(2, preview.count(WATCHING));
+        assertSame(back.out, client("p1").out);
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertNull(system("p1").get("preview"));
+        assertEquals(2, events("clientConnected", "p1"));
+        await("the seat given back", () -> engine().eval("g.getVertex('p1').ai") == null);
+        assertEquals(1, eventsWith("aiReturned", "playerId", "p1"));
+        engine().eval("autopilot.stop(); null");
+    }
+
+    @Test
+    public void aWatchedParticipantWhoLeavesTheWaitingRoomIsNoLongerCounted() throws Throwable {
+        engine().eval("autopilot.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 60, departureGraceSeconds: 0.3]); null");
+        Page first = connect("p1");
+        Page participant = connect("p2");
+        Page preview = connect("p2", true);
+        assertNotNull("enough are here: the wait for more began", engine().eval("autopilot.startAt"));
+        participant.hangUp();
+        assertEquals(1, preview.count(NOT_WATCHING));
+        assertEquals("the waiting room counts only who is there", 1, engine().eval("autopilot.connectedPlayers().size()"));
+        assertEquals(1, waitingRoom(first).path("here").asInt());
+        assertNotNull("their departure counts after the grace", engine().eval("autopilot.startAt"));
+        await("the start called off", () -> engine().eval("autopilot.startAt") == null);
+        assertEquals(1, events("clientConnected", "p2"));
+        assertEquals(1, events("clientDisconnected", "p2"));
+        engine().eval("autopilot.stop(); null");
+    }
+
+    @Test
+    public void aPreviewOfAComputerPlayerWatchesWhatTheComputerDoes() throws Throwable {
+        engine().eval("autopilot.replaceDisconnected([afterSeconds: 0.2, behavior: { p -> }]); autopilot.onGameStart(); "
+            + "bot = g.addAI(a, 1, { p -> })[0]; botBehavior = a.ai.behaviors[bot]; null");
+        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+        final String id = String.valueOf(engine().eval("bot.id"));
+        assertTrue(id, id.startsWith("_"));
+        Announcements announced = new Announcements();
+        bus().on("bb:connection", announced);
+        try {
+            Page preview = connect(id, true);
+            assertTrue("told first", WATCHING.matches(preview.frames.get(0)));
+            assertEquals("then the computer's view", 1, preview.count(VIEW));
+            assertFalse(preview.closed);
+            assertEquals("the computer still plays it", 1, engine().eval("bot.ai"));
+            assertNull("nothing recorded on it", system(id).get("connected"));
+            assertNull(system(id).get("preview"));
+            assertTrue(announced.heard.isEmpty());
+
+            // It sees what the computer's seat gets; what it sends doesn't act for it.
+            engine().eval("bot.score = 5; null");
+            assertEquals(5, preview.last().get("player").get("score").asInt());
+            CustomEvents customEvents = new CustomEvents();
+            bus().on("CustomEvent", customEvents);
+            try {
+                preview.send("CustomEvent", "eventName", "from-the-preview");
+                preview.send("MakeChoice", "choiceUID", "no-such-choice");
+                assertEquals(0, customEvents.heard.size());
+                assertEquals(0, preview.count(ANSWER));
+            } finally {
+                bus().off("CustomEvent", customEvents);
+            }
+
+            // Its going leaves the seat to the computer, with the experiment's own behaviour.
+            preview.hangUp();
+            Thread.sleep(400);
+            assertEquals(1, engine().eval("bot.ai"));
+            assertEquals(Boolean.TRUE, engine().eval("a.ai.behaviors[bot].is(botBehavior)"));
+            assertEquals(Boolean.FALSE, engine().eval("autopilot.takeoverTimers.containsKey('" + id + "')"));
+            assertTrue(announced.heard.isEmpty());
+            assertEquals(0, events("clientConnected", id) + events("clientDisconnected", id));
+            assertEquals(0, eventsWith("aiReturned", "playerId", id) + eventsWith("aiTakeover", "playerId", id));
+            assertTrue(client(id).watchers().isEmpty());
+        } finally {
+            bus().off("bb:connection", announced);
+            engine().eval("autopilot.stop(); null");
+        }
     }
 
     // ---- a page that takes the seat from an open one ---------------------------------------------
@@ -726,6 +899,58 @@ public class ParticipantConnectionTest extends BaseTest {
         await("rebuilt", () -> watching.closed && next.closed);
         assertTrue(before.watchers().isEmpty());
         assertNotSame(before, client("p2"));
+    }
+
+    // ---- pages at their final screen -----------------------------------------------------------
+
+    @Test
+    public void aPageJoiningAFinishedSessionGetsItsScreenAndPongsAndIsDroppedWhenSilent() throws Throwable {
+        @SuppressWarnings("unchecked")
+        Set<Object> endedPages = (Set<Object>) field("endedPages").get(null);
+        Page page = connect("p1");
+        engine().eval("def v = g.getVertex('p1'); v.finished = true; v.text = '<p>Thank you</p>'; null");
+        // The session finishes and the next one opens, as the autopilot does, restarting the engine.
+        console.send("LaunchGame", "name", "Next", "parameters", Json.newObject());
+        await("the next session", () -> ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", "Next")
+            .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
+        await("their page let go", () -> page.closed);
+        ExperimentInstance finished = ExperimentInstance.findById(session.id);
+        finished.finish();
+        finished.update();
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
+
+        // Their page, still on its thank-you screen, comes back to the session that is over.
+        Page back = connect("p1");
+        assertEquals(back.frames.toString(), 1, back.frames.size());
+        assertTrue(back.frames.get(0).path("player").path("text").asText().contains("Thank you"));
+        assertFalse(back.closed);
+        back.send("Ping");
+        assertEquals("its heartbeat is answered", 1, back.count(PONG));
+        // So is one of a page given the general notice, which never pings (from before 3.1).
+        Page old = connect("p2");
+        assertTrue(old.frames.get(0).path("player").path("text").asText().contains("This session has ended"));
+        assertEquals(2, endedPages.size());
+
+        // A page that falls silent is closed and dropped; one that never pinged is left alone.
+        long now = System.currentTimeMillis();
+        closeSilentPages(now + 29000);
+        assertFalse(back.closed);
+        closeSilentPages(now + 31000);
+        assertTrue(back.closed);
+        assertFalse(old.closed);
+        assertEquals(1, endedPages.size());
+        // A page that closes is dropped too.
+        old.hangUp();
+        assertTrue(endedPages.isEmpty());
+
+        // A newcomer after the start of the running session: its screen, and its pings answered.
+        session = ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", "Next").findUnique();
+        session.setHasStarted(Boolean.TRUE);
+        Page late = connect("p9");
+        assertEquals("notRunning", late.frames.get(0).path("player").path("ended").asText());
+        late.send("Ping");
+        assertEquals(1, late.count(PONG));
+        assertNull(client("p9"));
     }
 
     // ---- the seat cookie --------------------------------------------------------------------------

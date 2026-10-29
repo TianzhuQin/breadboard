@@ -30,7 +30,8 @@
     <slot v-else-if="state === 'ended'" name="ended">
       <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
     </slot>
-    <!-- A researcher's preview of a player whose own page is connected, which only watches -->
+    <!-- A researcher's preview of a player whose own page is connected, or of a computer player,
+         which only watches -->
     <slot v-else-if="state === 'watching'" name="watching">
       <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
     </slot>
@@ -55,6 +56,10 @@
   // What a researcher's preview says instead
   const PREVIEW_TEXTS: Record<string, string> = {
     elsewhere: 'This player is open in another preview or tab.',
+  }
+  // What a preview of a computer player (g.addAI's _1, _2, …) says: it watches what the computer does.
+  const COMPUTER_TEXTS: Record<string, string> = {
+    watching: 'Watching only: the computer plays this seat, so you see what it does but can’t answer for it.',
   }
 
   /**
@@ -86,6 +91,7 @@
         // Breadboard's `connection` (see ConnectionState in breadboard-core)
         state: 'connecting',
         preview: false,
+        computer: false,
         time: 0,
         finished: false,
         // when the next attempt starts (Date.now()), and the timer counting down to it
@@ -105,7 +111,8 @@
         return this.shown && this.state !== 'watching'
       },
       text (): string {
-        return (this.preview && PREVIEW_TEXTS[this.state]) || TEXTS[this.state] || TEXTS.lost
+        return (this.computer && COMPUTER_TEXTS[this.state]) || (this.preview && PREVIEW_TEXTS[this.state])
+          || TEXTS[this.state] || TEXTS.lost
       }
     },
     watch: {
@@ -116,6 +123,7 @@
     async created () {
       await window.Breadboard.connect()
       this.preview = !!window.Breadboard.preview
+      this.computer = !!window.Breadboard.computerPlayer
       this.sync()
       window.Breadboard.on(CONNECTION_EVENT, this.sync)
       window.Breadboard.on('retry', this.onRetry)
