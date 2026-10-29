@@ -94,6 +94,8 @@ public class ScriptBoard extends UntypedActor {
   // engine.gameStarted; null when none has. Tied to the engine rather than a flag that a rebuild
   // clears, so a start still running in an engine being replaced never counts for the new one.
   private static volatile ScriptEngine gameStartedIn = null;
+  // When that game started (markGameStarted), for the autopilot's longest session (gameStartedAt).
+  private static volatile long gameStartedAt = 0L;
 
   /**
    * The script or step a researcher's action runs on this thread (SendScript, SendStep, RunGame),
@@ -1253,8 +1255,11 @@ public class ScriptBoard extends UntypedActor {
       replayGraph(admin);
     } else if (message instanceof Breadboard.RunGame) {
       if (breadboardMessage.user != null) {
+        // (the game it starts, whichever account's actor built the engine: see consoleStartFailed)
+        GameListener listener = engineGameListener;
         // Run Game (every frame tagged, "started already" included, so the console knows it is the answer)
-        processScript("initStep.start()", breadboardMessage.out, null, "request", "RunGame");
+        String failed = processScript("initStep.start()", breadboardMessage.out, null, "request", "RunGame");
+        consoleStartFailed(listener, failed);
       }
 
     } else if (message instanceof Breadboard.HitCreated) {
@@ -1465,6 +1470,13 @@ public class ScriptBoard extends UntypedActor {
           LinkedHashMap<Object, Object> stopped = new LinkedHashMap<Object, Object>();
           stopped.put("by", breadboardMessage.user.email);
           trackEvent("sessionStopped", stopped);
+          // The computer players off before the timers stop, as a rebuild does: while they are on, a
+          // pick asked for afterwards starts a timer of its own, so a takeover as the participants'
+          // pages close (autopilot.handleDeparture) played the stopped game on, and its finish() made
+          // the session finished, no longer resumable. (Resuming rebuilds the engine, with them on.)
+          if (playerActions != null) {
+            playerActions.turnAIOff();
+          }
           stopSession(running);
           endParticipants(instance.id);
           // The game's timers (a round's time limit, takeovers, the experiment's own) would go on
@@ -2063,6 +2075,10 @@ public class ScriptBoard extends UntypedActor {
           LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
           data.put("error", failed);
           eventTracker.track("stepsFailedToLoad", data);
+          // (the computer players off before the timers stop, as for Stop)
+          if (playerActions != null) {
+            playerActions.turnAIOff();
+          }
           stopSession(gameListener);
           endParticipants(instance.id);
           cancelEngineTimers();
@@ -2667,7 +2683,7 @@ public class ScriptBoard extends UntypedActor {
 
       jsonOutput.put("output", outputString.trim());
       if (initStep) {
-        gameStartedIn = running;
+        markGameStarted(running);
         gameStartNotice("GameStarted");
       }
     } catch (CompilationFailedException cfe) {
@@ -2754,7 +2770,8 @@ public class ScriptBoard extends UntypedActor {
     final ScriptEngine engine;
     final GameListener closedBy;
     final Boolean before;
-    // the steps that had got going on its thread as its init step started (STEPS_STARTED)
+    // the steps that had got going on its thread as its init step started, counted once the
+    // bb:game-start handlers had run (STEPS_STARTED)
     final long steps;
 
     StartMark(ScriptEngine engine, GameListener closedBy, Boolean before, long steps) {
@@ -2793,6 +2810,7 @@ public class ScriptBoard extends UntypedActor {
    */
   static void stepStarted(Object step) {
     STEPS_STARTED.get()[0]++;
+    STEPS_GOT_GOING.incrementAndGet();
   }
 
   /** How many steps have got going on this thread so far (stepStarted). */
@@ -2827,7 +2845,9 @@ public class ScriptBoard extends UntypedActor {
     if (step != running.get("initStep")) {
       return null;
     }
-    StartMark mark = null;
+    boolean marked = false;
+    GameListener closedBy = null;
+    Boolean before = null;
     synchronized (ScriptBoard.class) {
       if (running != engine) {
         return null;
@@ -2835,8 +2855,6 @@ public class ScriptBoard extends UntypedActor {
       ResearcherRun researcher = RESEARCHER_RUN.get();
       if (running.get("initStep.start()") == null) {
         running.put("initStep.start()", true);
-        GameListener closedBy = null;
-        Boolean before = null;
         if (!Play.application().configuration().getBoolean("breadboard.allowLateJoin", false)) {
           try {
             before = listener.closeToNewcomers();
@@ -2846,22 +2864,27 @@ public class ScriptBoard extends UntypedActor {
             Logger.error("Could not close the session to newcomers as its game starts", e);
           }
         }
-        mark = new StartMark(running, closedBy, before, stepsStarted());
+        marked = true;
       } else if (researcher != null && researcher.startPending == running) {
         // The start command's own start, marked before it ran; it undoes it itself if it fails.
         researcher.startPending = null;
       } else if (researcher != null) {
         throw new IllegalStateException("initStep started already");
       }
-      gameStartedIn = running;
+      markGameStarted(running);
     }
-    if (mark != null) {
-      // Outside the lock, as in processScript: a handler may hold its own lock and call back in here.
-      Map<String, Object> info = new HashMap<String, Object>();
-      info.put("scriptName", "initStep");
-      eventBus.emit("bb:game-start", info);
-      gameStartNotice("GameStarted");
+    if (!marked) {
+      return null;
     }
+    // Outside the lock, as in processScript: a handler may hold its own lock and call back in here.
+    Map<String, Object> info = new HashMap<String, Object>();
+    info.put("scriptName", "initStep");
+    eventBus.emit("bb:game-start", info);
+    // The steps that got going on this thread are counted from here, once the handlers have run, as
+    // the start command counts them: a step a handler started (a game clock, say) is not this game
+    // getting going, and a first round that then fails still stalls it (stepStartFailed).
+    StartMark mark = new StartMark(running, closedBy, before, stepsStarted());
+    gameStartNotice("GameStarted");
     return mark;
   }
 
@@ -2913,7 +2936,7 @@ public class ScriptBoard extends UntypedActor {
   private static void startCommandFailed(ScriptEngine running, GameListener closedBy, Boolean before,
                                          long goingBefore) {
     if (gotGoingSince(goingBefore)) {
-      gameStartedIn = running;
+      markGameStarted(running);
       gameStartNotice("GameStarted");
       return;
     }
@@ -3049,6 +3072,41 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
+   * The console's Start (RunGame) answered {@code error}, what processScript answered (null: it
+   * started). In a session run by hand nothing more happens: a start that didn't get going was taken
+   * back, so Start works again once the step is fixed. In the autopilot's own session (Autopilot.
+   * isOwnSession) the start had told its waiting room the game began (bb:game-start), so nothing would
+   * ever start it again: it is dealt with as the autopilot's own start that fails (gameStartFailed):
+   * recorded, and when it didn't get going the session ends and the autopilot pauses, naming the step.
+   * The console that pressed Start has the error already. Never throws.
+   */
+  private static void consoleStartFailed(GameListener listener, String error) {
+    ScriptFailure failed = FAILED_RUN.get();
+    FAILED_RUN.remove();
+    // (nothing to deal with: it started, or there was no start to make, e.g. "started already")
+    if (error == null || failed == null || !error.equals(failed.answer)) {
+      return;
+    }
+    Long sessionId = instanceIdOf(listener);
+    try {
+      ScriptEngine running = engine;
+      if (failed.replaced || listener == null || running == null || listener.engine != running || !Autopilot.isOwnSession(sessionId)) {
+        return;
+      }
+      // (a start taken back and made again since, e.g. by the OnJoinStep: the game is under way)
+      if (failed.stalled && running.get(START_COMMAND) != null) {
+        return;
+      }
+      String step = failed.step != null ? failed.step : "initStep";
+      Logger.warn("The console's start of the autopilot's session failed: the step " + step + " failed (" + failed.brief + ")"
+          + (failed.stalled ? "" : "; the game got going, so it goes on"));
+      gameFailed(listener, step, failed.brief, failed.details, true, failed.stalled);
+    } catch (Throwable e) {
+      Logger.error("Could not deal with the failed start of the autopilot's session", e);
+    }
+  }
+
+  /**
    * Run the experiment's OnJoinStep or OnLeaveStep ({@code name}) for a player of the engine built as
    * {@code generation} (null: whichever runs), with {@code script} (e.g. onJoinStep.start('p1')). What
    * it says goes to every open console ({@code out}), tagged "source": name, as before. Nobody waits
@@ -3128,6 +3186,8 @@ public class ScriptBoard extends UntypedActor {
     } catch (Exception e) {
       Logger.error("Could not record the failure of the step " + step, e);
     }
+    // (for the autopilot's stall backstop, failureRecorded)
+    lastFailure = new RecordedFailure(engineGeneration, instanceIdOf(listener), step, brief);
     if (!consolesTold) {
       ObjectNode frame = Json.newObject();
       frame.put("source", step);
@@ -3187,6 +3247,343 @@ public class ScriptBoard extends UntypedActor {
         }
       }
     });
+  }
+
+  // ---- what the autopilot's guards of its own session see and do (Autopilot.guardOwnSession) ----
+
+  /** A step failure gameFailed recorded: in which engine build and session, the step, what went wrong. */
+  static final class RecordedFailure {
+    final long generation;
+    final Long session;
+    final String step;
+    final String error;
+
+    RecordedFailure(long generation, Long session, String step, String error) {
+      this.generation = generation;
+      this.session = session;
+      this.step = step;
+      this.error = error;
+    }
+  }
+
+  // The last step failure recorded in the engine's game (gameFailed), whether it stalled the game or not.
+  private static volatile RecordedFailure lastFailure = null;
+  // How many steps have got going, on every thread (stepStarted): a step that does means the game moved on.
+  private static final java.util.concurrent.atomic.AtomicLong STEPS_GOT_GOING = new java.util.concurrent.atomic.AtomicLong();
+
+  /** How many steps have got going so far, all threads together (stepStarted). */
+  static long stepsGotGoing() {
+    return STEPS_GOT_GOING.get();
+  }
+
+  /** The game of {@code running} counts as started (gameStartedIn), since now unless it did already. */
+  private static void markGameStarted(ScriptEngine running) {
+    if (gameStartedIn != running) {
+      gameStartedAt = System.currentTimeMillis();
+    }
+    gameStartedIn = running;
+  }
+
+  /** When the game of session {@code sessionId} started, if the engine runs it and its game has; else 0. */
+  static long gameStartedAt(Long sessionId) {
+    ScriptEngine running = engine;
+    long at = gameStartedAt;
+    return running != null && gameStartedIn == running && sessionId != null && sessionId.equals(instanceIdOf(engineGameListener))
+        ? at : 0L;
+  }
+
+  /** The last step failure recorded in the game of session {@code sessionId}, if the engine runs it; else null. */
+  static RecordedFailure failureRecorded(Long sessionId) {
+    RecordedFailure failure = lastFailure;
+    return failure != null && engine != null && failure.generation == engineGeneration && sessionId != null
+        && sessionId.equals(failure.session) && sessionId.equals(instanceIdOf(engineGameListener)) ? failure : null;
+  }
+
+  /**
+   * Whether the engine's game has anything to wait for: a choice offered to someone in the game
+   * (PlayerActions; not one left to a player removed since, which nobody can make), a task on one of
+   * the engine's timers (a timed step waiting for its time, a computer player's pick, a takeover, the
+   * experiment's own timers) or on an AMT timer, or an input from a participant it listens for
+   * (player.on in groovy/events.groovy: a form, a chat, tie edits). True when that can't be told: the
+   * stall backstop then ends nothing. A step whose code is running right now is not seen.
+   */
+  static boolean somethingPending() {
+    ScriptEngine running = engine;
+    if (running == null) {
+      return false;
+    }
+    try {
+      Object g = running.get("g");
+      Object actions = property(running.get("a"), "actions");
+      if (!(actions instanceof Map) || !(g instanceof Graph)) {
+        return true;
+      }
+      for (Object action : ((Map<?, ?>) actions).values()) {
+        Object player = property(action, "player");
+        if (!(player instanceof Vertex) || ((Graph) g).getVertex(((Vertex) player).getId()) != null) {
+          return true;
+        }
+      }
+      Object registered = property(running.get("timers"), "timers");
+      if (!(registered instanceof Collection)) {
+        return true;
+      }
+      for (Object timer : (Collection<?>) registered) {
+        if (timer instanceof Timer && hasTaskScheduled((Timer) timer)) {
+          return true;
+        }
+      }
+      for (Timer timer : amtTimers) {
+        if (hasTaskScheduled(timer)) {
+          return true;
+        }
+      }
+      return listensToPlayers(running);
+    } catch (Exception e) {
+      Logger.warn("Could not tell whether the game has anything to wait for: " + e);
+      return true;
+    }
+  }
+
+  private static Object property(Object scriptObject, String name) {
+    return scriptObject instanceof groovy.lang.GroovyObject ? ((groovy.lang.GroovyObject) scriptObject).getProperty(name) : null;
+  }
+
+  // java.util.Timer keeps its tasks in a queue of its own and can't be asked about them; on Java 8 they
+  // can be read through reflection. Null when a field can't be found: every timer then counts as busy.
+  private static final java.lang.reflect.Field TIMER_QUEUE = accessibleField("java.util.Timer", "queue");
+  private static final java.lang.reflect.Field QUEUE_TASKS = accessibleField("java.util.TaskQueue", "queue");
+  private static final java.lang.reflect.Field QUEUE_SIZE = accessibleField("java.util.TaskQueue", "size");
+  private static final java.lang.reflect.Field TASK_STATE = accessibleField("java.util.TimerTask", "state");
+  // TimerTask.SCHEDULED: waiting for its time (not run yet, or repeating), not cancelled.
+  private static final int TASK_SCHEDULED = 1;
+  // The listeners scripts add to the shared event bus (events.groovy names a player's "__player-<id>-<event>").
+  private static final java.lang.reflect.Field BUS_EVENTS = accessibleField(EventBus.class.getName(), "events");
+  private static final String PLAYER_EVENT = "__player-";
+
+  private static java.lang.reflect.Field accessibleField(String className, String name) {
+    try {
+      java.lang.reflect.Field field = Class.forName(className).getDeclaredField(name);
+      field.setAccessible(true);
+      return field;
+    } catch (Throwable e) {
+      Logger.warn("The autopilot can't tell whether a stalled game is waiting for something (" + className + "." + name + "): " + e);
+      return null;
+    }
+  }
+
+  /** Whether a timer has a task waiting for its time; true when that can't be read. */
+  private static boolean hasTaskScheduled(Timer timer) throws Exception {
+    if (TIMER_QUEUE == null || QUEUE_TASKS == null || QUEUE_SIZE == null || TASK_STATE == null) {
+      return true;
+    }
+    Object queue = TIMER_QUEUE.get(timer);
+    // (the timer's own lock, held only briefly: not while a task runs)
+    synchronized (queue) {
+      int size = QUEUE_SIZE.getInt(queue);
+      Object[] tasks = (Object[]) QUEUE_TASKS.get(queue);
+      for (int i = 1; i <= size && i < tasks.length; i++) {
+        if (tasks[i] != null && TASK_STATE.getInt(tasks[i]) == TASK_SCHEDULED) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Whether a script listens for an input of a player in the game (not a computer player's: "_..."). */
+  private static boolean listensToPlayers(ScriptEngine running) throws Exception {
+    Object g = running.get("g");
+    if (BUS_EVENTS == null || !(g instanceof Graph)) {
+      return true;
+    }
+    List<String> prefixes = new ArrayList<String>();
+    for (Vertex v : ((Graph) g).getVertices()) {
+      String id = String.valueOf(v.getId());
+      if (!id.startsWith("_")) {
+        prefixes.add(PLAYER_EVENT + id + "-");
+      }
+    }
+    for (Map.Entry<?, ?> listened : ((Map<?, ?>) BUS_EVENTS.get(eventBus)).entrySet()) {
+      String name = String.valueOf(listened.getKey());
+      Object handler = listened.getValue();
+      if (!name.startsWith(PLAYER_EVENT) || !(handler instanceof EventHandler) || ((EventHandler<?>) handler).closures.isEmpty()) {
+        continue;
+      }
+      for (String prefix : prefixes) {
+        if (name.startsWith(prefix)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** What the participants of a session that ran out of time see (Autopilot's longest session). */
+  static ObjectNode outOfTimeScreen() {
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "outOfTime");
+    player.put("text", "<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. You can close "
+        + "this page; if you have any questions, please contact the researcher.</p>");
+    return frame;
+  }
+
+  /**
+   * As endParticipants, with {@code frame} as their end screen. Someone whose screen is their own end
+   * keeps it, also when they come back: the experiment finished them, or gave them a completion code
+   * (_system.recruitment). Their page is sent the end as "sessionOver", which it shows only when it
+   * has no end of its own on the screen.
+   */
+  static void endParticipants(Long instanceId, ObjectNode frame) {
+    if (instanceId == null) {
+      return;
+    }
+    List<Client> ended = new ArrayList<>();
+    for (Client client : clients.values()) {
+      if (client.experimentInstance != null && instanceId.equals(client.experimentInstance.id)) {
+        ended.add(client);
+      }
+    }
+    for (Client client : ended) {
+      Vertex completed = completedPlayer(client.id);
+      boolean keep = completed != null || showsOwnEnd(client.lastFrame);
+      if (!keep) {
+        client.lastFrame = frame;
+      }
+      try {
+        if (completed != null) {
+          // Their screen as it is, with the code: a change inside _system alone isn't sent by itself,
+          // so a code given a moment ago may not have reached the page (or its last screen) yet.
+          client.updateGraph(completed);
+        }
+        if (keep) {
+          // The session is over all the same: the page stops reconnecting and keeps its own end
+          // (pages from before 3.1 ignore "sessionOver" and keep their screen too).
+          ObjectNode over = Json.newObject();
+          over.put("sessionOver", frame);
+          client.out.write(over);
+        } else {
+          client.out.write(frame);
+        }
+        client.disconnect();
+      } catch (Exception e) {
+        Logger.debug("Could not tell " + client.id + " that the session ended: " + e);
+      }
+      clients.remove(client.id, client);
+      if (graphChangedListener != null) {
+        graphChangedListener.removeClientListener(client);
+      }
+    }
+    rememberLastScreens(ended);
+  }
+
+  /** Whether a screen is the participant's own end (see endParticipants(Long, ObjectNode)). */
+  private static boolean showsOwnEnd(JsonNode frame) {
+    JsonNode player = frame == null ? null : frame.get("player");
+    return player != null && player.isObject() && !player.hasNonNull("ended")
+        && (player.path("finished").asBoolean(false) || player.path("_system").path("recruitment").path("completed").asBoolean(false));
+  }
+
+  /** The participant's vertex when the experiment gave them a completion code (_system.recruitment); else null. */
+  private static Vertex completedPlayer(String clientId) {
+    try {
+      Object g = engine == null ? null : engine.get("g");
+      Vertex v = g instanceof Graph && clientId != null ? ((Graph) g).getVertex(clientId) : null;
+      Object system = v == null ? null : v.getProperty("_system");
+      Object recruitment = system instanceof Map ? ((Map<?, ?>) system).get("recruitment") : null;
+      return recruitment instanceof Map && Boolean.TRUE.equals(((Map<?, ?>) recruitment).get("completed")) ? v : null;
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  /**
+   * The autopilot's guards end its own session {@code sessionId} (Autopilot.endOwnSession): its game
+   * ran longer than the longest session allowed, or had nothing left to do after a step failed. Under
+   * the engine lock, if the engine still runs that session live and {@code stillWanted} (asked there)
+   * agrees, it ends as the other paths end a session: the computer players off first (see Stop),
+   * {@code event} recorded, the participants told ({@code screen}, see endParticipants(Long, ObjectNode);
+   * null: the "stopped" screen), the game's timers cancelled and nothing more recorded; then the
+   * session is marked finished ({@code finished}: the autopilot opens the next one after its pause, as
+   * when a game ends) or stopped, and every console hears of it. Returns whether it ended it. Waits for
+   * the engine lock as long as it takes: the autopilot calls it on a thread of its own.
+   */
+  static boolean endForGuard(Long sessionId, String event, LinkedHashMap<Object, Object> data, ObjectNode screen,
+                             boolean finished, java.util.concurrent.Callable<Boolean> stillWanted) {
+    synchronized (REBUILD_LOCK) {
+      GameListener listener = engineGameListener;
+      if (engine == null || sessionId == null || !sessionId.equals(instanceIdOf(listener))) {
+        return false;
+      }
+      ExperimentInstance live = Autopilot.liveEngineSession();
+      if (live == null || !sessionId.equals(live.id) || !wanted(stillWanted)) {
+        return false;
+      }
+      if (playerActions != null) {
+        playerActions.turnAIOff();
+      }
+      trackEvent(event, data);
+      if (screen == null) {
+        endParticipants(sessionId);
+      } else {
+        endParticipants(sessionId, screen);
+      }
+      cancelEngineTimers();
+      eventTracker.disable();
+      if (finished) {
+        // as when its game ends: the next session opens after the pause, every console is told
+        finishSession(listener);
+      } else {
+        stopSession(listener);
+        // The console tabs of the account running it show it stopped, as after Stop.
+        User owner = listener.user == null ? null : User.findByEmail(listener.user.email);
+        if (owner != null) {
+          toAccount(owner.email, owner.toJson());
+        }
+        engineChanged();
+      }
+      return true;
+    }
+  }
+
+  private static boolean wanted(java.util.concurrent.Callable<Boolean> stillWanted) {
+    try {
+      return Boolean.TRUE.equals(stillWanted.call());
+    } catch (Exception e) {
+      Logger.error("Could not tell whether the autopilot's session is still to be ended", e);
+      return false;
+    }
+  }
+
+  /**
+   * Mark the session a game listener runs finished, as the end of its game does (GameListener.finish);
+   * never throws. Through a fresh copy when the game's own is out of date (changed meanwhile).
+   */
+  private static void finishSession(GameListener listener) {
+    try {
+      listener.finish();
+      return;
+    } catch (Exception e) {
+      Logger.warn("Could not mark the session finished through the game's copy: " + e);
+    }
+    Long id = instanceIdOf(listener);
+    ExperimentInstance fresh = id == null ? null : ExperimentInstance.findById(id);
+    if (fresh == null || fresh.status == ExperimentInstance.Status.FINISHED) {
+      engineChanged();
+      return;
+    }
+    try {
+      fresh.finish();
+      fresh.save();
+      listener.experimentInstance = fresh;
+    } catch (Exception e) {
+      Logger.error("Could not mark session " + id + " finished", e);
+    }
+    Autopilot.sessionFinished(fresh);
+    engineChanged();
   }
 
   /**

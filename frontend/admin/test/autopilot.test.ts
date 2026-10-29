@@ -91,6 +91,20 @@ describe('autopilot form validation', () => {
     expect(s.waitingRoom.maxPlayers).toBeNull()
     expect(s.waitingRoom.maxWaitSeconds).toBeNull()
   })
+
+  it('takes the longest session in whole minutes, up to a day, or no limit', () => {
+    expect(DEFAULTS.maxSessionMinutes).toBe(120)
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 0 }))).toHaveProperty('maxSessionMinutes', 'At least 1.')
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 1441 }))).toHaveProperty('maxSessionMinutes', 'At most a day (1440 minutes).')
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 2.5 }))).toHaveProperty('maxSessionMinutes', 'Use a whole number.')
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 1440 }))).toEqual({})
+    // empty: no limit
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = null }))).toEqual({})
+    expect(toSettings(form(f => { f.maxSessionMinutes = null })).maxSessionMinutes).toBeNull()
+    expect(toSettings(form(f => { f.maxSessionMinutes = 90 })).maxSessionMinutes).toBe(90)
+    // also when the continuous switch is off: it applies to every session
+    expect(validateAutopilot(form(f => { f.continuous = false; f.maxSessionMinutes = 0 }))).toHaveProperty('maxSessionMinutes')
+  })
 })
 
 describe('reading the server\'s answer', () => {
@@ -100,6 +114,20 @@ describe('reading the server\'s answer', () => {
     expect(s.waitingRoom.minPlayers).toBe(4)
     expect(s.waitingRoom.waitSeconds).toBe(60)
     expect(s.replaceDisconnected).toEqual(DEFAULTS.replaceDisconnected)
+  })
+  it('reads the longest session: a number, no limit (null), or the default from an older server', () => {
+    expect(normalizeSettings({ maxSessionMinutes: 90 }).maxSessionMinutes).toBe(90)
+    expect(normalizeSettings({ maxSessionMinutes: '45' }).maxSessionMinutes).toBe(45)
+    expect(normalizeSettings({ maxSessionMinutes: null }).maxSessionMinutes).toBeNull()
+    expect(normalizeSettings({}).maxSessionMinutes).toBe(120)
+    expect(normalizeSettings({ maxSessionMinutes: 'soon' }).maxSessionMinutes).toBe(120)
+  })
+  it('reads the notice of a session ended for running too long', () => {
+    const st = normalizeState({ status: { on: true, notice: 'Session "auto 3" was ended after 120 minutes, the longest a session may run.', noticeAt: '2026-10-29T10:05:00Z' } }).status
+    expect(st.notice).toBe('Session "auto 3" was ended after 120 minutes, the longest a session may run.')
+    expect(st.noticeAt).toBe('2026-10-29T10:05:00Z')
+    expect(normalizeState({ status: { on: true } }).status).toMatchObject({ notice: null, noticeAt: null })
+    expect(normalizeState({ status: { notice: ' ', noticeAt: 'later' } }).status).toMatchObject({ notice: null, noticeAt: null })
   })
   it('reads the state, with unknown sources as "off"', () => {
     const st = normalizeState({ source: 'weird', status: { on: 1, instance: { id: 3, name: 'auto', status: 'RUNNING' } } })
@@ -253,6 +281,16 @@ describe('words and links', () => {
       { name: 'aiTakeover', datetime: '2026-10-27T10:05:00Z', data: { playerId: 'p2' } },
     ])
     expect(list.map(a => a.text)).toEqual(['The computer took over p2\'s seat', 'Game started with 4 people'])
+  })
+
+  it('says when the guards ended its session', () => {
+    const list = autopilotActivity([
+      { name: 'autopilotStart', datetime: '2026-10-29T10:01:00Z', data: { players: '2' } },
+      { name: 'sessionTooLong', datetime: '2026-10-29T12:01:30Z', data: { minutes: '120', limit: '120' } },
+    ])
+    expect(list[0]).toMatchObject({ text: 'Ended: the game ran out of time (longest session: 120 min)', tone: 'warning' })
+    expect(autopilotActivity([{ name: 'sessionStalled', datetime: '2026-10-29T10:03:00Z', data: { step: 'RoundStep', error: 'line 7: x' } }])[0])
+      .toMatchObject({ text: 'Stopped: nothing was left to do after the step RoundStep failed', tone: 'warning' })
   })
 })
 
@@ -630,6 +668,63 @@ describe('Autopilot page', () => {
     expect(w.find('.apst__problem').text()).toMatch(/there is no experiment with that name/)
     expect(w.text()).not.toMatch(/Waiting for another session/)
     w.unmount()
+  })
+
+  it('shows the longest session with its default and saves it, or no limit once emptied', async () => {
+    http.get.mockResolvedValue(stateJson())
+    http.post.mockImplementation(async (_url: string, body: any) => stateJson({ settings: body }))
+    const w = await mountPage()
+    const field = () => w.findAll('.b-field').find(f => f.text().includes('Longest session'))!
+    const input = () => field().find('input.b-input__el')
+    expect((input().element as HTMLInputElement).value).toBe('120')
+    expect(input().attributes('placeholder')).toBe('No limit')
+    expect(field().text()).toMatch(/ran out of time\. Empty: no limit\. \(2 hours\)/)
+    // in the section about sessions
+    expect(w.find('section[aria-labelledby="ap-sec-sessions"]').text()).toMatch(/Longest session/)
+
+    await input().setValue('0')
+    expect(field().text()).toMatch(/At least 1\./)
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    expect(http.post).not.toHaveBeenCalled()
+
+    await input().setValue('')
+    expect(field().text()).not.toMatch(/At least/)
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(1)
+    expect(http.post.mock.calls[0][1]).toMatchObject({ maxSessionMinutes: null })
+    expect((input().element as HTMLInputElement).value).toBe('')
+
+    await input().setValue('90')
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(2)
+    expect(http.post.mock.calls[1][1]).toMatchObject({ maxSessionMinutes: 90 })
+    w.unmount()
+  })
+
+  it('shows a session it ended for running too long, also while it runs on', async () => {
+    const notice = 'Session "auto 3" was ended after 120 minutes, the longest a session may run. Its participants were told that the session ran out of time.'
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 5, name: 'auto 4', status: 'RUNNING' }, links: null, notice, noticeAt: new Date().toISOString() },
+    }))
+    const w = await mountPage()
+    const box = w.find('.apst__notice')
+    expect(box.exists()).toBe(true)
+    expect(box.attributes('role')).toBe('status')
+    expect(box.find('.apst__problem-title').text()).toMatch(/^A session ran out of time \(at .+\)$/)
+    expect(box.find('.apst__problem-text').text()).toBe(notice)
+    // not a fault of the autopilot's: it is on, and nothing to resume
+    expect(w.find('.apst__title').text()).toBe('The autopilot is on')
+    expect(w.find('.apst__resume').exists()).toBe(false)
+    w.unmount()
+
+    http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null } }))
+    const w2 = await mountPage()
+    expect(w2.find('.apst__notice').exists()).toBe(false)
+    w2.unmount()
   })
 
   it('counts unsaved settings when signing out, while the page is open', async () => {

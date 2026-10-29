@@ -22,6 +22,8 @@ export interface AutopilotSettings {
   /** open the next session when one finishes */
   continuous: boolean
   nextSessionDelaySeconds: number
+  /** how long the game of the autopilot's own session may run before it is ended; null: no limit */
+  maxSessionMinutes: number | null
   waitingRoom: WaitingRoomSettings
   replaceDisconnected: ReplaceDisconnectedSettings
 }
@@ -58,6 +60,13 @@ export interface AutopilotStatus {
   nextOpenAt: string | null
   /** another experiment's live session holds the engine: the autopilot waits for it to end */
   engineSession: EngineSession | null
+  /**
+   * The last session it ended for running longer than the longest session allowed, in the server's
+   * words, and when (ISO time); kept until the settings are saved or Resume is pressed. Only newer
+   * servers send it.
+   */
+  notice: string | null
+  noticeAt: string | null
 }
 export interface AutopilotState {
   settings: AutopilotSettings
@@ -72,6 +81,7 @@ export interface AutopilotForm {
   experimentId: number | null
   continuous: boolean
   nextSessionDelaySeconds: number | null
+  maxSessionMinutes: number | null
   waitingRoom: {
     enabled: boolean
     minPlayers: number | null
@@ -89,6 +99,7 @@ export const DEFAULTS: AutopilotSettings = {
   experimentId: null,
   continuous: true,
   nextSessionDelaySeconds: 10,
+  maxSessionMinutes: 120,
   waitingRoom: { enabled: true, minPlayers: 2, maxPlayers: null, waitSeconds: 60, maxWaitSeconds: null, countdownSeconds: 5 },
   replaceDisconnected: { enabled: true, afterSeconds: 30, returnToHuman: true },
 }
@@ -96,6 +107,8 @@ export const DEFAULTS: AutopilotSettings = {
 /** Longest wait accepted: a day (the engine's timers count milliseconds in an int). */
 export const MAX_SECONDS = 86400
 export const MAX_PLAYERS = 10000
+/** The longest session that can be set: a day, in minutes. */
+export const MAX_SESSION_MINUTES = 1440
 
 const num = (v: any, d: number) => (typeof v === 'number' && isFinite(v) ? v : (typeof v === 'string' && v.trim() !== '' && isFinite(+v) ? +v : d))
 const optNum = (v: any) => (v == null || v === '' ? null : num(v, NaN)) as number | null
@@ -108,11 +121,14 @@ export function normalizeSettings (raw: any): AutopilotSettings {
   const d = r.replaceDisconnected && typeof r.replaceDisconnected === 'object' ? r.replaceDisconnected : {}
   const maxPlayers = optNum(w.maxPlayers)
   const maxWait = optNum(w.maxWaitSeconds)
+  // (null is "no limit"; left out, by an older server, the default)
+  const maxSession = 'maxSessionMinutes' in r ? optNum(r.maxSessionMinutes) : DEFAULTS.maxSessionMinutes
   return {
     enabled: bool(r.enabled, DEFAULTS.enabled),
     experimentId: r.experimentId == null ? null : num(r.experimentId, NaN) || null,
     continuous: bool(r.continuous, DEFAULTS.continuous),
     nextSessionDelaySeconds: num(r.nextSessionDelaySeconds, DEFAULTS.nextSessionDelaySeconds),
+    maxSessionMinutes: maxSession != null && isNaN(maxSession) ? DEFAULTS.maxSessionMinutes : maxSession,
     waitingRoom: {
       enabled: bool(w.enabled, DEFAULTS.waitingRoom.enabled),
       minPlayers: num(w.minPlayers, DEFAULTS.waitingRoom.minPlayers),
@@ -149,6 +165,7 @@ export function normalizeState (raw: any): AutopilotState {
   const inst = s.instance && typeof s.instance === 'object' && s.instance.id != null ? s.instance : null
   const links = s.links && typeof s.links === 'object' && (s.links.login || s.links.prolific) ? s.links : null
   const next = text(s.nextOpenAt)
+  const noticeAt = text(s.noticeAt)
   return {
     settings: normalizeSettings(r.settings),
     source: r.source === 'config' || r.source === 'admin' ? r.source : 'off',
@@ -164,6 +181,8 @@ export function normalizeState (raw: any): AutopilotState {
       problemKind: PROBLEM_KINDS.has(s.problemKind) ? s.problemKind : null,
       nextOpenAt: next && !isNaN(Date.parse(next)) ? next : null,
       engineSession: normalizeEngineSession(s.engineSession),
+      notice: text(s.notice),
+      noticeAt: noticeAt && !isNaN(Date.parse(noticeAt)) ? noticeAt : null,
     },
   }
 }
@@ -267,7 +286,10 @@ function whole (v: number | null, field: string, errors: AutopilotErrors, opts: 
   }
   if (!Number.isInteger(v)) errors[field] = 'Use a whole number.'
   else if (v < opts.min) errors[field] = opts.min === 0 ? 'Can\'t be negative.' : `At least ${opts.min}.`
-  else if (v > opts.max) errors[field] = opts.max === MAX_SECONDS ? 'At most a day (86400 seconds).' : `At most ${opts.max}.`
+  else if (v > opts.max) {
+    errors[field] = opts.max === MAX_SECONDS ? 'At most a day (86400 seconds).'
+      : opts.max === MAX_SESSION_MINUTES ? 'At most a day (1440 minutes).' : `At most ${opts.max}.`
+  }
 }
 
 /**
@@ -280,6 +302,8 @@ export function validateAutopilot (f: AutopilotForm): AutopilotErrors {
   if (f.continuous) {
     whole(f.nextSessionDelaySeconds, 'nextSessionDelaySeconds', e, { min: 0, max: MAX_SECONDS, required: true, what: 'a number of seconds (0 opens it at once)' })
   }
+  // (empty: no limit)
+  whole(f.maxSessionMinutes, 'maxSessionMinutes', e, { min: 1, max: MAX_SESSION_MINUTES, required: false, what: '' })
   const w = f.waitingRoom
   if (w.enabled) {
     whole(w.minPlayers, 'waitingRoom.minPlayers', e, { min: 1, max: MAX_PLAYERS, required: true, what: 'how many people are needed' })
@@ -316,6 +340,9 @@ export function toSettings (f: AutopilotForm): AutopilotSettings {
     experimentId: f.experimentId,
     continuous: f.continuous,
     nextSessionDelaySeconds: ok(f.nextSessionDelaySeconds, 0, MAX_SECONDS) ? f.nextSessionDelaySeconds! : D.nextSessionDelaySeconds,
+    // empty is no limit (a value out of range never gets here: the checks stop the save)
+    maxSessionMinutes: f.maxSessionMinutes == null || (typeof f.maxSessionMinutes === 'number' && isNaN(f.maxSessionMinutes)) ? null
+      : ok(f.maxSessionMinutes, 1, MAX_SESSION_MINUTES) ? f.maxSessionMinutes : D.maxSessionMinutes,
     waitingRoom: {
       enabled: w.enabled,
       minPlayers,
@@ -465,7 +492,7 @@ export function waitingRoomLive (nodes: Iterable<{ id: string, data: Record<stri
   return best
 }
 
-const AUTOPILOT_EVENTS = new Set(['autopilotStart', 'autopilotCancelled', 'aiTakeover', 'aiReturned'])
+const AUTOPILOT_EVENTS = new Set(['autopilotStart', 'autopilotCancelled', 'aiTakeover', 'aiReturned', 'sessionTooLong', 'sessionStalled'])
 
 /** The autopilot's recent events in words, newest first. */
 export function autopilotActivity (events: { name: string, datetime: string, data: Record<string, any> }[], limit = 6) {
@@ -480,6 +507,8 @@ export function autopilotActivity (events: { name: string, datetime: string, dat
     if (e.name === 'autopilotCancelled') { text = `Called off: only ${d.players ?? '?'} joined`; tone = 'warning' }
     if (e.name === 'aiTakeover') { text = `The computer took over ${d.playerId ?? 'a player'}'s seat`; tone = 'info' }
     if (e.name === 'aiReturned') { text = `${d.playerId ?? 'A player'} came back and plays again`; tone = 'info' }
+    if (e.name === 'sessionTooLong') { text = `Ended: the game ran out of time (longest session: ${d.limit ?? '?'} min)`; tone = 'warning' }
+    if (e.name === 'sessionStalled') { text = `Stopped: nothing was left to do after ${d.step ? `the step ${d.step}` : 'a step'} failed`; tone = 'warning' }
     out.push({ key: `${i}-${e.name}`, at: e.datetime, text, tone })
   }
   return out

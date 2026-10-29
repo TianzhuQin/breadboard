@@ -220,6 +220,15 @@ public class Global extends GlobalSettings {
     } catch (Exception e) {
       Logger.warn("Could not add the index on event data names (looking up returning Prolific participants is slower without it): " + e.getMessage());
     }
+    // Evolution 34, for databases from older releases: the autopilot's longest session. Where its
+    // table doesn't exist yet, the autopilot creates it with this column at first use.
+    try {
+      if (tableExists("autopilot_settings")) {
+        Ebean.createSqlUpdate("alter table autopilot_settings add column if not exists max_session_minutes integer default 120").execute();
+      }
+    } catch (Exception e) {
+      Logger.warn("Could not add the autopilot's longest session to its settings (its sessions then have no time limit): " + e.getMessage());
+    }
 
     markInterruptedSessions();
 

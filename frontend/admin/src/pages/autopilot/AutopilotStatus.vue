@@ -49,6 +49,15 @@
       </div>
     </div>
 
+    <!-- a session it ended for running too long: kept until the settings are saved or Resume is pressed -->
+    <div v-if="status.notice" class="apst__problem apst__notice" role="status">
+      <TimerOff :size="16" aria-hidden="true" />
+      <div>
+        <p class="apst__problem-title">A session ran out of time{{ noticeTime ? ` (at ${noticeTime})` : '' }}</p>
+        <p class="apst__problem-text">{{ status.notice }}</p>
+      </div>
+    </div>
+
     <div v-if="status.on || status.instance" class="apst__block" aria-live="polite">
       <h3 class="apst__label">Open session</h3>
       <div v-if="status.instance" class="apst__session">
@@ -104,7 +113,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowRight, Bot, CirclePause, CircleX, Hourglass, Info, Lock, Play, RefreshCw, Timer, TriangleAlert } from 'lucide-vue-next'
+import { ArrowRight, Bot, CirclePause, CircleX, Hourglass, Info, Lock, Play, RefreshCw, Timer, TimerOff, TriangleAlert } from 'lucide-vue-next'
 import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
 import LocalOnlyNote from '../session/LocalOnlyNote.vue'
@@ -206,6 +215,16 @@ function timeOf (iso: string) {
   const d = new Date(iso)
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
+
+/** When the session in the notice was ended: a time today, else a date and time. */
+const noticeTime = computed(() => {
+  const at = status.value.noticeAt ? new Date(status.value.noticeAt) : null
+  if (!at || isNaN(at.getTime())) return ''
+  const today = at.toDateString() === new Date().toDateString()
+  return today
+    ? at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+})
 </script>
 
 <style>
@@ -243,6 +262,8 @@ function timeOf (iso: string) {
   font-size: var(--text-sm);
 }
 .apst__problem.is-info { background: var(--info-soft); color: var(--info-soft-text); }
+/* (after a problem box, one gap between them) */
+.apst__problem + .apst__notice { margin-top: -6px; }
 .apst__problem svg { flex: none; margin-top: 2px; }
 .apst__problem-title { font-weight: 650; }
 .apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }

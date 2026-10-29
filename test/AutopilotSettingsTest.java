@@ -158,6 +158,7 @@ public class AutopilotSettingsTest extends BaseTest {
         s.put("experimentId", experimentId);
         s.put("continuous", false);
         s.put("nextSessionDelaySeconds", 30);
+        s.put("maxSessionMinutes", 90);
         ObjectNode room = s.putObject("waitingRoom");
         room.put("enabled", true);
         room.put("minPlayers", 3);
@@ -199,6 +200,7 @@ public class AutopilotSettingsTest extends BaseTest {
         assertTrue(s.get("experimentId").isNull());
         assertTrue(s.get("continuous").asBoolean());
         assertEquals(10, s.get("nextSessionDelaySeconds").asInt());
+        assertEquals(120, s.get("maxSessionMinutes").asInt());
         JsonNode room = s.get("waitingRoom");
         assertTrue(room.get("enabled").asBoolean());
         assertEquals(2, room.get("minPlayers").asInt());
@@ -218,6 +220,8 @@ public class AutopilotSettingsTest extends BaseTest {
         assertTrue(status.get("instance").isNull());
         assertTrue(status.get("links").isNull());
         assertTrue(status.get("problem").isNull());
+        assertTrue(status.get("notice").isNull());
+        assertTrue(status.get("noticeAt").isNull());
     }
 
     // ---- saving ----------------------------------------------------------------------------------
@@ -247,6 +251,7 @@ public class AutopilotSettingsTest extends BaseTest {
         assertFalse(saved.enabled);
         assertEquals(experiment.id, saved.experimentId);
         assertEquals(30, saved.nextSessionDelaySeconds);
+        assertEquals(Integer.valueOf(90), saved.maxSessionMinutes);
         assertEquals(3, saved.minPlayers);
         assertEquals(Integer.valueOf(6), saved.maxPlayers);
         assertEquals(Integer.valueOf(600), saved.maxWaitSeconds);
@@ -310,6 +315,38 @@ public class AutopilotSettingsTest extends BaseTest {
         assertEquals(5, s.get("waitingRoom").get("waitSeconds").asInt());
         assertEquals(7, s.get("waitingRoom").get("countdownSeconds").asInt());
         assertTrue(s.get("waitingRoom").get("maxWaitSeconds").isNull());
+    }
+
+    @Test
+    public void theLongestSessionIsAWholeNumberOfMinutesUpToADayOrNoLimit() {
+        User user = user("limiter");
+        Experiment experiment = createExperiment("Limited");
+        own(user, experiment);
+        // New settings get two hours.
+        assertEquals(Integer.valueOf(120), new AutopilotSettings().maxSessionMinutes);
+        ObjectNode s = settings(experiment.id, false);
+        s.remove("maxSessionMinutes");
+        assertEquals(120, json(post(user, s)).get("settings").get("maxSessionMinutes").asInt());
+        assertEquals(Integer.valueOf(120), AutopilotSettings.load().maxSessionMinutes);
+
+        // Kept when left out; whole numbers may come as 45.0 or "45"; null is no limit.
+        assertEquals(45, json(post(user, Json.parse("{\"maxSessionMinutes\": 45.0}"))).get("settings").get("maxSessionMinutes").asInt());
+        assertEquals(45, json(post(user, Json.parse("{\"continuous\": true}"))).get("settings").get("maxSessionMinutes").asInt());
+        assertEquals(1440, json(post(user, Json.parse("{\"maxSessionMinutes\": \"1440\"}"))).get("settings").get("maxSessionMinutes").asInt());
+        assertEquals(Integer.valueOf(1440), AutopilotSettings.load().maxSessionMinutes);
+        JsonNode none = json(post(user, Json.parse("{\"maxSessionMinutes\": null}"))).get("settings");
+        assertTrue(none.toString(), none.has("maxSessionMinutes") && none.get("maxSessionMinutes").isNull());
+        assertNull(AutopilotSettings.load().maxSessionMinutes);
+        assertTrue(json(get(user)).get("settings").get("maxSessionMinutes").isNull());
+
+        for (String body : new String[]{"{\"maxSessionMinutes\": 0}", "{\"maxSessionMinutes\": 1441}", "{\"maxSessionMinutes\": -5}",
+                "{\"maxSessionMinutes\": 2.5}", "{\"maxSessionMinutes\": \"two hours\"}"}) {
+            Result result = post(user, Json.parse(body));
+            assertEquals(body + " -> " + contentAsString(result), BAD_REQUEST, status(result));
+            String message = json(result).get("message").asText();
+            assertTrue(body + " -> " + message, message.contains("The longest a session may run, in minutes (maxSessionMinutes)"));
+        }
+        assertNull("nothing was saved", AutopilotSettings.load().maxSessionMinutes);
     }
 
     @Test
@@ -392,6 +429,26 @@ public class AutopilotSettingsTest extends BaseTest {
         assertEquals("applied", String.valueOf(row.values().iterator().next()));
     }
 
+    @Test
+    public void theLongestSessionComesFromEvolution34AndSettingsSavedBeforeGetTheDefault() {
+        com.avaje.ebean.SqlRow row = Ebean.createSqlQuery("select state from play_evolutions where id = 34").findUnique();
+        assertNotNull("evolution 34 was applied", row);
+        assertEquals("applied", String.valueOf(row.values().iterator().next()));
+        // A row saved before the column was there gets two hours, as the column is added (the way
+        // evolution 34 and Global do it, which does nothing where the column exists).
+        Ebean.createSqlUpdate("alter table autopilot_settings drop column if exists max_session_minutes").execute();
+        try {
+            Ebean.createSqlUpdate("insert into autopilot_settings (id, enabled, continuous, next_session_delay_seconds, "
+                + "waiting_room_enabled, min_players, wait_seconds, countdown_seconds, replace_enabled, replace_after_seconds, "
+                + "return_to_human) values (1, false, true, 10, true, 2, 60, 5, true, 30, true)").execute();
+        } finally {
+            for (int i = 0; i < 2; i++) {
+                Ebean.createSqlUpdate("alter table autopilot_settings add column if not exists max_session_minutes integer default 120").execute();
+            }
+        }
+        assertEquals(Integer.valueOf(120), AutopilotSettings.load().maxSessionMinutes);
+    }
+
     // ---- where the settings come from ------------------------------------------------------------
 
     @Test
@@ -410,7 +467,13 @@ public class AutopilotSettingsTest extends BaseTest {
         assertEquals(experiment.id, fromFile.settings.experimentId);
         assertTrue(fromFile.settings.continuous);
         assertEquals(7, fromFile.settings.nextSessionDelaySeconds);
+        assertEquals("the default", Integer.valueOf(120), fromFile.settings.maxSessionMinutes);
         assertEquals("runner@lab.org", fromFile.settings.operatorEmail);
+        file.put("breadboard.autopilot.maxSessionMinutes", 45);
+        assertEquals(Integer.valueOf(45), Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(file))).settings.maxSessionMinutes);
+        file.put("breadboard.autopilot.maxSessionMinutes", 0);
+        assertNull("no limit", Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(file))).settings.maxSessionMinutes);
+        file.remove("breadboard.autopilot.maxSessionMinutes");
         // The file leaves the waiting room and takeovers to the experiment's scripts.
         assertFalse(fromFile.settings.waitingRoomEnabled);
         assertFalse(fromFile.settings.replaceEnabled);

@@ -12,8 +12,8 @@ import java.util.Date;
 
 /**
  * The autopilot settings a researcher saves in the console (GET/POST /autopilot), kept in the
- * {@code autopilot_settings} table (evolution 31). There is one row: the script engine is shared, so
- * only one experiment can run unattended at a time.
+ * {@code autopilot_settings} table (evolution 31, and 34 for the longest session). There is one row:
+ * the script engine is shared, so only one experiment can run unattended at a time.
  *
  * <p>The defaults are groovy/autopilot.groovy's own. The waiting-room and replace-disconnected values
  * are applied to the engine by {@link AutopilotHooks} after the experiment's steps load.
@@ -23,11 +23,19 @@ public final class AutopilotSettings {
   /** Longest wait accepted: a day. The engine's timers count milliseconds in an int. */
   public static final int MAX_SECONDS = 86400;
   public static final int MAX_PLAYERS = 10000;
+  /** The longest session that can be set: a day, in minutes. */
+  public static final int MAX_SESSION_MINUTES = 1440;
+  /** What a session's game may run by default before the autopilot ends it (see maxSessionMinutes). */
+  public static final int DEFAULT_SESSION_MINUTES = 120;
 
   public boolean enabled = false;
   public Long experimentId = null;
   public boolean continuous = true;
   public int nextSessionDelaySeconds = 10;
+  // How long the game of the autopilot's own session may run, in minutes, before it is ended
+  // (Autopilot.watchdog); null: no limit. A game that never ends (a script waiting for something
+  // that never comes) otherwise held the engine, and the study, for good.
+  public Integer maxSessionMinutes = DEFAULT_SESSION_MINUTES;
 
   public boolean waitingRoomEnabled = true;
   public int minPlayers = 2;
@@ -57,6 +65,7 @@ public final class AutopilotSettings {
     c.experimentId = experimentId;
     c.continuous = continuous;
     c.nextSessionDelaySeconds = nextSessionDelaySeconds;
+    c.maxSessionMinutes = maxSessionMinutes;
     c.waitingRoomEnabled = waitingRoomEnabled;
     c.minPlayers = minPlayers;
     c.maxPlayers = maxPlayers;
@@ -83,6 +92,7 @@ public final class AutopilotSettings {
     }
     json.put("continuous", continuous);
     json.put("nextSessionDelaySeconds", nextSessionDelaySeconds);
+    putOptional(json, "maxSessionMinutes", maxSessionMinutes);   // null: no limit
     ObjectNode room = json.putObject("waitingRoom");
     room.put("enabled", waitingRoomEnabled);
     room.put("minPlayers", minPlayers);
@@ -132,6 +142,8 @@ public final class AutopilotSettings {
     s.continuous = bool(body, "continuous", s.continuous, "Whether to open the next session (continuous)");
     s.nextSessionDelaySeconds = whole(body, "nextSessionDelaySeconds", s.nextSessionDelaySeconds, 0, MAX_SECONDS,
         "The pause before the next session opens (nextSessionDelaySeconds)");
+    s.maxSessionMinutes = optionalWhole(body, "maxSessionMinutes", s.maxSessionMinutes, 1, MAX_SESSION_MINUTES,
+        "The longest a session may run, in minutes (maxSessionMinutes)");
 
     JsonNode room = section(body, "waitingRoom", "The waiting room (waitingRoom)");
     if (room != null) {
@@ -238,8 +250,9 @@ public final class AutopilotSettings {
   private static volatile boolean tableChecked = false;
 
   /**
-   * The table as evolution 31 creates it. Installs that run with evolutions off (application-prod.conf)
-   * ship a ready-made database, so the table is also created here, the first time it is needed.
+   * The table as evolutions 31 and 34 make it. Installs that run with evolutions off
+   * (application-prod.conf) ship a ready-made database, so the table is also created here, the first
+   * time it is needed; Global adds evolution 34's column to one an older release made.
    */
   static final String CREATE_TABLE =
       "create table if not exists autopilot_settings (\n"
@@ -249,6 +262,7 @@ public final class AutopilotSettings {
           + "  operator_email              varchar(255),\n"
           + "  continuous                  boolean default true not null,\n"
           + "  next_session_delay_seconds  integer default 10 not null,\n"
+          + "  max_session_minutes         integer default " + DEFAULT_SESSION_MINUTES + ",\n"
           + "  waiting_room_enabled        boolean default true not null,\n"
           + "  min_players                 integer default 2 not null,\n"
           + "  max_players                 integer,\n"
@@ -283,6 +297,8 @@ public final class AutopilotSettings {
     s.operatorEmail = row.getString("operator_email");
     s.continuous = flag(row, "continuous", s.continuous);
     s.nextSessionDelaySeconds = number(row, "next_session_delay_seconds", s.nextSessionDelaySeconds);
+    // (null: no limit, as saved)
+    s.maxSessionMinutes = row.getInteger("max_session_minutes");
     s.waitingRoomEnabled = flag(row, "waiting_room_enabled", s.waitingRoomEnabled);
     s.minPlayers = number(row, "min_players", s.minPlayers);
     s.maxPlayers = row.getInteger("max_players");
@@ -311,7 +327,7 @@ public final class AutopilotSettings {
     ensureTable();
     updatedAt = new Date();
     String set = "enabled = :enabled, experiment_id = :experimentId, operator_email = :operatorEmail, "
-        + "continuous = :continuous, next_session_delay_seconds = :nextDelay, "
+        + "continuous = :continuous, next_session_delay_seconds = :nextDelay, max_session_minutes = :maxSession, "
         + "waiting_room_enabled = :roomEnabled, min_players = :minPlayers, max_players = :maxPlayers, "
         + "wait_seconds = :waitSeconds, max_wait_seconds = :maxWait, countdown_seconds = :countdown, "
         + "replace_enabled = :replaceEnabled, replace_after_seconds = :replaceAfter, "
@@ -319,10 +335,10 @@ public final class AutopilotSettings {
     int updated = bind(Ebean.createSqlUpdate("update autopilot_settings set " + set + " where id = :id")).execute();
     if (updated == 0) {
       bind(Ebean.createSqlUpdate("insert into autopilot_settings (id, enabled, experiment_id, operator_email, continuous, "
-          + "next_session_delay_seconds, waiting_room_enabled, min_players, max_players, wait_seconds, max_wait_seconds, "
-          + "countdown_seconds, replace_enabled, replace_after_seconds, return_to_human, updated_at) values (:id, :enabled, "
-          + ":experimentId, :operatorEmail, :continuous, :nextDelay, :roomEnabled, :minPlayers, :maxPlayers, :waitSeconds, "
-          + ":maxWait, :countdown, :replaceEnabled, :replaceAfter, :returnToHuman, :updatedAt)")).execute();
+          + "next_session_delay_seconds, max_session_minutes, waiting_room_enabled, min_players, max_players, wait_seconds, "
+          + "max_wait_seconds, countdown_seconds, replace_enabled, replace_after_seconds, return_to_human, updated_at) values "
+          + "(:id, :enabled, :experimentId, :operatorEmail, :continuous, :nextDelay, :maxSession, :roomEnabled, :minPlayers, "
+          + ":maxPlayers, :waitSeconds, :maxWait, :countdown, :replaceEnabled, :replaceAfter, :returnToHuman, :updatedAt)")).execute();
     }
   }
 
@@ -333,6 +349,7 @@ public final class AutopilotSettings {
     nullable(sql, "operatorEmail", operatorEmail, Types.VARCHAR);
     sql.setParameter("continuous", continuous);
     sql.setParameter("nextDelay", nextSessionDelaySeconds);
+    nullable(sql, "maxSession", maxSessionMinutes, Types.INTEGER);
     sql.setParameter("roomEnabled", waitingRoomEnabled);
     sql.setParameter("minPlayers", minPlayers);
     nullable(sql, "maxPlayers", maxPlayers, Types.INTEGER);
