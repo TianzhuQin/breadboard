@@ -11,6 +11,7 @@ import play.libs.Akka;
 import play.libs.Json;
 import play.mvc.WebSocket;
 
+import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -33,11 +34,15 @@ import java.util.concurrent.TimeUnit;
  * session unless a save asks it to ({@code takeOver}), doesn't take the engine by itself from a
  * researcher who has another experiment loaded in it and a console open, and pauses when a
  * researcher's action ends its session (Stop, or launching, resuming or reloading something else;
- * selecting another experiment, to edit it, leaves its session running). The game starts when the
- * waiting room says so (groovy/autopilot.groovy; its values can be set in the console, see
- * {@link AutopilotHooks}). A researcher's console that has its experiment selected (selected then,
- * or when signing in) shows its session; one with another experiment selected keeps that selection
- * (the engine info in the User JSON names what the engine runs).
+ * selecting another experiment, to edit it, leaves its session running), or when a step failure
+ * stalls the game of its own session (one it opened, or the one of its experiment that was open
+ * when Resume was pressed or its settings saved), which then ends (ScriptBoard.gameFailed; a
+ * session a researcher runs by hand, even of its experiment, goes on). It opens none while the disk
+ * that holds the database is almost full (diskFull). The game starts when the waiting room says so
+ * (groovy/autopilot.groovy; its values can be set in the console, see {@link AutopilotHooks}). A
+ * researcher's console that has its experiment selected (selected then, or when signing in) shows
+ * its session; one with another experiment selected keeps that selection (the engine info in the
+ * User JSON names what the engine runs).
  *
  * <p>Participants enter through links that always lead to the currently open session:
  * {@code /play/{experimentId}/login} and {@code /play/{experimentId}/prolific?PROLIFIC_PID=...}.
@@ -96,6 +101,11 @@ public final class Autopilot {
   private static volatile String doneBecause = null;
   // When a finished session's pause (nextSessionDelaySeconds) ends and the next one opens; 0 when none is due.
   private static volatile long nextOpenAt = 0L;
+  // The session it opened last (launchCarriedOut), or the one of its experiment Resume or a save
+  // handed it (adoptLiveSession), until it pauses or is done (setHalt): the one a failing step ends
+  // (gameFailed). Any other session of its experiment, e.g. one a researcher launched by hand to take
+  // over, or its own resumed by hand later, is the researcher's until they hand it over that way.
+  private static volatile Long ownSession = null;
 
   /** Opens a session (see openSession for the arguments). */
   public interface Opener {
@@ -403,6 +413,74 @@ public final class Autopilot {
   }
 
   /**
+   * A step failure stalled the game of the engine's session: it kept the next step from getting
+   * going (ScriptBoard.gameFailed, from stepFailed, gameStartFailed or joinOrLeaveStep). {@code error}
+   * is "line N: what went wrong". When it is the autopilot's own session (isOwnSession, and it is
+   * still on), the autopilot pauses until someone fixes the step and presses Resume, and true:
+   * ScriptBoard ends the session, whose participants would otherwise wait for good. Any other
+   * session, even of its experiment, is left to the researcher running it, and so is the reason it
+   * is paused (false).
+   */
+  static boolean gameFailed(ExperimentInstance instance, String step, String error) {
+    if (instance == null || instance.experiment == null) {
+      return false;
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long experimentId = instance.experiment.id;
+    Long id = instance.id;
+    String name = instance.name;
+    if (!isOwnSession(id)) {
+      return false;
+    }
+    Effective e;
+    try {
+      e = effective();
+    } catch (Exception ex) {
+      Logger.error("Autopilot: could not read its settings", ex);
+      return false;
+    }
+    if (!e.isOn() || !e.settings.experimentId.equals(experimentId)) {
+      return false;
+    }
+    setHalt(experimentId, "the step \"" + step + "\" failed during its session \"" + name + "\" (" + error
+        + "), so that session was stopped. Fix the step on the Steps page first", doneBecause);
+    Logger.warn("Autopilot: the step " + step + " failed during session " + name + " (" + error
+        + "); the session was stopped and the autopilot paused");
+    return true;
+  }
+
+  /**
+   * Whether this is the session the autopilot opened (or was handed, see adoptLiveSession), and it has
+   * been neither paused nor done since. A researcher's Launch while its session runs pauses it first,
+   * so the session they take over with is not its own, nor is one they launch to test after a pause,
+   * one after the single session of a run that isn't continuous, or its own session resumed by hand,
+   * until Resume is pressed or the settings are saved while it is open.
+   */
+  static boolean isOwnSession(Long sessionId) {
+    return sessionId != null && sessionId.equals(ownSession) && pausedBecause == null && doneBecause == null;
+  }
+
+  /** Run {@code task} soon on the autopilot's own thread; nothing once the application is stopping. */
+  static void later(final Runnable task) {
+    if (stopped) {
+      return;
+    }
+    try {
+      scheduler.execute(new Runnable() {
+        public void run() {
+          try {
+            task.run();
+          } catch (Throwable t) {
+            Logger.error("Autopilot: a task failed", t);
+          }
+        }
+      });
+    } catch (java.util.concurrent.RejectedExecutionException stopping) {
+      Logger.debug("Autopilot: the application is stopping; a task was not run");
+    }
+  }
+
+  /**
    * An experiment's steps loaded without an error (a launch, a reload, a session selected): an error
    * the autopilot kept from an earlier load of its experiment is out of date.
    */
@@ -426,11 +504,13 @@ public final class Autopilot {
    * new waiting-room and takeover values at once; with the autopilot on, a session opens now if
    * none of this experiment is open and the engine runs no other session. A session of another
    * experiment is ended only with {@code takeOver} (the console asks first): a plain edit used to end
-   * another researcher's live session.
+   * another researcher's live session. A live session of its experiment is its own from now on
+   * (adoptLiveSession).
    */
   public static void settingsSaved(final AutopilotSettings saved, final boolean takeOver) {
     // Saving is the researcher's go-ahead again.
     setHalt(null, null, null);
+    adoptLiveSession();
     scheduler.execute(new Runnable() {
       public void run() {
         try {
@@ -450,10 +530,12 @@ public final class Autopilot {
    * Resume was pressed (POST /autopilot/resume). It changes no settings, so it also works while
    * application.conf is in charge, where saving is refused: the pause or the done state ends, and a
    * session opens now unless one of the experiment is open or another experiment's session is live
-   * (that one is left to end). A researcher who only has another experiment loaded gives it up.
+   * (that one is left to end). A researcher who only has another experiment loaded gives it up. A
+   * live session of its experiment is its own from now on (adoptLiveSession).
    */
   public static void resume(User by) {
     setHalt(null, null, null);
+    adoptLiveSession();
     final String why = "it was resumed" + (by == null ? "" : " by " + by.email);
     Logger.info("Autopilot: " + why);
     scheduler.execute(new Runnable() {
@@ -461,6 +543,34 @@ public final class Autopilot {
         openWhenDue(why, true, false);
       }
     });
+  }
+
+  /**
+   * Resume was pressed or the settings saved, and a session of its experiment is live (a researcher
+   * launched or resumed it by hand, or the settings now name its experiment): the autopilot opens none
+   * beside it ("open already"), and from now on keeps that one open as its own. Its links lead there,
+   * its waiting room starts the game, and nobody need be watching, so it counts as a session it opened
+   * (ownSession): a step that fails during its game ends it and pauses the autopilot, rather than
+   * leaving its participants waiting for good. Only on Resume or a save, the researcher handing it
+   * over: the periodic check leaves a session run by hand to whoever runs it.
+   */
+  private static void adoptLiveSession() {
+    Effective e;
+    ExperimentInstance live;
+    try {
+      e = effective();
+      live = liveEngineSession();
+    } catch (Exception ex) {
+      Logger.error("Autopilot: could not tell which session is open", ex);
+      return;
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    if (!e.isOn() || live == null || live.isTestInstance() || live.experiment == null
+        || !e.settings.experimentId.equals(live.experiment.id) || live.id.equals(ownSession)) {
+      return;
+    }
+    ownSession = live.id;
+    Logger.info("Autopilot: session " + live.name + " of its experiment is open; it keeps that one open as its own");
   }
 
   /**
@@ -486,6 +596,14 @@ public final class Autopilot {
       String notNow = whyNotOpen(e, onlyIfIdle, automatic);
       if (notNow != null) {
         Logger.debug("Autopilot: " + why + ", but " + notNow + "; not opening one");
+        return;
+      }
+      String full = diskFull();
+      if (full != null) {
+        if (!full.equals(lastProblem)) {
+          Logger.warn("Autopilot: " + full);
+        }
+        lastProblem = full;
         return;
       }
       opener.open(why, onlyIfIdle, automatic);
@@ -516,6 +634,70 @@ public final class Autopilot {
       }
     }
     return null;
+  }
+
+  // ---- room on the disk ----------------------------------------------------------------------------
+
+  // A session records its data as it goes, and with the disk full the database stops in the middle
+  // of one. No new session opens while less than this is free where the database is kept.
+  static final long MIN_FREE_BYTES = 100L * 1024 * 1024;
+
+  // The bytes free on the disk that holds the database, or null when that can't be told (a database
+  // in memory or on a database server). A field only so tests can pretend the disk is full.
+  static volatile java.util.function.Supplier<Long> freeDiskBytes = new java.util.function.Supplier<Long>() {
+    public Long get() {
+      Configuration conf = Play.application().configuration();
+      File folder = conf.getString("db.default.driver", "").contains("h2")
+          ? databaseFolder(conf.getString("db.default.url", "")) : null;
+      return folder == null ? null : folder.getUsableSpace();
+    }
+  };
+
+  /** Why no session may open for lack of room on the database's disk, or null (also when it can't be told). */
+  static String diskFull() {
+    Long free;
+    try {
+      free = freeDiskBytes.get();
+    } catch (Exception ex) {
+      Logger.debug("Autopilot: could not tell how much room the disk has: " + ex);
+      return null;
+    }
+    if (free == null || free >= MIN_FREE_BYTES) {
+      return null;
+    }
+    return "The disk is almost full (" + free / (1024 * 1024) + " MB free where the database is kept): sessions record "
+        + "their data there, so no new session opens until there is room. Free up some space on that disk.";
+  }
+
+  /**
+   * The folder of the H2 database file a JDBC url names (jdbc:h2:db/breadboard: db/ in the folder the
+   * server runs in, as H2 reads it), or the nearest one above it that exists; null for a database in
+   * memory or on a server, and for anything but H2.
+   */
+  static File databaseFolder(String url) {
+    if (url == null || !url.startsWith("jdbc:h2:")) {
+      return null;
+    }
+    String path = url.substring("jdbc:h2:".length());
+    int options = path.indexOf(';');
+    if (options >= 0) {
+      path = path.substring(0, options);
+    }
+    if (path.startsWith("file:")) {
+      path = path.substring("file:".length());
+    }
+    // mem:, tcp://, ssl://, zip: and the like (one letter and a colon is a Windows drive)
+    if (path.isEmpty() || path.matches("[A-Za-z][A-Za-z0-9]+:.*")) {
+      return null;
+    }
+    if (path.startsWith("~")) {
+      path = System.getProperty("user.home") + path.substring(1);
+    }
+    File folder = new File(path).getAbsoluteFile().getParentFile();
+    while (folder != null && !folder.isDirectory()) {
+      folder = folder.getParentFile();
+    }
+    return folder;
   }
 
   /**
@@ -594,12 +776,13 @@ public final class Autopilot {
   }
 
   /**
-   * The engine actor has carried out the launch it was asked for. Until then launchUnderWay says so;
-   * after it, the engine's session tells (judged by the session alone, a session that had since
-   * ended looked like a launch still under way for half a minute).
+   * The engine actor has carried out the launch it was asked for, opening session {@code sessionId}.
+   * Until then launchUnderWay says so; after it, the engine's session tells (judged by the session
+   * alone, a session that had since ended looked like a launch still under way for half a minute).
    */
-  static void launchCarriedOut() {
+  static void launchCarriedOut(Long sessionId) {
     launchRequestedAt = 0L;
+    ownSession = sessionId;
   }
 
   /** Whether the last launch asked for hasn't been carried out yet (see launchRequestedAt). */
@@ -619,8 +802,10 @@ public final class Autopilot {
     pausedBecause = paused;
     doneBecause = done;
     if (paused != null || done != null) {
-      // A next session counting down after a finished one doesn't open (its task then does nothing).
+      // A next session counting down after a finished one doesn't open (its task then does nothing),
+      // and the session it opened is no longer its own: whoever resumes it does so by hand.
       nextOpenAt = 0L;
+      ownSession = null;
     }
     try {
       AutopilotSettings.saveHalt(paused == null && done == null ? null : experimentId, paused, done);

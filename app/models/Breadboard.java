@@ -1276,19 +1276,34 @@ public class Breadboard extends UntypedActor {
 
   public static class RunOnJoinStep extends BreadboardMessage {
     final Vertex vertex;
+    // The engine whose player joined (ScriptBoard.engineGeneration), or null. It runs in whichever
+    // engine runs then, but what fails in it once another has been built isn't that one's game.
+    final Long generation;
 
     public RunOnJoinStep(User user, Vertex vertex, ThrottledWebSocketOut out) {
+      this(user, vertex, out, null);
+    }
+
+    public RunOnJoinStep(User user, Vertex vertex, ThrottledWebSocketOut out, Long generation) {
       super(user, out);
       this.vertex = vertex;
+      this.generation = generation;
     }
   }
 
   public static class RunOnLeaveStep extends BreadboardMessage {
     final Vertex vertex;
+    // As RunOnJoinStep's.
+    final Long generation;
 
     public RunOnLeaveStep(User user, Vertex vertex, ThrottledWebSocketOut out) {
+      this(user, vertex, out, null);
+    }
+
+    public RunOnLeaveStep(User user, Vertex vertex, ThrottledWebSocketOut out, Long generation) {
       super(user, out);
       this.vertex = vertex;
+      this.generation = generation;
     }
   }
 

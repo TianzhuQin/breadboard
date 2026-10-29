@@ -14,8 +14,10 @@ import javax.script.ScriptEngineManager;
 import javax.script.ScriptException;
 import java.io.File;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -192,6 +194,7 @@ public class ScriptTestHarness {
         } finally {
             cancelTimers();
         }
+        failOnStepFailures();
     }
 
     /**
@@ -291,12 +294,14 @@ public class ScriptTestHarness {
         cancelTimers();
 
         if (!signalled) {
+            failOnStepFailures(); // (a step that threw is the likelier reason)
             throw new AssertionError("Async test did not call done() within " + timeoutMs + "ms");
         }
         Throwable e = error.get();
         if (e != null) {
             rethrow(e);
         }
+        failOnStepFailures();
     }
 
     /** Cancel any timers the test scheduled, so their threads don't outlive the test. */
@@ -403,9 +408,14 @@ public class ScriptTestHarness {
             "Cannot find groovy script directory (cwd=" + new File(".").getAbsolutePath() + ")");
     }
 
-    /** A GameListener that records finish() calls. With no ExperimentInstance, nothing persists. */
+    /**
+     * A GameListener that records finish() calls and the steps that failed. With no ExperimentInstance,
+     * nothing persists.
+     */
     public static class RecordingGameListener extends GameListener {
         public final AtomicInteger finishCount = new AtomicInteger(0);
+        /** Each step whose code threw (groovy/step.groovy reports it here), oldest first. */
+        public final List<StepFailure> stepFailures = new CopyOnWriteArrayList<StepFailure>();
 
         @Override
         public void finish() {
@@ -415,6 +425,36 @@ public class ScriptTestHarness {
 
         public boolean finished() {
             return finishCount.get() > 0;
+        }
+
+        @Override
+        public boolean stepFailed(Object step, Throwable failure, Long going) {
+            stepFailures.add(new StepFailure(step, failure));
+            // (the server's own handling: this engine isn't the server's, so it is only logged)
+            return super.stepFailed(step, failure, going);
+        }
+    }
+
+    /** A step whose code threw, and what it threw. */
+    public static class StepFailure {
+        public final Object step;
+        public final Throwable failure;
+
+        StepFailure(Object step, Throwable failure) {
+            this.step = step;
+            this.failure = failure;
+        }
+    }
+
+    /**
+     * A step that throws no longer fails the thread it runs on (it is reported to the game listener
+     * instead), so a case with a broken step would pass: it fails here, unless the case took the
+     * failure out of gameListener.stepFailures, having expected it.
+     */
+    private void failOnStepFailures() {
+        if (!gameListener.stepFailures.isEmpty()) {
+            Throwable first = gameListener.stepFailures.get(0).failure;
+            throw new AssertionError("A step threw: " + first, first);
         }
     }
 }

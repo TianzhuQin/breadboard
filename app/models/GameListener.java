@@ -48,9 +48,46 @@ public class GameListener {
     return ScriptBoard.stepStarting(this, step);
   }
 
+  /**
+   * The step got going: its start() is returning without having thrown (groovy/step.groovy); see
+   * ScriptBoard.stepStarted.
+   */
+  public void stepStarted(Object step) {
+    ScriptBoard.stepStarted(step);
+  }
+
+  /** How many steps have got going on this thread so far (stepStarted), for stepFailed. */
+  public Long stepsStarted() {
+    return ScriptBoard.stepsStarted();
+  }
+
   /** The step whose start stepStarting marked threw before it got going; see ScriptBoard.stepStartFailed. */
   public void stepStartFailed(Object mark) {
     ScriptBoard.stepStartFailed(mark);
+  }
+
+  /**
+   * A step's own code threw (groovy/step.groovy); see ScriptBoard.stepFailed. {@code going} is what
+   * stepsStarted() answered as that code began (null when not known). True when it has been reported,
+   * false when the step throws it on to the script the server is running.
+   */
+  public boolean stepFailed(Object step, Throwable failure, Long going) {
+    return ScriptBoard.stepFailed(this, step, failure, going);
+  }
+
+  /**
+   * Whether the step (groovy/step.groovy) is of the engine running now (ScriptBoard.ofRunningEngine):
+   * not when its engine has been replaced since and its code ran on. An actor gives every engine it
+   * builds this same listener, so such a step's finish() would finish the session running now. A
+   * listener of no server engine (a test's) has only its own.
+   */
+  public boolean ofRunningEngine(Object step) {
+    return this.engine == null || ScriptBoard.ofRunningEngine(step);
+  }
+
+  /** The autopilot's start of the game failed (groovy/autopilot.groovy); see ScriptBoard.gameStartFailed. */
+  public void gameStartFailed(String error) {
+    ScriptBoard.gameStartFailed(this, error);
   }
 
   public void start() {
