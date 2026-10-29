@@ -74,9 +74,9 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 页面顶部显示当前状态、开放中的那一场（**Watch it live** 可以去看），以及给参与者的 **Sign-in link** 和 **Prolific link**。这两个链接总是指向当时开放的那一场，所以一直用同一个就行。
 
-**暂停与继续**：如果你在控制台里结束了自动运行的那一场（停止它，或做了会重新加载引擎的事，比如切换实验、新建或恢复另一场、**Reload engine**），自动运行就会暂停，控制台会先提醒你。暂停时它不开新场，所以除非你自己为这个实验开了一场，链接都进不去。回到 Autopilot 页点 **Resume** 继续。如果关掉了 **Open the next session when one finishes**，一场结束后按钮会变成 **Open another session**。暂停状态在服务器重启后仍然保留。
+**暂停与继续**：如果你在控制台里结束了自动运行的那一场（停止它，或做了会重新加载引擎的事，比如新建或恢复另一场、**Reload engine**；切换实验不会），自动运行就会暂停，控制台会先提醒你。暂停时它不开新场，所以除非你自己为这个实验开了一场，链接都进不去。回到 Autopilot 页点 **Resume** 继续。如果关掉了 **Open the next session when one finishes**，一场结束后按钮会变成 **Open another session**。暂停状态在服务器重启后仍然保留。
 
-整台服务器只有一个脚本引擎，控制台和自动运行共用。所以在开着自动运行的服务器上，不要测试别的实验：换一台服务器测，或者先关掉自动运行。更多见 [console.md](console.md#running-sessions-with-nobody-at-the-console)。
+整台服务器只有一个脚本引擎，控制台和自动运行共用。自动运行的时候，你仍然可以切换到别的实验去修改它：切换不会影响正在进行的那一场，那个实验的 Build 页面（Steps、Content、Parameters 等）和 **Sessions & data** 都照常可用。要运行或测试别的实验，先停止自动运行的那一场（自动运行会因此暂停），或者为那个实验新建一场（控制台会先提醒你，再结束自动运行的那一场）；用完后回到 Autopilot 页点 **Resume**。更多见 [console.md](console.md#running-sessions-with-nobody-at-the-console)。
 
 ## 用 Prolific 招募
 

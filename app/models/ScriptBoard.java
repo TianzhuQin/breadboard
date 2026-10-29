@@ -669,10 +669,11 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * A researcher's action is about to end the session a game listener runs (selecting another
-   * experiment or session, launching, reloading). When that is the autopilot's live session, the
-   * autopilot pauses first, as for Stop, so it doesn't take the engine back behind their back (and
-   * its periodic check can't slip in between). {@code continuing} is a session that carries on
-   * (re-selected), {@code how} says what the researcher did, with %s for who.
+   * session, launching, reloading; selecting an experiment leaves a live session alone). When that
+   * is the autopilot's live session, the autopilot pauses first, as for Stop, so it doesn't take the
+   * engine back behind their back (and its periodic check can't slip in between). {@code continuing}
+   * is a session that carries on (re-selected), {@code how} says what the researcher did, with %s
+   * for who.
    */
   private static void pauseAutopilotIfItsSession(GameListener listener, User by, String how, Long continuing) {
     Long id = instanceIdOf(listener);
@@ -1334,13 +1335,19 @@ public class ScriptBoard extends UntypedActor {
           }
         }
         synchronized (REBUILD_LOCK) {
-          // Any other session the engine runs ends with the rebuild (its network is emptied). It is
-          // marked stopped: left running, its pages reconnected into this experiment's game, and the
-          // Sessions list and the /play links still showed it as open. (Read under the lock: another
-          // actor may have changed the engine since this message was sent.)
+          // Breadboard passes a selection on only while no session is live in the engine. One may
+          // have started since (read under the lock): the engine is left to it all the same.
+          ExperimentInstance live = sessionKeptBySelection();
+          if (live != null) {
+            selectionKept(breadboardMessage, live);
+            return;
+          }
+          // The engine's last session isn't live (it would have kept the engine, above). If the game's
+          // copy of it still counts as running, it is marked stopped, so its pages aren't put into this
+          // experiment's game. (Read under the lock: another actor may have changed the engine since
+          // this message was sent.)
           GameListener previous = engineGameListener;
           if (previous != null && (resumed == null || !resumed.id.equals(instanceIdOf(previous)))) {
-            pauseAutopilotIfItsSession(previous, breadboardMessage.user, "ended when %s selected an experiment (which reloads the engine)", null);
             stopSession(previous);
           }
 
@@ -1360,6 +1367,7 @@ public class ScriptBoard extends UntypedActor {
             gameListener.experimentInstance = null;
             eventTracker.setExperimentInstance(null);
           }
+          engineChanged();
         }
       }
     } else if (message instanceof Breadboard.DeleteExperiment) {
@@ -1378,13 +1386,22 @@ public class ScriptBoard extends UntypedActor {
         Breadboard.replyError(breadboardMessage.out, "StopGame", "There is no session with id " + stopGame.id + ".");
         return;
       }
+      String over = null;
       synchronized (REBUILD_LOCK) {
+        // Read again here: the game may have finished, or someone else stopped it, since this
+        // console showed it running.
+        ExperimentInstance current = ExperimentInstance.findById(instance.id);
         // The session the engine is running, whichever account started it.
         GameListener running = engineGameListener != null ? engineGameListener : gameListener;
-        if (instance.id.equals(instanceIdOf(running))) {
+        if (current == null || (current.status != ExperimentInstance.Status.RUNNING
+            && current.status != ExperimentInstance.Status.TESTING)) {
+          // Over already: nothing is stopped or recorded, and the autopilot isn't paused (Stop on its
+          // finished session paused it, which also called off the next session it was about to open).
+          over = current == null ? "There is no session with id " + stopGame.id + " any more." : alreadyOver(current);
+        } else if (instance.id.equals(instanceIdOf(running))) {
           // A researcher stopping the autopilot's session pauses it (no new one opens behind their
           // back); first, so its periodic check can't take the engine in between.
-          Autopilot.sessionStopped(instance, breadboardMessage.user);
+          Autopilot.sessionStopped(current, breadboardMessage.user);
           Experiment experiment = engineExperiment();
           if (experiment == null) {
             experiment = breadboardMessage.user.getExperiment();
@@ -1405,13 +1422,17 @@ public class ScriptBoard extends UntypedActor {
           // recorded in it until it is resumed (which turns recording back on).
           cancelEngineTimers();
           eventTracker.disable();
+          engineChanged();
         } else {
           // (This used to change the status in memory only.)
           stopQuietly(instance.id);
         }
       }
-      // Stopping an older session leaves the researcher's current one selected.
-      if (instance.id.equals(breadboardMessage.user.experimentInstanceId)) {
+      if (over != null) {
+        // (It stays the account's session, so its console shows how it ended.)
+        Breadboard.replyError(breadboardMessage.out, "StopGame", over);
+      } else if (instance.id.equals(breadboardMessage.user.experimentInstanceId)) {
+        // Stopping an older session leaves the researcher's current one selected.
         breadboardMessage.user.setExperimentInstanceId(-1L);
         breadboardMessage.user.update();
       }
@@ -1456,6 +1477,12 @@ public class ScriptBoard extends UntypedActor {
     } else if (message instanceof Breadboard.ReloadEngine) {
       Experiment selectedExperiment = breadboardMessage.user.getExperiment();
       synchronized (REBUILD_LOCK) {
+        // Not over another experiment's live session, which selecting left running (reloadRefusal).
+        String refused = reloadRefusal(breadboardMessage.user);
+        if (refused != null) {
+          Breadboard.replyError(breadboardMessage, refused);
+          return;
+        }
         // A session another account runs ends with the rebuild: marked stopped, as above. This
         // account's own session carries on in the new engine, as before, if it is of the experiment
         // reloaded (the autopilot launches through its account's actor, and leaves the account's
@@ -1477,17 +1504,73 @@ public class ScriptBoard extends UntypedActor {
           reopenAfterRebuild(own);
         }
         Breadboard.ReloadEngine reloadEngine = (Breadboard.ReloadEngine) message;
-        if (reloadEngine.user.experimentInstanceId != -1) {
-          ExperimentInstance ei = ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
-          if (ei != null) {
-            eventTracker.enable();
-            eventTracker.setExperimentInstance(ei);
-            for (Data d : ei.data) {
-              initParam(d, selectedExperiment);
-            }
+        ExperimentInstance ei = reloadEngine.user.experimentInstanceId == -1 ? null
+            : ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
+        // Only the account's session of the experiment reloaded: it can be one of another experiment
+        // (selecting one leaves a live session as the account's), which would get this one's events
+        // and set its parameters here. Nor do events go on to the session the engine ran before.
+        Long of = ei == null || ei.experiment == null ? null : ei.experiment.id;
+        if (of != null && selectedExperiment != null && of.equals(selectedExperiment.id)) {
+          eventTracker.enable();
+          eventTracker.setExperimentInstance(ei);
+          for (Data d : ei.data) {
+            initParam(d, selectedExperiment);
           }
+        } else {
+          eventTracker.setExperimentInstance(null);
         }
+        engineChanged();
       }
+    }
+  }
+
+  /**
+   * The live session (RUNNING or TESTING) the engine runs, the autopilot's or any researcher's, of
+   * whichever experiment; null when none is live. While there is one, selecting an experiment changes
+   * only what the account works on, and the engine is left as it is: rebuilding it for the selection
+   * ended that session for everyone in it, so the console refused to switch at all, even just to
+   * edit. An experiment's Build pages and data need no engine, and its engine actions are refused
+   * until the engine runs it (engineRefusal, reloadRefusal). With no live session, selecting loads the
+   * selected experiment's steps, as before.
+   */
+  static ExperimentInstance sessionKeptBySelection() {
+    return engine == null ? null : Autopilot.liveEngineSession();
+  }
+
+  /**
+   * The account selected an experiment (or signed in with one selected) while the engine runs the live
+   * session {@code live}: only its selection changes (the caller saves it). When that session is of
+   * the experiment selected, the account follows it, as one whose selection the autopilot's session
+   * is of does, so its consoles show the session the engine runs rather than an older one.
+   */
+  static void followLiveSession(User user, ExperimentInstance live) {
+    if (user == null || user.selectedExperiment == null || live == null || live.id == null || live.isTestInstance()) {
+      return;
+    }
+    Long of = live.experiment == null ? null : live.experiment.id;
+    if (of == null || !of.equals(user.selectedExperiment.id) || live.id.equals(user.experimentInstanceId)) {
+      return;
+    }
+    user.setExperimentInstanceId(live.id);
+    user.update();
+  }
+
+  /**
+   * A selection that reached the engine's actor after a live session had started: the engine is left
+   * to that session, as Breadboard does when one is live already. The account's consoles get its User
+   * JSON again (its session may have changed); the one that asked gets it with {@code engineKept}, so
+   * it doesn't wait for a rebuild.
+   */
+  private static void selectionKept(Breadboard.BreadboardMessage request, ExperimentInstance live) {
+    User fresh = User.findByEmail(request.user.email);
+    if (fresh == null) {
+      return;
+    }
+    followLiveSession(fresh, live);
+    ObjectNode json = fresh.toJson();
+    toOtherTabs(fresh.email, json, request.out);
+    if (request.out != null) {
+      request.out.write(json.deepCopy().put("engineKept", true));
     }
   }
 
@@ -1571,7 +1654,8 @@ public class ScriptBoard extends UntypedActor {
   /**
    * Why this account can't act on the engine's game now, in plain words; null when it can. It can
    * when the engine runs the experiment it has selected (or there is no engine yet: the action
-   * says so itself). Its console shows that experiment; the engine may run another account's.
+   * says so itself). Its console shows that experiment; the engine may run another one's session,
+   * which selecting left running (see sessionKeptBySelection).
    */
   static String engineRefusal(User user) {
     if (engine == null) {
@@ -1582,26 +1666,129 @@ public class ScriptBoard extends UntypedActor {
     if (selected == null ? running == null : selected.equals(running)) {
       return null;
     }
-    Experiment experiment = engineExperiment();
     ExperimentInstance session = Autopilot.liveEngineSession();
-    String owner = engineOwnerEmail();
     String yours = user == null || user.selectedExperiment == null ? null : user.selectedExperiment.name;
     StringBuilder text = new StringBuilder("Nothing was done: the engine is running ");
-    text.append(experiment == null ? "no experiment" : "\"" + experiment.name + "\"");
-    if (session != null) {
-      text.append(" (session \"").append(session.name).append("\"");
-      if (owner != null && (user == null || !owner.equalsIgnoreCase(user.email))) {
-        text.append(" of ").append(owner);
-      }
-      text.append(")");
-    }
+    text.append(describeEngine(user, session));
     text.append(yours == null ? ", and you have no experiment selected." : ", not your selected experiment \"" + yours + "\".");
     if (session != null) {
-      text.append(" Launch a session of your own experiment first (that ends the session running now).");
+      text.append(toRunYours(yours, session));
     } else {
-      text.append(yours == null ? " Select one first." : " Select \"" + yours + "\" again to load it.");
+      text.append(yours == null ? " Select one first." : " Reload the engine to load \"" + yours + "\".");
     }
     return text.toString();
+  }
+
+  /**
+   * Why this account's reload must not run now, or null: the engine runs a live session of another
+   * experiment than the one it has selected (selecting left it running), and rebuilding the engine
+   * would end that session for everyone in it. With no live session, a reload is how the selected
+   * experiment gets loaded; a new session of it takes the engine over too, after the console asks.
+   */
+  static String reloadRefusal(User user) {
+    if (engine == null) {
+      return null;
+    }
+    Long selected = user == null || user.selectedExperiment == null ? null : user.selectedExperiment.id;
+    ExperimentInstance session = Autopilot.liveEngineSession();
+    if (session == null || (selected != null && selected.equals(engineExperimentId))) {
+      return null;
+    }
+    String yours = user == null || user.selectedExperiment == null ? null : user.selectedExperiment.name;
+    return "Nothing was reloaded: the engine is running " + describeEngine(user, session)
+        + (yours == null ? "" : ", not your selected experiment \"" + yours + "\"")
+        + ", and reloading it would end that session for everyone in it." + toRunYours(yours, session);
+  }
+
+  /**
+   * Why file mode can't be switched on for the account's selected experiment now, or null: the engine
+   * runs a live session of another experiment. In file mode a step file saved in the experiment's
+   * folder runs at once, which it can't while that session holds the engine (see stepFileSaved).
+   */
+  static String fileModeRefusal(User user) {
+    Experiment selected = user == null ? null : user.selectedExperiment;
+    ExperimentInstance session = engine == null ? null : Autopilot.liveEngineSession();
+    Long of = session == null || session.experiment == null ? null : session.experiment.id;
+    if (selected == null || of == null || of.equals(selected.id)) {
+      return null;
+    }
+    return "File mode was not switched on: the engine is running " + describeEngine(user, session)
+        + ". In file mode a step file you save runs at once, which it can't while that session runs."
+        + " Switch file mode on once it has ended.";
+  }
+
+  /**
+   * A step file of an experiment in file mode was saved in its folder (FileWatcher.fileSaved). It runs
+   * in the engine at once, as file mode promises, while the engine runs that experiment, during its
+   * sessions too. Otherwise it is not loaded: the engine runs another experiment, maybe its session
+   * (the autopilot's study, say), whose game it would change; the next build of this one loads what
+   * is saved. Under the engine lock, as other step loads, so the engine can't be replaced in between.
+   * Every open console hears what happened. Returns whether it was loaded.
+   */
+  static boolean stepFileSaved(Experiment experiment, String source, String fileName) {
+    String notLoaded;
+    synchronized (REBUILD_LOCK) {
+      if (engine != null && experiment.id.equals(engineExperimentId)) {
+        // Step code: it defines steps, so mentioning initStep.start() starts nothing (see processScript).
+        processScript(source, allAdmins, fileName, "source", STEPS_SOURCE, null, true);
+        // A reloaded step may have set up the autopilot itself; the console's settings win again.
+        afterStepsLoaded(experiment);
+        return true;
+      }
+      ExperimentInstance session = engine == null ? null : Autopilot.liveEngineSession();
+      String saved = "Saved " + fileName + " of \"" + experiment.name + "\"; not loaded, because ";
+      if (engine == null) {
+        notLoaded = saved + "the script engine isn't running yet. It loads when \"" + experiment.name + "\" is loaded.";
+      } else if (session != null) {
+        notLoaded = saved + "the engine is running " + describeEngine(null, session) + ". It loads when the next session of \""
+            + experiment.name + "\" starts.";
+      } else {
+        notLoaded = saved + "the engine has " + describeEngine(null, null) + " loaded. It loads when the next session of \""
+            + experiment.name + "\" starts, or when the engine is reloaded with it selected.";
+      }
+    }
+    Logger.info(notLoaded);
+    ObjectNode note = Json.newObject();
+    note.put("source", STEPS_SOURCE);
+    note.put("output", notLoaded);
+    toAllAdmins(note);
+    return false;
+  }
+
+  /**
+   * The engine's experiment ("\"A\"", or "no experiment") and its live session, if any: " (the
+   * autopilot's session \"S\")", " (your session \"S\")" or " (session \"S\" of x@lab.org)".
+   */
+  private static String describeEngine(User user, ExperimentInstance session) {
+    Experiment experiment = engineExperiment();
+    String text = experiment == null ? "no experiment" : "\"" + experiment.name + "\"";
+    if (session == null) {
+      return text;
+    }
+    String owner = engineOwnerEmail();
+    if (isAutopilots(session)) {
+      return text + " (the autopilot's session \"" + session.name + "\")";
+    }
+    if (owner != null && user != null && owner.equalsIgnoreCase(user.email)) {
+      return text + " (your session \"" + session.name + "\")";
+    }
+    return text + " (session \"" + session.name + "\"" + (owner == null ? "" : " of " + owner) + ")";
+  }
+
+  /** What to do to run the selected experiment while {@code session} holds the engine. */
+  private static String toRunYours(String yours, ExperimentInstance session) {
+    if (yours == null) {
+      return " Select an experiment first.";
+    }
+    return " To run \"" + yours + "\", end that session first" + (isAutopilots(session) ? " (that pauses the autopilot)" : "")
+        + ", or open a new session of \"" + yours + "\", which ends it.";
+  }
+
+  /** Whether a session is of the experiment the autopilot runs (ending it pauses the autopilot). */
+  private static boolean isAutopilots(ExperimentInstance session) {
+    Experiment autopilot = Autopilot.experiment();
+    Long of = session == null || session.experiment == null ? null : session.experiment.id;
+    return autopilot != null && of != null && of.equals(autopilot.id);
   }
 
   /** The account whose actor built the running engine (it runs the session in it), or null. */
@@ -1643,6 +1830,56 @@ public class ScriptBoard extends UntypedActor {
       json.put("owner", owner);
     }
     return json;
+  }
+
+  // Whether a push of what the engine runs is waiting to go out (see engineChanged).
+  private static final java.util.concurrent.atomic.AtomicBoolean engineNewsDue = new java.util.concurrent.atomic.AtomicBoolean(false);
+  // One push at a time, so the last one out says what runs now.
+  private static final Object ENGINE_NEWS_LOCK = new Object();
+
+  /**
+   * The engine's session or experiment has changed: a session launched, resumed, started, stopped,
+   * finished or ended, or the engine rebuilt. Every open console is told what the engine runs now,
+   * as {@code {"engine": ...}} (engineJson, as in the User JSON), a moment later. Only the account
+   * that acted used to be told (in its User JSON): other consoles kept refusing Reload and Run for a
+   * session that had ended, and one that followed a session that finished kept showing it running.
+   * Never waits: the caller may hold the game's own locks (a waiting room giving up finishes its
+   * session while holding its own).
+   */
+  static void engineChanged() {
+    if (!engineNewsDue.compareAndSet(false, true)) {
+      return;
+    }
+    try {
+      play.libs.Akka.system().scheduler().scheduleOnce(
+          scala.concurrent.duration.Duration.create(50, java.util.concurrent.TimeUnit.MILLISECONDS),
+          new Runnable() {
+            public void run() {
+              tellEngineNews();
+            }
+          },
+          play.libs.Akka.system().dispatcher());
+    } catch (Exception e) {
+      engineNewsDue.set(false);
+      Logger.warn("Could not tell the consoles what the engine runs: " + e);
+    }
+  }
+
+  /** {@code {"engine": ...}} to every open console, read under the engine lock (never half-way through a change). */
+  private static void tellEngineNews() {
+    synchronized (ENGINE_NEWS_LOCK) {
+      engineNewsDue.set(false);
+      ObjectNode news = Json.newObject();
+      try {
+        synchronized (REBUILD_LOCK) {
+          news.put("engine", engineJson());
+        }
+      } catch (Exception e) {
+        Logger.warn("Could not tell the consoles what the engine runs: " + e);
+        return;
+      }
+      toAllAdmins(news);
+    }
   }
 
   // The experiment OnJoinStep / OnLeaveStep belong to: the one whose steps the engine loaded.
@@ -1699,6 +1936,14 @@ public class ScriptBoard extends UntypedActor {
 
   private static Long instanceIdOf(GameListener listener) {
     return (listener == null || listener.experimentInstance == null) ? null : listener.experimentInstance.id;
+  }
+
+  /** What Stop answers for a session that is over already (it finished, or was stopped). */
+  private static String alreadyOver(ExperimentInstance session) {
+    String how = session.status == ExperimentInstance.Status.FINISHED ? "it has finished"
+        : session.status == ExperimentInstance.Status.STOPPED ? "it was stopped"
+        : "it is " + String.valueOf(session.status).toLowerCase(Locale.ENGLISH);
+    return "Nothing was stopped: session \"" + session.name + "\" is already over (" + how + ").";
   }
 
   private void launchGame(Breadboard.LaunchGame launchGame) throws IOException, ScriptException {
@@ -1776,6 +2021,7 @@ public class ScriptBoard extends UntypedActor {
         }
       }
     }
+    engineChanged();
 
     // Update User JSON (in every tab of the account)
     Breadboard.breadboardController.tell(new Breadboard.Update(user, launchGame.out, true), null);
@@ -1932,6 +2178,7 @@ public class ScriptBoard extends UntypedActor {
         // A finished session is shown, not restarted: the engine runs no session now.
         gameListener.experimentInstance = null;
       }
+      engineChanged();
     }
     //don't know why... ebean bug? if don't do this, the instances in the selectedExperiment doesn't get updated
     //which is causing the launch button still shows up (because the status isn't updated) instead of the stop button for the instance
@@ -2000,6 +2247,9 @@ public class ScriptBoard extends UntypedActor {
 
     toBeDeleteExperiment.delete();
     Autopilot.experimentDeleted(deletedId);
+    if (deletedId.equals(engineExperimentId)) {
+      engineChanged();
+    }
 
     Breadboard.breadboardController.tell(new Breadboard.Update(requester, deleteExperiment.out, true), null);
     experimentsChanged();
@@ -2478,6 +2728,7 @@ public class ScriptBoard extends UntypedActor {
     ObjectNode notice = Json.newObject();
     notice.putObject("notify").put(what, new Date().getTime());
     toAllAdmins(notice);
+    engineChanged();
   }
 
   /**

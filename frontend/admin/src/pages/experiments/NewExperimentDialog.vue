@@ -64,10 +64,9 @@
         </template>
       </BField>
 
-      <BCheckbox v-model="switchTo" :disabled="!!running">
+      <BCheckbox v-model="switchTo">
         Work on it right away
       </BCheckbox>
-      <p v-if="running" class="xnew__note">A session is running, so you'll stay on the current experiment. Switch once the session ends.</p>
     </form>
 
     <template #footer>
@@ -83,7 +82,7 @@ import { Copy, Share2, Sparkles } from 'lucide-vue-next'
 import { BButton, BCheckbox, BDialog, BField, BInput, BSelect, notify } from '@/ui'
 import { uid } from '@/ui/uid'
 import { http } from '@/lib/http'
-import { admin, actions, experiments, running } from '@/store/admin'
+import { admin, actions, experiments } from '@/store/admin'
 import type { Experiment } from '@/store/types'
 import { describeError, validateExperimentName } from './experiments'
 import { useRouter } from 'vue-router'
@@ -119,7 +118,7 @@ watch(() => props.open, (open) => {
   name.value = source ? suggestCopyName(source.name) : ''
   touched.value = false
   tried.value = false
-  switchTo.value = !running.value
+  switchTo.value = true
   error.value = ''
   busy.value = false
 }, { immediate: true })
@@ -164,7 +163,7 @@ async function submit () {
     })
     // PUT /experiment doesn't push the researcher's state, so ask for it
     await actions.refresh()
-    if (switchTo.value && !running.value && created && typeof created.id === 'number') {
+    if (switchTo.value && created && typeof created.id === 'number') {
       // (the example runs as it is: the next step is a session to try it)
       await switchToNew(created.id, finalName, `Created “${finalName}”`, from.value === 'example'
         ? { label: 'Open a session', detail: 'It runs as it is: open a session, then join it from two tabs with its sign-in link.', run: () => { void router.push('/session?new=1') } }
@@ -209,6 +208,5 @@ async function submit () {
 .xnew__choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .xnew__choice-title { font-weight: 600; color: var(--text); }
 .xnew__choice-hint { font-size: var(--text-sm); color: var(--muted); line-height: 1.45; }
-.xnew__note { margin-top: -10px; font-size: var(--text-xs); color: var(--muted); }
 .xnew__tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--success-soft); color: var(--success-soft-text); font-size: var(--text-xs); font-weight: 600; vertical-align: 1px; }
 </style>

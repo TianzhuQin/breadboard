@@ -57,8 +57,8 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Menu, WifiOff, PanelBottom, Cpu, CircleCheck, TriangleAlert, RotateCw } from 'lucide-vue-next'
-import { BMenu, BSpinner, confirm, type MenuItem } from '@/ui'
-import { admin, actions, connectionState, ensureConnected } from '@/store/admin'
+import { BMenu, BSpinner, confirm, notify, type MenuItem } from '@/ui'
+import { admin, actions, connectionState, ensureConnected, reloadBlocked } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse, reloadKeeps } from '@/store/engineGuard'
 
 defineProps<{ outputOpen: boolean, navOpen?: boolean }>()
@@ -108,6 +108,11 @@ const engineHeading = computed(() => {
 })
 
 async function reload () {
+  // not over another experiment's live session, which a reload would end (the server refuses it too)
+  if (reloadBlocked.value) {
+    notify.info('The engine can’t be reloaded now', reloadBlocked.value)
+    return
+  }
   if (!ensureConnected()) return
   // the engine is shared by every account and the autopilot, so the people in it may not be ours
   // (this account's own running session carries on through a reload)

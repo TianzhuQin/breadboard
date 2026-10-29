@@ -32,10 +32,12 @@ import java.util.concurrent.TimeUnit;
  * a periodic check finds the engine running no session. It never ends another experiment's live
  * session unless a save asks it to ({@code takeOver}), doesn't take the engine by itself from a
  * researcher who has another experiment loaded in it and a console open, and pauses when a
- * researcher's action ends its session (Stop, or selecting, launching or reloading something else). The game starts when the waiting room says
- * so (groovy/autopilot.groovy; its values can be set in the console, see {@link AutopilotHooks}). A
- * researcher who logs in with the autopilot's account sees the session, unless they have another
- * experiment selected (their selection is left alone; the engine info in the User JSON names it).
+ * researcher's action ends its session (Stop, or launching, resuming or reloading something else;
+ * selecting another experiment, to edit it, leaves its session running). The game starts when the
+ * waiting room says so (groovy/autopilot.groovy; its values can be set in the console, see
+ * {@link AutopilotHooks}). A researcher's console that has its experiment selected (selected then,
+ * or when signing in) shows its session; one with another experiment selected keeps that selection
+ * (the engine info in the User JSON names what the engine runs).
  *
  * <p>Participants enter through links that always lead to the currently open session:
  * {@code /play/{experimentId}/login} and {@code /play/{experimentId}/prolific?PROLIFIC_PID=...}.
@@ -347,19 +349,25 @@ public final class Autopilot {
   }
 
   /**
-   * A researcher's action ended the session the engine ran: Stop, or selecting another experiment or
-   * session, launching another session or reloading the engine. If it was of the autopilot's
-   * experiment, the autopilot pauses: it opens no new session by itself until someone presses Resume
-   * (or saves the settings), rather than taking the engine back behind the researcher's back.
-   * {@code how} says what happened, with %s for who did it.
+   * A researcher's action ends the session the engine runs: Stop, or selecting another session,
+   * launching another session or reloading the engine (selecting another experiment leaves it
+   * running). If it is of the autopilot's experiment, the autopilot pauses: it opens no new session
+   * by itself until someone presses Resume (or saves the settings), rather than taking the engine
+   * back behind the researcher's back. Nothing for a session that had finished: no researcher ended
+   * it (Stop pressed on it paused the autopilot, which also called off the next session it was about
+   * to open). {@code how} says what happened, with %s for who did it.
    */
   static void sessionStopped(ExperimentInstance instance, User by, String how) {
-    if (instance == null || instance.experiment == null) {
+    if (instance == null || instance.experiment == null || instance.id == null) {
       return;
     }
     // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
     Long experimentId = instance.experiment.id;
     String name = instance.name;
+    ExperimentInstance now = ExperimentInstance.findById(instance.id);
+    if (now != null && now.status == ExperimentInstance.Status.FINISHED) {
+      return;
+    }
     String who = by == null || by.email == null ? "a researcher" : by.email;
     Effective e;
     try {
