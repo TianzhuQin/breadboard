@@ -285,11 +285,12 @@ Its choices, forms and tie changes are disabled, it sends nothing for them, and
 `Breadboard.connection` is `watching` (`Breadboard.preview` tells a preview from a participant's
 page). So does a preview of a computer player (`g.addAI`'s `_1`, `_2`, …): it shows what the
 computer does, which goes on playing (`Breadboard.computerPlayer` is `true`, and the page's notes
-say the computer plays the seat). A preview of anyone else (a test player, or someone who left)
-acts for them as before, until their own page comes back; from then on it watches. If their page
-goes while a preview watches, the preview takes their seat and can act for them again, but they
-count as gone, like anyone who leaves: the computer takes over after `afterSeconds`, and a waiting
-room no longer counts them.
+say the computer plays the seat). A preview of a test player, whose own page hasn't been in the
+session, acts for them as before, and they count as connected, until their own page comes back;
+from then on it watches. A preview of anyone whose own page has been in the session and is away
+(they left, or the computer took their seat) can act for them too, but they count as gone, like
+anyone who leaves, whichever preview it is: the computer takes over after `afterSeconds`, or goes on
+playing, and a waiting room doesn't count them.
 
 **On the server.** What the server does about connections, for experiment authors:
 
@@ -312,19 +313,23 @@ room no longer counts them.
   player (an id starting with `_`), is sent `{"bbWatching": true}` and then every frame that page
   gets; what it sends is ignored, apart from its sign-in (recorded as a preview's). Nothing about a
   computer player's connections is recorded or announced, and the autopilot leaves its seat to the
-  computer, with the experiment's own behaviour. A preview that takes a free seat (a test player,
-  someone who left) holds it as their page would: they count as connected, so the researcher plays
-  them, and the `clientConnected` / `clientDisconnected` it causes have `preview` = `true`, as does
-  the `clientDisconnected` when their own page takes the seat from it. While a preview holds the
-  seat, `player._system.preview` is `true`; neighbours never see it, as with the rest of `_system`.
-- **A preview that stands in.** When the player's own page goes while a preview watches, the
-  preview takes the seat and is sent `{"bbWatching": false}`: its choices count, but nobody counts
-  as being there. `_system.connected` stays `false` (with `_system.preview` `true`), no
+  computer, with the experiment's own behaviour. A preview that takes the seat of a test player
+  (one no page of the participant's has held in the session) holds it as their page would: they
+  count as connected, so the researcher plays them, and the `clientConnected` /
+  `clientDisconnected` it causes have `preview` = `true`, as does the `clientDisconnected` when
+  their own page takes the seat from it. While a preview holds the seat, `player._system.preview`
+  is `true`; neighbours never see it, as with the rest of `_system`.
+- **A preview that stands in.** Once a participant's own page has held their seat in a session, a
+  preview never counts as them being there. One that watches as their page goes takes the seat and
+  is sent `{"bbWatching": false}`, and any preview opened while their page is away takes it too (the
+  console opens new ones all the time: a tile opened full size and closed again, a reload, the
+  Preview page visited again, its **AI players** pick): its choices count, but nobody counts as
+  being there. `_system.connected` stays `false` (with `_system.preview` `true`), no
   `clientConnected` is recorded and no `bb:connection` with `connected: true` is emitted, so their
-  departure goes on as anyone's: the computer takes over after `afterSeconds`, and the waiting room
-  stops counting them once `departureGraceSeconds` have passed. It used to count as them coming
-  back, so nobody played the seat for as long as the preview was open, and a start went ahead with
-  a seat nobody played.
+  departure goes on as anyone's: the computer takes over after `afterSeconds` (or goes on playing a
+  seat it took over), and the waiting room stops counting them once `departureGraceSeconds` have
+  passed. It used to count as them coming back, so nobody played the seat for as long as the
+  preview was open, and a start went ahead with a seat nobody played.
 - **Started without them.** Someone the autopilot's start left out (see the autopilot above) is
   recorded as a `missedStart` event. Whenever their page comes back, even after the next session
   has opened, it gets a screen saying the session went ahead without them (Prolific participants

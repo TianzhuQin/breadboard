@@ -177,19 +177,22 @@ Tick players in the list, or pick **Test players** (those your steps marked with
 **AI players**, then choose **Desktop** or **Phone**. **Join as a new participant** opens the
 session's sign-in page in a new tab.
 
-**Previews are live.** A player whose own page is connected is shown read-only: you see their
-screen as it changes, but can't answer for them, and their page is left alone. So is a computer
-player: you see what the computer does, and it goes on playing. Anyone else's preview (a test
-player, or someone who left) signs in as that player: they count as connected, and a click is a
-real choice, recorded with the session's data (the connections it causes are recorded with
-`preview` = `true`). If their own page comes back, it takes over, and the preview goes on
-read-only. If their page goes while you watch, the preview takes their seat and you can answer for
-them again, but they count as away, like anyone who leaves: the computer takes their seat after the
-usual wait (when it plays for people who leave), and a waiting room no longer counts them. In the
-list, a green dot means the seat is connected; its tooltip says whether by their own page or by a
-preview (maybe another console's), or that a preview stands in for someone away. The first look at
-a session shows the test players whose seat is neither connected nor held by a preview, theirs or
-another console's (which a preview here would take it from).
+**Previews are live.** A click in a preview is a real choice, recorded with the session's data. A
+player whose own page is connected is shown read-only: you see their screen as it changes, but
+can't answer for them, and their page is left alone. So is a computer player: you see what the
+computer does, and it goes on playing. A test player, whose own page hasn't been in the session,
+is played through the preview: it signs in as that player, and they count as connected (the
+connections it causes are recorded with `preview` = `true`). Anyone else (someone whose own page
+has been in the session and isn't now: they left, or the computer took their seat) can be answered
+for in a preview, but counts as away all the same, like anyone who leaves, however often you open,
+reload or enlarge the preview: the computer takes their seat after the usual wait (when it plays
+for people who leave), or goes on playing it, and a waiting room doesn't count them. So **AI
+players** shows the computer players and the seats the computer took over, and the computer goes on
+playing all of them. When a player's own page comes back, it takes over, and the preview goes on
+read-only. In the list, a green dot means the seat is connected; its tooltip says whether by their
+own page or by a preview (maybe another console's), or that a preview stands in for someone away.
+The first look at a session shows the test players whose seat is neither connected nor held by a
+preview, theirs or another console's (which a preview here would take it from).
 
 ## Running a session
 
@@ -250,9 +253,10 @@ one participant's page to another.
 Click a player (here or on the Network page) to see what is **On their screen** and their
 choices, their **Ties** and **Properties**. Clicking a choice submits it for them, after you
 confirm; it can't be undone. Each tie has **Cut**, and **Tie … to…** adds one. **Preview their
-screen** opens them on the Preview page. **Preview connected** means a researcher's preview has
-their seat, and their own page isn't connected. **Away: preview standing in** means their page went
-while a preview watched it: the preview can answer for them, but they count as away.
+screen** opens them on the Preview page. **Preview connected** means a researcher's preview plays
+the seat of a test player, whose own page hasn't been in the session. **Away: preview standing in**
+means their own page isn't connected and a preview has their seat: the preview can answer for
+them, but they count as away.
 
 ### Script console
 
@@ -420,7 +424,7 @@ of event with a column per data name.
 
 | Download | Where | Contents |
 |---|---|---|
-| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that took a free seat. |
+| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. |
 | **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
 | **Export all**, **Export filtered** | A session's events | The same columns as the session's file, with times in standard ISO 8601 (`2026-10-28T13:24:23.757Z`). Events without data keep a row. |

@@ -265,11 +265,12 @@ describe('PlayerDetails', () => {
     await tick()
     expect(w.find('.pd__badges').text()).toContain('Preview connected')
     expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs.')
-    // their page went while the preview watched it: it stands in, and they count as away
+    // their own page isn't connected and a preview has their seat: it stands in, and they count as away
     __receive({ action: 'nodePropertyChanged', id: 'p1', key: '_system', value: { connected: false, preview: true } })
     await tick()
     expect(w.find('.pd__badges').text()).toContain('Away: preview standing in')
-    expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs.')
+    expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs, '
+      + 'but someone whose own page has been in this session still counts as away.')
     w.unmount()
   })
 

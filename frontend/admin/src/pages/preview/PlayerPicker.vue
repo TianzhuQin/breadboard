@@ -87,7 +87,7 @@ function connectionText (p: PlayerLike) {
   if (ownPageConnected(p)) return 'their own page is connected, so a preview is read-only'
   // (another console's preview, which a preview from here would take the seat from)
   if (heldByPreview(p)) {
-    return isConnected(p) ? 'a preview has their seat: their own page isn’t connected' : 'away: a preview stands in for them'
+    return isConnected(p) ? 'a preview plays this seat: their own page hasn’t been in this session' : 'away: a preview stands in for them'
   }
   return 'not connected'
 }

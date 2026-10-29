@@ -1415,9 +1415,12 @@ public class ScriptBoard extends UntypedActor {
    * whether a researcher's preview holds the seat (player._system, see markConnection). The events
    * clientConnected / clientDisconnected only when that has changed: their first page, their return
    * after it closed or fell silent, or its going; two tabs swapping the seat used to be recorded as
-   * a connection every few seconds. A preview that takes a free seat counts as connected, and its
-   * events say preview = true (its coming, its going, and its handing the seat to the participant's
-   * own page). A preview that took the seat as their page went counts as nobody (Presence.AWAY).
+   * a connection every few seconds. A preview that holds the seat of a test player (one no page of
+   * theirs has held in this session) counts as connected, and its events say preview = true (its
+   * coming, its going, and its handing the seat to the participant's own page). On any other seat a
+   * preview only stands in, and counts as nobody (Presence.AWAY): whether it watched as their page
+   * went or came after (the console opens new ones all the time), it never makes them connected, so
+   * the computer's takeover and the waiting room go on as for anyone away.
    * {@code tookSeat}: a socket has just taken the seat, maybe from another open one: their player is
    * marked connected if it isn't (one added again since was left unmarked, so the autopilot didn't
    * count them), and bb:connection is announced all the same, so the autopilot shows that page the
@@ -2907,7 +2910,7 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * The player's {@code _system}: connected, disconnectedAt while they are away, and preview while a
-   * researcher's preview holds the seat (as a player, or standing in for someone who left), so the
+   * researcher's preview holds the seat (playing a test player, or standing in for anyone else), so the
    * console can tell it from the participant's own page. Written only where it differs.
    */
   private static void markConnection(String clientId, boolean connected, boolean previewHolds) {

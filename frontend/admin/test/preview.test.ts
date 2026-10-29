@@ -280,7 +280,8 @@ describe('PreviewPage', () => {
     // what stays true is said once and can be put away: a preview is a live seat, or only watches
     expect(w.find('.pv__notice').text()).toMatch(/Previews are live/)
     expect(w.find('.pv__notice').text()).toMatch(/A player whose own page is connected, and a computer player, are shown read-only/)
-    expect(w.find('.pv__notice').text()).toMatch(/If their page goes while you watch, you can answer for them, but they count as away/)
+    expect(w.find('.pv__notice').text()).toMatch(/A test player, whose own page hasn’t been in the session, is played here/)
+    expect(w.find('.pv__notice').text()).toMatch(/Anyone else \(someone who left, or whose seat the computer took\) can be answered for here, but counts as away/)
     expect(w.find('.pv__notice').text()).not.toMatch(/taking the connection/)
     await w.find('.pv__notice button').trigger('click')
     expect(w.find('.pv__notice').exists()).toBe(false)
@@ -406,14 +407,14 @@ describe('PreviewPage', () => {
     addPlayer('p1', { _system: { connected: true } })
     addPlayer('p2', { _system: { connected: true, preview: true } })
     addPlayer('p3', { _system: { connected: false } })
-    // their page went while a preview watched it: the preview stands in, and they count as away
+    // their own page has been in the session and isn't now: the preview stands in, and they count as away
     addPlayer('p4', { _system: { connected: false, preview: true } })
     addPlayer('_1', { ai: 1 })
     await settle()
     const w = await mountPage()
     const dot = (id: string) => w.findAll('.pp__item').find(li => li.text().includes(id))!.find('.pp__dot')
     expect(dot('p1').attributes('title')).toBe('their own page is connected, so a preview is read-only')
-    expect(dot('p2').attributes('title')).toBe('a preview has their seat: their own page isn’t connected')
+    expect(dot('p2').attributes('title')).toBe('a preview plays this seat: their own page hasn’t been in this session')
     expect(dot('p3').attributes('title')).toBe('not connected')
     expect(dot('p2').classes()).toContain('is-on')
     expect(dot('p4').attributes('title')).toBe('away: a preview stands in for them')

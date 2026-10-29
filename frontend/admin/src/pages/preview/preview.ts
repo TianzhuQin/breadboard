@@ -37,8 +37,8 @@ export const isComputerPlayer = (p: PlayerLike) => p.id.startsWith('_')
 export const isConnected = (p: PlayerLike) => p.data?._system?.connected === true
 /**
  * A researcher's preview holds their seat (_system.preview): their own page isn't connected. It plays
- * the seat (connected), or stands in for someone whose page went while it watched (not connected:
- * they count as away, and the computer takes over as usual).
+ * the seat of a test player, whose own page hasn't been in the session (connected), or stands in for
+ * anyone else (not connected: they count as away, and the computer takes over as usual).
  */
 export const heldByPreview = (p: PlayerLike) => p.data?._system?.preview === true
 /** Their own page is connected: a preview of them only watches it, read-only. */

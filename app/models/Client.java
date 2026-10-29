@@ -50,6 +50,13 @@ public class Client extends Model {
   // A computer player's (see isComputer): nobody holds its seat, which the computer plays, and a
   // researcher's preview of it only watches. One used to take the seat, which switched the computer off.
   private final boolean computer;
+  // The participant's own page (not a researcher's preview) has held the seat in this session. From
+  // then on a preview never counts as them being there (see presence): it only watches their page,
+  // or stands in for them while it is away. Standing in used to be a mark on the one preview that
+  // watched as their page went, so any newer preview of them (the console opens new ones all the
+  // time: a tile opened full size, a reload, the Preview page visited again) counted as them coming
+  // back: the computer was switched off, and nobody played the seat while it stayed open.
+  private volatile boolean ownPageHeld;
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
   private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
@@ -70,9 +77,6 @@ public class Client extends Model {
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile long lastHeard = System.currentTimeMillis();
     private volatile boolean pinged;
-    // A preview that took the seat because the participant's own page went (seatAWatcher): it may act
-    // for them, but nobody counts as being there, so they are away as for anyone who leaves.
-    private volatile boolean standIn;
     // The text of the full view written last; null once any other frame has been written since.
     private String lastView;
 
@@ -84,11 +88,6 @@ public class Client extends Model {
 
     public boolean isOpen() {
       return !closed.get();
-    }
-
-    /** Whether it holds the seat only because the participant's own page went (Client.seatAWatcher). */
-    public boolean standsIn() {
-      return standIn;
     }
 
     /** It sent something at {@code now} (ms); {@code ping}: a {"action": "Ping"}. */
@@ -183,11 +182,15 @@ public class Client extends Model {
   /** Who is in the seat, as the session counts it (see ScriptBoard.recordConnection). */
   public enum Presence {
     /**
-     * Nobody: their page went. A preview that took the seat then (seatAWatcher) may act for them, but
-     * they are away all the same: the computer takes their seat after the usual wait.
+     * Nobody: their page is away. A researcher's preview may hold the seat of someone whose own page
+     * has held it (it stands in: it may act for them), but they are away all the same: the computer
+     * takes their seat after the usual wait, and a waiting room doesn't count them.
      */
     AWAY,
-    /** A researcher's preview that took the seat while it was free (a test player, someone who had left): it plays it. */
+    /**
+     * A researcher's preview holds a seat no page of the participant's has held in this session (a
+     * test player, played through previews): it plays it, and they count as there.
+     */
     PREVIEW,
     /** The participant's own page. */
     HERE
@@ -228,6 +231,9 @@ public class Client extends Model {
     this.seat = holder;
     this.in = holder.in;
     this.out = holder.out;
+    if (!holder.preview) {
+      ownPageHeld = true;
+    }
   }
 
   /**
@@ -238,7 +244,8 @@ public class Client extends Model {
    * and closed, so it doesn't reconnect and take the seat back, as two tabs used to, for ever; a
    * preview that held it for a participant who comes back watches from now on ({"bbWatching": true});
    * a socket that had closed already is just left. Any socket of a computer player only watches
-   * what the computer does.
+   * what the computer does. A preview that takes the seat of someone whose own page has held it only
+   * stands in for them (see presence).
    */
   public Arrival connect(Connection incoming) {
     synchronized (seatLock) {
@@ -256,7 +263,6 @@ public class Client extends Model {
       take(incoming);
       if (previous.preview && !incoming.preview) {
         // (it may have stood in for them: it only watches again)
-        previous.standIn = false;
         previous.writeAside(WATCHING);
         watchers.add(previous);
         return Arrival.PREVIEW_WATCHES;
@@ -306,8 +312,6 @@ public class Client extends Model {
         Connection watcher = watchers.get(i);
         if (watcher.isOpen()) {
           watchers.remove(i);
-          // (marked first: whoever sees it in the seat sees it standing in)
-          watcher.standIn = true;
           take(watcher);
           watcher.writeAside(NOT_WATCHING);
           return watcher;
@@ -329,15 +333,24 @@ public class Client extends Model {
   }
 
   /**
-   * Who is in the seat now: the participant's own page (HERE), a researcher's preview that took it
-   * while it was free (PREVIEW), or nobody (AWAY), a preview standing in for them included.
+   * Who is in the seat now: the participant's own page (HERE); a researcher's preview, on a seat no
+   * page of theirs has held in this session (PREVIEW); or nobody (AWAY), any preview standing in for
+   * someone whose own page has held the seat included, whichever preview it is and however it came.
    */
   public Presence presence() {
     Connection holder = seat;
-    if (holder == null || !holder.isOpen() || holder.standIn) {
+    if (holder == null || !holder.isOpen()) {
       return Presence.AWAY;
     }
-    return holder.preview ? Presence.PREVIEW : Presence.HERE;
+    if (!holder.preview) {
+      return Presence.HERE;
+    }
+    return ownPageHeld ? Presence.AWAY : Presence.PREVIEW;
+  }
+
+  /** Whether a researcher's preview holds the seat of someone whose own page has held it: it stands in for them. */
+  public boolean previewStandsIn() {
+    return previewHolds() && ownPageHeld;
   }
 
   /** Whether a researcher's preview holds the seat, as a player or standing in for them. */

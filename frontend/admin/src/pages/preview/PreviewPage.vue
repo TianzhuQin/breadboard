@@ -51,9 +51,10 @@
         <Info :size="18" class="pv__notice-icon" aria-hidden="true" />
         <div class="pv__notice-text">
           <strong>Previews are live.</strong>
+          What you click is a real choice for that player, recorded with the session’s data.
           A player whose own page is connected, and a computer player, are shown read-only: you see their screen, and their page (or the computer) carries on.
-          Otherwise the preview signs in as that player, just as their own browser would: it counts as them being connected, and what you click is a real choice, recorded with the session’s data, until their own page comes back.
-          If their page goes while you watch, you can answer for them, but they count as away, as anyone who leaves does.
+          A test player, whose own page hasn’t been in the session, is played here: the preview counts as them being connected until their own page comes back.
+          Anyone else (someone who left, or whose seat the computer took) can be answered for here, but counts as away, as anyone who leaves does: the computer takes their seat as usual, or goes on playing it.
         </div>
         <BButton size="sm" variant="ghost" @click="dismissNotice">Got it</BButton>
       </div>
@@ -394,8 +395,9 @@ watch(() => [route.query.player, players.value.length] as const, ([q]) => {
 const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
 const pickerOpen = ref(!(narrow && memory.ids.length))
 // (a new key whenever what previews do changes, so the notice is shown once more: previews of
-// connected players became read-only, then those of computer players)
-const NOTICE_KEY = 'bb.preview.liveNoticeSeen.3'
+// connected players became read-only, then those of computer players, then a preview of someone who
+// left stopped counting as them)
+const NOTICE_KEY = 'bb.preview.liveNoticeSeen.4'
 const noticeSeen = ref(readFlag(NOTICE_KEY))
 function dismissNotice () {
   noticeSeen.value = true
