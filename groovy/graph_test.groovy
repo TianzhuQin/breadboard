@@ -81,3 +81,34 @@ test("players leaving and joining at the same moment leave the network as it sho
     pool.shutdownNow()
   }
 }
+
+test("a player is looked up under the lock that joining and leaving hold") {
+  // The server used to look a joining participant up without it, right after adding them, while
+  // others joining at the same moment resized the map of players: now and then it missed one that
+  // was there (and their Prolific details weren't recorded until they reloaded).
+  def graph = new BreadboardGraph(new TinkerGraph(), null)
+  def p1 = graph.addPlayer("p1")
+  def lock = graph.@structureLock
+  def holding = new java.util.concurrent.CountDownLatch(1)
+  def release = new java.util.concurrent.CountDownLatch(1)
+  def holder = Thread.start {
+    synchronized (lock) {
+      holding.countDown()
+      release.await(5, TimeUnit.SECONDS)
+    }
+  }
+  def found = []
+  try {
+    assert holding.await(5, TimeUnit.SECONDS)
+    def lookup = Thread.start { found << graph.getPlayer("p1") }
+    lookup.join(300)
+    assert lookup.isAlive() : "getPlayer did not wait for the lock"
+    release.countDown()
+    lookup.join(5000)
+    assert found.size() == 1 && found[0].id == p1.id
+    assert graph.getPlayer("nobody") == null
+  } finally {
+    release.countDown()
+    holder.join(5000)
+  }
+}

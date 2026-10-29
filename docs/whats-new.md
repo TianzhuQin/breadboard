@@ -134,6 +134,7 @@ autopilot.waitingRoom([
   waitSeconds: 120,        // once minPlayers are here, wait this long for more
   maxWaitSeconds: 900,     // give up if minPlayers never arrive
   countdownSeconds: 10,
+  departureGraceSeconds: 15, // someone leaving counts only once they have been gone this long
   onCancel: { players -> players.each { recruitment.completeProlific(it, [completionCode: "WAITFEE"]) } },
 ])
 autopilot.replaceDisconnected([afterSeconds: 30, returnToHuman: true])
@@ -148,9 +149,15 @@ People who come back after a session was given up get its "could not start" noti
 to `onCancel` too.
 
 The server opens a session at startup. Participants enter through `/play/{e}/login` or
-`/play/{e}/prolific?...` and wait in the waiting room. The game starts by itself, and people who
-left before the start get no seat. Someone who drops out mid-game is played by the computer after
-the grace period. A new session opens when the game finishes.
+`/play/{e}/prolific?...` and wait in the waiting room. Someone whose connection drops there counts
+as gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor
+gets the session given up. The game starts by itself. People who left before the start get no
+seat, and are told so if they come back (see below). With `replaceDisconnected`, someone away for
+less than a minute (or `afterSeconds`, if that is longer) keeps their seat, which the computer plays
+until they are back; without it nobody would play that seat, so they get none either.
+Someone who drops out mid-game is played by the computer after the grace period. A new session
+opens when the game finishes. Waiting-room settings saved in the console replace the steps' own
+even for people who are already waiting: the limits count from the first arrival.
 
 ## The participant page
 
@@ -228,6 +235,108 @@ A page that reconnects after its session has ended (for example after the autopi
 is not let into the session the server runs now. It gets back the last screen it had, such as its
 completion code, or else a "This session has ended" notice.
 
+## The participant page's connection
+
+The page reconnects by itself, at once when the network or the participant comes back to the tab,
+and notices a connection that died without closing. `<ConnectionStatus />` says what is going on,
+with **Try now** while it reconnects. When the study is opened in another tab or window, the newer
+page takes over and the older one stops, with **Use it here** to take it back.
+
+`Breadboard.connection` says how the connection is, and Breadboard emits `bb:connection` whenever
+it may have changed (`Breadboard.on('bb:connection', () => ...)`):
+
+| Value | |
+|---|---|
+| `connecting` | The first try is under way. |
+| `open` | Connected. |
+| `lost` | It dropped, and is reconnecting. |
+| `blocked` | It has never connected after several tries: the network may not let it. It goes on trying. |
+| `elsewhere` | Another page has the seat, e.g. the study opened in another tab. `Breadboard.useHere()` takes it back. |
+| `ended` | The session is over for this page; it no longer reconnects. |
+| `watching` | A researcher's preview that only watches (below). |
+
+**No answers while disconnected.** While the connection is down, `PlayerChoices`, `Form` and
+`BBNetwork` disable their choices, buttons and tie changes, and say why; a page's own choices in
+`PlayerChoices`'s `choice` slot get a `disabled` slot prop. A choice or tie change sent anyway
+(`Breadboard.sendChoice`, `sendGroupChoice`, `sendEdgeEdit`) waits for the connection for at most
+5 seconds and is then dropped, since the screen may have moved on. Other messages
+(`Breadboard.send`) wait as long as it takes, as before.
+
+**`ConnectionStatus`'s slots.** The default slot replaces the message while the page reconnects
+(`lost` and `blocked`), with the slot props `time` (ms until the next try, counting down, and 0
+while one is under way), `state` and `tryNow()`. A message written for 3.0 stays there, and now
+shows only in those states. The other states have slots of their own, with Breadboard's words
+otherwise: `elsewhere` (slot prop `useHere()`), `ended` and `watching`.
+
+```html
+<ConnectionStatus>
+  <template #default="{ time, tryNow }">
+    Reconnecting in {{ Math.ceil(time / 1000) }} s… <button @click="tryNow">Retry</button>
+  </template>
+  <template #elsewhere="{ useHere }">
+    This study is open elsewhere. <button @click="useHere">Continue here</button>
+  </template>
+</ConnectionStatus>
+```
+
+**Researchers' previews watch connected players.** The console's preview of a player whose own
+page is connected only watches: it shows what their page shows, live, and leaves their page alone.
+Its choices, forms and tie changes are disabled, it sends nothing for them, and
+`Breadboard.connection` is `watching` (`Breadboard.preview` tells a preview from a participant's
+page). So does a preview of a computer player (`g.addAI`'s `_1`, `_2`, …): it shows what the
+computer does, which goes on playing (`Breadboard.computerPlayer` is `true`, and the page's notes
+say the computer plays the seat). A preview of anyone else (a test player, or someone who left)
+acts for them as before, until their own page comes back; from then on it watches. If their page
+goes while a preview watches, the preview takes their seat and can act for them again, but they
+count as gone, like anyone who leaves: the computer takes over after `afterSeconds`, and a waiting
+room no longer counts them.
+
+**On the server.** What the server does about connections, for experiment authors:
+
+- **One page holds the seat.** A participant's newer page (another tab, a reload) takes the seat.
+  The older one is sent `{"bbClosed": "replaced"}` and closed, so it doesn't reconnect and take the
+  seat back. `clientConnected` and `clientDisconnected` are recorded only when the participant comes
+  or goes, not each time a page takes over; `bb:connection` is emitted whenever a page takes the
+  seat, so scripts may hear `connected: true` for someone who is connected already.
+- **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds
+  after, and gets `{"pong": <the server's time in ms>}`. A page that has pinged and then sends
+  nothing for 30 seconds is closed and counts as gone, as when its socket closes: a connection that
+  dies without closing (a phone out of range, a laptop put to sleep) used to look connected for
+  good, so the computer never took that seat. Pages that never ping (from before 3.1) are left
+  alone. A page given its last screen as it connects (its session is over, isn't the one running,
+  or started without it: e.g. a thank-you page left open when the next session opens) has its pings
+  answered too, and is closed once it falls silent; nobody used to answer them.
+- **`player._system.disconnectedAt`**: since when (ms) the player has been away, next to
+  `_system.connected`; it goes when they are back.
+- **Previews.** A researcher's preview of a player whose own page is connected, or of a computer
+  player (an id starting with `_`), is sent `{"bbWatching": true}` and then every frame that page
+  gets; what it sends is ignored, apart from its sign-in (recorded as a preview's). Nothing about a
+  computer player's connections is recorded or announced, and the autopilot leaves its seat to the
+  computer, with the experiment's own behaviour. A preview that takes a free seat (a test player,
+  someone who left) holds it as their page would: they count as connected, so the researcher plays
+  them, and the `clientConnected` / `clientDisconnected` it causes have `preview` = `true`, as does
+  the `clientDisconnected` when their own page takes the seat from it. While a preview holds the
+  seat, `player._system.preview` is `true`; neighbours never see it, as with the rest of `_system`.
+- **A preview that stands in.** When the player's own page goes while a preview watches, the
+  preview takes the seat and is sent `{"bbWatching": false}`: its choices count, but nobody counts
+  as being there. `_system.connected` stays `false` (with `_system.preview` `true`), no
+  `clientConnected` is recorded and no `bb:connection` with `connected: true` is emitted, so their
+  departure goes on as anyone's: the computer takes over after `afterSeconds`, and the waiting room
+  stops counting them once `departureGraceSeconds` have passed. It used to count as them coming
+  back, so nobody played the seat for as long as the preview was open, and a start went ahead with
+  a seat nobody played.
+- **Started without them.** Someone the autopilot's start left out (see the autopilot above) is
+  recorded as a `missedStart` event. Whenever their page comes back, even after the next session
+  has opened, it gets a screen saying the session went ahead without them (Prolific participants
+  are asked to return the study), with `player.ended = "missedStart"`, and stops reconnecting.
+  Someone taken out of the network any other way (by a researcher, or by the experiment) gets their
+  last screen back, as before.
+- **The seat cookie lasts a day.** A participant whose browser was closed finds their seat again
+  through the study link or the game's address.
+- **No identical views.** A page isn't sent the same view twice in a row. Participants got one every
+  few hundred milliseconds, mostly unchanged, and a page on a weak connection fell further and
+  further behind. A page that connects, and a preview that starts watching, get the whole view.
+
 ## The researcher console
 
 The console is new: open the server's address and sign in. The previous console still works at
@@ -268,7 +377,9 @@ restarts the running session.
   recorded, with no byte-order mark. A spreadsheet may read a value that starts with `=`, `+`,
   `-` or `@` as a formula, so import the file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
-- **Connection events:** `clientConnected` and `clientDisconnected`.
-- **Autopilot events:** `autopilotStart`, `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+- **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
+  or goes (not for every page that takes over their seat).
+- **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
+  `missedStart` (someone its start left out), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
 - **Tie edits:** `edgeEdit`, which records the actor.
 - **Prolific entry:** `prolificEntry`.

@@ -51,8 +51,9 @@
         <Info :size="18" class="pv__notice-icon" aria-hidden="true" />
         <div class="pv__notice-text">
           <strong>Previews are live.</strong>
-          Each one signs in as that player, just as their own browser would: it counts as them being connected, and what you click is a real choice, recorded with the session’s data.
-          If the player’s own browser is open, the two keep taking the connection from each other, so preview test or computer players, or people who have left.
+          A player whose own page is connected, and a computer player, are shown read-only: you see their screen, and their page (or the computer) carries on.
+          Otherwise the preview signs in as that player, just as their own browser would: it counts as them being connected, and what you click is a real choice, recorded with the session’s data, until their own page comes back.
+          If their page goes while you watch, you can answer for them, but they count as away, as anyone who leaves does.
         </div>
         <BButton size="sm" variant="ghost" @click="dismissNotice">Got it</BButton>
       </div>
@@ -162,7 +163,7 @@ import {
   Bot, ChevronDown, Database, FlaskConical, Info, ListOrdered, Monitor, MonitorOff, MonitorSmartphone, Play, Plus,
   RotateCw, Smartphone, UserPlus, Users, UsersRound,
 } from 'lucide-vue-next'
-import { BButton, BEmpty, BPage, BPanel, BSpinner, BSwitch, BTabs, confirm, notify, type TabItem } from '@/ui'
+import { BButton, BEmpty, BPage, BPanel, BSpinner, BSwitch, BTabs, notify, type TabItem } from '@/ui'
 import { admin, graph } from '@/store/admin'
 import { describeError } from '../experiments/experiments'
 import { canResume } from '../sessions/sessionData'
@@ -171,8 +172,8 @@ import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  MAX_PREVIEWS, isAIPlayer, isConnected, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, quickPick,
-  sortPlayers, tileWidth, wouldDisplace, type PlayerLike, type PreviewTarget, type QuickPick,
+  MAX_PREVIEWS, autoPicked, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl,
+  quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 
@@ -215,41 +216,51 @@ function tooMany () {
   notify.warning(`Up to ${MAX_PREVIEWS} previews at a time`, 'Each preview is a whole participant page; more would slow your browser down. Remove some first.')
 }
 
-async function askToDisplace (list: PlayerLike[]): Promise<boolean> {
-  const one = list.length === 1
-  return confirm({
-    title: one ? `${list[0].id} is connected right now` : `${list.length} of these players are connected right now`,
-    message: `${one ? 'Their' : 'These players’'} own browser is open. A preview takes over the player’s connection: their page is disconnected and keeps reconnecting, taking the seat back from your preview, for as long as the preview is open. Choices made in the preview count as theirs.\n\nPreview ${one ? 'them' : 'them too'} anyway?`,
-    confirmLabel: one ? 'Preview anyway' : 'Include them',
-    cancelLabel: one ? 'Cancel' : 'Leave them out',
-    danger: true,
-  })
+/**
+ * A preview never takes the seat of a player whose own page is connected, nor of a computer player:
+ * it only watches. Said as they are added, so a researcher isn't left wondering why nothing there can
+ * be clicked.
+ */
+function noteReadOnly (list: PlayerLike[]) {
+  const people = list.filter(p => !isComputerPlayer(p))
+  const computers = list.filter(isComputerPlayer)
+  if (people.length) {
+    const one = people.length === 1
+    notify.info(
+      one ? `${people[0].id} is connected right now` : `${people.length} of these players are connected right now`,
+      `${one ? 'Their preview is' : 'Their previews are'} read-only: you see what they see, but can’t answer for them. Their own page is left alone.`,
+    )
+  }
+  if (computers.length) {
+    const one = computers.length === 1
+    notify.info(
+      one ? `${computers[0].id} is a computer player` : `${computers.length} of these are computer players`,
+      `${one ? 'Its preview is' : 'Their previews are'} read-only: you see what the computer does, and it goes on playing.`,
+    )
+  }
 }
 
-async function toggle (id: string, on: boolean) {
+function toggle (id: string, on: boolean) {
   if (!on) { remove(id); return }
   const p = players.value.find(x => x.id === id)
   if (!p || selected.value.has(id)) return
   if (memory.ids.length >= MAX_PREVIEWS) { tooMany(); listKey.value++; return }
-  if (isConnected(p) && !await askToDisplace([p])) { listKey.value++; return }
+  noteReadOnly(shownReadOnly([p], selected.value))
   memory.ids = [...memory.ids, id]
 }
 
-/** A quick pick replaces what is shown (players already shown stay without asking again). */
-async function pick (kind: QuickPick, n?: number) {
+/** A quick pick replaces what is shown. */
+function pick (kind: QuickPick, n?: number) {
   let chosen = quickPick(players.value, kind, n ?? 4)
   if (!chosen.length) {
     notify.info(kind === 'test' ? 'No test players' : kind === 'ai' ? 'No computer players' : 'Nobody to show')
     return
   }
-  const displaced = wouldDisplace(chosen, selected.value)
-  if (displaced.length && !await askToDisplace(displaced)) {
-    chosen = chosen.filter(p => !displaced.includes(p))
-  }
   if (chosen.length > MAX_PREVIEWS) {
     tooMany()
     chosen = chosen.slice(0, MAX_PREVIEWS)
   }
+  noteReadOnly(shownReadOnly(chosen, selected.value))
   memory.ids = chosen.map(p => p.id)
   listKey.value++
 }
@@ -312,13 +323,6 @@ function step (delta: number) {
 function closeFocus () {
   const id = focusId.value
   focusId.value = null
-  if (id && oneLook.has(id)) {
-    // a look at a connected participant's screen ends here, so their own page gets its seat back
-    oneLook.delete(id)
-    remove(id)
-    notify.info(`Stopped previewing ${id}`, 'Their own page has their seat back.')
-    return
-  }
   // the tile connects again in place of the full-size page
   if (id) reload(id)
 }
@@ -356,7 +360,7 @@ async function openTab (id: string) {
 // ---- following the session ---------------------------------------------------------------
 
 // A new session starts from a clean slate; on the first look the test players are shown, as in
-// the old Testing panel (but not ones whose own browser is open, which a preview would disturb).
+// the old Testing panel (but not those whose seat is connected: see autoPicked).
 watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
   if (id == null) return
   if (memory.instanceId !== id) {
@@ -368,25 +372,18 @@ watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
   }
   if (!memory.autoPicked && players.value.length) {
     memory.autoPicked = true
-    const tests = quickPick(players.value, 'test').filter(p => !isConnected(p)).slice(0, MAX_PREVIEWS)
+    const tests = autoPicked(players.value)
     if (tests.length && !memory.ids.length) memory.ids = tests.map(p => p.id)
   }
 }, { immediate: true })
 
-// Connected participants shown for one look from the player panel: the preview ends with that look.
-const oneLook = new Set<string>()
-
 // "Preview their screen" from the player panel links here with ?player=<id>: show that player full size.
-watch(() => [route.query.player, players.value.length] as const, async ([q]) => {
+watch(() => [route.query.player, players.value.length] as const, ([q]) => {
   const id = typeof q === 'string' ? q : ''
   const p = players.value.find(x => x.id === id)
   if (!id || !p) return
   router.replace({ query: { ...route.query, player: undefined } })
-  if (!selected.value.has(id)) {
-    const connected = isConnected(p)
-    await toggle(id, true)
-    if (connected && selected.value.has(id)) oneLook.add(id)
-  }
+  if (!selected.value.has(id)) toggle(id, true)
   if (selected.value.has(id)) focusId.value = id
 }, { immediate: true })
 
@@ -395,7 +392,9 @@ watch(() => [route.query.player, players.value.length] as const, async ([q]) => 
 // On narrow screens the list sits above the previews; once some are chosen it starts folded away.
 const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
 const pickerOpen = ref(!(narrow && memory.ids.length))
-const NOTICE_KEY = 'bb.preview.liveNoticeSeen'
+// (a new key whenever what previews do changes, so the notice is shown once more: previews of
+// connected players became read-only, then those of computer players)
+const NOTICE_KEY = 'bb.preview.liveNoticeSeen.3'
 const noticeSeen = ref(readFlag(NOTICE_KEY))
 function dismissNotice () {
   noticeSeen.value = true

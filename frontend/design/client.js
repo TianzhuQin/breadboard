@@ -23,6 +23,23 @@ import ClientCtrl from './client/client.controller';
 import ChoicesCtrl from './client/choices.controller';
 const clientHtmlCacheLocation = 'holy.cow.client.html';
 
+// One line above the page when it can't act for its player: another page has the seat (this one
+// stopped), or it is a researcher's preview that only watches a player whose own page is connected.
+// (Breadboard.connection, from breadboard-core)
+function connectionNotice (bb) {
+  if (!bb) return '';
+  if (bb.connection === 'elsewhere') {
+    // (a reloaded preview can't continue: it is opened again from the console)
+    return bb.preview
+      ? 'This player is open in another preview or tab.'
+      : 'This study is open in another tab or window. Reload this page to use it here.';
+  }
+  if (bb.connection === 'watching') {
+    return 'Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.';
+  }
+  return '';
+}
+
 window.bbClientInit = function init () {
   angular.module('breadboard.client', [
     'breadboard.services',
@@ -45,8 +62,21 @@ window.bbClientInit = function init () {
           scope.isLoaded = true;
           $templateCache.put(clientHtmlCacheLocation, html);
         });
+        scope.connectionNotice = connectionNotice(window.Breadboard);
+        function showConnection () {
+          scope.$applyAsync(function () {
+            scope.connectionNotice = connectionNotice(window.Breadboard);
+          });
+        }
+        if (window.Breadboard && window.Breadboard.on) {
+          window.Breadboard.on('bb:connection', showConnection);
+          scope.$on('$destroy', function () {
+            window.Breadboard.off('bb:connection', showConnection);
+          });
+        }
       },
       template: `<div class="main" ng-if="isLoaded">
+                    <p class="bb-connection-notice" ng-if="connectionNotice" role="status">{{ connectionNotice }}</p>
                     <ng-include src="'${clientHtmlCacheLocation}'">
                         Loading...
                     </ng-include>

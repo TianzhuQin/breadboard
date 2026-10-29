@@ -297,6 +297,15 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
     }
   }
 
+  // The player's vertex, or null: looked up under the same lock, as the server does for someone
+  // joining (ScriptBoard.playerVertex). A lookup while another participant joining resized the map
+  // of vertices could miss one that is there.
+  def getPlayer(id) {
+    synchronized (structureLock) {
+      return getVertex(id)
+    }
+  }
+
   def removePlayer(id) {
     synchronized (structureLock) {
       if (hasVertex(id)) {

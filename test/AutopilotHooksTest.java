@@ -52,7 +52,7 @@ public class AutopilotHooksTest extends BaseTest {
     /** The experiment's own setup, as a step would do it. */
     private void scriptSetsItsOwnAutopilot() throws Exception {
         eval("autopilot.waitingRoom([minPlayers: 9, maxPlayers: 20, waitSeconds: 1, countdownSeconds: 2,\n"
-            + "  waitingText: { here, min, max -> 'custom ' + here },\n"
+            + "  departureGraceSeconds: 4, waitingText: { here, min, max -> 'custom ' + here },\n"
             + "  onStart: { players -> }, onCancel: { players -> }])\n"
             + "autopilot.replaceDisconnected([afterSeconds: 99, returnToHuman: true, behavior: { p -> }]); null");
     }
@@ -72,6 +72,7 @@ public class AutopilotHooksTest extends BaseTest {
         assertEquals(true, eval("autopilot.room.onStart != null && autopilot.room.onCancel != null"));
         assertEquals(true, eval("autopilot.room.customText"));
         assertEquals("custom 0", eval("autopilot.room.waitingText(0, 3, 5)"));
+        assertEquals("the console has no setting for it", 4, eval("autopilot.room.departureGraceSeconds"));
 
         assertEquals(12, eval("autopilot.replace.afterSeconds"));
         assertEquals(false, eval("autopilot.replace.returnToHuman"));
@@ -96,6 +97,7 @@ public class AutopilotHooksTest extends BaseTest {
         assertNull("no upper limit", eval("autopilot.room.maxPlayers"));
         assertNull("never gives up", eval("autopilot.room.maxWaitSeconds"));
         assertEquals(false, eval("autopilot.room.customText"));
+        assertEquals(15, eval("autopilot.room.departureGraceSeconds"));
         assertTrue(eval("autopilot.room.waitingText(1, 3, null)").toString().contains("Waiting for other participants"));
         assertEquals(12, eval("autopilot.replace.afterSeconds"));
         assertNull(eval("autopilot.replace.behavior"));
@@ -142,6 +144,20 @@ public class AutopilotHooksTest extends BaseTest {
 
         AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
         assertEquals(3, eval("autopilot.room.minPlayers"));
+    }
+
+    @Test
+    public void someoneAlreadyWaitingGetsTheConsolesGiveUp() throws Exception {
+        // The steps' own room never gives up, and someone came in before the console's settings
+        // (which do give up) were applied: the session gives up all the same.
+        eval("autopilot.waitingRoom([minPlayers: 5]); null");
+        eval("def v = g.addPlayer('p1'); v._system.connected = true; autopilot.onConnection('p1', true); null");
+        assertEquals(true, eval("autopilot.firstArrivalAt != null && autopilot.giveUpTimer == null"));
+
+        saved(true);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        assertEquals(300, eval("autopilot.room.maxWaitSeconds"));
+        assertEquals(true, eval("autopilot.giveUpTimer != null"));
     }
 
     @Test

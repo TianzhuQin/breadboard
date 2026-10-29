@@ -48,7 +48,7 @@
       <div v-else class="pt__paused">
         <component :is="paused === 'focus' ? Maximize2 : ExternalLink" :size="18" aria-hidden="true" />
         <p>{{ paused === 'focus' ? 'Shown full size' : 'Open in another tab' }}</p>
-        <p class="pt__paused-why">One page per player at a time, or the two would keep taking the connection from each other.</p>
+        <p class="pt__paused-why">One page per player at a time: the newer one would take the connection from the other.</p>
         <BButton v-if="paused === 'tab'" size="sm" @click="emit('resume')">Show here again</BButton>
       </div>
     </div>

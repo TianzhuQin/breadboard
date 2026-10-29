@@ -43,9 +43,11 @@ public final class AutopilotHooks {
   }
 
   /**
-   * Call {@code autopilot.waitingRoom([...])} and {@code autopilot.replaceDisconnected([...])} with
+   * Call {@code autopilot.replaceWaitingRoom([...])} and {@code autopilot.replaceDisconnected([...])} with
    * the saved values. What the console can't set is kept from the experiment's own call, if it made
-   * one: the onStart / onCancel callbacks, a custom waiting text and the AI behavior.
+   * one: the onStart / onCancel callbacks, a custom waiting text, departureGraceSeconds and the AI
+   * behavior. People already waiting (who came while the experiment's own room was set up) get the
+   * new room's timers: replaceWaitingRoom times them again.
    */
   static void apply(ScriptEngine engine, AutopilotSettings settings) {
     Object bound = engine.get("autopilot");
@@ -55,7 +57,7 @@ public final class AutopilotHooks {
     }
     GroovyObject autopilot = (GroovyObject) bound;
     if (settings.waitingRoomEnabled) {
-      autopilot.invokeMethod("waitingRoom", new Object[]{waitingRoomOptions(settings, autopilot.getProperty("room"))});
+      autopilot.invokeMethod("replaceWaitingRoom", new Object[]{waitingRoomOptions(settings, autopilot.getProperty("room"))});
     }
     if (settings.replaceEnabled) {
       autopilot.invokeMethod("replaceDisconnected", new Object[]{replaceOptions(settings, autopilot.getProperty("replace"))});
@@ -74,6 +76,8 @@ public final class AutopilotHooks {
       Map<?, ?> room = (Map<?, ?>) scriptRoom;
       options.put("onStart", room.get("onStart"));
       options.put("onCancel", room.get("onCancel"));
+      // (the console has no setting for how long a departure takes to count)
+      options.put("departureGraceSeconds", room.get("departureGraceSeconds"));
       // Only a text the experiment chose itself (null included: "keep the experiment's own text").
       if (Boolean.TRUE.equals(room.get("customText"))) {
         options.put("waitingText", room.get("waitingText"));

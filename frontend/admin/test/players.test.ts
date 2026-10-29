@@ -10,6 +10,7 @@ import PlayerDetails from '../src/pages/players/PlayerDetails.vue'
 import PropertyRow from '../src/pages/players/PropertyRow.vue'
 import TiePicker from '../src/pages/players/TiePicker.vue'
 import type { GraphNode } from '../src/lib/graph'
+import { statusOf } from '../src/network/players'
 
 const tick = () => new Promise(r => setTimeout(r, 30))
 const node = (id: string, data: Record<string, any> = {}): GraphNode => ({ id, data })
@@ -50,6 +51,17 @@ describe('players table', () => {
     expect(sortNodes(people, { key: 'score', dir: -1 }, degree).map(n => n.id)).toEqual(['p10', 'p1', 'p2', '_1'])
     expect(sortNodes(people, { key: '@ties', dir: -1 }, degree).map(n => n.id)).toEqual(['p1', 'p10', 'p2', '_1'])
     expect(sortNodes(people, { key: '@choice', dir: 1 }, degree)[0].id).toBe('p1')
+  })
+
+  it('says when a researcher\'s preview, not their own page, has the seat', () => {
+    expect(statusOf(node('p1', { _system: { connected: true } }))).toBe('Connected')
+    expect(statusOf(node('p1', { _system: { connected: true, preview: true } }))).toBe('Preview connected')
+    expect(statusOf(node('p1', { _system: { connected: false } }))).toBe('Disconnected')
+    // their page went while a preview watched it: the preview stands in, and they count as away
+    expect(statusOf(node('p1', { _system: { connected: false, preview: true } }))).toBe('Away: preview standing in')
+    expect(quickMatch(node('p1', { _system: { connected: false, preview: true } }), 'disconnected')).toBe(true)
+    // still a connected seat for the quick filter
+    expect(quickMatch(node('p1', { _system: { connected: true, preview: true } }), 'connected')).toBe(true)
   })
 
   it('has quick filters for people, AI, disconnected and waiting', () => {
@@ -241,6 +253,31 @@ describe('PlayerDetails', () => {
     __receive({ action: 'nodePropertyChanged', id: 'p1', key: 'mood', value: 'happy' })
     await tick()
     expect(w.find('.pd__props').text()).toContain('mood')
+    w.unmount()
+  })
+
+  it('says whether their own page is connected, or a preview holds their seat', async () => {
+    const w = mount(PlayerDetails, { props: { id: 'p1' } })
+    const previewButton = () => w.findAll('.pd__actions a, .pd__actions button').find(b => b.text().includes('Preview their screen'))!
+    expect(w.find('.pd__badges').text()).toContain('Connected')
+    expect(previewButton().attributes('title')).toMatch(/read-only: their own page is connected/)
+    __receive({ action: 'nodePropertyChanged', id: 'p1', key: '_system', value: { connected: true, preview: true } })
+    await tick()
+    expect(w.find('.pd__badges').text()).toContain('Preview connected')
+    expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs.')
+    // their page went while the preview watched it: it stands in, and they count as away
+    __receive({ action: 'nodePropertyChanged', id: 'p1', key: '_system', value: { connected: false, preview: true } })
+    await tick()
+    expect(w.find('.pd__badges').text()).toContain('Away: preview standing in')
+    expect(previewButton().attributes('title')).toBe('Opens their page on the Preview page. Choices made in the preview count as theirs.')
+    w.unmount()
+  })
+
+  it('says a preview of a computer player only watches what the computer does', async () => {
+    const w = mount(PlayerDetails, { props: { id: '_1' } })
+    const previewButton = w.findAll('.pd__actions a, .pd__actions button').find(b => b.text().includes('Preview their screen'))!
+    expect(w.find('.pd__badges').text()).toContain('AI player')
+    expect(previewButton.attributes('title')).toBe('Opens its page on the Preview page, read-only: the computer plays this seat, and goes on playing.')
     w.unmount()
   })
 

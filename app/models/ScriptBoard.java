@@ -1,6 +1,8 @@
 package models;
 
 import akka.actor.*;
+import com.avaje.ebean.Ebean;
+import com.avaje.ebean.SqlRow;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -8,6 +10,8 @@ import com.tinkerpop.blueprints.Edge;
 import com.tinkerpop.blueprints.Graph;
 import com.tinkerpop.blueprints.Vertex;
 import com.tinkerpop.gremlin.groovy.GremlinGroovyPipeline;
+import groovy.lang.GroovyObject;
+import groovy.lang.MissingMethodException;
 import groovy.util.ObservableMap;
 import groovy.lang.Closure;
 import org.apache.commons.io.output.ByteArrayOutputStream;
@@ -15,10 +19,12 @@ import org.apache.commons.lang3.StringUtils;
 import org.codehaus.groovy.control.CompilationFailedException;
 import play.Logger;
 import play.Play;
+import play.libs.Akka;
 import play.libs.F.Callback;
 import play.libs.F.Callback0;
 import play.libs.Json;
 import play.mvc.WebSocket;
+import scala.concurrent.duration.Duration;
 
 import javax.script.*;
 import java.beans.PropertyChangeEvent;
@@ -27,6 +33,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ScriptBoard extends UntypedActor {
   private static ObjectMapper mapper = new ObjectMapper();
@@ -44,6 +52,15 @@ public class ScriptBoard extends UntypedActor {
 
   private static Random rand = new Random();
   private static final Map<String, Client> clients = new java.util.concurrent.ConcurrentHashMap<>();
+  // A page that pings (pages do every few seconds from 3.1 on) and then sends nothing for this long has
+  // lost its connection, though its socket never closed (see closeSilentPages). Checked this often.
+  static volatile long silenceLimitMs = 30000L;
+  private static final long SILENCE_CHECK_SECONDS = 5L;
+  // When a page was heard from (ms); only tests set another clock.
+  static volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
+  private static final AtomicBoolean silenceWatched = new AtomicBoolean();
+  // Pages given their final screen as they connected, whose sockets are still open (see finalScreen).
+  private static final Set<Client.Connection> endedPages = java.util.concurrent.ConcurrentHashMap.newKeySet();
   // Final screens of the participants of the last few sessions, by instance id and client id, for
   // pages that reconnect after their session has ended (see addClient).
   private static final int ENDED_SESSIONS_KEPT = 10;
@@ -300,9 +317,13 @@ public class ScriptBoard extends UntypedActor {
       }
     }
     for (Client client : ended) {
-      client.lastFrame = frame;
+      // (someone the game started without keeps that screen: it says what they should do)
+      if (!client.leftOut) {
+        client.lastFrame = frame;
+      }
       try {
-        client.out.write(frame);
+        // (the previews watching them too)
+        client.write(frame);
         client.disconnect();
       } catch (Exception e) {
         Logger.debug("Could not tell " + client.id + " that the session stopped: " + e);
@@ -317,9 +338,83 @@ public class ScriptBoard extends UntypedActor {
 
   private static boolean hasPlayer(String clientId) {
     try {
-      Object g = engine == null ? null : engine.get("g");
-      return g instanceof Graph && clientId != null && ((Graph) g).getVertex(clientId) != null;
+      return engine != null && playerVertex(engine.get("g"), clientId) != null;
     } catch (Exception e) {
+      return false;
+    }
+  }
+
+  /**
+   * The player's vertex in this graph, or null. The engine's graph is asked under the lock it holds
+   * while players are added and removed (getPlayer in groovy/graph.groovy): TinkerGraph keeps its
+   * vertices in a plain HashMap, and a lookup while another participant joining resized it could
+   * miss a vertex that is there. Other graphs (tests' own) are asked directly.
+   */
+  static Vertex playerVertex(Object g, String clientId) {
+    if (clientId == null) {
+      return null;
+    }
+    if (g instanceof GroovyObject) {
+      try {
+        Object v = ((GroovyObject) g).invokeMethod("getPlayer", clientId);
+        return v instanceof Vertex ? (Vertex) v : null;
+      } catch (MissingMethodException noGetPlayer) {
+        // (a graph of another class: asked directly below)
+      }
+    }
+    return g instanceof Graph ? ((Graph) g).getVertex(clientId) : null;
+  }
+
+  /** What someone gets whose session started while they were away, without them (see addClient). */
+  static ObjectNode missedStartScreen(boolean prolific) {
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "missedStart");
+    player.put("text", "<h3>The session started without you</h3><p>The session started while your connection was "
+        + "lost, so it went ahead without you, and it can't take you in any more. "
+        + (prolific ? "Please return the study on Prolific. You can then close this page."
+            : "You can close this page. If you have any questions, please contact the researcher.") + "</p>");
+    return frame;
+  }
+
+  /**
+   * Whether a screen is the participant's own end, which a later notice must not replace: the
+   * experiment finished them (player.finished, without the server's "ended"), or gave them a completion
+   * code (_system.recruitment.completed). As the participant page tells them apart.
+   */
+  static boolean ownEnd(JsonNode frame) {
+    JsonNode player = frame == null ? null : frame.get("player");
+    if (player == null || !player.isObject() || player.hasNonNull("ended")) {
+      return false;
+    }
+    return player.path("finished").asBoolean(false)
+        || player.path("_system").path("recruitment").path("completed").asBoolean(false);
+  }
+
+  /**
+   * Whether this participant came through a Prolific link: their last screen says so
+   * (_system.recruitment), or the session recorded their entry (prolificEntry).
+   */
+  private static boolean fromProlific(Client client, Long instanceId) {
+    ObjectNode last = client.lastFrame;
+    if (last != null && "prolific".equals(last.path("player").path("_system").path("recruitment").path("source").asText())) {
+      return true;
+    }
+    if (instanceId == null) {
+      return false;
+    }
+    try {
+      SqlRow entries = Ebean.createSqlQuery("select count(*) as n from events e join event_data d on d.event_id = e.id"
+          + " where e.experiment_instance_id = :session and e.name = 'prolificEntry' and d.name = 'clientId' and d.value = :client")
+          .setParameter("session", instanceId)
+          .setParameter("client", client.id)
+          .findUnique();
+      Integer n = entries == null ? null : entries.getInteger("n");
+      return n != null && n > 0;
+    } catch (RuntimeException e) {
+      Logger.warn("Could not tell whether " + client.id + " came from Prolific: " + e);
       return false;
     }
   }
@@ -1058,7 +1153,7 @@ public class ScriptBoard extends UntypedActor {
         // (a stopped session counts as over here: its participants keep the screen it ended with)
         boolean over = experimentInstance.status != null
             && (!experimentInstance.status.isRunnable() || experimentInstance.status == ExperimentInstance.Status.STOPPED);
-        out.write(over ? endedSessionScreen(experimentInstance.id, clientId) : sessionNotRunningScreen());
+        finalScreen(in, out, over ? endedSessionScreen(experimentInstance.id, clientId) : sessionNotRunningScreen());
         return;
       }
 
@@ -1068,7 +1163,7 @@ public class ScriptBoard extends UntypedActor {
         // be running the next one, which this participant must not be pulled into. Give the page
         // back its last screen (a completion code, a "could not start" notice) instead.
         Logger.debug("addClient: instance " + experimentInstanceId + " is no longer running");
-        out.write(endedSessionScreen(experimentInstance.id, clientId));
+        finalScreen(in, out, endedSessionScreen(experimentInstance.id, clientId));
         return;
       }
 
@@ -1077,7 +1172,7 @@ public class ScriptBoard extends UntypedActor {
         // has taken this one up since a restart). Its pages reconnect, and used to be put into
         // whatever game the engine was running.
         Logger.debug("addClient: instance " + experimentInstanceId + " is not the session the engine runs");
-        out.write(sessionNotRunningScreen());
+        finalScreen(in, out, sessionNotRunningScreen());
         return;
       }
 
@@ -1086,103 +1181,82 @@ public class ScriptBoard extends UntypedActor {
         // so instead of leaving the page connecting for ever. Someone whose player is in the game
         // (a participant whose page is gone, a researcher's preview of a computer player) goes on.
         Logger.debug("New client trying to join after game has already started.");
-        out.write(sessionStartedScreen());
+        finalScreen(in, out, sessionStartedScreen());
         return;
       }
 
-      final Client thisClient;
+      final Client.Connection connection = new Client.Connection(in, out, byResearcher);
+      // Someone this session has seen: their page reconnecting, another tab, or a preview of them.
+      boolean returning = client != null;
       if (client == null) {
-        // New client, let's create a new Client object
-        client = new Client(clientId, experimentInstance, in, out);
-        clients.put(clientId, client);
-      } else {
-        // Reconnecting (the controller already checked this request holds the seat's token):
-        // switch to the new socket and close the previous one, so an older tab can neither keep
-        // receiving updates nor keep sending choices for this participant.
-        ThrottledWebSocketOut previous = client.out;
-        client.setIn(in);
-        client.setOut(out);
-        if (previous != null && previous != out) {
-          try {
-            previous.close();
-          } catch (Exception ignored) {}
+        // New client, let's create a new Client object (another page of this id may come in at the
+        // same moment: two tabs opened at once)
+        Client created = new Client(clientId, experimentInstance);
+        client = clients.putIfAbsent(clientId, created);
+        if (client == null) {
+          client = created;
         }
       }
-      thisClient = client;
+      // The controller has checked that this request holds the seat's token, or is a researcher's
+      // preview. Client.connect says what becomes of this socket, and of the one before, which can
+      // no longer act for this participant.
+      Client.Arrival arrival = client.connect(connection);
+      final Client thisClient = client;
+      watchForSilence();
 
       in.onClose(new Callback0() {
         public void invoke() {
-          // Only the current socket counts; a replaced one closing is not a disconnect.
-          if (thisClient.in == in) {
-            setConnected(clientId, false);
-          }
+          socketClosed(thisClient, connection);
         }
       });
 
       in.onMessage(new Callback<JsonNode>() {
         public void invoke(JsonNode event) {
-          if (thisClient.in != in) {
-            return; // message from a socket that has since been replaced
-          }
-          try {
-            ObjectMapper mapper = new ObjectMapper();
-            // TODO: is event.toString() the correct method here?
-            Map<String, Object> jsonInput = mapper.readValue(event.toString(), Map.class);
-            Object actionValue = jsonInput.get("action");
-            String action = actionValue == null ? "" : actionValue.toString();
-            if (action.equals("LogIn")) {
-              // The browser used to report its own IP address, user agent, referer (full URL,
-              // including recruitment ids) and other headers here, which were stored with every
-              // login. They were unverified and mostly personal data, so only the id is kept.
-              if (eventTracker != null) {
-                LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
-                data.put("clientId", clientId);
-                if (byResearcher) {
-                  data.put("preview", "true");
-                }
-                eventTracker.track("clientLogIn", data);
-              }
-            } else if (action.equals("MakeChoice")) {
-              Object uidValue = jsonInput.get("choiceUID");
-              String choiceUID = uidValue == null ? null : uidValue.toString();
-              String params = (jsonInput.containsKey("params") && jsonInput.get("params") != null) ? jsonInput.get("params").toString() : null;
-              makeChoice(clientId, choiceUID, params, out);
-            } else if (action.equals("CustomEvent")) {
-              // TODO: Is is possible for this to be emitted before the event has been registered? 
-              //       I think it is and I think it will cause exceptions to be thrown...
-              eventBus.emit("CustomEvent", jsonInput, new HashMap<String, String>() {{
-                put("clientId", clientId);
-            }});
-            }
-          } catch (java.io.IOException ignored) {
-            Logger.debug("java.io.IOException");
-          } catch (Exception e) {
-            ScriptLoader.humanizeStackTrace(e);
-            Logger.error("Error handling client message", e);
-          }
+          participantMessage(thisClient, connection, clientId, byResearcher, event);
         }
       });
 
       if (graphChangedListener != null) {
+        // (also for a computer player's, whose page a preview watches: it is sent what changes)
         graphChangedListener.addClientListener(client);
+      }
+
+      if (arrival == Client.Arrival.WATCHING) {
+        // A researcher's preview of a player whose own page is connected, or of a computer player:
+        // it changes nothing (no connection is recorded, no player added), and only shows what that
+        // player's page would.
+        startWatching(thisClient, connection, experimentInstance);
+        return;
       }
 
       if (graphInterface != null) {
         if (!experimentInstance.hasStarted) {
           graphInterface.addPlayer(clientId);
         }
-        Graph wholeGraph = (Graph) engine.get("g");
-        Vertex clientVertex = wholeGraph.getVertex(clientId);
+        Vertex clientVertex = playerVertex(engine.get("g"), clientId);
+        if (clientVertex == null && client.leftOut) {
+          // The game started without them (see leftOutAtStart).
+          leftOutOfTheGame(client, connection);
+          return;
+        }
+        if (clientVertex == null && returning && Boolean.TRUE.equals(experimentInstance.hasStarted)) {
+          // Taken out of the network some other way (by a researcher, or by the experiment, maybe
+          // after giving them a completion code): their last screen again, as it was.
+          ObjectNode last = client.lastFrame;
+          if (last != null) {
+            connection.write(last);
+          }
+        }
         if (clientVertex == null && !experimentInstance.hasStarted) {
           // Taken out again as they joined (graph.groovy no longer loses a player added at the
           // same time as another): e.g. by the autopilot's launch, which leaves out whoever isn't
-          // connected yet, as they aren't until setConnected below. That stands; adding them back
-          // would undo it and run OnJoinStep for them twice.
+          // connected yet, as they aren't until recordConnection below. That stands; adding them
+          // back would undo it and run OnJoinStep for them twice.
           Logger.info("addClient: " + clientId + " was taken out of the network as they joined");
         }
         Recruitment.applyTo(clientVertex);
         // After addPlayer, so a new participant's vertex exists to record it on.
-        setConnected(clientId, true);
+        recordConnection(client, true);
         if (clientVertex != null) {
           if (graphChangedListener instanceof EventGraphChangedListener) {
             client.updateGraph(clientVertex);
@@ -1194,10 +1268,277 @@ public class ScriptBoard extends UntypedActor {
       ObjectNode jsonOutput = Json.newObject();
       jsonOutput.put("style", experimentInstance.experiment.getStyle());
       Logger.debug("addClient, " + clientId);
-      out.write(jsonOutput);
+      connection.writeAside(jsonOutput);
     } catch (NumberFormatException nfe) {
       Logger.debug("addClient: NumberFormatException");
     }
+  }
+
+  /**
+   * A message from a participant's page, or from a researcher's preview of it. Every message counts
+   * as hearing from that socket (see closeSilentPages), and {"action": "Ping"} is answered on it with
+   * {"pong": <the server's time in ms>}. What the page that holds the seat sends acts for the player.
+   * A preview that only watches can't act: its sign-in is recorded (as a preview's), the rest is
+   * ignored. So is everything from a socket that has been replaced.
+   */
+  @SuppressWarnings("unchecked")
+  private static void participantMessage(Client client, Client.Connection connection, final String clientId,
+                                         boolean byResearcher, JsonNode event) {
+    String action = actionOf(event);
+    if (heardFrom(connection, action)) {
+      return;
+    }
+    if (!client.holdsSeat(connection) && !(client.watches(connection) && "LogIn".equals(action))) {
+      return;
+    }
+    try {
+      ObjectMapper mapper = new ObjectMapper();
+      // TODO: is event.toString() the correct method here?
+      Map<String, Object> jsonInput = mapper.readValue(event.toString(), Map.class);
+      if (action.equals("LogIn")) {
+        // The browser used to report its own IP address, user agent, referer (full URL,
+        // including recruitment ids) and other headers here, which were stored with every
+        // login. They were unverified and mostly personal data, so only the id is kept.
+        if (eventTracker != null) {
+          LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+          data.put("clientId", clientId);
+          if (byResearcher) {
+            data.put("preview", "true");
+          }
+          eventTracker.track("clientLogIn", data);
+        }
+      } else if (action.equals("MakeChoice")) {
+        Object uidValue = jsonInput.get("choiceUID");
+        String choiceUID = uidValue == null ? null : uidValue.toString();
+        String params = (jsonInput.containsKey("params") && jsonInput.get("params") != null) ? jsonInput.get("params").toString() : null;
+        makeChoice(clientId, choiceUID, params, connection.out);
+      } else if (action.equals("CustomEvent")) {
+        // TODO: Is is possible for this to be emitted before the event has been registered?
+        //       I think it is and I think it will cause exceptions to be thrown...
+        eventBus.emit("CustomEvent", jsonInput, new HashMap<String, String>() {{
+          put("clientId", clientId);
+        }});
+      }
+    } catch (java.io.IOException ignored) {
+      Logger.debug("java.io.IOException");
+    } catch (Exception e) {
+      ScriptLoader.humanizeStackTrace(e);
+      Logger.error("Error handling client message", e);
+    }
+  }
+
+  // A message's "action", or "".
+  private static String actionOf(JsonNode event) {
+    JsonNode actionNode = event == null ? null : event.get("action");
+    return actionNode == null ? "" : actionNode.asText();
+  }
+
+  /**
+   * Something came from this page: it counts as hearing from it (see closeSilentPages), and
+   * {"action": "Ping"} is answered on it with {"pong": <the server's time in ms>}. True for a ping,
+   * which needs nothing more.
+   */
+  private static boolean heardFrom(Client.Connection connection, String action) {
+    boolean ping = "Ping".equals(action);
+    connection.heard(ping, clock.getAsLong());
+    if (ping) {
+      ObjectNode pong = Json.newObject();
+      pong.put("pong", System.currentTimeMillis());
+      connection.writeAside(pong);
+    }
+    return ping;
+  }
+
+  /**
+   * A page given its final screen as it connected: its session is over, isn't the one the engine
+   * runs, or has started without it. Nothing more comes for it, and its socket stays open, as before
+   * (a page from before 3.1 reconnects as soon as it closes). Its pings are answered, so the page's
+   * heartbeat finds a connection that works, and one that falls silent is closed (closeSilentPages);
+   * its closing drops it. Nobody used to listen: such a page (say, a thank-you screen left open when
+   * the autopilot opened the next session) pinged every 5 s for as long as it was open, unanswered,
+   * and its socket was never closed.
+   */
+  private static void finalScreen(WebSocket.In<JsonNode> in, ThrottledWebSocketOut out, JsonNode screen) {
+    final Client.Connection page = new Client.Connection(in, out, false);
+    endedPages.add(page);
+    in.onClose(new Callback0() {
+      public void invoke() {
+        page.markClosed();
+        endedPages.remove(page);
+      }
+    });
+    in.onMessage(new Callback<JsonNode>() {
+      public void invoke(JsonNode event) {
+        heardFrom(page, actionOf(event));
+      }
+    });
+    page.write(screen);
+    watchForSilence();
+  }
+
+  /**
+   * A researcher's preview of a player whose own page holds the seat, or of a computer player
+   * (Client.connect has told it that it only watches): it gets what the player's page shows now,
+   * their view (or their last screen) and the style, then every frame their page gets, for as long
+   * as it is open.
+   */
+  private static void startWatching(Client client, Client.Connection watcher, ExperimentInstance instance) {
+    Vertex v = engine == null ? null : playerVertex(engine.get("g"), client.id);
+    ObjectNode last = client.lastFrame;
+    if (v != null) {
+      client.showTo(watcher, v);
+    } else if (last != null) {
+      watcher.write(last);
+    }
+    ObjectNode style = Json.newObject();
+    style.put("style", instance.experiment.getStyle());
+    watcher.writeAside(style);
+  }
+
+  /**
+   * The autopilot's launch left this participant out of the game: they had been away too long when
+   * it started (groovy/autopilot.groovy). Their page used to keep showing the waiting room it
+   * remembered ("Please keep this page open") for good, and to keep reconnecting, even into the next
+   * session. Now their last screen is the one that says what happened and what to do, which their
+   * page gets whenever it comes back (leftOutOfTheGame), also once the engine has been rebuilt
+   * (rememberLastScreens), and the event missedStart is recorded. Someone the experiment had already
+   * given an end of their own (e.g. a completion code) keeps it.
+   */
+  public static void leftOutAtStart(String clientId) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    if (client == null || client.leftOut || ownEnd(client.lastFrame)) {
+      return;
+    }
+    Long instanceId = client.experimentInstance == null ? null : client.experimentInstance.id;
+    client.lastFrame = missedStartScreen(fromProlific(client, instanceId));
+    client.leftOut = true;
+    if (eventTracker != null && eventTracker.sessionLive()) {
+      LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+      data.put("clientId", clientId);
+      eventTracker.track("missedStart", data);
+    }
+  }
+
+  /**
+   * A page of someone the game started without (leftOutAtStart) connected: it is told so, and the
+   * socket is closed, as nothing more comes for them. A researcher's preview of them sees the same.
+   */
+  private static void leftOutOfTheGame(Client client, Client.Connection connection) {
+    ObjectNode screen = client.lastFrame;
+    if (screen != null) {
+      client.write(screen);
+    }
+    socketClosed(client, connection);
+    connection.close(null);
+  }
+
+  /**
+   * Record who is in this participant's seat (Client.presence): whether they are connected, and
+   * whether a researcher's preview holds the seat (player._system, see markConnection). The events
+   * clientConnected / clientDisconnected only when that has changed: their first page, their return
+   * after it closed or fell silent, or its going; two tabs swapping the seat used to be recorded as
+   * a connection every few seconds. A preview that takes a free seat counts as connected, and its
+   * events say preview = true (its coming, its going, and its handing the seat to the participant's
+   * own page). A preview that took the seat as their page went counts as nobody (Presence.AWAY).
+   * {@code tookSeat}: a socket has just taken the seat, maybe from another open one: their player is
+   * marked connected if it isn't (one added again since was left unmarked, so the autopilot didn't
+   * count them), and bb:connection is announced all the same, so the autopilot shows that page the
+   * waiting room's or countdown's seconds as they are now. Nothing for a computer player, whose seat
+   * the computer plays (a preview of it only watches).
+   */
+  static void recordConnection(Client client, boolean tookSeat) {
+    if (client.computer()) {
+      return;
+    }
+    synchronized (client.recordLock()) {
+      Client.Presence now = client.presence();
+      Client.Presence before = client.recordPresence(now);
+      boolean connected = now != Client.Presence.AWAY;
+      boolean wasConnected = before != null && before != Client.Presence.AWAY;
+      // Each part on its own, as in setConnected.
+      try {
+        markConnection(client.id, connected, client.previewHolds());
+      } finally {
+        try {
+          if (now != before && wasConnected) {
+            trackConnection(client.id, false, before == Client.Presence.PREVIEW);
+          }
+          if (now != before && connected) {
+            trackConnection(client.id, true, now == Client.Presence.PREVIEW);
+          }
+        } finally {
+          if (connected != wasConnected || (connected && tookSeat)) {
+            announceConnection(client.id, connected);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * A participant's socket closed, or was closed because it fell silent (closeSilentPages). Only the
+   * page that held the seat counts: a replaced socket or a watching preview going changes nothing.
+   * Nor does a socket of a session that has ended, whose participants are gone (the next session may
+   * have someone with the same id). When the participant's page goes, a researcher's preview watching
+   * them takes the seat (Client.seatAWatcher) and can act for them until they are back, but they have
+   * left all the same: the computer takes their seat after the usual wait, and the waiting room
+   * stops counting them, as for anyone who leaves.
+   */
+  static void socketClosed(Client client, Client.Connection connection) {
+    if (client.closed(connection) && clients.get(client.id) == client) {
+      client.seatAWatcher();
+      recordConnection(client, false);
+    }
+  }
+
+  /**
+   * Close the sockets that have gone quiet: pages that ping but have sent nothing for longer than
+   * silenceLimitMs. A connection that drops without closing (a phone out of range, a laptop put to
+   * sleep) used to look connected for good, so the computer never took that seat. Now the
+   * participant counts as gone, as when a socket closes, and the computer takes over after the
+   * usual wait. A preview that watches is just closed and dropped, and so is a page that got its
+   * final screen as it connected (finalScreen). Pages that never ping (from before 3.1) are left
+   * alone. {@code now}: the time to judge by.
+   */
+  static void closeSilentPages(long now) {
+    for (Client client : clients.values()) {
+      for (Client.Connection connection : client.connections()) {
+        if (connection.silent(now, silenceLimitMs)) {
+          Logger.info("Closing a socket of " + client.id + (connection.preview ? " (a preview)" : "")
+              + ": nothing heard from it for " + (now - connection.lastHeard()) / 1000 + " s");
+          socketClosed(client, connection);
+          connection.close(null);
+        }
+      }
+    }
+    for (Client.Connection page : endedPages) {
+      if (page.silent(now, silenceLimitMs)) {
+        Logger.debug("Closing the socket of a page at its final screen: nothing heard from it for "
+            + (now - page.lastHeard()) / 1000 + " s");
+        endedPages.remove(page);
+        page.close(null);
+      }
+    }
+  }
+
+  // closeSilentPages every few seconds, from the first participant on (not in tests, which call it).
+  private static void watchForSilence() {
+    if (Play.isTest() || !silenceWatched.compareAndSet(false, true)) {
+      return;
+    }
+    Akka.system().scheduler().schedule(
+        Duration.create(SILENCE_CHECK_SECONDS, TimeUnit.SECONDS),
+        Duration.create(SILENCE_CHECK_SECONDS, TimeUnit.SECONDS),
+        new Runnable() {
+          public void run() {
+            try {
+              closeSilentPages(System.currentTimeMillis());
+            } catch (Throwable t) {
+              Logger.error("Could not check whether participants' connections are still there", t);
+            }
+          }
+        },
+        Akka.system().dispatcher());
   }
 
   public void onReceive(Object message) throws Exception {
@@ -2567,47 +2908,93 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * Record whether a participant currently has an open socket: {@code player._system.connected}
-   * on the vertex (engine-internal, never sent to neighbors) and a clientConnected /
-   * clientDisconnected event in the log.
+   * on the vertex (engine-internal, never sent to neighbors), with {@code _system.disconnectedAt}
+   * (ms) while they are away, a clientConnected / clientDisconnected event in the log, and
+   * bb:connection for the scripts.
    */
   static void setConnected(String clientId, boolean connected) {
-    // Each part on its own: setting _system runs every graph listener (consoles, the player's and
-    // neighbours' pages), and one of them failing used to skip bb:connection, so the autopilot never
-    // learned that someone left and no AI took their seat.
+    // Each part on its own (as in recordConnection): setting _system runs every graph listener
+    // (consoles, the player's and neighbours' pages), and one of them failing used to skip
+    // bb:connection, so the autopilot never learned that someone left and no AI took their seat.
+    try {
+      markConnection(clientId, connected, false);
+    } finally {
+      try {
+        trackConnection(clientId, connected, false);
+      } finally {
+        announceConnection(clientId, connected);
+      }
+    }
+  }
+
+  /**
+   * The player's {@code _system}: connected, disconnectedAt while they are away, and preview while a
+   * researcher's preview holds the seat (as a player, or standing in for someone who left), so the
+   * console can tell it from the participant's own page. Written only where it differs.
+   */
+  private static void markConnection(String clientId, boolean connected, boolean previewHolds) {
     try {
       if (engine != null) {
-        Object g = engine.get("g");
-        if (g instanceof Graph) {
-          Vertex v = ((Graph) g).getVertex(clientId);
-          if (v != null) {
-            setSystemValue(v, "connected", connected);
+        Vertex v = playerVertex(engine.get("g"), clientId);
+        if (v != null) {
+          Map<String, Object> changes = connectionChanges(v, connected, previewHolds);
+          if (!changes.isEmpty()) {
+            setSystemValues(v, changes);
           }
         }
       }
     } catch (Exception e) {
       Logger.error("Could not record connection state for " + clientId, e);
-    } finally {
-      try {
-        // (not into a session that is over: people leaving its thank-you page aren't part of it)
-        if (eventTracker != null && eventTracker.sessionLive()) {
-          LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
-          data.put("clientId", clientId);
-          eventTracker.track(connected ? "clientConnected" : "clientDisconnected", data);
-        }
-      } catch (Exception e) {
-        Logger.error("Could not log the " + (connected ? "connection" : "disconnection") + " of " + clientId, e);
-      } finally {
-        // Scripts can react, e.g. groovy/autopilot.groovy hands a departed player to the AI.
-        try {
-          Map<String, Object> info = new HashMap<String, Object>();
-          info.put("clientId", clientId);
-          info.put("connected", connected);
-          eventBus.emit("bb:connection", info);
-        } catch (Exception e) {
-          Logger.error("Could not announce the connection change of " + clientId, e);
-        }
-      }
     }
+  }
+
+  /**
+   * The event clientConnected or clientDisconnected, with preview = true when a researcher's preview
+   * came or went, so the data can tell it from the participant's own page. Not into a session that is
+   * over (people leaving its thank-you page aren't part of it), nor for a computer player.
+   */
+  private static void trackConnection(String clientId, boolean connected, boolean preview) {
+    try {
+      if (eventTracker != null && eventTracker.sessionLive() && !Client.isComputer(clientId)) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("clientId", clientId);
+        if (preview) {
+          data.put("preview", "true");
+        }
+        eventTracker.track(connected ? "clientConnected" : "clientDisconnected", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not log the " + (connected ? "connection" : "disconnection") + " of " + clientId, e);
+    }
+  }
+
+  // bb:connection, so scripts can react: e.g. groovy/autopilot.groovy hands a departed player to the AI.
+  private static void announceConnection(String clientId, boolean connected) {
+    try {
+      Map<String, Object> info = new HashMap<String, Object>();
+      info.put("clientId", clientId);
+      info.put("connected", connected);
+      eventBus.emit("bb:connection", info);
+    } catch (Exception e) {
+      Logger.error("Could not announce the connection change of " + clientId, e);
+    }
+  }
+
+  // What changes in the player's _system: connected; since when they are away (disconnectedAt, set
+  // as they go: the autopilot's launch keeps the seat of someone gone only a moment); and preview,
+  // there only while a researcher's preview holds the seat.
+  private static Map<String, Object> connectionChanges(Vertex v, boolean connected, boolean preview) {
+    Object system = v.getProperty("_system");
+    Map<?, ?> now = system instanceof Map ? (Map<?, ?>) system : Collections.emptyMap();
+    Map<String, Object> changes = new HashMap<String, Object>();
+    if (!Boolean.valueOf(connected).equals(now.get("connected"))) {
+      changes.put("connected", connected);
+      changes.put("disconnectedAt", connected ? null : System.currentTimeMillis());
+    }
+    if (preview != Boolean.TRUE.equals(now.get("preview"))) {
+      changes.put("preview", preview ? Boolean.TRUE : null);
+    }
+    return changes;
   }
 
   /**
@@ -2619,12 +3006,23 @@ public class ScriptBoard extends UntypedActor {
    * autopilot's timers write into it from other threads, and swapping in a copy could drop the
    * write that lands in between (e.g. this very connected flag, which the autopilot counts).
    */
-  @SuppressWarnings("unchecked")
   static void setSystemValue(Vertex v, String key, Object value) {
+    setSystemValues(v, Collections.singletonMap(key, value));
+  }
+
+  /** setSystemValue for several keys at once, announced once; a null value removes its key. */
+  @SuppressWarnings("unchecked")
+  static void setSystemValues(Vertex v, Map<String, Object> values) {
     Object system = v.getProperty("_system");
     if (system instanceof Map) {
       Map<String, Object> systemMap = (Map<String, Object>) system;
-      systemMap.put(key, value);
+      for (Map.Entry<String, Object> value : values.entrySet()) {
+        if (value.getValue() == null) {
+          systemMap.remove(value.getKey());
+        } else {
+          systemMap.put(value.getKey(), value.getValue());
+        }
+      }
       v.setProperty("_system", systemMap);
     }
   }
