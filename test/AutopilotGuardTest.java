@@ -394,6 +394,48 @@ public class AutopilotGuardTest extends BaseTest {
     }
 
     @Test
+    public void theEndReachesTheResearchersPreviewsOfAComputerPlayerAndOfAParticipant() throws Throwable {
+        final User researcher = user("previews");
+        final Experiment experiment = createExperiment("Watched as it runs too long");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { g.addAI(a, 1, { p -> }) }\n"
+            + "initStep.done = { roundStep.start() }\n"
+            + "roundStep = stepFactory.createStep('RoundStep')\n"
+            + "roundStep.run = { g.V.filter { !it.id.startsWith('_') }.each { p -> a.add(p, [name: 'Done', result: { }]) } }\n"
+            + "roundStep.done = { roundStep.finish() }");
+        own(researcher, experiment);
+        ObjectNode s = settings(experiment, 1, 1, 1);
+        s.put("continuous", false);   // (no next session as the test ends)
+        assertEquals(OK, status(post(researcher, s)));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        Page participant = joins(experiment, session, "pv-1");
+        await("the start", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted)
+            && ((Number) engineValue("a.actions.size()")).intValue() == 1 && engineValue("g.getVertex('_1')") != null);
+        // The researcher watches the computer player (its Client never takes a seat) and the participant.
+        Page computer = previews(experiment, session, "_1");
+        Page watcher = previews(experiment, session, "pv-1");
+        assertTrue(computer.frames.get(0).path("bbWatching").asBoolean());
+        assertTrue(watcher.frames.get(0).path("bbWatching").asBoolean());
+
+        ahead = 61000L;
+        watchdog();
+        await("the session to be finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        // Every page is told and closed: the computer player's preview (it used to be left open with a
+        // frozen view, as its Client has no seat), and the participant's, which watches too.
+        for (Page page : new Page[]{participant, watcher, computer}) {
+            assertEquals(page.frames.toString(), "outOfTime", page.lastPlayer().get("player").get("ended").asText());
+            assertTrue(page.closed);
+        }
+    }
+
+    /** A researcher's preview of a player (a signed-in researcher's socket, as ClientController makes it). */
+    private static Page previews(Experiment experiment, ExperimentInstance session, String id) throws Exception {
+        Page page = new Page();
+        ScriptBoard.addClient(experiment.id.toString(), session.id.toString(), id, page.in, page.out, true);
+        return page;
+    }
+
+    @Test
     public void threeSessionsInARowThatRunTooLongPauseItAndAGameThatEndsStartsTheCountAgain() throws Exception {
         final User researcher = user("inarow");
         final Experiment experiment = createExperiment("Never ends, mostly");
@@ -952,7 +994,7 @@ public class AutopilotGuardTest extends BaseTest {
         // A round the computer finishes at once for whoever it plays; the game ends after it.
         createStep(experiment, "InitStep", "picks = 0\n"
             + "picksAtOnce = { p -> a.ai.pickLater(p, 50) { a.ai.chooseFor(p, p.choices[0]) } }\n"
-            + "autopilot.replaceDisconnected([afterSeconds: 0.2, behavior: picksAtOnce])\n"
+            + "autopilot.replaceDisconnected([afterSeconds: 30, behavior: picksAtOnce])\n"
             + "initStep = stepFactory.createStep('InitStep')\n"
             + "initStep.run = { }\n"
             + "initStep.done = { roundStep.start() }\n"
@@ -969,12 +1011,16 @@ public class AutopilotGuardTest extends BaseTest {
         tab.send("RunGame");
         await("the round", () -> ((Number) engineValue("a.actions.size()")).intValue() == 2);
 
+        // The first page goes just before the stop: its seat's takeover is due after it. (Its page
+        // going afterwards would change nothing: the session's participants are gone by then.)
+        first.socketClosed();
+        assertEquals(Boolean.TRUE, engineValue("autopilot.takeoverTimers.containsKey('stop-1')"));
         tab.send("StopGame", "id", session.id);
         await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
-        // The first page's socket closes afterwards: its seat's takeover is due 0.2 s later. A script
-        // then hands the other seat to the computer.
-        first.socketClosed();
-        engine().eval("a.ai.add(g.getVertex('stop-2'), picksAtOnce); null");
+        // The takeover comes 0.2 s after the stop (brought forward from its 30 s, so that it surely
+        // comes after). A script then hands the other seat to the computer.
+        engine().eval("autopilot.replace.afterSeconds = 0.2; autopilot.handleDeparture('stop-1', false); "
+            + "a.ai.add(g.getVertex('stop-2'), picksAtOnce); null");
         Thread.sleep(1500);
         assertEquals("the computer made no pick", 0, engineValue("picks"));
         assertEquals(Integer.valueOf(1), engineValue("g.getVertex('stop-1').ai"));

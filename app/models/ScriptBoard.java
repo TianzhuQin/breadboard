@@ -295,13 +295,14 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * The researcher stopped this session: its participants' pages say so (instead of a game that
-   * no longer answers), and keep saying so if they reconnect. Their sockets are closed, so the
-   * engine, which still holds the game, sends them nothing more.
+   * no longer answers), and keep saying so if they reconnect. See endParticipants(Long, ObjectNode).
    */
   static void endParticipants(Long instanceId) {
-    if (instanceId == null) {
-      return;
-    }
+    endParticipants(instanceId, stoppedScreen());
+  }
+
+  /** What the participants of a session a researcher stopped see. */
+  static ObjectNode stoppedScreen() {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
@@ -310,30 +311,7 @@ public class ScriptBoard extends UntypedActor {
     player.put("text", "<h3>This session has been stopped</h3><p>The researcher stopped this session. "
         + "If they start it again, open the link you were given once more. Otherwise, thank you for "
         + "taking part: you can close this page.</p>");
-    List<Client> ended = new ArrayList<>();
-    for (Client client : clients.values()) {
-      if (client.experimentInstance != null && instanceId.equals(client.experimentInstance.id)) {
-        ended.add(client);
-      }
-    }
-    for (Client client : ended) {
-      // (someone the game started without keeps that screen: it says what they should do)
-      if (!client.leftOut) {
-        client.lastFrame = frame;
-      }
-      try {
-        // (the previews watching them too)
-        client.write(frame);
-        client.disconnect();
-      } catch (Exception e) {
-        Logger.debug("Could not tell " + client.id + " that the session stopped: " + e);
-      }
-      clients.remove(client.id, client);
-      if (graphChangedListener != null) {
-        graphChangedListener.removeClientListener(client);
-      }
-    }
-    rememberLastScreens(ended);
+    return frame;
   }
 
   private static boolean hasPlayer(String clientId) {
@@ -3872,7 +3850,7 @@ public class ScriptBoard extends UntypedActor {
       }
       for (Object action : ((Map<?, ?>) actions).values()) {
         Object player = property(action, "player");
-        if (!(player instanceof Vertex) || ((Graph) g).getVertex(((Vertex) player).getId()) != null) {
+        if (!(player instanceof Vertex) || playerVertex(g, String.valueOf(((Vertex) player).getId())) != null) {
           return true;
         }
       }
@@ -3943,7 +3921,7 @@ public class ScriptBoard extends UntypedActor {
     return false;
   }
 
-  /** Whether a script waits for an input of a player in the game (not a computer player's: "_..."). */
+  /** Whether a script waits for an input of a player in the game (not a computer player's: Client.isComputer). */
   private static boolean listensToPlayers(ScriptEngine running) throws Exception {
     Object g = running.get("g");
     if (BUS_EVENTS == null || !(g instanceof Graph)) {
@@ -3952,7 +3930,7 @@ public class ScriptBoard extends UntypedActor {
     Map<?, ?> listened = (Map<?, ?>) BUS_EVENTS.get(eventBus);
     for (Vertex v : ((Graph) g).getVertices()) {
       String id = String.valueOf(v.getId());
-      if (id.startsWith("_")) {
+      if (Client.isComputer(id)) {
         continue;
       }
       String prefix = PLAYER_EVENT + id + "-";
@@ -4025,10 +4003,15 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
-   * As endParticipants, with {@code frame} as their end screen. Someone whose screen is their own end
-   * keeps it, also when they come back: the experiment finished them, or gave them a completion code
+   * The session is over for its participants (a researcher's Stop, the server's stop, the autopilot's
+   * guards, a failure that ends it), with {@code frame} as their end screen: their pages say so
+   * instead of a game that no longer answers, and keep saying so if they reconnect. Their sockets
+   * are closed, the previews watching them too (which get the end first), so the engine, which may
+   * still hold the game, sends them nothing more. Someone whose screen is their own end keeps it,
+   * also when they come back: the experiment finished them, or gave them a completion code
    * (_system.recruitment). Their page is sent the end as "sessionOver", which it shows only when it
-   * has no end of its own on the screen.
+   * has no end of its own on the screen. Someone the game started without (leftOutAtStart) keeps
+   * that screen as their last: it says what they should do.
    */
   static void endParticipants(Long instanceId, ObjectNode frame) {
     if (instanceId == null) {
@@ -4042,8 +4025,8 @@ public class ScriptBoard extends UntypedActor {
     }
     for (Client client : ended) {
       Vertex completed = completedPlayer(client.id);
-      boolean keep = completed != null || showsOwnEnd(client.lastFrame);
-      if (!keep) {
+      boolean keep = completed != null || ownEnd(client.lastFrame);
+      if (!keep && !client.leftOut) {
         client.lastFrame = frame;
       }
       try {
@@ -4057,14 +4040,17 @@ public class ScriptBoard extends UntypedActor {
           // (pages from before 3.1 ignore "sessionOver" and keep their screen too).
           ObjectNode over = Json.newObject();
           over.put("sessionOver", frame);
-          client.out.write(over);
+          client.write(over);
         } else {
-          client.out.write(frame);
+          // (to the page in the seat, if any, and to the previews watching: a computer player's
+          // seat has only those)
+          client.write(frame);
         }
-        client.disconnect();
       } catch (Exception e) {
         Logger.debug("Could not tell " + client.id + " that the session ended: " + e);
       }
+      // (whatever happened above: a socket left open would show a game that no longer answers)
+      client.disconnect();
       clients.remove(client.id, client);
       if (graphChangedListener != null) {
         graphChangedListener.removeClientListener(client);
@@ -4073,18 +4059,10 @@ public class ScriptBoard extends UntypedActor {
     rememberLastScreens(ended);
   }
 
-  /** Whether a screen is the participant's own end (see endParticipants(Long, ObjectNode)). */
-  private static boolean showsOwnEnd(JsonNode frame) {
-    JsonNode player = frame == null ? null : frame.get("player");
-    return player != null && player.isObject() && !player.hasNonNull("ended")
-        && (player.path("finished").asBoolean(false) || player.path("_system").path("recruitment").path("completed").asBoolean(false));
-  }
-
   /** The participant's vertex when the experiment gave them a completion code (_system.recruitment); else null. */
   private static Vertex completedPlayer(String clientId) {
     try {
-      Object g = engine == null ? null : engine.get("g");
-      Vertex v = g instanceof Graph && clientId != null ? ((Graph) g).getVertex(clientId) : null;
+      Vertex v = engine == null ? null : playerVertex(engine.get("g"), clientId);
       Object system = v == null ? null : v.getProperty("_system");
       Object recruitment = system instanceof Map ? ((Map<?, ?>) system).get("recruitment") : null;
       return recruitment instanceof Map && Boolean.TRUE.equals(((Map<?, ?>) recruitment).get("completed")) ? v : null;
