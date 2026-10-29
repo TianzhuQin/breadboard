@@ -1,0 +1,278 @@
+import com.fasterxml.jackson.databind.type.TypeFactory;
+import groovy.lang.GroovyClassLoader;
+import groovy.lang.GroovySystem;
+import groovy.lang.MetaClass;
+import models.EngineCleanup;
+import models.JsonSetup;
+import org.codehaus.groovy.reflection.ClassInfo;
+import org.codehaus.groovy.util.ManagedReference;
+import org.junit.Test;
+
+import javax.script.ScriptEngine;
+import java.lang.ref.Reference;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Set;
+
+import static org.junit.Assert.*;
+
+/**
+ * Each launch rebuilds the script engine, and every engine it replaced used to stay in memory for
+ * good, one per session, until the server ran out of memory: Groovy's global registry kept the
+ * metaclasses the scripts change on their own classes (BBTimer.metaClass.register = ...), and
+ * Jackson kept the classes it had written. Groovy's caches of those classes (their other
+ * metaclasses, their call sites) kept the engine too, while memory lasted. ScriptBoard hands the
+ * engine it replaces to EngineCleanup.release; these tests replace engines built the way ScriptBoard
+ * builds them (ScriptTestHarness), as a release does (no experimental scripts).
+ */
+public class EngineCleanupTest {
+
+    @Test
+    public void aReplacedEngineCanBeGarbageCollected() throws Exception {
+        JsonSetup.install(); // as at startup
+        // Groovy keeps a metaclass for Vertex's classes made when they are first used, with the
+        // closures events.groovy gave Vertex then: the JVM's first engines can stay for that. One
+        // played before the engine under test takes that place.
+        replaced(played(new ScriptTestHarness(false)));
+        WeakReference<ScriptEngine> old = new WeakReference<ScriptEngine>(replaced(played(new ScriptTestHarness(false))));
+        ScriptTestHarness next = played(new ScriptTestHarness(false));
+        try {
+            assertTrue("the replaced engine is still in memory", collected(old, 20000));
+        } finally {
+            next.close();
+        }
+    }
+
+    @Test
+    public void replacingEnginesDoesNotGrowGroovysChangedMetaclasses() throws Exception {
+        replaced(played(new ScriptTestHarness(false)));
+        int ofScripts = keptMetaClassesOfScripts();
+        int all = modifiedExpandos().size();
+        for (int i = 1; i <= 3; i++) {
+            ScriptTestHarness engine = played(new ScriptTestHarness(false));
+            assertFalse("the scripts change the metaclasses of their own classes",
+                keptMetaClassesUnder(scriptLoader(engine)).isEmpty());
+            replaced(engine);
+            assertEquals("engine " + i + ": no class of it keeps a changed metaclass", Collections.emptyList(),
+                keptMetaClassesUnder(scriptLoader(engine)));
+            assertEquals("engine " + i, ofScripts, keptMetaClassesOfScripts());
+            assertEquals("engine " + i, all, modifiedExpandos().size());
+        }
+    }
+
+    @Test
+    public void releasingEnginesDoesNotGrowGroovysRegistryList() throws Exception {
+        // Each changed metaclass removed through Groovy's registry (six or more per engine) left an
+        // entry that holds nothing in a list of the registry's, for good.
+        replaced(played(new ScriptTestHarness(false)));
+        int before = emptyRegistryEntries();
+        for (int i = 1; i <= 3; i++) {
+            replaced(played(new ScriptTestHarness(false)));
+        }
+        assertEquals("entries that hold nothing, after 3 more engines", before, emptyRegistryEntries());
+    }
+
+    @Test
+    public void onlyTheReplacedEnginesClassesLoseTheirMetaclasses() throws Exception {
+        ScriptTestHarness other = new ScriptTestHarness(false);
+        try {
+            ScriptTestHarness engine = new ScriptTestHarness(false);
+            replaced(engine);
+            assertEquals(Collections.emptyList(), keptMetaClassesUnder(scriptLoader(engine)));
+            assertFalse("the other engine's classes keep theirs", keptMetaClassesUnder(scriptLoader(other)).isEmpty());
+            // The other engine still works: a BBTimer registers itself through its metaclass.
+            assertEquals(1, other.eval("def before = timers.timers.size(); new BBTimer(); timers.timers.size() - before"));
+        } finally {
+            other.close();
+        }
+    }
+
+    @Test
+    public void jacksonForgetsTheReplacedEnginesClasses() throws Exception {
+        JsonSetup.install();
+        ScriptTestHarness engine = played(new ScriptTestHarness(false));
+        ClassLoader scripts = scriptLoader(engine);
+        assertTrue("the mapper keeps the classes it wrote", reachesClassUnder(playMapper(), scripts));
+        assertTrue("so does the type factory", reachesClassUnder(TypeFactory.defaultInstance(), scripts));
+        replaced(engine);
+        assertFalse("the mapper still holds a class of the replaced engine", reachesClassUnder(playMapper(), scripts));
+        assertFalse("the type factory still holds a class of the replaced engine",
+            reachesClassUnder(TypeFactory.defaultInstance(), scripts));
+    }
+
+    // ---- helpers ------------------------------------------------------------------------------------
+
+    /**
+     * Uses the engine as a session does: players and ties, their _system, timers, a computer player,
+     * JSON, and an experiment's step that changes the metaclass of a class of its own, edited and
+     * run again (which defines its classes anew).
+     */
+    private static ScriptTestHarness played(ScriptTestHarness engine) throws Exception {
+        for (String greeting : new String[]{"hello", "hello again"}) {
+            engine.eval("class Greeter { }; Greeter.metaClass.greet = { -> '" + greeting + "' };"
+                + "assert new Greeter().greet() == '" + greeting + "'; null");
+        }
+        engine.eval("class Note { String text = 'an object of an experiment\\'s own class' }; null");
+        engine.eval("def p = g.addPlayer('p1'); def q = g.addPlayer('p2'); g.addEdge(p, q, 'connected');"
+            + "p._system.connected = true; p.text = \"${p.id} joined\".toString();"
+            + "new SharedTimer(time: 60, player: p); timers.newTimer().runAfter(60000) { };"
+            + "a.ai.add(q); a.add(q, [name: 'Go', result: { }]);"
+            + "p.on('ping') { v, data -> };"
+            + "p.note = new Note(); play.libs.Json.toJson(p._system); play.libs.Json.toJson(p.note); null");
+        return engine;
+    }
+
+    /** What ScriptBoard does with the engine it replaces: its timers cancelled, then released. */
+    private static ScriptEngine replaced(ScriptTestHarness engine) {
+        engine.close();
+        EngineCleanup.release(engine.engine);
+        return engine.engine;
+    }
+
+    /** Collects garbage until {@code ref} is cleared, for at most {@code timeoutMs}. */
+    static boolean collected(Reference<?> ref, long timeoutMs) throws InterruptedException {
+        long until = System.currentTimeMillis() + timeoutMs;
+        while (ref.get() != null && System.currentTimeMillis() < until) {
+            System.gc();
+            // A Timer is let go of through a finalizer, and a cancelled one's thread ends on its own.
+            System.runFinalization();
+            Thread.sleep(50);
+        }
+        return ref.get() == null;
+    }
+
+    /** The loader the engine compiles its scripts with: each script's classes are loaded by a child of it. */
+    private static ClassLoader scriptLoader(ScriptTestHarness engine) {
+        return engine.get("timers").getClass().getClassLoader().getParent();
+    }
+
+    private static boolean loadedUnder(Class<?> c, ClassLoader loader) {
+        for (ClassLoader l = c.getClassLoader(); l != null; l = l.getParent()) {
+            if (l == loader) return true;
+        }
+        return false;
+    }
+
+    /** The classes loaded under {@code loader} whose changed metaclass Groovy keeps (modifiedExpandos). */
+    private static List<Class<?>> keptMetaClassesUnder(ClassLoader loader) throws Exception {
+        List<Class<?>> classes = new ArrayList<Class<?>>();
+        for (Class<?> c : keptMetaClasses()) {
+            if (loadedUnder(c, loader)) classes.add(c);
+        }
+        return classes;
+    }
+
+    /** How many of the changed metaclasses Groovy keeps belong to classes a script defined. */
+    static int keptMetaClassesOfScripts() throws Exception {
+        int n = 0;
+        for (Class<?> c : keptMetaClasses()) {
+            if (c.getClassLoader() instanceof GroovyClassLoader.InnerLoader) n++;
+        }
+        return n;
+    }
+
+    private static List<Class<?>> keptMetaClasses() throws Exception {
+        List<Class<?>> classes = new ArrayList<Class<?>>();
+        for (Object info : new ArrayList<Object>(modifiedExpandos())) {
+            MetaClass mc = ((ClassInfo) info).getStrongMetaClass();
+            if (mc != null) classes.add(mc.getTheClass());
+        }
+        return classes;
+    }
+
+    /**
+     * The entries of the registry's list of metaclasses (MetaClassRegistryImpl.metaClassInfo) that
+     * hold none and never will, so never leave it. (One whose metaclass was collected is queued to
+     * leave, and doesn't count.) Counted after collecting garbage, so that all those are queued:
+     * the least of a few counts, should one come between a collection and the queueing.
+     */
+    private static int emptyRegistryEntries() throws Exception {
+        Object registry = GroovySystem.getMetaClassRegistry();
+        Field list = registry.getClass().getDeclaredField("metaClassInfo");
+        list.setAccessible(true);
+        Object entries = list.get(registry);
+        Field head = entries.getClass().getDeclaredField("head");
+        head.setAccessible(true);
+        Field next = Class.forName("org.codehaus.groovy.util.ManagedLinkedList$Element").getDeclaredField("next");
+        next.setAccessible(true);
+        Field ref = ManagedReference.class.getDeclaredField("ref");
+        ref.setAccessible(true);
+        int least = Integer.MAX_VALUE;
+        for (int round = 0; round < 3; round++) {
+            System.gc();
+            Thread.sleep(100);
+            int n = 0;
+            synchronized (entries) { // as the registry adds to and reads the list
+                for (Object e = head.get(entries); e != null; e = next.get(e)) {
+                    Object r = ref.get(e);
+                    boolean queued = r instanceof Reference && ((Reference<?>) r).isEnqueued();
+                    if (((ManagedReference<?>) e).get() == null && !queued) n++;
+                }
+            }
+            least = Math.min(least, n);
+        }
+        return least;
+    }
+
+    /**
+     * Groovy's global set of the classes whose metaclass a script changed: it holds each metaclass,
+     * and so its class, for good (ClassInfo.modifiedExpandos).
+     */
+    private static Set<?> modifiedExpandos() throws Exception {
+        Field f = ClassInfo.class.getDeclaredField("modifiedExpandos");
+        f.setAccessible(true);
+        return (Set<?>) f.get(null);
+    }
+
+    /** The mapper Play's Json uses now. */
+    private static Object playMapper() throws Exception {
+        Field f = play.libs.Json.class.getDeclaredField("objectMapper");
+        f.setAccessible(true);
+        return f.get(null);
+    }
+
+    /**
+     * Whether a class loaded under {@code loader} (or an object of one) can be reached from {@code root}
+     * through fields, the way the garbage collector would find it: not through what weak and soft
+     * references point to, nor through Class objects and class loaders, which are only checked.
+     */
+    private static boolean reachesClassUnder(Object root, ClassLoader loader) throws Exception {
+        Set<Object> seen = Collections.newSetFromMap(new IdentityHashMap<Object, Boolean>());
+        Deque<Object> queue = new ArrayDeque<Object>();
+        queue.add(root);
+        while (!queue.isEmpty()) {
+            Object o = queue.poll();
+            if (!seen.add(o)) continue;
+            if (o instanceof Class) {
+                if (loadedUnder((Class<?>) o, loader)) return true;
+                continue;
+            }
+            if (o instanceof ClassLoader || o instanceof Thread) continue;
+            Class<?> type = o.getClass();
+            if (loadedUnder(type, loader)) return true;
+            if (type.isArray()) {
+                if (!type.getComponentType().isPrimitive()) {
+                    for (Object e : (Object[]) o) if (e != null) queue.add(e);
+                }
+                continue;
+            }
+            for (Class<?> c = type; c != null; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers()) || f.getType().isPrimitive()
+                        || (c == Reference.class && f.getName().equals("referent"))) continue;
+                    f.setAccessible(true);
+                    Object value = f.get(o);
+                    if (value != null) queue.add(value);
+                }
+            }
+        }
+        return false;
+    }
+}

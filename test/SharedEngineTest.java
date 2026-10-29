@@ -1,4 +1,9 @@
 import com.fasterxml.jackson.databind.JsonNode;
+import com.tinkerpop.blueprints.Edge;
+import com.tinkerpop.blueprints.Graph;
+import com.tinkerpop.blueprints.Vertex;
+import com.tinkerpop.blueprints.util.wrappers.event.EventGraph;
+import com.tinkerpop.blueprints.util.wrappers.event.listener.GraphChangedListener;
 import models.*;
 import org.junit.After;
 import org.junit.Test;
@@ -10,9 +15,11 @@ import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 
@@ -22,8 +29,9 @@ import static org.junit.Assert.*;
  * another experiment; a launch is refused when the page shows an experiment that is no longer
  * selected; every tab of the account learns of a new selection; a session the engine moves off is
  * marked stopped, and its participants are not put into the next game. Also: event times come
- * with UTC, the websocket password change follows the Settings page's rules, and deleting an
- * experiment switches off an autopilot that runs it.
+ * with UTC, the websocket password change follows the Settings page's rules, deleting an
+ * experiment switches off an autopilot that runs it, and someone taken out of the network as they
+ * join stays out.
  */
 public class SharedEngineTest extends BaseTest {
 
@@ -359,6 +367,64 @@ public class SharedEngineTest extends BaseTest {
         ScriptBoard.addClient(e, live.id.toString(), "3", new WebSocket.In<JsonNode>(), back.out);
         assertSame(back.out, client("3").out);
         assertTrue("the older socket is closed", real.closed);
+    }
+
+    // ---- someone taken out of the network as they join stays out ------------------------------------------
+
+    /**
+     * Takes a player out of the network the first time they are added, as the autopilot's launch
+     * does with whoever isn't connected yet (a participant still joining included), and counts the
+     * times they are added.
+     */
+    private static final class TakesOut implements GraphChangedListener {
+        final String id;
+        final Graph graph;
+        final AtomicInteger added = new AtomicInteger();
+
+        TakesOut(String id, Graph graph) {
+            this.id = id;
+            this.graph = graph;
+        }
+
+        public void vertexAdded(Vertex vertex) {
+            if (id.equals(vertex.getId()) && added.incrementAndGet() == 1) {
+                graph.removeVertex(vertex);
+            }
+        }
+
+        public void vertexPropertyChanged(Vertex vertex, String key, Object oldValue, Object setValue) {}
+        public void vertexPropertyRemoved(Vertex vertex, String key, Object removedValue) {}
+        public void vertexRemoved(Vertex vertex, Map<String, Object> props) {}
+        public void edgeAdded(Edge edge) {}
+        public void edgePropertyChanged(Edge edge, String key, Object oldValue, Object setValue) {}
+        public void edgePropertyRemoved(Edge edge, String key, Object removedValue) {}
+        public void edgeRemoved(Edge edge, Map<String, Object> props) {}
+    }
+
+    @Test
+    public void someoneTakenOutOfTheNetworkAsTheyJoinIsNotPutBack() throws Throwable {
+        final User user = user("takenout");
+        final Experiment experiment = createExperiment("Taken out");
+        own(user, experiment);
+        final AdminSocketsTest.Tab t = loggedIn(user);
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        t.send("LaunchGame", "name", "J", "parameters", Json.newObject());
+        await("running", () -> sessions(experiment).size() == 1
+            && sessions(experiment).get(0).status == ExperimentInstance.Status.RUNNING);
+        ExperimentInstance session = sessions(experiment).get(0);
+
+        EventGraph<?> g = (EventGraph<?>) engine().get("g");
+        TakesOut takesOut = new TakesOut("late", g);
+        g.addListener(takesOut);
+        try {
+            // A safety net put them back (and ran OnJoinStep for them again), undoing the launch.
+            ScriptBoard.addClient(experiment.id.toString(), session.id.toString(), "late", new WebSocket.In<JsonNode>(), new Page().out);
+            assertNull("put back into the network", g.getVertex("late"));
+            assertEquals("added to the network", 1, takesOut.added.get());
+        } finally {
+            g.removeListener(takesOut);
+        }
     }
 
     // ---- a step queued for an engine that has been replaced -----------------------------------------------

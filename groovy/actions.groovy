@@ -160,6 +160,8 @@ class PlayerActions {
     actions.clear()
     playerToActionQueue.clear()
 
+    // Off first: a pick asked for meanwhile would otherwise start another timer for this AI.
+    ai.off()
     ai.timer.cancel()
     ai = new PlayerAI(playerActions: this)
 
@@ -440,25 +442,41 @@ class PlayerAI {
   @JsonIgnore
   def r = new Random()
 
+  // A random one of the choices on screen, 1 to 4 seconds later.
   @JsonIgnore
   def defaultBehavior = { player ->
     def randomDelay = 1000 + r.nextInt(3000)
+    // The pick is for these choices, not for whatever is offered after them.
+    def offered = (player.getProperty("choices") ?: []).findAll { it instanceof Map }.collect { it.uid }
     try {
-      def task = new BBTimer().runAfter(randomDelay) {
-        if (player.getProperty("choices")) {
-          def choices = player.getProperty("choices")
-          def choice = choices[r.nextInt(choices.size())]
-          playerActions.choose(choice.uid, null)
+      pickLater(player, randomDelay) {
+        // Only while the seat is still the computer's (its person may have come back), and only
+        // among those choices that are still offered to the player.
+        if (player.getProperty("ai") != 1) {
+          return
+        }
+        def choices = (player.getProperty("choices") ?: []).findAll {
+          it instanceof Map && offered.contains(it.uid) && playerActions.ownerOf(it.uid) == player.id.toString()
+        }
+        if (choices) {
+          chooseFor(player, choices[r.nextInt(choices.size())])
         }
       }
     } catch (IllegalStateException e) {
-      // This is most likely a side effect of a.remove()
-      println "Caught side effect of a.remove(): " + e
+      // The computer players are off and their timer is cancelled: the engine is being rebuilt (or
+      // a.empty() replaced them).
+      println "The computer's pick was not scheduled: " + e
     }
   }
 
-  // A timer so we can stagger AI actions
+  // Every pick waits on this one timer. A timer of its own per pick started a thread that lived
+  // until the engine was rebuilt: 80 of them in a 12-round game with 6 computer players.
+  // timers.cancel() cancels it with the others; the next pick then starts another (schedulePick).
   def timer = new BBTimer()
+
+  // Picks scheduled and not made yet, by player id, so remove() can call them off.
+  @JsonIgnore
+  def pendingPicks = [:]
 
   // Is the AI behavior globally turned on?
   // Changed to default to true
@@ -468,11 +486,12 @@ class PlayerAI {
   // Map of Vertex player : Closure behavior
   def behaviors = [:]
 
-  def off() {
+  // (synchronized: a pick being scheduled sees the change, see schedulePick)
+  synchronized def off() {
     this.isOn = false
   }
 
-  def on() {
+  synchronized def on() {
     this.isOn = true
   }
 
@@ -502,6 +521,8 @@ class PlayerAI {
   def remove(Vertex player) {
     // Remove the "ai" property
     player.removeProperty("ai")
+    // The computer's picks not made yet are called off: the person decides from here.
+    cancelPicks(player.id.toString())
     // If a custom behavior was defined, remove it
     if (behaviors.containsKey(player))
       behaviors.remove(player)
@@ -514,6 +535,69 @@ class PlayerAI {
     if (behaviors.containsKey(player)) {
       behaviors[player](player)
     }
+  }
+
+  // Run pick on this AI's timer after delayMs, unless remove() calls it off first. A GroovyTimerTask
+  // logs what pick throws: an error escaping a task would stop the timer, and every pick after it.
+  def pickLater(Vertex player, long delayMs, Closure pick) {
+    def id = player.id.toString()
+    def task
+    task = new GroovyTimerTask(closure: {
+      forgetPick(id, task)
+      pick()
+    })
+    schedulePick(id, task, delayMs)
+  }
+
+  // Schedules the pick and remembers it in one go (its task's forgetPick waits for this).
+  // timers.cancel() (the console's "Stop every timer", an experiment's own call) cancels this timer
+  // too: while the computer players are on, a new one takes over, or they would never answer again,
+  // those standing in for departed participants included. They are off when the engine is being
+  // rebuilt (ScriptBoard turns them off before it cancels the timers): then the pick throws, and no
+  // timer starts in an engine on its way out.
+  synchronized void schedulePick(String id, TimerTask task, long delayMs) {
+    try {
+      timer.schedule(task, delayMs)
+    } catch (IllegalStateException cancelled) {
+      if (!isOn) {
+        throw cancelled
+      }
+      // The picks still remembered were dropped with the cancelled timer.
+      pendingPicks.clear()
+      timer = new BBTimer()
+      timer.schedule(task, delayMs)
+    }
+    rememberPick(id, task)
+  }
+
+  // The computer makes this choice for the player, recorded first as an "aiChoice" event so the
+  // data tells its choices from the participant's.
+  def chooseFor(Vertex player, Map choice) {
+    playerActions.eventTracker?.track("aiChoice", [playerId: player.id.toString(), choice: choice.name, choiceUID: choice.uid])
+    playerActions.choose(choice.uid, null)
+  }
+
+  synchronized void rememberPick(String id, TimerTask task) {
+    def tasks = pendingPicks[id]
+    if (tasks == null) {
+      tasks = []
+      pendingPicks[id] = tasks
+    }
+    tasks << task
+  }
+
+  synchronized void forgetPick(String id, TimerTask task) {
+    def tasks = pendingPicks[id]
+    if (tasks != null) {
+      tasks.remove(task)
+      if (tasks.isEmpty()) {
+        pendingPicks.remove(id)
+      }
+    }
+  }
+
+  synchronized void cancelPicks(String id) {
+    pendingPicks.remove(id)?.each { it.cancel() }
   }
 }
 
