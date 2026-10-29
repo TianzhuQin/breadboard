@@ -1058,8 +1058,11 @@ public class AutopilotGuardTest extends BaseTest {
         createStep(experiment, "InitStep", "NETWORK_SIZE = 3\nSEATS = five");
         own(researcher, experiment);
         assertEquals(OK, status(post(researcher, settings(experiment, 2, null, 120))));
+        // (and the autopilot paused, which comes once the stop is done: a new session is STOPPED from
+        // the moment it is made until its game is set going, so its status alone came too early)
         await("the session to be stopped", () -> sessions(experiment).size() == 1
-            && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED);
+            && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED
+            && autopilotStatus(researcher).get("paused").asBoolean());
         assertEquals(Boolean.FALSE, engineValue("a.ai.isOn"));
     }
 }

@@ -166,8 +166,11 @@ public class AutopilotSessionTest extends BaseTest {
 
         Result saved = post(researcher, settings(experiment, 2));
         assertEquals(contentAsString(saved), OK, status(saved));
+        // (and the autopilot paused, which comes once the stop is done: a new session is STOPPED from
+        // the moment it is made until its game is set going, so its status alone can come too early)
         await("the session to be opened and stopped", () -> sessions(experiment).size() == 1
-            && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED);
+            && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED
+            && state(researcher).get("status").get("paused").asBoolean());
         Thread.sleep(500);
         assertEquals("no other session opened in its place", 1, sessions(experiment).size());
 
