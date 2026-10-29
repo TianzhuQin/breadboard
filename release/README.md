@@ -20,24 +20,52 @@ Chinese.
 
 ## Start it
 
-- **macOS**: double-click `Start Breadboard.command`. The first time, macOS may say it can't check
-  who made it: right-click the file and choose **Open** (on newer macOS, click **Open Anyway** in
-  System Settings → Privacy & Security). Or open Terminal in this folder and run `./breadboard.sh`.
-- **Windows**: double-click `breadboard.bat`.
-- **Linux**: run `./breadboard.sh` in this folder.
+- **macOS**: double-click `Start Breadboard.command`. The first time, macOS blocks it, as it does
+  any file from the internet whose maker it can't check. On macOS 15 and later, Control-click →
+  **Open** no longer gets past that; only **Open Anyway** in System Settings → Privacy & Security
+  does. The way that always works: open Terminal, type `sh` and a space, drag `breadboard.sh` from
+  this folder into the Terminal window, and press Return.
+- **Windows**: before you unzip the download, right-click it, choose **Properties**, tick
+  **Unblock** and click **OK** (otherwise Windows may refuse to run `breadboard.bat`, which came
+  from the internet). Then right-click the zip, choose **Extract All**, and double-click
+  `breadboard.bat` in the new folder. The first time, Windows Firewall asks about Java: tick
+  **Private networks**, so that the lab's computers can reach Breadboard, and click **Allow**.
+- **Linux**: unzip it (if `unzip` is missing: `sudo apt install unzip`) and run `./breadboard.sh`
+  in this folder.
 
-The console opens in your browser once the server is up (or open <http://localhost:9000>). The
-first time, it asks you to create your researcher account; add your colleagues' accounts in
-Settings → Researchers. Stop the server with Ctrl+C in its window, or by closing the window.
+The console opens in your browser once the server is up. Its window also says where Breadboard is:
+`On this computer: http://localhost:9000`, and for the other computers on your network (a lab's)
+`On this network: http://192.168.…:9000`. The first time, the console asks you to create your
+researcher account; add your colleagues' accounts in Settings → Researchers. Stop the server with
+Ctrl+C in its window, or by closing the window. If it stops by itself (it ran out of memory, say),
+it is started again after a few seconds.
+
+While the server runs, the computer doesn't go to sleep by itself. For a long study, keep a laptop
+plugged in with its lid open: on battery with the lid closed, it sleeps anyway. On a Mac, also turn
+on **Prevent automatic sleeping … when the display is off** (System Settings → Battery → Options;
+on a Mac mini or iMac, System Settings → Energy).
 
 Another port: `./breadboard.sh -Dhttp.port=8080` (or `breadboard.bat -Dhttp.port=8080`).
+
+## Your settings
+
+The settings you change go in `conf/local.conf`, one per line. Breadboard makes this file at first
+start; open it in a text editor (TextEdit, Notepad) and add lines such as:
+
+```
+breadboard.rootUrl="https://breadboard.example.org"
+breadboard.allowLateJoin=true
+```
+
+Then restart Breadboard. `conf/application-prod.conf` lists every setting with what it does, but
+don't change it there: a new release brings its own, while `conf/local.conf` is yours to keep.
 
 ## Before participants join
 
 Participants need an address they can reach, for example `https://breadboard.example.org`. The
 links the console gives you for participants use the address you opened the console at, so open
 it at that public address before copying them. For Mechanical Turk, also set `breadboard.rootUrl`
-in `conf/application-prod.conf` to it: HITs send workers there.
+in `conf/local.conf` to it: HITs send workers there.
 
 For a server on the internet, put it behind a reverse proxy that provides HTTPS. With
 [Caddy](https://caddyserver.com), the whole configuration is:
@@ -48,8 +76,7 @@ breadboard.example.org {
 }
 ```
 
-Then set `breadboard.secureCookies=true` and `session.secure=true` in
-`conf/application-prod.conf`.
+Then set `breadboard.secureCookies=true` and `session.secure=true` in `conf/local.conf`.
 
 ## Where things are kept
 
@@ -57,10 +84,12 @@ Then set `breadboard.secureCookies=true` and `session.secure=true` in
 |---|---|
 | `db/breadboard.h2.db` | The database: experiments, sessions, accounts and data. |
 | `backups/` | Copies of the database, made every day and before an upgrade; the newest 14 are kept. Settings → Backups lists them. |
-| `conf/application-prod.conf` | The settings |
+| `conf/local.conf` | Your settings (see above) |
+| `conf/application-prod.conf` | Every setting, with what it does (don't change it here) |
 | `conf/application.secret` | Generated at first start; signs sign-ins and invitation links. Keep it private. |
 | `logs/application.log` | The server's log (a new one every day; 30 days are kept; set in `conf/logger.xml`) |
 | `groovy/` | The engine's scripts (part of Breadboard; don't edit) |
+| `jre/` | Java, in the downloads that include it |
 
 ## Backups
 
@@ -72,11 +101,12 @@ unzip the copy into `db/` (replacing `breadboard.h2.db`), and start Breadboard a
 ## Upgrading from an earlier release
 
 1. Stop the old server and make a copy of its `db/breadboard.h2.db`.
-2. Copy that file into this folder's `db/`. From a 3.x release, also copy
-   `conf/application.secret`; if you use file mode, copy the `dev/` folder too.
-3. Carry over the settings you changed in the old `conf/application-prod.conf` (such as
-   `breadboard.rootUrl`, `breadboard.secureCookies`, `session.secure`, AWS keys): copy the
-   values into this folder's file rather than the whole file, which has new settings.
+2. Copy that file into this folder's `db/`. From a 3.x release, also copy `conf/application.secret`;
+   if you use file mode, copy the `dev/` folder too.
+3. Copy your `conf/local.conf` into this folder's `conf/`. Releases before 3.1 had none: if you
+   changed settings in the old `conf/application-prod.conf` (such as `breadboard.rootUrl`,
+   `breadboard.secureCookies`, `session.secure`, AWS keys), put just those lines in
+   `conf/local.conf` instead.
 4. Start this release. It updates the database's tables by itself.
 
 Experiments keep their participant pages. The new researcher console opens at the server's
@@ -87,4 +117,5 @@ use a reverse proxy as above (or see `docs/install.md`).
 ## More
 
 Source code, documentation and new releases: <https://github.com/TianzhuQin/breadboard>.
-What changed in this release: `CHANGELOG.md`.
+What changed in this release: `CHANGELOG.md`. Breadboard's licence: `LICENSE.md`. `jre/` is Azul
+Zulu 8 (OpenJDK), GPLv2 with the Classpath Exception; its licence files are in `jre/`.

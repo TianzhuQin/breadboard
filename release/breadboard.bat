@@ -2,32 +2,63 @@
 REM (Without delayed expansion, a "!" in the folder's path is just a character.)
 SETLOCAL EnableExtensions DisableDelayedExpansion
 REM Start Breadboard: double-click it. The console opens in the browser once the server is up
-REM (SET BREADBOARD_NO_BROWSER=1 stops that); close the window or press Ctrl+C to stop it.
-REM Other settings go to the server as -D options, e.g.  breadboard.bat -Dhttp.port=8080
-REM Needs Java 8: the one in JAVA8_HOME, else the one that comes with this download (jre\), else
-REM JAVA_HOME's, else java on PATH. JAVA_OPTS adds options for Java itself, e.g. SET JAVA_OPTS=-Xmx2g
+REM (SET BREADBOARD_NO_BROWSER=1 stops that); close the window or press Ctrl+C to stop it. While it
+REM runs, the computer doesn't go to sleep by itself.
+REM Other settings go to the server as -D options, e.g.  breadboard.bat -Dhttp.port=8080; the settings
+REM you change go in conf\local.conf.
+REM Needs Java 8: the first Java 8 among JAVA8_HOME's (the JDK's folder, or its bin folder), the one
+REM that comes with this download (jre\), JAVA_HOME's, and java on PATH. JAVA_OPTS adds options for
+REM Java itself, e.g. SET JAVA_OPTS=-Xmx2g
 REM
 REM Keep running: when the server stops by itself (it ran out of memory, Java crashed), this window
 REM says why, waits a few seconds and starts it again; after 5 restarts in 10 minutes it is left
 REM stopped. On when the window is someone's (double-clicked, or typed in a Command Prompt); off
-REM when its input is redirected (a script, or a service manager such as Task Scheduler, which
-REM restarts it itself). SET BREADBOARD_KEEP_RUNNING=1 or 0 decides instead.
+REM when its input is redirected (a script). SET BREADBOARD_KEEP_RUNNING=1 or 0 decides instead.
+REM
+REM As a service (SET BREADBOARD_SERVICE=1, as breadboard-task.xml has Task Scheduler do), nobody
+REM reads the window: it never waits for a key (PAUSE), no browser is opened, and keep running is on
+REM and never gives up (after 5 restarts in 10 minutes it goes on, once a minute).
 CD /D "%~dp0"
 REM (set below for the server when this script starts it again)
 SET "BREADBOARD_RESTARTED="
 
-SET "JAVA=java"
-IF DEFINED JAVA_HOME SET "JAVA=%JAVA_HOME%\bin\java.exe"
-IF EXIST "jre\bin\java.exe" SET "JAVA=%CD%\jre\bin\java.exe"
-IF DEFINED JAVA8_HOME SET "JAVA=%JAVA8_HOME%\bin\java.exe"
-REM (A regular expression, so that the command line has no quote inside the search string.)
-"%JAVA%" -version 2>&1 | findstr /R /C:"version .1\.8\." >NUL
-IF ERRORLEVEL 1 (
-  ECHO Breadboard needs Java 8. Download the Breadboard release that includes Java ^(its name ends
-  ECHO in -windows-x64^), or install a Java 8 JDK ^(for example Azul Zulu 8^) and set JAVA8_HOME to it.
-  PAUSE
-  EXIT /B 1
-)
+SET "SERVICE="
+IF DEFINED BREADBOARD_SERVICE SET "SERVICE=1"
+IF "%BREADBOARD_SERVICE%"=="0" SET "SERVICE="
+IF /I "%BREADBOARD_SERVICE%"=="false" SET "SERVICE="
+IF /I "%BREADBOARD_SERVICE%"=="no" SET "SERVICE="
+IF /I "%BREADBOARD_SERVICE%"=="off" SET "SERVICE="
+
+REM Opened from inside the zip, Explorer runs this file alone, from a temporary folder: the rest of
+REM Breadboard isn't there.
+IF EXIST "lib\classpath.txt" GOTO unpacked
+ECHO Extract the whole zip first: right-click it, Extract All, then open breadboard.bat in the new folder.
+CALL :pause
+EXIT /B 1
+:unpacked
+
+REM Java 8 (see the top). JAVA8_HOME is often given in quotes: they go.
+SET "JAVA="
+SET "OTHER_JAVA="
+IF NOT DEFINED JAVA8_HOME GOTO lookelsewhere
+SET "JAVA8_HOME=%JAVA8_HOME:"=%"
+CALL :tryjava "%JAVA8_HOME%\bin\java.exe"
+CALL :tryjava "%JAVA8_HOME%\java.exe"
+IF NOT DEFINED JAVA ECHO JAVA8_HOME is "%JAVA8_HOME%", which has no Java 8; ignoring it.
+:lookelsewhere
+CALL :tryjava "%CD%\jre\bin\java.exe"
+IF DEFINED JAVA_HOME CALL :tryjava "%JAVA_HOME%\bin\java.exe"
+FOR %%J IN (java.exe) DO IF NOT "%%~$PATH:J"=="" CALL :tryjava "%%~$PATH:J"
+IF DEFINED JAVA GOTO havejava
+IF NOT DEFINED OTHER_JAVA GOTO nojava8
+ECHO Breadboard needs Java 8, but "%OTHER_JAVA%" is:
+"%OTHER_JAVA%" -version
+:nojava8
+ECHO Breadboard needs Java 8. Download the Breadboard release that includes Java ^(its name ends
+ECHO in -windows-x64^), or install a Java 8 JDK ^(for example Azul Zulu 8^) and set JAVA8_HOME to it.
+CALL :pause
+EXIT /B 1
+:havejava
 
 REM Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
 REM and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
@@ -46,7 +77,7 @@ REM of the database's stack trace.
 CALL :runninghere
 IF DEFINED RUNNING (
   ECHO Breadboard is already running from this folder ^(process %RUNNING%^): open http://localhost:%RUNNING_PORT%, or stop it first.
-  PAUSE
+  CALL :pause
   EXIT /B 1
 )
 
@@ -56,7 +87,7 @@ powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.
 IF NOT ERRORLEVEL 1 (
   ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
   ECHO To start another one, choose another port, e.g.  breadboard.bat -Dhttp.port=9001
-  PAUSE
+  CALL :pause
   EXIT /B 1
 )
 
@@ -88,9 +119,19 @@ IF NOT DEFINED APPLICATION_SECRET (
 )
 IF NOT DEFINED APPLICATION_SECRET (
   ECHO Could not create conf\application.secret. Set APPLICATION_SECRET to a long random text instead.
-  PAUSE
+  CALL :pause
   EXIT /B 1
 )
+
+REM conf\local.conf holds the settings changed for this Breadboard (conf\application-prod.conf reads it
+REM last, so that they win). It is made on first start, saying how, so that it only has to be opened
+REM in Notepad.
+IF NOT EXIST "conf\local.conf" (
+  ECHO # Your settings for this Breadboard, one per line, for example:
+  ECHO #   breadboard.rootUrl="https://breadboard.example.org"
+  ECHO # They win over conf/application-prod.conf, which lists every setting and what it does. A new release
+  ECHO # doesn't come with this file: copy it into the new release's conf folder when you upgrade.
+) 2>NUL >"conf\local.conf"
 
 REM Play refuses to start while RUNNING_PID exists: one left behind by a crash goes.
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
@@ -101,6 +142,7 @@ FOR /F "usebackq delims=" %%J IN ("lib\classpath.txt") DO CALL :addjar %%J
 IF NOT DEFINED CP SET "CP=lib\*"
 
 REM Keep running (see the top), unless BREADBOARD_KEEP_RUNNING says otherwise.
+IF NOT DEFINED BREADBOARD_KEEP_RUNNING IF DEFINED SERVICE SET "BREADBOARD_KEEP_RUNNING=1"
 IF NOT DEFINED BREADBOARD_KEEP_RUNNING (
   powershell -NoProfile -Command "if ([Console]::IsInputRedirected) { exit 1 }" >NUL 2>&1
   IF ERRORLEVEL 1 (SET "BREADBOARD_KEEP_RUNNING=0") ELSE (SET "BREADBOARD_KEEP_RUNNING=1")
@@ -111,24 +153,43 @@ IF /I "%BREADBOARD_KEEP_RUNNING%"=="false" SET "KEEP_RUNNING="
 IF /I "%BREADBOARD_KEEP_RUNNING%"=="no" SET "KEEP_RUNNING="
 IF /I "%BREADBOARD_KEEP_RUNNING%"=="off" SET "KEEP_RUNNING="
 
-ECHO Starting Breadboard. Once it says "Listening for HTTP", open http://localhost:%PORT%
+REM Where it is reached: here, and from the other computers on this network (a lab's), at this
+REM computer's private IPv4 address on the network it reaches the internet through.
+ECHO Starting Breadboard. Once it says "Listening for HTTP", it is ready at:
+ECHO   On this computer: http://localhost:%PORT%
+FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue; if ($route) { Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match '\A(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]+\.[0-9]+\z' } | Select-Object -ExpandProperty IPAddress -Unique }" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
 IF DEFINED KEEP_RUNNING ECHO If it stops by itself, it is started again. Close this window to stop it.
 
-REM Open the console once the server answers (for up to 3 minutes), from a hidden helper.
+REM Open the console once the server answers (for up to 3 minutes), from a helper in the background.
+REM (Not with -WindowStyle Hidden: the helper shares this window, and that would hide it.)
+IF DEFINED SERVICE SET "BREADBOARD_NO_BROWSER=1"
 IF NOT DEFINED BREADBOARD_NO_BROWSER (
-  START "" /B powershell -NoProfile -WindowStyle Hidden -Command "for ($i = 0; $i -lt 180; $i++) { try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %PORT%); $c.Close(); Start-Process 'http://localhost:%PORT%'; break } catch { Start-Sleep -Seconds 1 } }"
+  START "" /B powershell -NoProfile -Command "for ($i = 0; $i -lt 180; $i++) { try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %PORT%); $c.Close(); Start-Process 'http://localhost:%PORT%'; break } catch { Start-Sleep -Seconds 1 } }"
 )
 
-REM When the last 5 restarts were (in seconds), oldest first: a sixth within 10 minutes is not made.
+REM The computer stays awake while the server runs (a study left to run by itself stopped when it went
+REM to sleep): a helper in the background asks Windows for that (SetThreadExecutionState) as long as
+REM this window runs a Java, and ends two minutes after the last one stopped. (A laptop still sleeps
+REM when its lid is closed, if its lid is set to do so.) 2147483649 is ES_CONTINUOUS and
+REM ES_SYSTEM_REQUIRED; 2147483648, ES_CONTINUOUS alone, lets the computer sleep again.
+START "" /B powershell -NoProfile -Command "$q = [char]34; $power = Add-Type -Name Power -Namespace Breadboard -PassThru -MemberDefinition ('[DllImport(' + $q + 'kernel32.dll' + $q + ')] public static extern uint SetThreadExecutionState(uint flags);'); $window = (Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID)).ParentProcessId; $idle = 0; while ($idle -lt 12) { $idle++; if (Get-CimInstance Win32_Process -Filter ('ParentProcessId = ' + $window + ' AND Name = ''java.exe''')) { $idle = 0; [void]$power::SetThreadExecutionState(2147483649) } else { [void]$power::SetThreadExecutionState(2147483648) }; Start-Sleep -Seconds 10 }" >NUL 2>&1
+
+REM When the last 5 restarts were (in seconds), oldest first: a sixth within 10 minutes is not made
+REM (as a service: it is, a minute later).
 SET "R1=-100000"
 SET "R2=-100000"
 SET "R3=-100000"
 SET "R4=-100000"
 SET "R5=-100000"
+SET "TO_STOP=close this window to leave it stopped"
+IF DEFINED SERVICE SET "TO_STOP=end its task in Task Scheduler to leave it stopped"
 
 :start
-REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.)
-"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\."
+REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.) MaxMetaspaceSize:
+REM the classes made for the experiments' scripts (anew at every engine reload) may take that much
+REM memory besides the heap, so that a leak of them ends in a restart (out of memory) instead of
+REM taking all the computer's memory.
+"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\."
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
@@ -141,13 +202,13 @@ SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
 IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. SET JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
 CALL :now
 SET /A "SINCE=NOW-(R1)"
-IF %SINCE% LSS 600 GOTO giveup
+IF %SINCE% LSS 600 IF NOT DEFINED SERVICE GOTO giveup
 REM 5, 10, 20, 40, then 60 seconds, by the restarts in the last 10 minutes
 SET "RECENT=0"
 FOR %%R IN (%R1% %R2% %R3% %R4% %R5%) DO CALL :countrecent %%R
 SET /A "DELAY=5<<RECENT"
 IF %DELAY% GTR 60 SET "DELAY=60"
-CALL :note "Breadboard stopped by itself (%WHY%). Starting it again in %DELAY% seconds; close this window to leave it stopped."
+CALL :note "Breadboard stopped by itself (%WHY%). Starting it again in %DELAY% seconds; %TO_STOP%."
 SET /A "PINGS=DELAY+1"
 ping -n %PINGS% 127.0.0.1 >NUL
 SET "R1=%R2%"
@@ -171,15 +232,33 @@ CALL :note "Breadboard stopped by itself (%WHY%). It has been started again 5 ti
 :failed
 REM Keep the window open after a failure, so the message can be read. (Play stops with -1, which
 REM IF ERRORLEVEL 1 doesn't catch.)
-PAUSE
+CALL :pause
 EXIT /B %EXIT_CODE%
 
 :unwritable
 ECHO %UNWRITABLE% can't be written by the account "%USERNAME%", so Breadboard can't start. Move the
 ECHO Breadboard folder somewhere your account can write to (such as Documents), or give that account
 ECHO write access to "%CD%" (right-click it, Properties, Security).
-PAUSE
+CALL :pause
 EXIT /B 1
+
+:pause
+REM Keeps the window open after a message, until a key is pressed, so that the message can be read;
+REM not as a service, where nobody would press it (and its task would wait for good, not end).
+IF NOT DEFINED SERVICE PAUSE
+GOTO :EOF
+
+:tryjava
+REM JAVA: the file %1, if it is a Java 8 and none was found before. OTHER_JAVA: the first other Java.
+IF DEFINED JAVA GOTO :EOF
+IF NOT EXIST "%~1" GOTO :EOF
+"%~1" -version 2>&1 | findstr /R /C:"version .1\.8\." >NUL
+IF ERRORLEVEL 1 GOTO notjava8
+SET "JAVA=%~1"
+GOTO :EOF
+:notjava8
+IF NOT DEFINED OTHER_JAVA SET "OTHER_JAVA=%~1"
+GOTO :EOF
 
 :addjar
 IF DEFINED CP (SET "CP=%CP%;lib\%~1") ELSE (SET "CP=lib\%~1")

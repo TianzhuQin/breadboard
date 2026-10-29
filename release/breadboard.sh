@@ -3,51 +3,73 @@
 #
 #   ./breadboard.sh                       # port 9000
 #   ./breadboard.sh -Dhttp.port=8080      # other settings go to the server as -D options
-#   BREADBOARD_KEEP_RUNNING=1 ./breadboard.sh   # start it again whenever it stops by itself
 #
-# Needs Java 8: the one in JAVA8_HOME, else the one that comes with this download (jre/), else
-# (on macOS) the Java 8 that /usr/libexec/java_home finds, else JAVA_HOME's, else java on PATH.
-# JAVA_OPTS adds options for Java itself, e.g. JAVA_OPTS=-Xmx2g. The database lives in db/ (with
-# copies in backups/), and application.secret (which signs sign-ins and invitation links) in
-# conf/application.secret. Run in a terminal, it opens the console in the browser once it is up
-# (BREADBOARD_NO_BROWSER=1 stops that).
+# Needs Java 8: the first Java 8 among JAVA8_HOME's (the JDK's folder, its bin folder, or a macOS JDK
+# folder as Finder shows it), the one that comes with this download (jre/), (on macOS) the one that
+# /usr/libexec/java_home finds, JAVA_HOME's, and java on PATH. JAVA_OPTS adds options for Java
+# itself, e.g. JAVA_OPTS=-Xmx2g. The database lives in db/ (with copies in backups/), application.secret
+# (which signs sign-ins and invitation links) in conf/application.secret, and the settings you change
+# in conf/local.conf. Run in a terminal, it opens the console in the browser once it is up
+# (BREADBOARD_NO_BROWSER=1 stops that). On macOS it keeps the computer awake while the server runs.
 #
-# With BREADBOARD_KEEP_RUNNING=1 (Start Breadboard.command sets it), a server that stops by itself
-# (it ran out of memory, Java crashed, it was killed) is started again after a few seconds, saying
-# why; after 5 restarts in 10 minutes it is left stopped. Ctrl+C, closing the window and SIGTERM
-# still stop it. Without it, this script becomes the server (exec), for service managers (systemd,
-# launchd) that restart it themselves.
+# Keep running: run in a terminal, or with BREADBOARD_KEEP_RUNNING=1 (Start Breadboard.command sets
+# it), a server that stops by itself (it ran out of memory, Java crashed, it was killed) is started
+# again after a few seconds, saying why; after 5 restarts in 10 minutes it is left stopped. Ctrl+C,
+# closing the window and SIGTERM still stop it. Otherwise (BREADBOARD_KEEP_RUNNING=0, or no terminal,
+# as under systemd or launchd, which restart it themselves), this script becomes the server (exec).
 set -e
 cd "$(dirname "$0")"
 # set again below for the server when this script starts it again
 unset BREADBOARD_RESTARTED
 
-JDK="${JAVA8_HOME:-}"
-if [ -z "$JDK" ] && [ -x jre/bin/java ]; then
-  JDK="$(pwd)/jre"
+# Java 8: JAVA is the first one found. OTHER is the first Java found that isn't Java 8, to name it if
+# there is no Java 8 at all.
+JAVA=""
+OTHER=""
+use_java() {
+  [ -z "$JAVA" ] && [ -f "$1" ] && [ -x "$1" ] || return 0
+  if "$1" -version 2>&1 | grep -q 'version "1\.8\.'; then
+    JAVA="$1"
+  elif [ -z "$OTHER" ]; then
+    OTHER="$1"
+  fi
+}
+if [ -n "${JAVA8_HOME:-}" ]; then
+  # (a macOS JDK as Finder shows it, .../zulu-8.jdk, has its Java in Contents/Home)
+  use_java "$JAVA8_HOME/bin/java"
+  use_java "$JAVA8_HOME/Contents/Home/bin/java"
+  use_java "$JAVA8_HOME/java"
+  if [ -z "$JAVA" ]; then
+    echo "JAVA8_HOME is $JAVA8_HOME, which has no Java 8; ignoring it." >&2
+  fi
 fi
-if [ -z "$JDK" ] && [ -x /usr/libexec/java_home ]; then
+use_java "$(pwd)/jre/bin/java"
+if [ -z "$JAVA" ] && [ -x /usr/libexec/java_home ]; then
   # macOS: java on PATH is a stub that runs the newest Java installed; ask for Java 8 by name.
   # (-F: without it, java_home answers with the newest Java when it has no Java 8.)
   JDK="$(/usr/libexec/java_home -F -v 1.8 2>/dev/null || true)"
+  [ -z "$JDK" ] || use_java "$JDK/bin/java"
 fi
-JDK="${JDK:-${JAVA_HOME:-}}"
-if [ -n "$JDK" ]; then
-  JAVA="$JDK/bin/java"
-else
-  JAVA="$(command -v java || true)"
+[ -z "${JAVA_HOME:-}" ] || use_java "$JAVA_HOME/bin/java"
+if [ -z "$JAVA" ]; then
+  ON_PATH="$(command -v java || true)"
+  # (not macOS's stub when no Java is installed at all: it only offers to install the newest one)
+  if [ "$ON_PATH" = /usr/bin/java ] && [ -x /usr/libexec/java_home ] && ! /usr/libexec/java_home >/dev/null 2>&1; then
+    ON_PATH=""
+  fi
+  [ -z "$ON_PATH" ] || use_java "$ON_PATH"
 fi
-if [ -z "$JAVA" ] || [ ! -x "$JAVA" ]; then
-  echo "Breadboard needs Java 8. Download the Breadboard release that includes Java (its name ends in" >&2
-  echo "-macos-arm64, -macos-x64 or -linux-x64), or install a Java 8 JDK (for example Azul Zulu 8)" >&2
-  echo "and set JAVA8_HOME to it." >&2
-  exit 1
-fi
-if ! "$JAVA" -version 2>&1 | grep -q 'version "1\.8\.'; then
-  echo "Breadboard needs Java 8, but $JAVA is:" >&2
-  "$JAVA" -version >&2 || true
-  echo "Download the Breadboard release that includes Java, or install a Java 8 JDK (for example" >&2
-  echo "Azul Zulu 8) and set JAVA8_HOME to it." >&2
+if [ -z "$JAVA" ]; then
+  if [ -n "$OTHER" ]; then
+    echo "Breadboard needs Java 8, but $OTHER is:" >&2
+    "$OTHER" -version >&2 || true
+    echo "Download the Breadboard release that includes Java, or install a Java 8 JDK (for example" >&2
+    echo "Azul Zulu 8) and set JAVA8_HOME to it." >&2
+  else
+    echo "Breadboard needs Java 8. Download the Breadboard release that includes Java (its name ends in" >&2
+    echo "-macos-arm64, -macos-x64 or -linux-x64), or install a Java 8 JDK (for example Azul Zulu 8)" >&2
+    echo "and set JAVA8_HOME to it." >&2
+  fi
   exit 1
 fi
 
@@ -102,10 +124,12 @@ if running_here; then
 fi
 
 # Something already answering on the port (often Breadboard itself, started earlier): say so
-# instead of Play's stack trace. curl's 7 means nothing listens there.
+# instead of Play's stack trace. curl's 7 means nothing listens there. (--noproxy: a proxy set for
+# the internet, often one on this computer, would answer in the port's place; curl uses it even for
+# 127.0.0.1.)
 if command -v curl >/dev/null 2>&1; then
   set +e
-  ANSWER="$(curl -s --max-time 8 "http://127.0.0.1:$PORT/health" 2>/dev/null)"
+  ANSWER="$(curl -s --noproxy '*' --max-time 8 "http://127.0.0.1:$PORT/health" 2>/dev/null)"
   CODE=$?
   set -e
   if [ "$CODE" -ne 7 ]; then
@@ -159,6 +183,18 @@ if [ -z "$APPLICATION_SECRET" ]; then
 fi
 export APPLICATION_SECRET
 
+# conf/local.conf holds the settings changed for this Breadboard (conf/application-prod.conf reads it
+# last, so that they win). It is made on first start, saying how, so that it only has to be opened
+# in a text editor; only its owner can read it, as it may hold keys (AWS's, for Mechanical Turk).
+if [ ! -e conf/local.conf ]; then
+  (umask 077 && cat > conf/local.conf) 2>/dev/null <<'EOF' || true
+# Your settings for this Breadboard, one per line, for example:
+#   breadboard.rootUrl="https://breadboard.example.org"
+# They win over conf/application-prod.conf, which lists every setting and what it does. A new release
+# doesn't come with this file: copy it into the new release's conf folder when you upgrade.
+EOF
+fi
+
 # Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
 remove_pid_file() {
   [ "$PID_FILE" = /dev/null ] || rm -f "$PID_FILE"
@@ -168,17 +204,34 @@ remove_pid_file
 # The jars in the order the build lists them (lib/classpath.txt): a few classes are in two of them.
 CP="$(sed 's#^#lib/#' lib/classpath.txt | paste -s -d: -)"
 
+# Keep running (see the top): on in a terminal, unless BREADBOARD_KEEP_RUNNING says otherwise.
 KEEP_RUNNING=""
 case "${BREADBOARD_KEEP_RUNNING:-}" in
-  ''|0|false|no|off) ;;
+  0|false|no|off) ;;
+  '') [ ! -t 0 ] || KEEP_RUNNING=1 ;;
   *) KEEP_RUNNING=1 ;;
 esac
 
+# This computer's private IPv4 addresses (10.x, 172.16-31.x, 192.168.x), where the other computers
+# on its network (a lab's) reach it, one per line.
+lan_addresses() {
+  if [ "$(uname)" = Darwin ]; then
+    ipconfig getifaddr en0 2>/dev/null || true
+    ipconfig getifaddr en1 2>/dev/null || true
+  else
+    hostname -I 2>/dev/null | tr ' ' '\n' || true
+  fi | grep -E '^(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]+\.[0-9]+$' | awk '!seen[$0]++'
+}
+
+echo "Starting Breadboard. Once it says \"Listening for HTTP\", it is ready at:"
+echo "  On this computer: $URL"
+for ADDRESS in $(lan_addresses); do
+  echo "  On this network: http://$ADDRESS:$PORT"
+done
 if [ -n "$KEEP_RUNNING" ]; then
-  echo "Starting Breadboard. Once it says \"Listening for HTTP\", open $URL (Ctrl+C stops it; if it"
-  echo "stops by itself, it is started again)."
+  echo "Ctrl+C stops it. If it stops by itself, it is started again."
 else
-  echo "Starting Breadboard. Once it says \"Listening for HTTP\", open $URL (Ctrl+C stops it)."
+  echo "Ctrl+C stops it."
 fi
 
 # In a terminal on a desktop, open the console once the server answers (for up to 3 minutes).
@@ -195,7 +248,7 @@ if [ -n "$OPENER" ]; then
   (
     i=0
     while [ $i -lt 180 ]; do
-      if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/health"; then
+      if curl -s --noproxy '*' -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/health"; then
         "$OPENER" "$URL" >/dev/null 2>&1 || true
         exit 0
       fi
@@ -206,9 +259,20 @@ if [ -n "$OPENER" ]; then
   OPENER_PID=$!
 fi
 
+# macOS: the computer stays awake while the server runs (a study left to run by itself stopped when
+# it went to sleep). caffeinate holds that until this process ends: Java, which takes it over (exec)
+# below, or this script, which ends with Java. A laptop on battery still sleeps when its lid is
+# closed.
+if [ "$(uname)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -i -s -w $$ >/dev/null 2>&1 &
+fi
+
 # The server's command line, in "$@" (the settings given to this script go before the main class).
+# MaxMetaspaceSize: the classes made for the experiments' scripts (anew at every engine reload) may
+# take that much memory besides the heap, so that a leak of them ends in a restart (out of memory)
+# instead of taking all the computer's memory.
 # shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options
-set -- "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m $MEMORY_OPTS $JAVA_OPTS \
+set -- "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
   -Duser.timezone=UTC \
   -Dconfig.file=conf/application-prod.conf -Dlogger.file=conf/logger.xml \
   -cp "$CP" \
