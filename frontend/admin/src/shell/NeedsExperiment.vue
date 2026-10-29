@@ -22,15 +22,15 @@ import { useRouter } from 'vue-router'
 import { FlaskConical, Plus, Upload } from 'lucide-vue-next'
 import { BButton, BEmpty, notify } from '@/ui'
 import { admin, actions, ensureConnected, experiments } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { confirmSwitch } from '@/store/engineGuard'
 import type { Experiment } from '@/store/types'
 const router = useRouter()
 
 const picking = ref<number | null>(null)
 async function pick (e: Experiment) {
   if (picking.value !== null || !ensureConnected()) return
-  // the engine is shared: another researcher's session (or the autopilot's) may be live on it
-  if (!await confirmEngineRebuild({ title: `Open “${e.name}”?`, action: 'Opening an experiment', confirmLabel: 'Open anyway' })) return
+  // the engine is shared: a live session there is left running; otherwise the engine loads this one
+  if (!await confirmSwitch({ title: `Open “${e.name}”?`, action: 'Opening an experiment', confirmLabel: 'Open anyway' })) return
   picking.value = e.id
   try {
     await actions.selectExperiment(e.id)

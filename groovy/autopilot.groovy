@@ -39,7 +39,9 @@ class Autopilot {
   def a
   def gameListener
   def eventTracker
-  def startGame    // closure: starts InitStep through ScriptBoard (guarded, closes the game to newcomers)
+  def startGame    // closure: starts InitStep through ScriptBoard (guarded, closes the game to newcomers);
+                   // returns null, or what went wrong (a String)
+  def startFailed  // closure, given what went wrong: the session is dealt with (ScriptBoard.gameStartFailed)
   // Which vertices are participants. AI players added with g.addAI have ids starting with "_".
   Closure isParticipant = { v -> !v.id.toString().startsWith("_") }
   // Someone away at the start for less than this (or replace.afterSeconds, if longer) keeps their seat.
@@ -273,7 +275,12 @@ class Autopilot {
       away.each { v -> handleDeparture(v.id.toString(), false) }
       if (room?.onStart != null) room.onStart(players)
     } finally {
-      startGame()
+      // A start that failed (a mistake in InitStep, or in a step it starts) is taken back, and with
+      // launched set nothing would start it again: everyone would stay on "Starting in…" for good,
+      // with newcomers let in. ScriptBoard says why, and ends the session if the autopilot opened it
+      // (one a researcher runs by hand is left to them).
+      def failed = startGame()
+      if (failed instanceof String && startFailed != null) startFailed(failed)
     }
   }
 
@@ -414,7 +421,8 @@ class Autopilot {
 }
 
 autopilot = new Autopilot(g: g, a: a, gameListener: gameListener, eventTracker: eventTracker,
-    startGame: { models.ScriptBoard.processScript("initStep.start()", null, "autopilot") })
+    startGame: { models.ScriptBoard.processScript("initStep.start()", null, "autopilot") },
+    startFailed: { String failed -> gameListener.gameStartFailed(failed) })
 
 events.on("bb:connection", { Map info ->
   try {

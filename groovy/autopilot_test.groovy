@@ -55,6 +55,26 @@ test("the game starts even when the experiment's onStart fails") {
   ap.stop()
 }
 
+test("a start that fails is handed on with what went wrong, and one that works is not") {
+  def failedWith = []
+  def ap = pilot('ap-startfail-', [:])
+  ap.startGame = { "line 3: No such property: roundStepp" }
+  ap.startFailed = { String error -> failedWith << error }
+  ap.waitingRoom([minPlayers: 1, maxPlayers: 1, countdownSeconds: 0])
+  arrive(ap, 'ap-startfail-1')
+  assert failedWith == ["line 3: No such property: roundStepp"]
+  ap.stop()
+
+  def fine = pilot('ap-startok-', [:])
+  fine.startGame = { null }
+  fine.startFailed = { String error -> failedWith << error }
+  fine.waitingRoom([minPlayers: 1, maxPlayers: 1, countdownSeconds: 0])
+  arrive(fine, 'ap-startok-1')
+  assert fine.launched
+  assert failedWith.size() == 1
+  fine.stop()
+}
+
 test("waiting participants are told how many are here") {
   def ap = pilot('ap-text-', [:])
   ap.waitingRoom([minPlayers: 3, waitSeconds: 60])

@@ -101,15 +101,18 @@ study URL.
 - If another experiment's session is running when you turn it on, the autopilot waits for that
   session to end; the page also offers to end it there and then.
 - Ending the autopilot's session from the console pauses the autopilot: stopping it, or anything
-  that reloads the engine (selecting another experiment, launching or resuming another session,
-  reloading). Press **Resume** on the Autopilot page to let it open sessions again; after a run
-  with **continuous** off, the button reads **Open another session**. Both work when
-  `application.conf` is in charge too, and a pause survives a server restart.
+  that reloads the engine (launching or resuming another session, reloading). Selecting another
+  experiment, to edit it, doesn't: the autopilot's session keeps running. Press **Resume** on the
+  Autopilot page to let it open sessions again; after a run with **continuous** off, the button
+  reads **Open another session**. Both work when `application.conf` is in charge too, and a pause
+  survives a server restart.
 - While a researcher has another experiment loaded and a console open, the autopilot leaves the
   engine to them and opens its session once they close the console.
 - While it is on, it opens a session whenever the script engine runs none. The engine is shared
-  by everyone on the server, so on a server that runs the autopilot, test other experiments on
-  another server, or turn the autopilot off first.
+  by everyone on the server: while the autopilot's session runs, you can still edit other
+  experiments, but to run or test one, stop that session first (which pauses the autopilot) or
+  open a session of the other experiment (which ends the autopilot's, after asking), then press
+  **Resume**.
 
 Settings saved there take precedence over the ones in the experiment's steps. Alternatively, in
 `application.conf` (or as `-D` options), in which case the Autopilot page only shows them:

@@ -1,7 +1,7 @@
 import { computed, reactive, toRaw, watch } from 'vue'
 import { http, HttpError } from '@/lib/http'
 import { admin, actions, ensureConnected } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { confirmSwitch } from '@/store/engineGuard'
 import type { Step } from '@/store/types'
 import { registerUnsaved } from '@/shell/unsaved'
 import { notify, toast } from '@/ui'
@@ -34,7 +34,7 @@ let bucketsFor = admin.email
 watch(() => admin.email, (email) => {
   if (email === bucketsFor) return
   buckets.clear()
-  stepDeletedSinceReload = false
+  stepsDeletedSinceReload.clear()
   bucketsFor = email
 })
 
@@ -176,15 +176,16 @@ async function saveNow (b: StepsBucket, d: StepDraft): Promise<boolean> {
 
 /**
  * Run a step's code in the live engine (SendStep) and keep the engine's answer on the draft. False
- * when it could not be sent (the connection is down): the draft says so at once.
+ * when it could not be sent (the connection is down): the draft says so at once. `experimentId`:
+ * the experiment the step is of (the selected one when left out).
  */
-export function runDraft (d: StepDraft): boolean {
+export function runDraft (d: StepDraft, experimentId?: number): boolean {
   const source = d.source
   const afterId = lastOutputId()
   const requestId = actions.runStep({ id: d.id, name: d.name, source })
   if (!requestId) {
     d.run = { status: 'notsent', values: [], error: null, at: Date.now() }
-    if (d.engineBehind) actions.markEngineStale()
+    if (d.engineBehind) actions.markEngineStale(experimentId)
     return false
   }
   d.run = { status: 'pending', values: [], error: null, at: Date.now() }
@@ -192,7 +193,7 @@ export function runDraft (d: StepDraft): boolean {
   expectReply(source, afterId, { request: 'SendStep', requestId }).then(reply => {
     if (d.run !== run) return
     // it didn't load: the engine still has the version before this save (or half of this one)
-    if ((!reply || !reply.ok) && d.engineBehind) actions.markEngineStale()
+    if ((!reply || !reply.ok) && d.engineBehind) actions.markEngineStale(experimentId)
     if (!reply) {
       run.status = 'noreply'
       return
@@ -212,38 +213,56 @@ export function runDraft (d: StepDraft): boolean {
 
 // ---- is the live engine running the saved steps? ----------------------------------------------
 
-/** A saved step was deleted since the engine last loaded: only a reload drops what it defined. */
-let stepDeletedSinceReload = false
+/** Experiments a saved step was deleted from since the engine last loaded: only a reload drops what it defined. */
+const stepsDeletedSinceReload = new Set<number>()
+
+/** Whether experiment `id` has saved changes the engine hasn't loaded: a saved version not run, or a deleted step. */
+function savedNotLoaded (id: number): boolean {
+  if (stepsDeletedSinceReload.has(id)) return true
+  for (const b of buckets.values()) {
+    if (b.experimentId === id && b.drafts.some(d => d.engineBehind)) return true
+  }
+  return false
+}
 
 /**
  * Once every saved change has been loaded with Run, the engine is current again: clear the
  * "Reload needed" mark, so nobody reloads (and disconnects a running session) for nothing.
  */
 function engineCaughtUp () {
-  if (admin.engine !== 'stale' || stepDeletedSinceReload) return
   const id = admin.experiment?.id
-  for (const b of buckets.values()) {
-    if (b.experimentId === id && b.drafts.some(d => d.engineBehind)) return
-  }
+  if (admin.engine !== 'stale' || (id != null && savedNotLoaded(id))) return
   // (the store keeps the mark of a reload that didn't finish: only a reload clears that)
   actions.markEngineCurrent()
 }
 
-// A reload (or an experiment switch) loads every saved step, so nothing is behind any more.
+// A reload (or an experiment switch) loads every saved step, so nothing is behind any more. (An
+// experiment it didn't load isn't in the engine at all: its next build loads what is saved.)
 // (Signing out sets the time back to 0: that is no reload, and the drafts outlive it.)
 watch(() => admin.engineReloadedAt, (t) => {
   if (!t) return
-  stepDeletedSinceReload = false
+  stepsDeletedSinceReload.clear()
   for (const b of buckets.values()) for (const d of b.drafts) d.engineBehind = false
 })
 
 // Signing in again (after Sign out or a 401) starts the store over with the engine marked current,
 // but the shared engine still has the old versions of what was saved here and never loaded.
 watch(() => admin.ready, (ready) => {
-  if (!ready || admin.engine !== 'ready') return
   const id = admin.experiment?.id
-  const behind = [...buckets.values()].some(b => b.experimentId === id && b.drafts.some(d => d.engineBehind))
-  if (stepDeletedSinceReload || behind) actions.markEngineStale()
+  if (!ready || admin.engine !== 'ready' || id == null) return
+  if (savedNotLoaded(id)) actions.markEngineStale(id)
+})
+
+// The mark is about the experiment the engine runs. When the selection changes without a rebuild (a
+// session kept the engine), it is worked out again for the experiment now selected: on while the
+// engine runs it and changes saved here aren't loaded, off while it runs another one (whose next
+// build loads what is saved; a reload from here would not catch it up). A rebuild clears it anyway.
+watch(() => `${admin.experiment?.id}:${admin.user?.engine?.experimentId}:${admin.engineInfoCurrent}`, () => {
+  const id = admin.experiment?.id
+  const runs = admin.user?.engine?.experimentId
+  if (id == null || runs == null || !admin.engineInfoCurrent || admin.engine === 'loading') return
+  if (runs === id && savedNotLoaded(id)) actions.markEngineStale(id)
+  else actions.markEngineCurrent()
 })
 
 /** Delete a step (DELETE /steps/:id); a step never saved is just dropped. */
@@ -257,7 +276,7 @@ export async function deleteDraft (b: StepsBucket, d: StepDraft): Promise<boolea
   try {
     await http.del(`/steps/${d.id}`)
     removeDraft(b, d)
-    stepDeletedSinceReload = true
+    stepsDeletedSinceReload.add(b.experimentId)
     return true
   } catch (e) {
     d.status = 'error'
@@ -333,10 +352,13 @@ watch(() => admin.experiment?.id, (now, before) => {
   })
 })
 
-/** The toast's way back. Switching rebuilds the shared engine, so ask first while anyone is using it. */
+/**
+ * The toast's way back. Switching rebuilds the shared engine when no session is live there, so ask
+ * first while anyone is using it.
+ */
 async function switchBack (id: number, name: string) {
   if (!ensureConnected()) return
-  if (!await confirmEngineRebuild({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+  if (!await confirmSwitch({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
   const asked = Date.now()
   const res = await actions.selectExperiment(id)
   if (!res) {

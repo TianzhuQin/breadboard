@@ -174,6 +174,20 @@ sudo systemctl enable --now breadboard
 
 `Restart=on-failure` starts it again if it stops by itself.
 
+**A folder the server can't write**, such as one root keeps read-only under `/opt`, works too, as
+long as the folders the server writes exist and are the account's, and Java's pid file
+(`RUNNING_PID`, which would go into the folder) goes somewhere the account can write:
+
+```bash
+sudo mkdir -p /opt/breadboard/db /opt/breadboard/logs /opt/breadboard/backups
+sudo chown breadboard: /opt/breadboard/db /opt/breadboard/logs /opt/breadboard/backups
+```
+
+and in the service, `RuntimeDirectory=breadboard` and
+`ExecStart=/opt/breadboard/breadboard.sh -Dpidfile.path=/run/breadboard/RUNNING_PID`. It can't make
+`conf/application.secret` there either: put one in that the account can read (copied from an
+earlier folder, or made with `openssl rand -hex 32`), or set `APPLICATION_SECRET`.
+
 **On a Mac that stays on** (a lab computer), launchd can start Breadboard at login and again if
 it stops. Save this as `~/Library/LaunchAgents/org.breadboard.plist`, with the path to your
 Breadboard folder in both places:

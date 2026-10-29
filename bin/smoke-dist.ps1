@@ -1,9 +1,14 @@
 # Check a Windows release the way someone installing it would use it (bin/smoke-dist does the same
 # on macOS and Linux): unzip it, start breadboard.bat, wait until it answers, create the first
-# account, sign in, back up the database, check that starting it a second time says the port is in
-# use, then stop it and look for errors in its log.
+# account, sign in, back up the database, check what a second start says (from the same folder:
+# that Breadboard runs from it already, and where; from another copy, on the same port: that the
+# port is in use), then stop it and look for errors in its log.
 #
-#   powershell -File bin\smoke-dist.ps1 -Zip target\release\breadboard-<version>-windows-x64.zip
+# It is unzipped into a folder whose path has spaces, parentheses and an "&" (as Explorer's Extract
+# All of a second download, "... (1)", or a lab's "R&D" folder has), and the other copy into one
+# with a "!": breadboard.bat must cope with them.
+#
+#   pwsh -File bin\smoke-dist.ps1 -Zip target\release\breadboard-<version>-windows-x64.zip
 #
 # A release that carries its own Java must run on it: JAVA8_HOME and JAVA_HOME are ignored here.
 param(
@@ -17,30 +22,39 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ('bbsmoke-' + [Guid]::NewGuid().ToS
 New-Item -ItemType Directory -Path $work | Out-Null
 $base = "http://localhost:$Port"
 $app = $null
+$other = $null
 
 function Stop-Breadboard {
-  if ($app) {
-    Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" |
-      Where-Object { $_.CommandLine -like "*$app*" } |
-      ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  foreach ($folder in @($app, $other)) {
+    if ($folder) {
+      Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($folder) } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
   }
 }
 function Fail([string]$why) {
   Write-Host "FAIL: $why"
   foreach ($f in 'out.log', 'err.log') {
     $p = Join-Path $work $f
-    if (Test-Path $p) { Write-Host "---- $f ----"; Get-Content $p -Tail 60 | Write-Host }
+    if (Test-Path -LiteralPath $p) { Write-Host "---- $f ----"; Get-Content -LiteralPath $p -Tail 60 | Write-Host }
   }
   Stop-Breadboard
   exit 1
 }
 function Pass([string]$what) { Write-Host "ok   $what" }
 
-Expand-Archive -Path $Zip -DestinationPath $work
-$app = (Get-ChildItem -Path $work -Directory | Where-Object { $_.Name -like 'breadboard-*' } | Select-Object -First 1).FullName
-if (-not $app) { Fail 'the zip has no breadboard-* folder' }
-if (-not (Test-Path (Join-Path $app 'breadboard.bat'))) { Fail 'the zip has no breadboard.bat' }
-if (-not (Test-Path (Join-Path $app 'jre\bin\java.exe'))) { Fail 'the zip has no jre\bin\java.exe' }
+# Unzip the release into $into; the breadboard-* folder it holds.
+function Expand-Release([string]$into) {
+  Expand-Archive -LiteralPath $Zip -DestinationPath $into
+  $found = Get-ChildItem -LiteralPath $into -Directory | Where-Object { $_.Name -like 'breadboard-*' } | Select-Object -First 1
+  if (-not $found) { Fail "the zip has no breadboard-* folder" }
+  return $found.FullName
+}
+
+$app = Expand-Release (Join-Path $work 'R&D downloads (1)')
+if (-not (Test-Path -LiteralPath (Join-Path $app 'breadboard.bat'))) { Fail 'the zip has no breadboard.bat' }
+if (-not (Test-Path -LiteralPath (Join-Path $app 'jre\bin\java.exe'))) { Fail 'the zip has no jre\bin\java.exe' }
 Pass 'release layout'
 
 Remove-Item Env:JAVA8_HOME -ErrorAction SilentlyContinue
@@ -48,13 +62,14 @@ Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue
 $env:BREADBOARD_NO_BROWSER = '1'
 # PAUSE (after a failure) reads from here, and so doesn't wait
 $empty = Join-Path $work 'empty.txt'
-Set-Content -Path $empty -Value ''
+Set-Content -LiteralPath $empty -Value ''
 
-function Start-Breadboard([string]$out, [string]$err, [switch]$Wait) {
+# breadboard.bat in $folder, on $on; its output goes to $out and $err in $work.
+function Start-Breadboard([string]$folder, [int]$on, [string]$out, [string]$err, [switch]$Wait) {
   $opts = @{
     FilePath               = 'cmd.exe'
-    ArgumentList           = @('/c', 'breadboard.bat', "-Dhttp.port=$Port")
-    WorkingDirectory       = $app
+    ArgumentList           = @('/c', 'breadboard.bat', "-Dhttp.port=$on")
+    WorkingDirectory       = $folder
     PassThru               = $true
     NoNewWindow            = $true
     RedirectStandardInput  = $empty
@@ -65,7 +80,12 @@ function Start-Breadboard([string]$out, [string]$err, [switch]$Wait) {
   Start-Process @opts
 }
 
-$server = Start-Breadboard 'out.log' 'err.log'
+# What a start that was turned away printed (empty when nothing)
+function Get-Said([string]$out) {
+  return [string](Get-Content -LiteralPath (Join-Path $work $out) -Raw)
+}
+
+$server = Start-Breadboard $app $Port 'out.log' 'err.log'
 $deadline = (Get-Date).AddSeconds(240)
 $health = $null
 while (-not $health) {
@@ -75,9 +95,9 @@ while (-not $health) {
   try { $health = Invoke-RestMethod -Uri "$base/health" -TimeoutSec 10 } catch { $health = $null }
 }
 if ($health.status -ne 'ok') { Fail "/health says $($health | ConvertTo-Json -Compress)" }
-Pass 'server started'
+Pass 'server started (from a folder whose path has spaces, parentheses and an "&")'
 
-$java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -like "*$app*" } | Select-Object -First 1
+$java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($app) } | Select-Object -First 1
 if (-not $java -or $java.ExecutablePath -ne (Join-Path $app 'jre\bin\java.exe')) { Fail "the server doesn't run on the Java in jre\ ($($java.ExecutablePath))" }
 Pass 'it runs on the Java that comes with it'
 
@@ -104,19 +124,32 @@ Pass 'signed in; account state and accounts load'
 
 $backups = Invoke-RestMethod -Uri "$base/backups" -Method Post -WebSession $web
 $manual = $backups.backups | Where-Object { $_.name -like '*-manual.zip' } | Select-Object -First 1
-if (-not $manual -or -not (Test-Path (Join-Path $app "backups\$($manual.name)"))) { Fail 'backing up made no file in backups\' }
+if (-not $manual -or -not (Test-Path -LiteralPath (Join-Path $app "backups\$($manual.name)"))) { Fail 'backing up made no file in backups\' }
 Pass 'a backup made in the console is in backups\'
 
-$second = Start-Breadboard 'second.log' 'second-err.log' -Wait
-$said = Get-Content (Join-Path $work 'second.log') -Raw
-if ($second.ExitCode -ne 1 -or $said -notmatch "Port $Port is in use") { Fail "a second start didn't say the port is in use (exit code $($second.ExitCode)): $said" }
-Pass 'a second start says the port is in use'
+# A second start from the same folder, on another port, is turned away with the first one's address
+# (breadboard.bat looks for one running from its folder before it looks at the port).
+$second = Start-Breadboard $app ($Port + 1) 'second.log' 'second-err.log' -Wait
+$said = Get-Said 'second.log'
+if ($second.ExitCode -ne 1 -or -not $said.Contains('Breadboard is already running from this folder') -or -not $said.Contains("http://localhost:$Port,")) {
+  Fail "a second start from the same folder didn't say where the first one is (exit code $($second.ExitCode)): $said"
+}
+Pass 'a second start from the same folder says where the first one is'
+
+# Another copy (a second download, unzipped elsewhere) started on the same port says the port is in use.
+$other = Expand-Release (Join-Path $work 'another copy! (2)')
+$third = Start-Breadboard $other $Port 'third.log' 'third-err.log' -Wait
+$said = Get-Said 'third.log'
+if ($third.ExitCode -ne 1 -or -not $said.Contains("Port $Port is in use")) {
+  Fail "another copy started on the same port didn't say the port is in use (exit code $($third.ExitCode)): $said"
+}
+Pass 'another copy on the same port says the port is in use (from a folder whose path has a "!")'
 
 Stop-Breadboard
 Start-Sleep -Seconds 3
 $log = Join-Path $app 'logs\application.log'
-if (Test-Path $log) {
-  $errors = Select-String -Path $log -Pattern '\[ERROR\]|Exception' | Select-Object -First 20
+if (Test-Path -LiteralPath $log) {
+  $errors = Select-String -LiteralPath $log -Pattern '\[ERROR\]|Exception' | Select-Object -First 20
   if ($errors) { $errors | ForEach-Object { Write-Host $_.Line }; Fail 'the server logged errors' }
 }
 Pass 'no errors in the log'

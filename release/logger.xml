@@ -28,6 +28,9 @@
 
   <logger name="play" level="INFO" />
   <logger name="application" level="INFO" />
+  <!-- Akka's own warnings and errors (akka.loggers in conf/application-prod.conf), e.g. the fatal
+       error that stops the server -->
+  <logger name="akka" level="WARN" />
 
   <!-- Noise from libraries that configure themselves (the connection pool warns about settings
        H2 doesn't need) -->

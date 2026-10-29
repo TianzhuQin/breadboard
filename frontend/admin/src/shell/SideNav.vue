@@ -21,7 +21,7 @@
           <component :is="item.icon" :size="17" class="sidenav__icon" aria-hidden="true" />
           <span class="sidenav__label">{{ item.label }}</span>
           <span v-if="item.to === '/session' && running" class="sidenav__live" aria-label="running" />
-          <span v-if="item.to === '/players' && playerCount" class="sidenav__count">{{ playerCount }}</span>
+          <span v-if="item.to === '/players' && playerCount && !engineElsewhere" class="sidenav__count">{{ playerCount }}</span>
         </RouterLink>
       </div>
     </div>
@@ -49,9 +49,11 @@ import { NAV, FOOTER_NAV } from './nav'
 import BrandMark from './BrandMark.vue'
 import ExperimentSwitcher from './ExperimentSwitcher.vue'
 import AccountMenu from './AccountMenu.vue'
-import { graph, running } from '@/store/admin'
+import { engineElsewhere, graph, running } from '@/store/admin'
 
 const emit = defineEmits<{ navigate: [] }>()
+// The engine's players: not counted while it runs another experiment than the one worked on here,
+// whose players they are (the Run pages say whose).
 const playerCount = computed(() => { void graph.version.value; return graph.nodes.size })
 </script>
 

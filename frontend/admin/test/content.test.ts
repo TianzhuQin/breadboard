@@ -30,8 +30,9 @@ vi.mock('@/store/admin', async () => {
   }
 })
 
+// (switching asks only when it would rebuild the engine under someone: see engineGuard's confirmSwitch)
 const rebuild = vi.hoisted(() => vi.fn(async (_opts: any) => true))
-vi.mock('@/store/engineGuard', () => ({ confirmEngineRebuild: rebuild }))
+vi.mock('@/store/engineGuard', () => ({ confirmSwitch: rebuild }))
 
 const confirmMock = vi.hoisted(() => vi.fn(async (_req: any) => true))
 vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: false, req: null, resolve: null }, settleConfirm: () => {} }))

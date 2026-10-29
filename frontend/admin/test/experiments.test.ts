@@ -29,13 +29,23 @@ vi.mock('@/store/admin', async () => {
   Object.defineProperty(store.running, 'value', { get: () => running.value, set: (v) => { running.value = v } })
   const admin = reactive({ experiment: null as any, instance: null as any, email: 'r@lab.org', events: [], user: null as any, requestError: null as any })
   ;(store as any).admin = admin
+  // what the engine runs when that is another experiment than the selected one (engineGuard reads it)
+  const engineElsewhere = ref<any>(null)
+  ;(store as any).engineElsewhere = engineElsewhere
+  const graph = { nodes: new Map() }
+  ;(store as any).graph = graph
+  // why file mode can't be switched on now ('' when it can)
+  const fileModeBlocked = ref('')
+  ;(store as any).fileModeBlocked = fileModeBlocked
   return {
     admin,
     actions: store.actions,
     experiments: computed(() => list),
     running,
+    engineElsewhere,
+    fileModeBlocked,
     ensureConnected: () => true,
-    graph: { nodes: new Map() },
+    graph,
   }
 })
 
@@ -307,22 +317,40 @@ describe('Import dialog', () => {
     w.unmount()
   })
 
-  it('asks before switching to the import while someone uses the engine', async () => {
+  it('switches to the import without asking while another account\'s session runs (it keeps running)', async () => {
     http.post.mockResolvedValue({ id: 44, name: 'Shared' })
     ;(store as any).admin.user = { engine: { experimentId: 1, experimentName: 'Existing', sessionId: 41, sessionName: 'live run', owner: 'boss@lab.org' } }
     confirmMock.mockClear()
-    confirmMock.mockResolvedValueOnce(false)
     try {
       const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Shared.zip'))
       submit().click()
       await flushPromises()
-      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Shared” now?', danger: true })
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(44)
+      w.unmount()
+    } finally {
+      ;(store as any).admin.user = null
+    }
+  })
+
+  it('asks before switching to the import when that would empty a network nobody can account for', async () => {
+    http.post.mockResolvedValue({ id: 45, name: 'Unsure' })
+    // players in the network, and the server can't say whose (GET /autopilot doesn't answer)
+    ;(store as any).graph.nodes.set('p1', { id: 'p1', data: {} })
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(false)
+    try {
+      const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Unsure.zip'))
+      submit().click()
+      await flushPromises()
+      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Unsure” now?', danger: true })
+      expect(confirmMock.mock.calls[0][0].message).toContain('1 player is in the network right now')
       expect(store.actions.selectExperiment).not.toHaveBeenCalled()
       // the new experiment still shows up in the list
       expect(store.actions.refresh).toHaveBeenCalled()
       w.unmount()
     } finally {
-      ;(store as any).admin.user = null
+      ;(store as any).graph.nodes.clear()
     }
   })
 
@@ -366,14 +394,16 @@ describe('Import dialog', () => {
     w.unmount()
   })
 
-  it('only refreshes the list when a session is running (switching would disconnect people)', async () => {
+  it('works on the import even while a session runs (switching leaves it running)', async () => {
     store.running.value = true
     http.post.mockResolvedValue({ id: 43, name: 'Later' })
     const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Later.zip'))
+    const tick = document.querySelector<HTMLInputElement>('.b-dialog input[type="checkbox"]')!
+    expect(tick.checked).toBe(true)
+    expect(tick.disabled).toBe(false)
     submit().click()
     await flushPromises()
-    expect(store.actions.selectExperiment).not.toHaveBeenCalled()
-    expect(store.actions.refresh).toHaveBeenCalled()
+    expect(store.actions.selectExperiment).toHaveBeenCalledWith(43)
     w.unmount()
   })
 })
@@ -416,30 +446,42 @@ describe('New experiment dialog', () => {
     w.unmount()
   })
 
-  it('asks before switching to it while someone uses the engine, and stays put on Cancel', async () => {
+  it('works on it while another account\'s session runs, and says that session keeps running', async () => {
     http.put.mockResolvedValue({ id: 6, name: 'Fresh' })
-    ;(store as any).admin.user = { engine: { experimentId: 5, experimentName: 'Base', sessionId: 40, sessionName: 'their run', owner: 'boss@lab.org' } }
+    const engine = { experimentId: 5, experimentName: 'Base', sessionId: 40, sessionName: 'their run', owner: 'boss@lab.org' }
+    const admin = (store as any).admin
+    admin.user = { engine }
     confirmMock.mockClear()
-    confirmMock.mockResolvedValueOnce(false)
+    toasts.splice(0)
+    // the server's answer: the new experiment selected, the engine still running the other one
+    store.actions.selectExperiment.mockImplementationOnce(async () => {
+      admin.experiment = { id: 6, name: 'Fresh', instances: [], steps: [], languages: [] }
+      ;(store as any).engineElsewhere.value = engine
+      return null
+    })
     try {
       const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
       await w.setProps({ open: true })
+      const tick = document.querySelector<HTMLInputElement>('.b-dialog input[type="checkbox"]')!
+      expect(tick.checked).toBe(true)
+      expect(tick.disabled).toBe(false)
       const name = document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!
       name.value = 'Fresh'
       name.dispatchEvent(new Event('input'))
       document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
       await flushPromises()
       expect(http.put).toHaveBeenCalledTimes(1)
-      expect(confirmMock).toHaveBeenCalledTimes(1)
-      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Fresh” now?', danger: true })
-      expect(confirmMock.mock.calls[0][0].message).toContain('boss@lab.org has session “their run” of “Base” running.')
-      expect(store.actions.selectExperiment).not.toHaveBeenCalled()
-      // created all the same, so the dialog closes
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(6)
+      const said = toasts.find(t => t.title === 'Created “Fresh”')
+      expect(said?.detail).toBe('You are now working on it. The engine keeps running “Base” (session “their run”), untouched. Edit this experiment and see its data here; to run it, end that session first.')
       const opened = w.emitted('update:open') || []
       expect(opened[opened.length - 1]).toEqual([false])
       w.unmount()
     } finally {
-      ;(store as any).admin.user = null
+      admin.user = null
+      admin.experiment = null
+      ;(store as any).engineElsewhere.value = null
     }
   })
 
@@ -557,6 +599,39 @@ describe('Experiments page', () => {
     w.unmount()
   })
 
+  it('won\'t switch file mode on while another experiment\'s session runs in the engine, and says why', async () => {
+    const FileModeDialog = (await import('../src/pages/experiments/FileModeDialog.vue')).default
+    const why = 'The engine is running “Live study”’s session “Wave 2”. In file mode a step file you save runs at once, which it can’t while that session runs. Switch file mode on once it has ended.'
+    ;(store as any).fileModeBlocked.value = why
+    store.actions.toggleFileMode.mockClear()
+    const admin = (store as any).admin
+    try {
+      const w = mount(FileModeDialog, { props: { open: true }, attachTo: document.body })
+      await flushPromises()
+      expect(document.querySelector('.xfm__blocked')!.textContent).toBe(why)
+      const go = [...document.querySelectorAll<HTMLButtonElement>('.b-dialog button')].find(b => /Switch to file mode/.test(b.textContent || ''))!
+      expect(go.disabled).toBe(true)
+      go.click()
+      await flushPromises()
+      expect(store.actions.toggleFileMode).not.toHaveBeenCalled()
+      // and the dialog says when a saved file runs
+      expect(document.querySelector('.xfm__list')!.textContent).toContain('it runs at once in the engine (while the engine runs this experiment)')
+      w.unmount()
+
+      // Leaving file mode doesn't touch the engine: that stays possible.
+      admin.experiment = B
+      const back = mount(FileModeDialog, { props: { open: true }, attachTo: document.body })
+      await flushPromises()
+      expect(document.querySelector('.xfm__blocked')).toBe(null)
+      const leave = [...document.querySelectorAll<HTMLButtonElement>('.b-dialog button')].find(b => /Import the files and switch/.test(b.textContent || ''))!
+      expect(leave.disabled).toBe(false)
+      back.unmount()
+    } finally {
+      ;(store as any).fileModeBlocked.value = ''
+      admin.experiment = A
+    }
+  })
+
   it('opens the New dialog from ?action=new and clears the query', async () => {
     const { w, router } = await mountAt('/experiments?action=new')
     expect(document.querySelector('.b-dialog__title')!.textContent).toBe('New experiment')
@@ -615,10 +690,54 @@ describe('Experiments page', () => {
     w.unmount()
   })
 
-  it('asks before switching while another account\'s session runs on the shared engine', async () => {
+  it('switches without asking while a session runs on the shared engine, which keeps running', async () => {
     store.actions.selectExperiment.mockClear()
-    // not this account's session: the engine info in the User JSON says who runs what
-    ;(store as any).admin.user = { engine: { experimentId: 300, experimentName: 'Alpha', sessionId: 2, sessionName: 'lab manager run', owner: 'boss@lab.org' } }
+    // another account's session (the engine info in the User JSON says who runs what)
+    const engine = { experimentId: 300, experimentName: 'Alpha', sessionId: 2, sessionName: 'lab manager run', owner: 'boss@lab.org' }
+    const admin = (store as any).admin
+    admin.user = { engine }
+    toasts.splice(0)
+    store.actions.selectExperiment.mockImplementationOnce(async () => {
+      admin.experiment = B
+      ;(store as any).engineElsewhere.value = engine
+      return null
+    })
+    try {
+      const { w } = await mountAt('/experiments')
+      await workOn(w, 1).trigger('click')
+      await flushPromises()
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(301)
+      const said = toasts.find(t => t.title === 'Now working on “Beta”')
+      expect(said?.detail).toBe('The engine keeps running “Alpha” (session “lab manager run”), untouched. Edit this experiment and see its data here; to run it, end that session first.')
+      w.unmount()
+    } finally {
+      admin.user = null
+      ;(store as any).engineElsewhere.value = null
+    }
+  })
+
+  it('switches without asking while this account\'s own session runs (no more “Stop the running session first”)', async () => {
+    store.actions.selectExperiment.mockClear()
+    store.running.value = true
+    ;(store as any).admin.instance = { id: 1, name: 's1', status: 'RUNNING' }
+    toasts.splice(0)
+    try {
+      const { w } = await mountAt('/experiments')
+      await workOn(w, 1).trigger('click')
+      await flushPromises()
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(301)
+      expect(toasts.some(t => /Stop the running session|autopilot is running/.test(t.title))).toBe(false)
+      w.unmount()
+    } finally {
+      ;(store as any).admin.instance = null
+    }
+  })
+
+  it('asks before a switch that would empty a network nobody can account for', async () => {
+    store.actions.selectExperiment.mockClear()
+    ;(store as any).graph.nodes.set('p1', { id: 'p1', data: {} })
     confirmMock.mockResolvedValueOnce(false)
     try {
       const { w } = await mountAt('/experiments')
@@ -626,11 +745,11 @@ describe('Experiments page', () => {
       await flushPromises()
       expect(confirmMock).toHaveBeenCalledTimes(1)
       expect(confirmMock.mock.calls[0][0]).toMatchObject({ danger: true, title: 'Switch to “Beta”?', confirmLabel: 'Switch anyway' })
-      expect(confirmMock.mock.calls[0][0].message).toContain('boss@lab.org has session “lab manager run” of “Alpha” running.')
+      expect(confirmMock.mock.calls[0][0].message).toContain('1 player is in the network right now')
       expect(store.actions.selectExperiment).not.toHaveBeenCalled()
       w.unmount()
     } finally {
-      ;(store as any).admin.user = null
+      ;(store as any).graph.nodes.clear()
     }
   })
 

@@ -1,12 +1,14 @@
 import { http } from '@/lib/http'
 import { confirm } from '@/ui/confirm'
-import { admin, graph, running } from './admin'
+import { admin, engineElsewhere, graph, running } from './admin'
+import type { EngineInfo } from './types'
 
 /**
  * The script engine is one for the whole server: every account's console and the autopilot share
- * it (app/models/Breadboard.java). Switching experiment, reloading the engine, and launching or
- * resuming a session all rebuild it, which empties the network and disconnects everyone in it,
- * whoever's session they are in. Ask before doing that while anyone is using it.
+ * it (app/models/Breadboard.java). Reloading the engine, and launching or resuming a session, all
+ * rebuild it, which empties the network and disconnects everyone in it, whoever's session they are
+ * in; so does switching experiments, but only while no session is live there (otherwise switching
+ * changes just what this console works on). Ask before doing that while anyone is using it.
  */
 
 type Named = { id: number, name: string }
@@ -23,16 +25,17 @@ type EngineSession = Named & { experimentName: string | null, owner: string | nu
  * console last heard what the engine runs (admin.user.engine is asked for once the engine says it
  * rebuilt, which can be before the session that rebuild is for has started).
  */
-async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null, autopilotLive: boolean, known: boolean }> {
+async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null, autopilotOn: boolean, autopilotLive: boolean, known: boolean }> {
   try {
     const answer = http.get<any>('/autopilot', { quiet401: true })
     const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))
     const s = await Promise.race([answer, timeout])
     const status = s && s.status && typeof s.status === 'object' ? s.status : null
     const auto = autopilotSession(status)
-    return { auto, other: otherSession(status), autopilotLive: !!auto && status.on === true && status.paused !== true, known: !!status }
+    const on = !!status && status.on === true
+    return { auto, other: otherSession(status), autopilotOn: on, autopilotLive: !!auto && on && status.paused !== true, known: !!status }
   } catch (e) {
-    return { auto: null, other: null, autopilotLive: false, known: false }
+    return { auto: null, other: null, autopilotOn: false, autopilotLive: false, known: false }
   }
 }
 
@@ -141,14 +144,63 @@ export function reloadKeeps (): number | undefined {
  * `detail`, when given, is said after it (e.g. that a named session is stopped).
  */
 export async function confirmEngineRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string, keeping?: number }): Promise<boolean> {
-  const { who, pausesAutopilot } = await engineUse(opts.keeping)
-  if (!who) return true
+  const use = await engineUse(opts.keeping)
+  if (!use.who) return true
+  return askRebuild(opts, use)
+}
+
+function askRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string }, use: { who: string, pausesAutopilot: boolean }): Promise<boolean> {
   return confirm({
     title: opts.title,
-    message: `${who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
+    message: `${use.who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
       (opts.detail ? ` ${opts.detail}` : '') +
-      (pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : ''),
+      (use.pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : ''),
     confirmLabel: opts.confirmLabel || 'Continue anyway',
     danger: true,
   })
+}
+
+/**
+ * Before switching experiments: ask only when the switch rebuilds the engine under someone. While a
+ * session is live in the engine (the autopilot's, or any researcher's), selecting changes only what
+ * this console works on, and the server leaves the engine and that session alone
+ * (ScriptBoard.sessionKeptBySelection): nothing to ask. Otherwise the engine loads the selected
+ * experiment's steps, and this asks as confirmEngineRebuild does (at once true when nobody uses it).
+ */
+export async function confirmSwitch (opts: { title: string, action: string, confirmLabel?: string }): Promise<boolean> {
+  const use = await engineUse()
+  if (use.endsSession || !use.who) return true
+  return askRebuild(opts, use)
+}
+
+/**
+ * What to say after switching experiments while the engine runs another one's session, which the
+ * switch left running; '' when the engine runs the selected experiment or has no live session.
+ */
+export function switchedNote (): string {
+  const e = engineElsewhere.value
+  if (!e || e.sessionId === null) return ''
+  const what = e.experimentName ? `“${e.experimentName}”` : 'another experiment'
+  return `The engine keeps running ${what}${e.sessionName ? ` (session “${e.sessionName}”)` : ''}, untouched. Edit this experiment and see its data here; to run it, end that session first.`
+}
+
+/**
+ * Whose live session the engine runs, in words: "the autopilot’s session “S”" (when `autopilot`),
+ * "your session “S”", "x@lab’s session “S”", or "session “S”" when nobody is named.
+ */
+export function sessionWords (e: Pick<EngineInfo, 'sessionId' | 'sessionName' | 'owner'>, autopilot = false): string {
+  const name = e.sessionName ? `session “${e.sessionName}”` : 'session'
+  if (autopilot) return `the autopilot’s ${name}`
+  if (e.owner && e.owner.toLowerCase() === admin.email.toLowerCase()) return `your ${name}`
+  return e.owner ? `${e.owner}’s ${name}` : name
+}
+
+/**
+ * Whether the engine's live session `id` is the autopilot's, as GET /autopilot says: it is on, and
+ * that is its session, so ending it pauses the autopilot. False when the server can't be asked.
+ */
+export async function isAutopilotSession (id: number | null): Promise<boolean> {
+  if (id === null) return false
+  const { auto, autopilotOn } = await engineSessions()
+  return autopilotOn && !!auto && auto.id === id
 }

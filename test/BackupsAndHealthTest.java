@@ -1,6 +1,13 @@
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.avaje.ebean.Ebean;
+import com.avaje.ebean.SqlRow;
 import com.fasterxml.jackson.databind.JsonNode;
 import models.*;
 import org.junit.Test;
+import org.slf4j.LoggerFactory;
 import play.libs.Json;
 import play.mvc.Result;
 
@@ -10,6 +17,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.zip.ZipFile;
 
 import static org.junit.Assert.*;
@@ -28,6 +36,67 @@ public class BackupsAndHealthTest extends BaseTest {
         JsonNode body = Json.parse(contentAsString(health));
         assertEquals("ok", body.get("status").asText());
         assertEquals("ok", body.get("database").asText());
+        assertFalse("no reason while it is well", body.has("reason"));
+        assertTrue(body.toString(), body.get("diskFreeMb").isIntegralNumber());
+        assertTrue(body.toString(), body.get("diskFreeMb").asLong() >= 100);
+        assertTrue(body.has("version"));
+        assertTrue(body.has("uptimeSeconds"));
+    }
+
+    @Test
+    public void eachHealthCheckWritesItsHeartbeatRow() throws Exception {
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        SqlRow first = Ebean.createSqlQuery("select count(*) as row_count, max(checked_at) as checked_at from health_check").findUnique();
+        assertEquals("one row, however many checks", 1, first.getInteger("row_count").intValue());
+        Thread.sleep(20);
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        SqlRow second = Ebean.createSqlQuery("select count(*) as row_count, max(checked_at) as checked_at from health_check").findUnique();
+        assertEquals(1, second.getInteger("row_count").intValue());
+        assertTrue("updated by the second check", second.getTimestamp("checked_at").after(first.getTimestamp("checked_at")));
+    }
+
+    /**
+     * A full disk left H2 holding a lock it never released ("Timeout trying to lock table USERS"),
+     * while select 1 still answered: here another connection holds the accounts locked.
+     */
+    @Test
+    public void healthFailsWhileTheDatabaseKeepsTheAccountsLocked() throws Exception {
+        Language lang = createLanguage("eng", "English");
+        createUser("pi@lab.org", "PI", "password123", lang);
+        // well first, so that the failure below is a change, which the log notes
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        Logger log = (Logger) LoggerFactory.getLogger("application");
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        log.addAppender(logged);
+        Level level = log.getLevel();
+        log.setLevel(Level.INFO);
+        try (Connection stuck = DriverManager.getConnection("jdbc:h2:mem:breadboard-test;MODE=MYSQL;DB_CLOSE_DELAY=-1", "", "")) {
+            stuck.setAutoCommit(false);
+            try (Statement s = stuck.createStatement()) {
+                s.executeUpdate("update users set name = name");
+            }
+            long started = System.currentTimeMillis();
+            Result health = route(fakeRequest(GET, "/health"));
+            long took = System.currentTimeMillis() - started;
+            assertEquals(contentAsString(health), SERVICE_UNAVAILABLE, status(health));
+            JsonNode body = Json.parse(contentAsString(health));
+            assertEquals("failing", body.get("status").asText());
+            assertEquals("failing", body.get("database").asText());
+            // Fixed words: /health needs no sign-in, and the database's own message names its tables
+            // (and, on a full disk, its file's path).
+            assertEquals(body.toString(), "the database could not be written", body.get("reason").asText());
+            String said = logged.list.stream().map(ILoggingEvent::getFormattedMessage).collect(Collectors.joining("\n"));
+            assertTrue(said, said.contains("Health check: failing"));
+            assertTrue("the details are in the log: " + said, said.toLowerCase().contains("lock"));
+            assertTrue("it doesn't hang: " + took + " ms", took < 8000);
+            stuck.rollback();
+        } finally {
+            log.detachAppender(logged);
+            log.setLevel(level);
+        }
+        Result again = route(fakeRequest(GET, "/health"));
+        assertEquals(contentAsString(again), OK, status(again));
     }
 
     @Test

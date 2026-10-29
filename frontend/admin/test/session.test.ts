@@ -628,6 +628,32 @@ describe('session controls', () => {
     store2.admin.experiment = null
   })
 
+  it('says why a session that was over already wasn\'t stopped (the autopilot isn\'t paused for it)', async () => {
+    const live = { id: 9, name: 'Auto 3', status: 'RUNNING' } as any
+    const why = 'Nothing was stopped: session "Auto 3" is already over (it has finished).'
+    store.autopilotNow.mockResolvedValueOnce(null)
+    store.stopInstance.mockImplementationOnce(async () => {
+      store2.admin.requestError = { request: 'StopGame', text: why, at: Date.now() }
+      return null
+    })
+    const done = stopSession(live)
+    await flushPromises()
+    settleConfirm(true)
+    await done
+    expect(toasts[toasts.length - 1]).toMatchObject({ title: '“Auto 3” was not stopped', detail: why })
+
+    // an older refusal isn't the answer: no word from the server is said as such
+    store.autopilotNow.mockResolvedValueOnce(null)
+    store2.admin.requestError = { request: 'StopGame', text: why, at: Date.now() - 60000 }
+    store.stopInstance.mockImplementationOnce(async () => null)
+    const again = stopSession(live)
+    await flushPromises()
+    settleConfirm(true)
+    await again
+    expect(toasts[toasts.length - 1]).toMatchObject({ title: 'The server did not confirm the stop' })
+    store2.admin.requestError = null
+  })
+
   it('says that resuming pauses the autopilot when the engine runs its session', async () => {
     store.engineUse.mockResolvedValueOnce({ who: 'The autopilot has session “Auto 3” open.', pausesAutopilot: true })
     const done = resumeSession(inst)

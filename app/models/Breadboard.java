@@ -501,9 +501,15 @@ public class Breadboard extends UntypedActor {
         breadboardMessage.user.setSelectedExperiment(selectExperiment.experiment);
         breadboardMessage.user.update();
 
-        // If there are steps associated with this experiment, load them
+        // While a session is live in the engine (the autopilot's or any researcher's), selecting
+        // changes only what this account works on: the engine and that session are left alone
+        // (ScriptBoard.sessionKeptBySelection). Otherwise the engine loads the experiment's steps.
         Experiment selectedExperiment = breadboardMessage.user.getExperiment();
-        if (selectedExperiment != null) {
+        ExperimentInstance live = selectedExperiment == null ? null : ScriptBoard.sessionKeptBySelection();
+        if (live != null) {
+          ScriptBoard.followLiveSession(breadboardMessage.user, live);
+          selectExperiment.engineKept = true;
+        } else if (selectedExperiment != null) {
           // TODO: Create "ChangeExperiment" action and handle it in ScriptBoard
           // Find Content based on currently selected Experiment
           BreadboardMessage change = new ChangeExperiment(breadboardMessage.user, selectedExperiment, breadboardMessage.out);
@@ -721,6 +727,12 @@ public class Breadboard extends UntypedActor {
       } else if (message instanceof ToggleFileMode) {
         Experiment selectedExperiment = breadboardMessage.user.getExperiment();
         if (selectedExperiment != null) {
+          // Not on while the engine runs another experiment's session: a saved step file couldn't run.
+          String refused = Boolean.TRUE.equals(selectedExperiment.fileMode) ? null : ScriptBoard.fileModeRefusal(breadboardMessage.user);
+          if (refused != null) {
+            replyError(breadboardMessage.out, "ToggleFileMode", refused);
+            return;
+          }
           try {
             selectedExperiment.toggleFileMode(breadboardMessage.user);
           } catch (Exception e) {
@@ -735,7 +747,10 @@ public class Breadboard extends UntypedActor {
       }
 
       ObjectNode userJson = breadboardMessage.user.toJson();
-      breadboardMessage.out.write(userJson);
+      // A selection that left the engine alone says so to the console that asked: no rebuild follows,
+      // so the engine this User JSON names is what runs now.
+      boolean kept = message instanceof SelectExperiment && ((SelectExperiment) message).engineKept;
+      breadboardMessage.out.write(kept ? userJson.deepCopy().put("engineKept", true) : userJson);
       if (message instanceof SelectExperiment || message instanceof ToggleFileMode
           || (message instanceof Update && ((Update) message).wholeAccount)) {
         // The account's other tabs show the same selection and session; one left behind would act on
@@ -768,6 +783,15 @@ public class Breadboard extends UntypedActor {
       instances.put(user.email, scriptBoard);
     }
 
+    // An account that has the experiment of the engine's live session selected follows that session,
+    // as when it selects the experiment: its console showed "No session is open" beside it, and
+    // offered to restart it.
+    try {
+      ScriptBoard.followLiveSession(user, ScriptBoard.sessionKeptBySelection());
+    } catch (Exception e) {
+      // (signing in goes on: the account just keeps the session it had)
+      Logger.warn("LogIn: " + user.email + " could not follow the live session: " + e);
+    }
     // User JSON first, then the network (the ScriptBoard actor writes it after this).
     out.write(user.toJson());
     // Registered now, not only when the engine actor gets to it (it may be busy for seconds), so
@@ -873,6 +897,8 @@ public class Breadboard extends UntypedActor {
 
   public static class SelectExperiment extends BreadboardMessage {
     final Experiment experiment;
+    // Set when a live session kept the engine, so only the selection changed (see its handling).
+    boolean engineKept = false;
 
     public SelectExperiment(User user, Experiment experiment, ThrottledWebSocketOut out) {
       super(user, out);
@@ -1250,19 +1276,34 @@ public class Breadboard extends UntypedActor {
 
   public static class RunOnJoinStep extends BreadboardMessage {
     final Vertex vertex;
+    // The engine whose player joined (ScriptBoard.engineGeneration), or null. It runs in whichever
+    // engine runs then, but what fails in it once another has been built isn't that one's game.
+    final Long generation;
 
     public RunOnJoinStep(User user, Vertex vertex, ThrottledWebSocketOut out) {
+      this(user, vertex, out, null);
+    }
+
+    public RunOnJoinStep(User user, Vertex vertex, ThrottledWebSocketOut out, Long generation) {
       super(user, out);
       this.vertex = vertex;
+      this.generation = generation;
     }
   }
 
   public static class RunOnLeaveStep extends BreadboardMessage {
     final Vertex vertex;
+    // As RunOnJoinStep's.
+    final Long generation;
 
     public RunOnLeaveStep(User user, Vertex vertex, ThrottledWebSocketOut out) {
+      this(user, vertex, out, null);
+    }
+
+    public RunOnLeaveStep(User user, Vertex vertex, ThrottledWebSocketOut out, Long generation) {
       super(user, out);
       this.vertex = vertex;
+      this.generation = generation;
     }
   }
 
