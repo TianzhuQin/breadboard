@@ -34,7 +34,8 @@ import java.util.concurrent.TimeUnit;
  * session unless a save asks it to ({@code takeOver}), doesn't take the engine by itself from a
  * researcher who has another experiment loaded in it and a console open, and pauses when a
  * researcher's action ends its session (Stop, or selecting, launching or reloading something else),
- * or when a step fails during the game of the session it opened, which then ends
+ * or when a step fails during the game of its own session (one it opened, or the one of its
+ * experiment that was open when Resume was pressed or its settings saved), which then ends
  * (ScriptBoard.stepFailed; a session a researcher runs by hand, even of its experiment, goes on). It
  * opens none while the disk that holds the database is almost full (diskFull). The game starts when
  * the waiting room says so (groovy/autopilot.groovy; its values can be set in the console, see
@@ -99,9 +100,10 @@ public final class Autopilot {
   private static volatile String doneBecause = null;
   // When a finished session's pause (nextSessionDelaySeconds) ends and the next one opens; 0 when none is due.
   private static volatile long nextOpenAt = 0L;
-  // The session it opened last (launchCarriedOut), until it pauses or is done (setHalt): the one a
-  // failing step ends (gameFailed). Any other session of its experiment, e.g. one a researcher
-  // launched by hand to take over, or its own resumed by hand later, is the researcher's.
+  // The session it opened last (launchCarriedOut), or the one of its experiment Resume or a save
+  // handed it (adoptLiveSession), until it pauses or is done (setHalt): the one a failing step ends
+  // (gameFailed). Any other session of its experiment, e.g. one a researcher launched by hand to take
+  // over, or its own resumed by hand later, is the researcher's until they hand it over that way.
   private static volatile Long ownSession = null;
 
   /** Opens a session (see openSession for the arguments). */
@@ -406,7 +408,7 @@ public final class Autopilot {
   /**
    * A step threw during the game of the engine's session, or as its game started
    * (ScriptBoard.stepFailed, gameStartFailed, joinOrLeaveStep): {@code error} is "line N: what went
-   * wrong". When it is the session the autopilot opened (isOwnSession, and it is still on), the
+   * wrong". When it is the autopilot's own session (isOwnSession, and it is still on), the
    * autopilot pauses until someone fixes the step and presses Resume, and true: ScriptBoard ends the
    * session, whose participants would otherwise wait for good. Any other session, even of its
    * experiment, is left to the researcher running it, and so is the reason it is paused (false).
@@ -440,10 +442,11 @@ public final class Autopilot {
   }
 
   /**
-   * Whether this is the session the autopilot opened, and it has been neither paused nor done since.
-   * A researcher's Launch while its session runs pauses it first, so the session they take over with
-   * is not its own, nor is one they launch to test after a pause, one after the single session of a
-   * run that isn't continuous, or its own session resumed by hand.
+   * Whether this is the session the autopilot opened (or was handed, see adoptLiveSession), and it has
+   * been neither paused nor done since. A researcher's Launch while its session runs pauses it first,
+   * so the session they take over with is not its own, nor is one they launch to test after a pause,
+   * one after the single session of a run that isn't continuous, or its own session resumed by hand,
+   * until Resume is pressed or the settings are saved while it is open.
    */
   static boolean isOwnSession(Long sessionId) {
     return sessionId != null && sessionId.equals(ownSession) && pausedBecause == null && doneBecause == null;
@@ -493,11 +496,13 @@ public final class Autopilot {
    * new waiting-room and takeover values at once; with the autopilot on, a session opens now if
    * none of this experiment is open and the engine runs no other session. A session of another
    * experiment is ended only with {@code takeOver} (the console asks first): a plain edit used to end
-   * another researcher's live session.
+   * another researcher's live session. A live session of its experiment is its own from now on
+   * (adoptLiveSession).
    */
   public static void settingsSaved(final AutopilotSettings saved, final boolean takeOver) {
     // Saving is the researcher's go-ahead again.
     setHalt(null, null, null);
+    adoptLiveSession();
     scheduler.execute(new Runnable() {
       public void run() {
         try {
@@ -517,10 +522,12 @@ public final class Autopilot {
    * Resume was pressed (POST /autopilot/resume). It changes no settings, so it also works while
    * application.conf is in charge, where saving is refused: the pause or the done state ends, and a
    * session opens now unless one of the experiment is open or another experiment's session is live
-   * (that one is left to end). A researcher who only has another experiment loaded gives it up.
+   * (that one is left to end). A researcher who only has another experiment loaded gives it up. A
+   * live session of its experiment is its own from now on (adoptLiveSession).
    */
   public static void resume(User by) {
     setHalt(null, null, null);
+    adoptLiveSession();
     final String why = "it was resumed" + (by == null ? "" : " by " + by.email);
     Logger.info("Autopilot: " + why);
     scheduler.execute(new Runnable() {
@@ -528,6 +535,34 @@ public final class Autopilot {
         openWhenDue(why, true, false);
       }
     });
+  }
+
+  /**
+   * Resume was pressed or the settings saved, and a session of its experiment is live (a researcher
+   * launched or resumed it by hand, or the settings now name its experiment): the autopilot opens none
+   * beside it ("open already"), and from now on keeps that one open as its own. Its links lead there,
+   * its waiting room starts the game, and nobody need be watching, so it counts as a session it opened
+   * (ownSession): a step that fails during its game ends it and pauses the autopilot, rather than
+   * leaving its participants waiting for good. Only on Resume or a save, the researcher handing it
+   * over: the periodic check leaves a session run by hand to whoever runs it.
+   */
+  private static void adoptLiveSession() {
+    Effective e;
+    ExperimentInstance live;
+    try {
+      e = effective();
+      live = liveEngineSession();
+    } catch (Exception ex) {
+      Logger.error("Autopilot: could not tell which session is open", ex);
+      return;
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    if (!e.isOn() || live == null || live.isTestInstance() || live.experiment == null
+        || !e.settings.experimentId.equals(live.experiment.id) || live.id.equals(ownSession)) {
+      return;
+    }
+    ownSession = live.id;
+    Logger.info("Autopilot: session " + live.name + " of its experiment is open; it keeps that one open as its own");
   }
 
   /**

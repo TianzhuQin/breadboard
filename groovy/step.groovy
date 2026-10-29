@@ -100,9 +100,11 @@ class Step {
   }
 
   // done(player), and what it returns; what it throws goes to reportFailure. Called as the step
-  // starts (with what its start marked), a done that throws takes the start back too, as a run that
+  // starts (with what its start marked), a done that throws hands the start back too, as a run that
   // throws does: an init step whose done fails at once (e.g. a typo in the next step's name) never
-  // got the game going, and the start may be tried again, as when the console's Start fails.
+  // got the game going, and the start may be tried again, as when the console's Start fails. One
+  // that started the next step first (its first round) did, and the server leaves its start
+  // (ScriptBoard.stepStartFailed).
   private def callDone(String player, startMark = null) {
     try {
       return done(player)
