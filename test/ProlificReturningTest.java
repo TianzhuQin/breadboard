@@ -227,6 +227,40 @@ public class ProlificReturningTest extends BaseTest {
     }
 
     @Test
+    public void someoneCutShortWhoseSessionWasResumedAndFinishedWithoutThemJoinsTheOpenOne() throws Exception {
+        // In the session when the researcher stopped it (or the server restarted) ...
+        ExperimentInstance resumed = openSession("resumed");
+        assertEquals(SEE_OTHER, status(enter("PIDRES")));
+        connection(seat(resumed, "PIDRES"), true);
+        tracker.track("sessionStopped", new LinkedHashMap<Object, Object>());
+        Thread.sleep(5);
+        // ... which was resumed and finished, its game played again by others
+        tracker.track("sessionResumed", new LinkedHashMap<Object, Object>());
+        connection("someone-else", true);
+        finishGame(resumed);
+        ParticipantAuth.reset();
+
+        ExperimentInstance open = openSession("open");
+        assertEquals(SEE_OTHER, status(enter("PIDRES")));
+        assertTrue(ParticipantAuth.isClaimed(open.id.toString(), seat(open, "PIDRES")));
+
+        // someone who came back after the resume and was there at the end did take part
+        ExperimentInstance again = openSession("again");
+        assertEquals(SEE_OTHER, status(enter("PIDBACK")));
+        tracker.track("sessionInterrupted", new LinkedHashMap<Object, Object>());
+        Thread.sleep(5);
+        tracker.track("sessionResumed", new LinkedHashMap<Object, Object>());
+        Thread.sleep(5);
+        connection(seat(again, "PIDBACK"), true);
+        finishGame(again);
+        ParticipantAuth.reset();
+        openSession("later");
+        Result took = enter("PIDBACK");
+        assertEquals(OK, status(took));
+        assertTrue(contentAsString(took).contains("already taken part"));
+    }
+
+    @Test
     public void aSessionThatFinishedWithoutThemDoesntCount() throws Exception {
         // They left before the end (the game went on without them) ...
         ExperimentInstance left = openSession("left");

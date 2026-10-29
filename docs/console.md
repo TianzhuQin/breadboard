@@ -314,7 +314,15 @@ recorded in a `prolificEntry` event. **When a participant finishes** builds the 
 step from your completion code, `recruitment.completeProlific(player, [completionCode: "…"])`:
 participants then see the code and a **Finish** button that takes them back to Prolific. **From
 Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus.
+Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
+
+**People don't take part twice.** Someone who opens the Prolific link again after they took part in
+this experiment (they were given a completion code, or were still there when a session's game
+finished) sees **You have already taken part in this study** with their code and a button back to
+Prolific, also after a server restart, and gets no seat. Someone whose session was stopped or cut
+short by a restart may join the open one. The check covers the whole experiment: for a new wave on
+Prolific with the same people, copy the experiment. Testing by hand, use **Try it as a test
+participant**, which makes up a new Prolific ID each time.
 
 **Mechanical Turk.** The server needs your AWS keys first ([install.md](install.md#settings)); until
 then the tab explains how to add them. At the top, choose **Sandbox** (practice) or **Production**

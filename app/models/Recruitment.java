@@ -73,7 +73,8 @@ public final class Recruitment {
   // For each session of the experiment that this PROLIFIC_PID entered (its prolificEntry event): the
   // session's state, the latest completion code recorded for the seat they had there, and whether
   // that seat's last connection event was a connection or a disconnection. Subqueries rather than
-  // joins, so each reads only the events of the sessions found (by the index on their session).
+  // joins, so each reads only the events of the sessions found (by the index on their session). The
+  // entries are found by the index on event data names (evolution 33): only prolificPid rows are read.
   private static final String PROLIFIC_SESSIONS_SQL =
       "select i.id as session_id, i.status as status, i.has_started as has_started,"
       + " (select code.value from events done"
@@ -86,7 +87,12 @@ public final class Recruitment {
       + "    join event_data who on who.event_id = conn.id"
       + "   where conn.experiment_instance_id = i.id and conn.name in ('clientConnected', 'clientDisconnected')"
       + "     and who.name = 'clientId' and who.value = seat.value"
-      + "   order by conn.id desc limit 1) as last_connection"
+      // only since the session last stopped, was cut short or resumed: a game resumed after a stop
+      // starts again, and someone in the first run who isn't in the new one didn't reach its end
+      + "     and not exists (select 1 from events restart where restart.experiment_instance_id = i.id"
+      + "       and restart.name in ('sessionStopped', 'sessionInterrupted', 'sessionResumed')"
+      + "       and restart.datetime >= conn.datetime)"
+      + "   order by conn.datetime desc, conn.id desc limit 1) as last_connection"
       + " from experiment_instances i"
       + " join events entry on entry.experiment_instance_id = i.id"
       + " join event_data pid on pid.event_id = entry.id"
