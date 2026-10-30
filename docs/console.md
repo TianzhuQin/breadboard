@@ -62,7 +62,9 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 
 While the console isn't connected, a notice under the top bar says so on every page, and on a phone
 the chip reads **Offline**. Each page shows what was last known until the console reconnects, which
-it does by itself. If Breadboard was stopped, start it again.
+it does by itself. If Breadboard was stopped, start it again. A console that has never connected
+stays on "Loading your experiments…" instead, its top bar saying **Reconnecting…**: usually a proxy
+in front of Breadboard doesn't pass websockets (see [install.md](install.md#putting-it-on-a-server)).
 
 There is one script engine per server, shared by every researcher's console and the autopilot.
 It runs one experiment at a time, which need not be the one you work on: while a session is running
