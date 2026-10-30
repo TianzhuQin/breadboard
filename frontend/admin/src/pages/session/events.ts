@@ -178,8 +178,8 @@ const KNOWN: Record<string, string> = {
   clientlogin: 'Someone signed in',
   clientconnected: 'A participant connected',
   clientdisconnected: 'A participant lost connection',
-  connectiongap: 'A participant\'s connection dropped for a moment, then came back',
-  answerdropped: 'A participant\'s answer was dropped: it waited too long for the connection',
+  connectiongap: 'A participant’s connection dropped for a moment, then came back',
+  answerdropped: 'A participant’s answer was dropped: it waited too long for the connection',
   participantcomment: 'A participant left a comment',
   prolificentry: 'Arrived from Prolific',
   prolificcomplete: 'A Prolific participant was given their completion code',
@@ -207,9 +207,46 @@ const KNOWN: Record<string, string> = {
   sessiontoolong: 'The game ran longer than the longest session allowed, so it was ended',
 }
 
+/** "RoundStep, line 72": a failure's step, and its line (its own `line`, or the "line 72: …" its error starts with). */
+function failurePlace (data: Record<string, unknown>): string {
+  const step = typeof data.step === 'string' ? data.step.trim() : ''
+  const n = Number(data.line)
+  let line = Number.isInteger(n) && n > 0 ? n : null
+  if (line == null) {
+    const m = /^line (\d+):/.exec(String(data.error ?? ''))
+    if (m) line = Number(m[1])
+  }
+  return [step, line ? `line ${line}` : ''].filter(Boolean).join(', ')
+}
+
+/** "25 s", "3 min": how long, from milliseconds; '' when it isn't a time. */
+function lasted (ms: unknown): string {
+  const n = Number(ms)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const s = Math.max(1, Math.round(n / 1000))
+  return s < 120 ? `${s} s` : `${Math.round(s / 60)} min`
+}
+
+/** The line, with what the event's data says that matters: the step that failed, whether a game started again. */
+function withData (n: string, data: Record<string, unknown>): string {
+  const place = failurePlace(data)
+  if (n === 'stepfailed' && place) return `A step failed (${place}): its code threw an error`
+  if (n === 'sessionfailed' && place) return `A step failure (${place}) stalled the game, so the autopilot ended the session`
+  if (n === 'sessionstalled' && place) return `After a step failed (${place}), the game had nothing left to do, so it was ended`
+  if (n === 'enginereloaded' && 'restarted' in data) {
+    return data.restarted === true || data.restarted === 'true'
+      ? 'A researcher reloaded the engine: the game started again from the beginning'
+      : 'A researcher reloaded the engine; the session carried on'
+  }
+  if (n === 'connectiongap' && lasted(data.awayMs)) return `A participant’s connection dropped for ${lasted(data.awayMs)}, then came back`
+  if (n === 'answerdropped' && lasted(data.ageMs)) return `A participant’s answer was dropped: it waited ${lasted(data.ageMs)} for the connection`
+  return ''
+}
+
 /**
  * A plain-words line for well-known events; '' for the experiment's own. With the event's `data`, a
- * researcher's preview signing in as a player (recorded with preview = true) says so.
+ * researcher's preview signing in as a player (recorded with preview = true) says so, and a failure
+ * names its step and line.
  */
 export function describeEvent (name: string, data?: Record<string, unknown> | null): string {
   const n = (name || '').toLowerCase()
@@ -218,6 +255,8 @@ export function describeEvent (name: string, data?: Record<string, unknown> | nu
     const who = typeof id === 'string' && id ? aiName(id) ?? id : ''
     return who ? `A researcher’s preview signed in as ${who}` : 'A researcher’s preview signed in'
   }
+  const said = data ? withData(n, data) : ''
+  if (said) return said
   if (KNOWN[n]) return KNOWN[n]
   if (n.length > 5 && n.endsWith('start')) return `Step “${name.slice(0, -5)}” started`
   if (n.length > 7 && n.endsWith('timeout')) return `Step “${name.slice(0, -7)}” timed out`

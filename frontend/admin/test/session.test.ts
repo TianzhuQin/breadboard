@@ -317,6 +317,20 @@ describe('event feed', () => {
     }
   })
 
+  it('names the step and line of a failure, and says whether a reload started the game again, from the event\'s data', () => {
+    expect(describeEvent('stepFailed', { step: 'RoundStep', error: 'line 72: No such property: roundNote' })).toBe('A step failed (RoundStep, line 72): its code threw an error')
+    expect(describeEvent('sessionFailed', { step: 'RoundStep', line: '71', error: 'No such property: x' })).toBe('A step failure (RoundStep, line 71) stalled the game, so the autopilot ended the session')
+    expect(describeEvent('sessionStalled', { step: 'FinishStep', error: 'boom' })).toBe('After a step failed (FinishStep), the game had nothing left to do, so it was ended')
+    expect(describeEvent('engineReloaded', { restarted: 'true', by: 'a@example.org' })).toBe('A researcher reloaded the engine: the game started again from the beginning')
+    expect(describeEvent('engineReloaded', { restarted: false, by: 'a@example.org' })).toBe('A researcher reloaded the engine; the session carried on')
+    expect(describeEvent('connectionGap', { player: 'p1', awayMs: '25300' })).toBe('A participant’s connection dropped for 25 s, then came back')
+    expect(describeEvent('answerDropped', { player: 'p1', ageMs: 8000 })).toBe('A participant’s answer was dropped: it waited 8 s for the connection')
+    // without that data, the plain line
+    expect(describeEvent('stepFailed', {})).toBe('A step failed: its code threw an error')
+    expect(describeEvent('engineReloaded')).toBe('A researcher reloaded the engine')
+    expect(describeEvent('connectionGap', { awayMs: 'soon' })).toBe('A participant’s connection dropped for a moment, then came back')
+  })
+
   it('counts distinct participants from arrival events, not AI seats', () => {
     const ev = mergeEvents([], [
       { id: 1, name: 'clientLogIn', datetime: '2026-10-27T10:00:00Z', data: { clientId: 'p1' } },
