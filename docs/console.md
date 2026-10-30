@@ -93,7 +93,7 @@ up by name in the server's settings file (`conf/local.conf`) needs the new name 
 | Action | |
 |---|---|
 | **New experiment** | Starts from **Breadboard's template** (the empty steps OnJoinStep, OnLeaveStep and InitStep, and the standard participant page), from **Example: network game**, or from **A copy of an experiment** (its steps, content, translations, parameters, images and participant page, without sessions or data). Names must be unique and can't contain `/` or `\`. |
-| **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment, named by the same rules; nothing you have is changed. |
+| **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment, named by the same rules; nothing you have is changed. The name is filled in with the one the experiment had where it was exported, with " (copy)" added when an experiment here is called that already. |
 | **Export .zip** | Downloads the experiment, to move it to another server or keep a copy. |
 | **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm (capital letters, spaces and dashes don't matter). Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
 
