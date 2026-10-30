@@ -233,7 +233,9 @@ parameter, and code loaded on demand has content-hashed file names.
 
 A page that reconnects after its session has ended (for example after the autopilot gave up on it)
 is not let into the session the server runs now. It gets back the last screen it had, such as its
-completion code, or else a "This session has ended" notice.
+completion code. A participant who was away when a reload of the engine carried the session on gets
+the end the others were given (that it was stopped, say), not the screen from before the reload.
+Anyone else gets a "This session has ended" notice.
 
 ## The participant page's connection
 

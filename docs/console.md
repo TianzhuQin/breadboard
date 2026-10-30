@@ -208,7 +208,7 @@ people can join with its links. If a session is running, the button reads **Stop
 |---|---|---|
 | **Start the game** | The session runs and its game hasn't started | Runs `initStep.start()`: everyone waiting is let in and the experiment begins. Later arrivals are turned away, and a waiting room is cut short. Once started, it does nothing more until the engine is reloaded. |
 | **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (someone who was given a completion code keeps it on screen), and nothing more is recorded in it. Stopping the autopilot's session pauses the autopilot. |
-| **Resume session** | The session is stopped | Restarts the experiment's scripts: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
+| **Resume session** | The session is stopped | Restarts the experiment's scripts with the session's launch parameters: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
 | **Download data** | The session has finished | Its events as CSV. A finished session can't be resumed; start a new one. |
 
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
@@ -275,12 +275,12 @@ change the live session.
 **Reload engine** (in the top bar's Engine menu, or on the Steps page) restarts the experiment's
 scripts from its saved steps. The engine is shared by every researcher on the server, so everyone
 in the network is disconnected and the network is emptied, whoever's session they are in. Your own
-running session carries on: it takes people again, newcomers and those who held a seat, and its
-game counts as not started, so **Start the game** runs InitStep again. Creating a session and
-resuming one restart the engine too, and so does switching experiments while no session is
-running. While anyone is using it, the console says who before doing any of these, and whether it
-pauses the autopilot. While another experiment's session is running, a reload is refused: it would
-end that session.
+running session carries on, with its launch parameters: it takes people again, newcomers and those
+who held a seat, and its game counts as not started, so **Start the game** runs InitStep again.
+Creating a session and resuming one restart the engine too, and so does switching experiments while
+no session is running. While anyone is using it, the console says who before doing any of these, and
+whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
+it would end that session.
 
 ## Running sessions with nobody at the console
 
