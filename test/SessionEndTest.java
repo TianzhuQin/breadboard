@@ -11,6 +11,9 @@ import play.mvc.WebSocket;
 import security.ParticipantAuth;
 
 import javax.script.ScriptEngine;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +22,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.junit.Assert.*;
@@ -211,6 +216,107 @@ public class SessionEndTest extends BaseTest {
         assertEquals("stopped", ended(a.lastFrame));
         assertEquals(before, first.frames.size());
         assertEquals("stopped", ended(connect("p1").frames.get(0)));
+    }
+
+    // ---- the locks of a session's end -------------------------------------------------------------
+
+    /** The graph's structureLock (groovy/graph.groovy): held while a player or a tie is added or removed. */
+    private static Object structureLock() throws Exception {
+        Object g = engine().get("g");
+        Field f = g.getClass().getDeclaredField("structureLock");
+        f.setAccessible(true);
+        return f.get(g);
+    }
+
+    /**
+     * Whether a thread ending a participant (ScriptBoard.endParticipant) comes to wait for this lock
+     * within 30 seconds, as the caller holds it.
+     */
+    private static boolean endingWaitsFor(Object lock, ThreadMXBean threads) throws InterruptedException {
+        long until = System.currentTimeMillis() + 30000;
+        while (System.currentTimeMillis() < until) {
+            for (ThreadInfo info : threads.getThreadInfo(threads.getAllThreadIds(), Integer.MAX_VALUE)) {
+                if (info == null || info.getThreadState() != Thread.State.BLOCKED || info.getLockInfo() == null
+                    || info.getLockInfo().getIdentityHashCode() != System.identityHashCode(lock)) {
+                    continue;
+                }
+                for (StackTraceElement frame : info.getStackTrace()) {
+                    if (frame.getClassName().equals(ScriptBoard.class.getName()) && frame.getMethodName().equals("endParticipant")) {
+                        return true;
+                    }
+                }
+            }
+            Thread.sleep(10);
+        }
+        return false;
+    }
+
+    private static String describe(ThreadMXBean threads, long[] ids) {
+        StringBuilder sb = new StringBuilder();
+        for (ThreadInfo info : threads.getThreadInfo(ids, Integer.MAX_VALUE)) {
+            if (info == null) continue;
+            sb.append('"').append(info.getThreadName()).append("\" waits for ").append(info.getLockName())
+                .append(" held by \"").append(info.getLockOwnerName()).append("\"\n");
+            StackTraceElement[] stack = info.getStackTrace();
+            for (int i = 0; i < Math.min(30, stack.length); i++) sb.append("    at ").append(stack[i]).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * A Stop that comes while the game adds a tie. The tie is added under the graph's structureLock,
+     * and the graph's listeners update the two players' pages there and then (Client.updateGraph, under
+     * each one's Client monitor). The Stop looks each participant up in the graph (under structureLock)
+     * as it ends them: it used to do that holding their Client's monitor, so the two waited for each
+     * other for good, the engine's actor holding the engine lock, and every later Stop, launch, reload
+     * or selection hung until the server was restarted.
+     */
+    @Test
+    public void aStopThatComesWhileATieIsAddedEndsTheSessionWithoutADeadlock() throws Throwable {
+        Page first = connect("p1");
+        Page second = connect("p2");
+        final Object structureLock = structureLock();
+        final ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        final AtomicBoolean holding = new AtomicBoolean();
+        final AtomicBoolean stopWaited = new AtomicBoolean();
+        final AtomicReference<Throwable> failed = new AtomicReference<>();
+        Thread game = new Thread(() -> {
+            try {
+                synchronized (structureLock) {
+                    holding.set(true);
+                    // (until the Stop, ending a participant, wants the lock)
+                    stopWaited.set(endingWaitsFor(structureLock, threads));
+                    engine().eval("g.addEdge(g.getVertex('p1'), g.getVertex('p2')); null");
+                }
+            } catch (Throwable t) {
+                failed.set(t);
+            }
+        }, "session-end-test-game");
+        game.setDaemon(true);
+        game.start();
+        await("the game holds the lock", holding::get);
+        console.send("StopGame", "id", session.id);
+        long until = System.currentTimeMillis() + 45000;
+        while (game.isAlive() || !first.closed || !second.closed) {
+            long[] deadlocked = threads.findMonitorDeadlockedThreads();
+            if (deadlocked != null) {
+                fail("Deadlocked:\n" + describe(threads, deadlocked));
+            }
+            if (System.currentTimeMillis() > until) {
+                fail("The Stop didn't finish:\n" + describe(threads, new long[]{game.getId()}));
+            }
+            Thread.sleep(25);
+        }
+        assertNull(String.valueOf(failed.get()), failed.get());
+        assertTrue("the Stop waited for the graph's lock as it ended a participant", stopWaited.get());
+        assertNull(threads.findMonitorDeadlockedThreads());
+        assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(session.id).status);
+        assertEquals(first.frames.toString(), "stopped", ended(first.last()));
+        assertEquals(second.frames.toString(), "stopped", ended(second.last()));
+        assertEquals("the tie was added", Boolean.TRUE, engine().eval("g.hasEdge(g.getVertex('p1'), g.getVertex('p2'))"));
+        // and the engine answers the next request: its actor no longer holds the engine lock
+        ExperimentInstance next = launchSession(console, "After");
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(next.id).status);
     }
 
     // ---- a researcher's Stop ----------------------------------------------------------------------

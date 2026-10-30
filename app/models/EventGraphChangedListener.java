@@ -10,6 +10,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Event-based updates (breadboard.clientUpdateRate=0): each change of the graph updates the consoles
+ * and the pages of the players it touches at once, on the thread that made it. A player or a tie added
+ * or removed comes here under the graph's structureLock, and Client.updateGraph takes each page's
+ * Client monitor: the lock order is written at structureLock, in groovy/graph.groovy.
+ */
 public class EventGraphChangedListener implements BreadboardGraphChangedListener {
   private Graph graph;
   private final java.util.concurrent.CopyOnWriteArrayList<ClientListener> adminListeners = new java.util.concurrent.CopyOnWriteArrayList<>();

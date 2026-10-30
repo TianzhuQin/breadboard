@@ -423,6 +423,11 @@ public class Client extends Model {
     return before;
   }
 
+  // This Client's monitor (updateGraph, showTo, end; ScriptBoard.endParticipant) comes after the
+  // graph's structureLock: a player or a tie added or removed under that lock updates the pages of
+  // the players it touches here, on the same thread. Whoever holds this monitor reads the graph only
+  // through vertices looked up before taking it, and never waits for structureLock. The lock order is
+  // written at structureLock, in groovy/graph.groovy.
   public synchronized void updateGraph(Vertex me) {
     EventGraph subGraph = subGraphOf(me);
     writeGraph(subGraph.getVertex(me.getId()), subGraph);

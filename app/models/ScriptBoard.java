@@ -409,7 +409,8 @@ public class ScriptBoard extends UntypedActor {
    * The player's vertex in this graph, or null. The engine's graph is asked under the lock it holds
    * while players are added and removed (getPlayer in groovy/graph.groovy): TinkerGraph keeps its
    * vertices in a plain HashMap, and a lookup while another participant joining resized it could
-   * miss a vertex that is there. Other graphs (tests' own) are asked directly.
+   * miss a vertex that is there. Other graphs (tests' own) are asked directly. As it waits for that
+   * lock, never call it while holding a Client's monitor (the lock order is written at structureLock).
    */
   static Vertex playerVertex(Object g, String clientId) {
     if (clientId == null) {
@@ -4286,12 +4287,17 @@ public class ScriptBoard extends UntypedActor {
   // One participant of endParticipants; nothing for one whose end is settled already (a page of theirs
   // that came back while the server's stop ran settled it: see addClient).
   private static void endParticipant(Client client, ObjectNode frame) {
+    // Their player is looked up before their Client's monitor is taken, never under it: the lookup
+    // waits for the graph's structureLock, whose holder may be updating this very participant's page
+    // (the lock order is written at structureLock, in groovy/graph.groovy). Looked up under the
+    // monitor, a Stop that came while the game added a tie deadlocked the engine.
+    Vertex player = enginePlayer(client.id);
     JsonNode last;
     synchronized (client) {
       if (client.ended()) {
         return;
       }
-      Vertex completed = completedPlayer(client.id);
+      Vertex completed = completed(player);
       boolean keep = completed != null || ownEnd(client.lastFrame);
       if (completed != null) {
         try {
@@ -4324,10 +4330,21 @@ public class ScriptBoard extends UntypedActor {
     client.disconnect(last);
   }
 
-  /** The participant's vertex when the experiment gave them a completion code (_system.recruitment); else null. */
-  private static Vertex completedPlayer(String clientId) {
+  /**
+   * The participant's player in the engine's game, or null; never throws. Waits for the graph's
+   * structureLock (playerVertex): never ask while holding a Client's monitor.
+   */
+  private static Vertex enginePlayer(String clientId) {
     try {
-      Vertex v = engine == null ? null : playerVertex(engine.get("g"), clientId);
+      return engine == null ? null : playerVertex(engine.get("g"), clientId);
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  /** {@code v} when the experiment gave this player a completion code (_system.recruitment); else null. */
+  private static Vertex completed(Vertex v) {
+    try {
       Object system = v == null ? null : v.getProperty("_system");
       Object recruitment = system instanceof Map ? ((Map<?, ?>) system).get("recruitment") : null;
       return recruitment instanceof Map && Boolean.TRUE.equals(((Map<?, ?>) recruitment).get("completed")) ? v : null;
