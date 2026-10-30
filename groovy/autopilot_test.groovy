@@ -150,6 +150,30 @@ test("a start that fails is handed on with what went wrong, and one that works i
   fine.stop()
 }
 
+test("someone away is shown the room as it is now, not as it was when they left") {
+  def hooks = [:]
+  def ap = pilot('ap-awaytext-', hooks)
+  try {
+    ap.waitingRoom([minPlayers: 2, waitSeconds: 60, countdownSeconds: 30])
+    arrive(ap, 'ap-awaytext-1'); arrive(ap, 'ap-awaytext-2')
+    def away = g.getVertex('ap-awaytext-2')
+    assert away._system.autopilot.here == 2 && away._system.autopilot.startsIn != null
+    leave(ap, 'ap-awaytext-2')
+    // (a researcher's preview standing in for them shows this)
+    assert away._system.autopilot.state == "waiting"
+    assert away._system.autopilot.here == 1 : "what the room said as they left"
+    assert away._system.autopilot.startsIn == null
+    assert away.text.contains("1 joined so far")
+    // and the countdown, once it begins
+    arrive(ap, 'ap-awaytext-3')
+    ap.beginCountdown()
+    assert away._system.autopilot.state == "starting"
+    assert away.text.contains("Starting in")
+  } finally {
+    ap.stop()
+  }
+}
+
 test("waiting participants are told how many are here") {
   def ap = pilot('ap-text-', [:])
   ap.waitingRoom([minPlayers: 3, waitSeconds: 60])

@@ -274,11 +274,15 @@ class Autopilot {
     }
     // Once enough are here: the seconds until the game starts unless more come (the page counts down).
     Integer startsIn = startAt == null || !enough ? null : (int) Math.max(0, Math.ceil((startAt - System.currentTimeMillis()) / 1000d))
-    players.each { status(it, [state: "waiting", here: here, min: room.minPlayers, max: room.maxPlayers,
-                               customText: room.customText, startsIn: startsIn]) }
+    // Everyone's page says how the room is now, also of those who are away: a researcher's preview
+    // stands in for them, and kept what the room said as they left ("Starting soon" with two here,
+    // once only one was), as does their own page when it comes back.
+    def everyone = participants()
+    everyone.each { status(it, [state: "waiting", here: here, min: room.minPlayers, max: room.maxPlayers,
+                                customText: room.customText, startsIn: startsIn]) }
     if (room.waitingText != null) {
       String text = room.waitingText(here, room.minPlayers, room.maxPlayers)?.toString()
-      players.each { it.text = text }
+      everyone.each { it.text = text }
     }
     if (full) {
       cancelTimer("start")
@@ -323,8 +327,9 @@ class Autopilot {
       countdownEndsAt = System.currentTimeMillis() + seconds * 1000L
       // The timer is set whatever happens to the pages: with starting set, nothing else starts the game.
       try {
-        def players = connectedPlayers()
-        players.each { countdown(it, seconds, players.size()) }
+        int here = connectedPlayers().size()
+        // (those away too, as in evaluate)
+        participants().each { countdown(it, seconds, here) }
       } finally {
         countdownTimer = schedule(seconds) { launch() }
       }
