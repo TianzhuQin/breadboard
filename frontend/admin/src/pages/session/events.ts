@@ -1,4 +1,5 @@
 import type { EventItem, LiveEvent } from '@/store/types'
+import { aiName, playerName } from '@/network/players'
 
 /**
  * The live event feed: what the session has recorded, newest first.
@@ -132,11 +133,23 @@ export function formatValue (v: unknown, max = 60): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s
 }
 
+/** Data names whose value is a player's id. */
+const PLAYER_KEYS = new Set(['player', 'playerid', 'clientid'])
+
+/**
+ * A data value as short text for the feed (formatValue), with a computer player's id named as the
+ * other pages name it: "AI 4 (_4)".
+ */
+export function formatDataValue (key: string, v: unknown, max = 60): string {
+  if (typeof v === 'string' && PLAYER_KEYS.has(key.toLowerCase())) return formatValue(playerName(v), max)
+  return formatValue(v, max)
+}
+
 /** The first few key/value pairs of an event, as text, and how many are left over. */
 export function summarizeData (data: Record<string, unknown>, max = 3): { shown: [string, string][], more: number } {
   const entries = Object.entries(data || {})
   return {
-    shown: entries.slice(0, max).map(([k, v]) => [k, formatValue(v)] as [string, string]),
+    shown: entries.slice(0, max).map(([k, v]) => [k, formatDataValue(k, v)] as [string, string]),
     more: Math.max(0, entries.length - max),
   }
 }
@@ -194,9 +207,17 @@ const KNOWN: Record<string, string> = {
   sessiontoolong: 'The game ran longer than the longest session allowed, so it was ended',
 }
 
-/** A plain-words line for well-known events; '' for the experiment's own. */
-export function describeEvent (name: string): string {
+/**
+ * A plain-words line for well-known events; '' for the experiment's own. With the event's `data`, a
+ * researcher's preview signing in as a player (recorded with preview = true) says so.
+ */
+export function describeEvent (name: string, data?: Record<string, unknown> | null): string {
   const n = (name || '').toLowerCase()
+  if (n === 'clientlogin' && data && (data.preview === true || data.preview === 'true')) {
+    const id = data.clientId
+    const who = typeof id === 'string' && id ? aiName(id) ?? id : ''
+    return who ? `A researcher’s preview signed in as ${who}` : 'A researcher’s preview signed in'
+  }
   if (KNOWN[n]) return KNOWN[n]
   if (n.length > 5 && n.endsWith('start')) return `Step “${name.slice(0, -5)}” started`
   if (n.length > 7 && n.endsWith('timeout')) return `Step “${name.slice(0, -7)}” timed out`

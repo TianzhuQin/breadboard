@@ -24,7 +24,7 @@ import { clockParts, describeEvent, eventTone, summarizeData, type FeedEvent } f
 const props = defineProps<{ event: FeedEvent, expandable?: boolean }>()
 const tone = computed(() => eventTone(props.event.name))
 const clock = computed(() => clockParts(props.event.at))
-const plain = computed(() => describeEvent(props.event.name))
+const plain = computed(() => describeEvent(props.event.name, props.event.data))
 const summary = computed(() => summarizeData(props.event.data, 3))
 </script>
 

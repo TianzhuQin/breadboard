@@ -6,9 +6,10 @@ import {
   parseBound, rangeText, suggestName,
 } from '../src/pages/session/params'
 import {
-  FEED_CAP, describeEvent, eventNameCounts, eventTone, filterEvents, formatValue, fromLive, fromSeed, mergeEvents,
+  FEED_CAP, describeEvent, eventNameCounts, eventTone, filterEvents, formatDataValue, formatValue, fromLive, fromSeed, mergeEvents,
   mergeFeed, parseServerTime, participantsSeen, summarizeData,
 } from '../src/pages/session/events'
+import EventRow from '../src/pages/session/EventRow.vue'
 import {
   classifyStartReply, cleanError, detectGameStarted, engineGameFlag, formatDuration, isLocalOrigin, isStartReply, joinLinks,
   networkStats, safeFileName, waitingRoom,
@@ -282,6 +283,20 @@ describe('event feed', () => {
     expect(describeEvent('RoundTimeout')).toBe('Step “Round” timed out')
     expect(describeEvent('aiTakeover')).toMatch(/took over/)
     expect(describeEvent('myEvent')).toBe('')
+  })
+
+  it('says a preview\'s sign-in is a researcher\'s, and names computer players as the other pages do', () => {
+    expect(describeEvent('clientLogIn', { clientId: '_6', preview: 'true' })).toBe('A researcher’s preview signed in as AI 6')
+    expect(describeEvent('clientLogIn', { clientId: 't1', preview: true })).toBe('A researcher’s preview signed in as t1')
+    expect(describeEvent('clientLogIn', { clientId: 'p1' })).toBe('Someone signed in')
+    expect(summarizeData({ player: '_4', choice: 'Blue', playerId: 'p2' }).shown).toEqual([['player', 'AI 4 (_4)'], ['choice', 'Blue'], ['playerId', 'p2']])
+    expect(formatDataValue('clientId', '_12')).toBe('AI 12 (_12)')
+    // other data keeps its values as recorded
+    expect(formatDataValue('choice', '_4')).toBe('_4')
+    const w = mount(EventRow, { props: { event: { key: 'e1', id: 1, name: 'clientLogIn', at: Date.now(), data: { clientId: '_6', preview: 'true' } } } })
+    expect(w.find('.live-evr__plain').text()).toBe('A researcher’s preview signed in as AI 6')
+    expect(w.find('.live-evr__data').text()).toContain('AI 6 (_6)')
+    w.unmount()
   })
 
   it('explains failures, ends and the newer events in plain words, and failures stand out', () => {

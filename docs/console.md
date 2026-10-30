@@ -217,7 +217,8 @@ people can join with its links. If a session is running, the button reads **Stop
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
 how many people are here and the countdown. **Events** lists what the session records, newest
-first, as it happens; click one to see its data.
+first, as it happens, with what the well-known ones mean (a researcher's preview signing in says
+so); click one to see its data.
 
 Under **Links for participants**, **This session** works while this session runs. **Whichever
 session is open** leads to this experiment's open session whose game hasn't started, so it can be
@@ -250,8 +251,8 @@ The Players page lists everyone in the session. Type an id, or a filter: `score=
 a property (`_system.connected=false`). The buttons above the table show **Everyone**, **People**,
 **AI players**, **Connected**, **Disconnected** or who **Has a choice**. **Columns** adds properties
 to the table, and **Download CSV** saves the players shown with every property. Computer players
-(`g.addAI`) are called AI 1 (`_1`), AI 2 (`_2`) and so on, here and on the Network and Preview
-pages; scripts, filters and the data use their ids. A participant's page calls the people around
+(`g.addAI`) are called AI 1 (`_1`), AI 2 (`_2`) and so on, here, on the Network and Preview pages
+and in Live session's events; scripts, filters and the data use their ids. A participant's page calls the people around
 them Person A, Person B, … in the order it first shows them, so a player's letter can differ from
 one participant's page to another.
 
