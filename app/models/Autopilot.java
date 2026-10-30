@@ -1242,11 +1242,26 @@ public final class Autopilot {
     return users.isEmpty() ? null : users.get(0);
   }
 
-  /** e.g. "Autopilot · Oct 28, 13:16:05 UTC" (the seconds keep sessions opened a minute apart distinct). */
   private static String sessionName() {
-    SimpleDateFormat format = new SimpleDateFormat("MMM d, HH:mm:ss", java.util.Locale.ENGLISH);
+    return sessionName(new Date());
+  }
+
+  /**
+   * The name of a session it opens at {@code at}, e.g. "Autopilot · 2026-10-30 13:20:47 UTC": the date
+   * in numbers, as in the data, which reads the same in any language and sorts; the time in UTC, said
+   * so, since the server can't know the researcher's time zone (the console shows local times next to
+   * it); the seconds keep sessions opened within a minute of each other, as short games are, apart.
+   * No-break spaces keep "Autopilot ·" and "13:20:47 UTC" each in one piece, so a column too narrow for
+   * the name breaks it between the date and the time (Sessions & data at 1280 px), the same in every
+   * row: it used to break at different places from one row to the next ("Oct 30," / "13:44:37 UTC",
+   * "13:27:15" / "UTC"). The date and the time are not joined: that made one piece too wide for the
+   * column, which the console then broke inside the date. It was "Autopilot · Oct 28, 13:16:05 UTC", an
+   * English month next to UTC; sessions named so keep their names.
+   */
+  static String sessionName(Date at) {
+    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.ENGLISH);
     format.setTimeZone(TimeZone.getTimeZone("UTC"));
-    return "Autopilot · " + format.format(new Date()) + " UTC";
+    return "Autopilot\u00a0· " + format.format(at) + "\u00a0UTC";
   }
 
   // ---- what the engine is doing --------------------------------------------------------------------
