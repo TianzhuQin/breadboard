@@ -28,7 +28,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 服务器运行期间，Mac 和 Windows 电脑不会自己进入睡眠。在 Linux 上，如果是在图形桌面里启动的（不是通过 SSH 或作为服务），启动脚本会请求 systemd（在 GNOME 桌面上也会请求桌面环境）不让电脑睡眠；如果电脑仍然会自动睡眠（有些桌面会这样，比如 Linux Mint 的 Cinnamon），请在电源设置里关掉"自动挂起"。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里"显示器关闭时防止自动进入睡眠"那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
 
-启动时如果提示 "Breadboard is already running from this folder"，说明这个文件夹里的 Breadboard 已经在运行；从终端或双击启动时，它会直接在浏览器里打开正在运行的那个控制台。如果提示 "Breadboard is already running on port 9000"，是另一份 Breadboard 在用这个端口，打开提示里的网址就能用它。如果提示 "Another program is using port 9000"（Windows 上是 "Port 9000 is in use"），是别的程序占了这个端口：关掉那个程序，或者换一个端口。在 `conf/local.conf` 里加一行 `http.port=9001`，以后每次启动都用这个端口；只想这一次换，就像上面那样在终端里启动，在拖进去的 `breadboard.sh` 后面加上 ` -Dhttp.port=9001` 再按回车（在 Breadboard 的文件夹里，就是 `sh breadboard.sh -Dhttp.port=9001`；Windows 上用提示里给出的命令）。同一个文件夹同时只能运行一个 Breadboard，因为它们共用一个数据库；要同时运行第二个，请把 zip 另外解压一份，在那一份里用另一个端口启动。
+启动时如果提示 "Breadboard is already running from this folder"，说明这个文件夹里的 Breadboard 已经在运行；从终端或双击启动时，它会直接在浏览器里打开正在运行的那个控制台。如果提示 "Breadboard is already running on port 9000"，是另一份 Breadboard 在用这个端口，打开提示里的网址就能用它。如果提示 "Another program is using port 9000"，是别的程序占了这个端口：关掉那个程序，或者换一个端口。Windows 上这两种情况的提示都是 "Port 9000 is in use"：先打开提示里的网址看看，打开的是 Breadboard 的话，说明它已经在运行，直接用就行；不是的话，就是别的程序占了这个端口。换端口的办法：在 `conf/local.conf` 里加一行 `http.port=9001`，以后每次启动都用这个端口；只想这一次换，就像上面那样在终端里启动，在拖进去的 `breadboard.sh` 后面加上 ` -Dhttp.port=9001` 再按回车（在 Breadboard 的文件夹里，就是 `sh breadboard.sh -Dhttp.port=9001`；Windows 上用提示里给出的命令）。同一个文件夹同时只能运行一个 Breadboard，因为它们共用一个数据库；要同时运行第二个，请把 zip 另外解压一份，在那一份里用另一个端口启动。
 
 更多见 [install.md](install.md)。
 
