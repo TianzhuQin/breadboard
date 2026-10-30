@@ -52,7 +52,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 例子的文字是英文写的，放在 Content 页面的 **English** 下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
 
-- 在 Content 页面切换到中文，写上译文（可以先点 **Copy from English**，再改成中文），保存后参与者就看到中文。
+- 在 **Content** 页面顶部的语言栏（**Language**）点 **Chinese**（`zho`），写上译文（可以先点 **Copy from English**，再改成中文），保存后参与者就看到中文。
 - 还没翻译的文字，参与者看到的仍是英文，所以可以一段一段地翻译。
 - 参与者读哪种语言，由启动参数 `language` 决定，默认是你的 Default language。在 **Parameters** 页把它的 **Default** 改成 `eng`，参与者就都看英文。注意：**New session** 会照上一场填好启动参数，不会自动换成新的 Default。所以自己新建一场时，要在 `language` 下点 **Use default**，确认是 `eng`，再点 **Create session**。
 
