@@ -503,7 +503,7 @@ public final class Autopilot {
             + (inARow[0] >= TOO_LONG_IN_A_ROW ? "; " + inARow[0] + " in a row, so the autopilot paused" : ""));
       }
     };
-    endOwnSession(id, "sessionTooLong", data, ScriptBoard.outOfTimeScreen(), true, stillWanted, after);
+    endOwnSession(id, "sessionTooLong", data, ScriptBoard.outOfTimeScreens(id), true, stillWanted, after);
   }
 
   /** "1 minute", "90 minutes". */
@@ -544,7 +544,7 @@ public final class Autopilot {
   /**
    * Its own session's game stalled after a step failed (watchForStall): it ends as a failure that
    * stalls a game ends it (ScriptBoard.gameFailed): stopped, its participants told it had to stop
-   * because of a problem with the study (ScriptBoard.problemScreen; a completion code on screen stays),
+   * because of a problem with the study (ScriptBoard.problemScreens; a completion code on screen stays),
    * a sessionStalled event (step, error), and the autopilot pauses, naming the step and what went wrong.
    */
   private static void endStalled(ExperimentInstance live, final Long experimentId, final ScriptBoard.RecordedFailure failure,
@@ -573,7 +573,7 @@ public final class Autopilot {
             + " s after the step " + failure.step + " failed (" + failure.error + "); the session was stopped and the autopilot paused");
       }
     };
-    endOwnSession(id, "sessionStalled", data, ScriptBoard.problemScreen(), false, stillWanted, after);
+    endOwnSession(id, "sessionStalled", data, ScriptBoard.problemScreens(id), false, stillWanted, after);
   }
 
   /**
@@ -584,12 +584,12 @@ public final class Autopilot {
    * ({@code stillWanted}, asked under the lock); no other is asked for meanwhile.
    */
   private static void endOwnSession(final Long id, final String event, final LinkedHashMap<Object, Object> data,
-                                    final ObjectNode screen, final boolean finished,
+                                    final java.util.function.Function<Client, ObjectNode> screens, final boolean finished,
                                     final java.util.concurrent.Callable<Boolean> stillWanted, final Runnable after) {
     Thread thread = new Thread(new Runnable() {
       public void run() {
         try {
-          if (ScriptBoard.endForGuard(id, event, data, screen, finished, stillWanted)) {
+          if (ScriptBoard.endForGuard(id, event, data, screens, finished, stillWanted)) {
             after.run();
           }
         } catch (Throwable t) {

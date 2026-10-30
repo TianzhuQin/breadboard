@@ -357,8 +357,9 @@ panel, and the session records a `stepFailed` event naming the step and the line
 *stalls* the game when it kept the next step from getting going; a step gets going when its start
 finishes without an error. In the autopilot's own session (also one of its experiment that was open
 when you pressed **Resume** or saved its settings), a failure that stalls ends the session, telling
-its participants that it had to stop because of a problem with the study (someone who was given a
-completion code keeps it on screen), and pauses the autopilot, and this page names the step and
+its participants that it had to stop because of a problem with the study (those who came from
+Prolific, that they can open the study again from Prolific later or return it; someone who was given
+a completion code keeps it on screen), and pauses the autopilot, and this page names the step and
 line; so does an OnJoinStep that fails before the game starts when no waiting room is set. A failure
 that doesn't stall, such as a typo after the next round has started, is only recorded and shown, and
 the game goes on. In a session you run by hand nothing is ended. When **Start the game**, the
@@ -371,7 +372,8 @@ its waiting room no longer starts the game.
 
 **Games that never end.** The autopilot's own session is also ended when its game runs longer than
 **Longest session**, whatever keeps it going: its participants are told the session ran out of time
-(someone who was given a completion code keeps it on screen), the session is finished with a
+(those who came from Prolific are asked to message you there about their submission; someone who was
+given a completion code keeps it on screen), the session is finished with a
 `sessionTooLong` event (`minutes`, `limit`), and the next one opens after the pause. This page says
 which session it was until you save or press **Resume**. After three such sessions in a row the
 autopilot pauses instead; a game that comes to its end starts the count again. And once a step has

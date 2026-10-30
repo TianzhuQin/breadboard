@@ -2941,7 +2941,7 @@ public class ScriptBoard extends UntypedActor {
           }
           stopSession(gameListener);
           // (not the "stopped" screen: no researcher stopped it; a completion code on screen stays)
-          endParticipants(instance.id, problemScreen());
+          endParticipants(instance.id, problemScreens(instance.id));
           cancelEngineTimers();
           eventTracker.disable();
           Autopilot.stepsFailed(instance, failed);
@@ -4168,7 +4168,7 @@ public class ScriptBoard extends UntypedActor {
    * session (Autopilot.gameFailed decides: one it opened, or was handed on Resume or a save; not one
    * a researcher launched or resumed by hand, even of its experiment), its participants would wait
    * for good and no new session would open: it ends as when its steps don't load (stepsFailedToLoad:
-   * participants are told it had to stop because of a problem with the study (problemScreen), the
+   * participants are told it had to stop because of a problem with the study (problemScreens), the
    * computer players and the game's timers stop, nothing more is recorded, the session is stopped),
    * and the autopilot pauses, saying where.
    * On the autopilot's thread, under the engine lock, which the failing thread may not wait for: it
@@ -4199,7 +4199,7 @@ public class ScriptBoard extends UntypedActor {
             playerActions.turnAIOff();
           }
           stopSession(listener);
-          endParticipants(sessionId, problemScreen());
+          endParticipants(sessionId, problemScreens(sessionId));
           cancelEngineTimers();
           eventTracker.disable();
           // The console tabs of the account running it show it stopped, as after Stop.
@@ -4466,32 +4466,81 @@ public class ScriptBoard extends UntypedActor {
     return screens;
   }
 
-  /** What the participants of a session that ran out of time see (Autopilot's longest session). */
-  static ObjectNode outOfTimeScreen() {
+  /**
+   * What the participants of a session that ran out of time see (Autopilot's longest session). The
+   * session finished, and the study gave them no completion code: a {@code prolific} participant
+   * messages the researcher on Prolific about their submission (opening the study again would only
+   * say they took part already).
+   */
+  static ObjectNode outOfTimeScreen(boolean prolific) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "outOfTime");
-    player.put("text", "<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. You can close "
-        + "this page; if you have any questions, please contact the researcher.</p>");
+    player.put("text", "<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. "
+        + (prolific
+            ? "It ended before the study gave you a completion code, so please message the researcher on Prolific "
+                + "about your submission."
+            : "You can close this page; if you have any questions, please contact the researcher.")
+        + "</p>");
     return frame;
   }
 
   /**
    * What the participants of the autopilot's own session see when it ends that session itself because
    * of a problem with the study: a step failure that stalls its game (endAutopilotSession, the stall
-   * backstop) or steps that don't load. The "stopped" screen would say a researcher stopped it.
+   * backstop) or steps that don't load. The "stopped" screen would say a researcher stopped it. A
+   * {@code prolific} participant may open the study again from Prolific later, as the server's stop
+   * says (the autopilot opens nothing until the researcher has fixed the study), or return it.
    */
-  static ObjectNode problemScreen() {
+  static ObjectNode problemScreen(boolean prolific) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "problem");
     player.put("text", "<h3>This session has ended</h3><p>It had to stop because of a problem with the study. Thank you for "
-        + "taking part. You can close this page; if you have any questions, please contact the researcher.</p>");
+        + "taking part. "
+        + (prolific
+            ? "You can open the study again from Prolific later to join a new session, if one is open then. Otherwise, "
+                + "please return the study on Prolific, and message the researcher there if you have any questions."
+            : "You can close this page; if you have any questions, please contact the researcher.")
+        + "</p>");
     return frame;
+  }
+
+  /**
+   * The end screens of a session's participants, each in the words for Prolific to someone who came
+   * from there (fromProlific, which may ask the session's data), as stopForServerStop chooses them:
+   * {@code screen} given whether they did. Also for a page that comes back to the session later
+   * (endedSessionScreen).
+   */
+  static java.util.function.Function<Client, ObjectNode> perParticipant(final Long sessionId,
+                                                                         final java.util.function.Function<Boolean, ObjectNode> screen) {
+    return new java.util.function.Function<Client, ObjectNode>() {
+      public ObjectNode apply(Client client) {
+        return screen.apply(client != null && fromProlific(client, sessionId));
+      }
+    };
+  }
+
+  /** The out-of-time screens of a session's participants (outOfTimeScreen, per participant). */
+  static java.util.function.Function<Client, ObjectNode> outOfTimeScreens(Long sessionId) {
+    return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
+      public ObjectNode apply(Boolean prolific) {
+        return outOfTimeScreen(prolific);
+      }
+    });
+  }
+
+  /** The problem screens of a session's participants (problemScreen, per participant). */
+  static java.util.function.Function<Client, ObjectNode> problemScreens(Long sessionId) {
+    return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
+      public ObjectNode apply(Boolean prolific) {
+        return problemScreen(prolific);
+      }
+    });
   }
 
   /**
@@ -4612,12 +4661,13 @@ public class ScriptBoard extends UntypedActor {
    * the engine lock, if the engine still runs that session live and {@code stillWanted} (asked there)
    * agrees, it ends as the other paths end a session: the computer players off first (see Stop),
    * {@code event} recorded, the session marked finished ({@code finished}: the autopilot opens the
-   * next one after its pause, as when a game ends) or stopped, the participants told ({@code screen},
-   * see endParticipants(Long, ObjectNode)), the game's timers cancelled and nothing more recorded,
+   * next one after its pause, as when a game ends) or stopped, the participants told ({@code screens}
+   * gives each theirs, see endParticipants), the game's timers cancelled and nothing more recorded,
    * and every console hears of it. Returns whether it ended it. Waits for the engine lock as long as
    * it takes: the autopilot calls it on a thread of its own.
    */
-  static boolean endForGuard(Long sessionId, String event, LinkedHashMap<Object, Object> data, ObjectNode screen,
+  static boolean endForGuard(Long sessionId, String event, LinkedHashMap<Object, Object> data,
+                             java.util.function.Function<Client, ObjectNode> screens,
                              boolean finished, java.util.concurrent.Callable<Boolean> stillWanted) {
     synchronized (REBUILD_LOCK) {
       GameListener listener = engineGameListener;
@@ -4641,7 +4691,7 @@ public class ScriptBoard extends UntypedActor {
       } else {
         stopSession(listener);
       }
-      endParticipants(sessionId, screen);
+      endParticipants(sessionId, screens);
       cancelEngineTimers();
       eventTracker.disable();
       if (!finished) {

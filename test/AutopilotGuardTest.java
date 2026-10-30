@@ -357,6 +357,8 @@ public class AutopilotGuardTest extends BaseTest {
         // The second came from Prolific, and the experiment has given them their completion code.
         engine().eval("def v = g.getVertex('tl-2'); recruitment.registerProlific(v); "
             + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
+        // Someone else came from Prolific, and isn't connected as the session ends.
+        prolificEntry("tl-9");
 
         // Within the limit nothing happens.
         watchdog();
@@ -380,8 +382,13 @@ public class AutopilotGuardTest extends BaseTest {
         // told the session is over all the same (so it stops reconnecting), in the way that keeps its own end
         assertEquals("outOfTime", second.last().get("sessionOver").get("player").get("ended").asText());
         assertTrue(second.closed);
-        // and so do the pages that come back to it
+        assertTrue(first.last().toString(), first.last().get("player").get("text").asText().contains("You can close this page"));
+        // and so do the pages that come back to it, in the words for Prolific to someone who came from there
         assertEquals("outOfTime", endedScreen(session, "tl-1").get("player").get("ended").asText());
+        JsonNode prolific = endedScreen(session, "tl-9").get("player");
+        assertEquals("outOfTime", prolific.get("ended").asText());
+        assertTrue(prolific.toString(), prolific.get("text").asText().contains("It ran out of time.")
+            && prolific.get("text").asText().contains("please message the researcher on Prolific about your submission"));
         assertEquals("C0DE42", endedScreen(session, "tl-2").get("player").get("_system").get("recruitment")
             .get("completionCode").asText());
         // The game is frozen: no computer player picks, no timer runs.
@@ -1122,5 +1129,57 @@ public class AutopilotGuardTest extends BaseTest {
             && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED
             && autopilotStatus(researcher).get("paused").asBoolean());
         assertEquals(Boolean.FALSE, engineValue("a.ai.isOn"));
+    }
+
+    // ---- what participants are told ---------------------------------------------------------------
+
+    /** Someone entered the session from Prolific (ClientLogin.prolificEntry records it so). */
+    private static void prolificEntry(String clientId) {
+        java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
+        data.put("clientId", clientId);
+        data.put("prolificPid", "PID-" + clientId);
+        data.put("studyId", "STUDY");
+        data.put("sessionId", "SESSION");
+        ScriptBoard.trackEvent("prolificEntry", data);
+        Recruitment.prolificEntry(clientId, "PID-" + clientId, "STUDY", "SESSION");
+    }
+
+    // InitStep's done starts a step that doesn't exist (a typo on its line 4): the start of the game throws.
+    private static final String FAILS_TO_START = "initStep = stepFactory.createStep('InitStep')\n"
+        + "initStep.run = { }\n"
+        + "initStep.done = {\n"
+        + "  roundStepp.start()\n"
+        + "}";
+
+    @Test
+    public void aFailureThatStallsTheGameTellsItsParticipantsWhatToDoInTheWordsForProlific() throws Throwable {
+        final User researcher = user("stalls");
+        final Experiment experiment = createExperiment("Stalls at the start");
+        createStep(experiment, "InitStep", FAILS_TO_START);
+        own(researcher, experiment);
+        assertEquals(OK, status(post(researcher, settings(experiment, 2, 2, null))));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        Page plain = joins(experiment, session, "st-1");
+        prolificEntry("st-2");
+        prolificEntry("st-9");
+        Page prolific = joins(experiment, session, "st-2");
+        await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED
+            && plain.closed && prolific.closed);
+
+        assertTrue(autopilotStatus(researcher).get("paused").asBoolean());
+
+        JsonNode toPlain = plain.lastPlayer().get("player");
+        assertEquals("problem", toPlain.get("ended").asText());
+        assertTrue(toPlain.toString(), toPlain.get("text").asText().contains("You can close this page"));
+        JsonNode toProlific = prolific.lastPlayer().get("player");
+        assertEquals("problem", toProlific.get("ended").asText());
+        String text = toProlific.get("text").asText();
+        assertTrue(text, text.contains("It had to stop because of a problem with the study."));
+        assertTrue(text, text.contains("You can open the study again from Prolific later"));
+        assertTrue(text, text.contains("please return the study on Prolific"));
+        // and to someone from Prolific whose page comes back to it later
+        assertTrue(endedScreen(session, "st-9").toString(),
+            endedScreen(session, "st-9").get("player").get("text").asText().contains("return the study on Prolific"));
+        assertTrue(endedScreen(session, "st-1").get("player").get("text").asText().contains("You can close this page"));
     }
 }
