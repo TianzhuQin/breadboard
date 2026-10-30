@@ -3535,11 +3535,13 @@ public class ScriptBoard extends UntypedActor {
    * says nothing then: whether the game starts is seen when the init step actually starts
    * (stepStarting). Returns what went wrong, briefly (ScriptBoardSupport.briefError), or null when
    * the script ran. A step that throws while the script runs is reported here, as the script's error
-   * (stepFailed leaves it to this method), and FAILED_RUN names it.
+   * (stepFailed leaves it to this method), and FAILED_RUN names it. The error sent to {@code out}
+   * names the failing step in "step" when that is known (failedStep), so a console can say "line 71
+   * of RoundStep" rather than "of a step".
    */
   static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
                               String requestId, boolean stepCode) {
-    if (scriptName == null) scriptName = "Unnamed Script";
+    if (scriptName == null) scriptName = UNNAMED_SCRIPT;
     // (FAILED_RUN is about this run from here on)
     FAILED_RUN.remove();
 
@@ -3696,6 +3698,10 @@ public class ScriptBoard extends UntypedActor {
         SCRIPT_RUN.remove();
       }
       if (out != null) {
+        String failedStep = failure == null ? null : failedStep(thisScript, thrown, stepCode, scriptName);
+        if (failedStep != null) {
+          jsonOutput.put("step", failedStep);
+        }
         out.write(jsonOutput);
       }
     }
@@ -3715,6 +3721,23 @@ public class ScriptBoard extends UntypedActor {
     return failure;
   }
 
+  /**
+   * The step a script that failed with {@code thrown} names in its error ("step"), for the consoles:
+   * the step whose own code threw (run, done, a timer's), when that is what the script failed with;
+   * else, for step code being loaded ({@code stepCode}: the experiment's steps as they load, a step
+   * file of file mode), the step whose code it is ({@code scriptName}, "RoundStep" or "RoundStep.groovy");
+   * else null (a script typed in the console, a step's code run again from the Steps page).
+   */
+  private static String failedStep(ScriptRun run, Throwable thrown, boolean stepCode, String scriptName) {
+    if (run.stepFailure != null && run.step != null && causedBy(thrown, run.stepFailure)) {
+      return run.step;
+    }
+    if (!stepCode || scriptName == null || UNNAMED_SCRIPT.equals(scriptName)) {
+      return null;
+    }
+    return scriptName.endsWith(".groovy") ? scriptName.substring(0, scriptName.length() - ".groovy".length()) : scriptName;
+  }
+
   /** Whether {@code cause} is {@code thrown} or one of its causes. */
   private static boolean causedBy(Throwable thrown, Throwable cause) {
     Set<Throwable> seen = new HashSet<Throwable>();
@@ -3728,6 +3751,8 @@ public class ScriptBoard extends UntypedActor {
 
   /** The script that starts the game. */
   static final String START_COMMAND = "initStep.start()";
+  /** What processScript calls a script that has no name (one typed in the console, say). */
+  private static final String UNNAMED_SCRIPT = "Unnamed Script";
 
   /** What stepStarting marked when an init step started outside processScript, for stepStartFailed. */
   static final class StartMark {
@@ -4129,7 +4154,8 @@ public class ScriptBoard extends UntypedActor {
   /**
    * A step of the engine's game failed where no one would see it (stepFailed, gameStartFailed,
    * joinOrLeaveStep). It is recorded (the event "stepFailed": step, error), every open console is
-   * told as processScript tells of an error ({"error": "Caught error: ...", "source": the step}), so
+   * told as processScript tells of an error ({"error": "Caught error: ...", "source" and "step": the
+   * step}), so
    * the Live session page shows it (unless processScript has told them: {@code consolesTold}), and,
    * when the failure stalls the game ({@code stalls}: it kept the next step from getting going; the
    * rule is above STEPS_STARTED), the autopilot's own session ends (endAutopilotSession). A session a
@@ -4155,6 +4181,7 @@ public class ScriptBoard extends UntypedActor {
     if (!consolesTold) {
       ObjectNode frame = Json.newObject();
       frame.put("source", step);
+      frame.put("step", step);
       frame.put("error", "Caught error: " + details + "\n");
       toAllAdmins(frame);
     }

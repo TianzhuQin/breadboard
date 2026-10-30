@@ -341,10 +341,10 @@ public class AutopilotSessionTest extends BaseTest {
         final ExperimentInstance session = sessions(experiment).get(0);
 
         tab.send("RunGame");
-        // As processScript tells of an error, from the step: the Live session page shows it.
+        // As processScript tells of an error, from the step, which it names: the Live session page shows it.
         await("the error on the console", () -> tab.count(f -> f.has("error") && f.has("source")
             && "finishStep".equals(f.get("source").asText()) && f.get("error").asText().startsWith("Caught error: ")
-            && f.get("error").asText().contains("roundz")) == 1);
+            && f.get("error").asText().contains("roundz") && "finishStep".equals(f.path("step").asText())) == 1);
         await("the event", () -> events(session, "stepFailed").size() == 1);
         Thread.sleep(500);
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
@@ -357,6 +357,38 @@ public class AutopilotSessionTest extends BaseTest {
             if (name.equals(i.name)) return i;
         }
         return null;
+    }
+
+    @Test
+    public void anErrorAStepGivesAsItLoadsOrRunsNamesThatStep() throws Exception {
+        final User researcher = user("named");
+        final Experiment experiment = createExperiment("Names its step");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { }");
+        // valid Groovy, but "five" is not defined: it fails as the step loads
+        createStep(experiment, "RoundStep", "SEATS = 2\nROUNDS = five");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(researcher.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", experiment.id);
+        await("the error of the step that didn't load", () -> tab.count(f -> f.has("error")
+            && f.get("error").asText().contains("five")) == 1);
+        JsonNode loading = tab.first(f -> f.has("error") && f.get("error").asText().contains("five"));
+        assertEquals("Steps", loading.get("source").asText());
+        assertEquals("RoundStep", loading.get("step").asText());
+
+        // A script typed in the Script console names no step, unless a step's own code fails in it.
+        tab.send("SendScript", "script", "undefinedName + 1");
+        await("its error", () -> tab.count(f -> f.has("error") && f.get("error").asText().contains("undefinedName")) == 1);
+        assertFalse(tab.first(f -> f.has("error") && f.get("error").asText().contains("undefinedName")).has("step"));
+        tab.send("SendScript", "script", "probe = stepFactory.createStep('Probe'); probe.run = { missingName + 1 }; probe.start()");
+        await("the step's error", () -> tab.count(f -> f.has("error") && f.get("error").asText().contains("missingName")) == 1);
+        assertEquals("Probe", tab.first(f -> f.has("error") && f.get("error").asText().contains("missingName")).get("step").asText());
     }
 
     /** A console tab of the user's, logged in, with the experiment selected. */
@@ -511,6 +543,9 @@ public class AutopilotSessionTest extends BaseTest {
             && f.get("error").asText().contains("roundStepp")));
         assertEquals("OnJoinStep", tab.first(f -> f.has("error") && f.get("error").asText().contains("roundStepp"))
             .get("source").asText());
+        // (and names the step that failed: the OnJoinStep ran InitStep's code)
+        assertEquals("InitStep", tab.first(f -> f.has("error") && f.get("error").asText().contains("roundStepp"))
+            .get("step").asText());
 
         tab.send("SendScript", "script", "initStep.done = { }");
         await("fixed", () -> tab.count(f -> f.has("request") && "SendScript".equals(f.get("request").asText())
