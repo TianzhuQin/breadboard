@@ -275,8 +275,12 @@ change the live session.
 **Reload engine** (in the top bar's Engine menu, or on the Steps page) restarts the experiment's
 scripts from its saved steps. The engine is shared by every researcher on the server, so everyone
 in the network is disconnected and the network is emptied, whoever's session they are in. Your own
-running session carries on: it takes people again, newcomers and those who held a seat, and its
-game counts as not started, so **Start the game** runs InitStep again. Creating a session and
+running session carries on (so does the autopilot's, when you saved its settings: it goes on running
+it), and a game under way in it starts again from the beginning: its game counts as not started, so
+**Start the game** (or its waiting room) runs InitStep again. The pages of those who held a seat get
+back in by themselves as they reconnect, and it takes newcomers as before its game. Its data records
+an `engineReloaded` event, with `restarted` (whether a game was under way) and `by`, as a Resume
+records `sessionResumed`. Creating a session and
 resuming one restart the engine too, and so does switching experiments while no session is
 running. While anyone is using it, the console says who before doing any of these, and whether it
 pauses the autopilot. While another experiment's session is running, a reload is refused: it would
@@ -326,7 +330,9 @@ the session open at the moment, so the same links keep working from one session 
 
 **What pauses it.** Ending the autopilot's session from the console pauses the autopilot: stopping
 it, or anything that reloads the engine (creating or resuming another session, reloading); selecting
-another experiment doesn't. The console says so before you do it. A paused autopilot opens no
+another experiment doesn't, and neither does a **Reload engine** that carries its session on (by the
+account that saved its settings: see [Reloading the engine](#reloading-the-engine)). The console says
+so before you do it. A paused autopilot opens no
 session, so its links lead nowhere until you press **Resume** on this page. After its one session
 with **Open the next session when one finishes** off, the button reads **Open another session**.
 Both work when the server's settings file (`conf/local.conf`) is in charge too, and a pause

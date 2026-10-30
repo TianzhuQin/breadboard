@@ -2174,7 +2174,13 @@ public class ScriptBoard extends UntypedActor {
             gameListener.experimentInstance = null;
           }
         }
+        if (carriesOn) {
+          carryOnThroughRebuild(own, breadboardMessage.user);
+        }
         rebuildScriptBoard(selectedExperiment, builtFor(breadboardMessage));
+        if (carriesOn) {
+          Recruitment.restoreFor(own.id);
+        }
         Breadboard.ReloadEngine reloadEngine = (Breadboard.ReloadEngine) message;
         ExperimentInstance ei = reloadEngine.user.experimentInstanceId == -1 ? null
             : ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
@@ -2339,6 +2345,34 @@ public class ScriptBoard extends UntypedActor {
     if (request.out != null) {
       request.out.write(json.deepCopy().put("engineKept", true));
     }
+  }
+
+  /**
+   * A Reload engine is about to rebuild the engine under the account's live session, which carries
+   * on in the new one (ReloadEngine; or the session is selected again, SelectInstance), before the
+   * rebuild closes its participants' pages. Its data
+   * says the engine was reloaded there, by whom, and whether a game in progress starts again from the
+   * beginning (engineReloaded: restarted, by), as sessionResumed says for a Resume: the data of the
+   * game before is the old game's. And it takes people again now (reopenAfterRebuild), not once the
+   * new engine has loaded the steps: the pages of those who held a seat reconnect within a second of
+   * being closed, while the steps were still loading, and were given the late-arrival page ("it began
+   * before you arrived") of a game that was no longer there, and stopped trying. Nothing for a
+   * session that isn't running.
+   */
+  private static void carryOnThroughRebuild(ExperimentInstance session, User by) {
+    ExperimentInstance fresh = session == null || session.id == null ? null : ExperimentInstance.findById(session.id);
+    if (fresh == null || fresh.isTestInstance() || fresh.status != ExperimentInstance.Status.RUNNING) {
+      return;
+    }
+    // (the game counts as started by the engine, or as closed to newcomers by the session: with
+    // breadboard.allowLateJoin a game that started never closes)
+    ScriptEngine running = engine;
+    boolean restarted = (running != null && gameStartedIn == running) || Boolean.TRUE.equals(fresh.hasStarted);
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    data.put("restarted", restarted);
+    data.put("by", by == null || by.email == null ? "" : by.email);
+    EventTracker.record(fresh, "engineReloaded", data);
+    reopenAfterRebuild(session);
   }
 
   /**
@@ -2956,9 +2990,14 @@ public class ScriptBoard extends UntypedActor {
       if (previous != null && (continuing == null || !continuing.equals(instanceIdOf(previous)))) {
         endBeforeRebuild(previous);
       }
+      if (continuing != null && continuing.equals(instanceIdOf(previous)) && !resuming) {
+        // The engine's live session selected again: it carries on in the new engine, as with a reload.
+        carryOnThroughRebuild(previous.experimentInstance, user);
+      }
       rebuildScriptBoard(experiment, builtFor(selectInstance));
       if (continuing != null) {
         bindLaunchParameters(target, experiment);
+        Recruitment.restoreFor(target.id);
       }
       loadSteps(experiment, selectInstance.out);
       user.setExperimentInstanceId(target.id);

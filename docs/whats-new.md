@@ -37,7 +37,10 @@ autopilot, the AMT timer, or the experiment's own code calling `initStep.start()
 OnJoinStep that starts the game once enough people are in). Code that only mentions
 `initStep.start()`, such as that OnJoinStep while the steps load, starts nothing. Reloading the
 engine, resuming a session or selecting its experiment again forgets the game, so the session then
-takes people again (newcomers and those who held a seat) until its game is started again.
+takes people again (newcomers and those who held a seat) until its game is started again. A reload
+that carries a running session on opens it to them before it closes their pages, so the pages of
+those who held a seat get back in by themselves as they reconnect (they used to be told the game
+began before they arrived), and records `engineReloaded` in it.
 
 ## What participants receive about others
 
@@ -398,5 +401,7 @@ restarts the running session.
   own, so such events could come out the wrong way round.
 - **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
   `missedStart` (someone its start left out), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+- **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
+  researcher), in a session that a reload of the engine carries on.
 - **Tie edits:** `edgeEdit`, which records the actor.
 - **Prolific entry:** `prolificEntry`.
