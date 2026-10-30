@@ -44,6 +44,56 @@ export const heldByPreview = (p: PlayerLike) => p.data?._system?.preview === tru
 /** Their own page is connected: a preview of them only watches it, read-only. */
 export const ownPageConnected = (p: PlayerLike) => isConnected(p) && !heldByPreview(p)
 
+/**
+ * What a preview of this player does, as far as the console can tell:
+ * - 'computer': a computer player; the preview watches what the computer does.
+ * - 'watching': their own page is connected; the preview watches it.
+ * - 'plays': a preview plays the seat (a test player's, whose own page hasn't been in the session).
+ * - 'away': their own page has been in the session and isn't now: a preview stands in for them (or
+ *   will), answering for them, but they count as away. Also a person whose seat the computer took over.
+ * - null: nobody is on the seat, and the console can't tell whether their own page has been in the
+ *   session (the server says so once a preview takes the seat).
+ */
+export type PreviewRole = 'computer' | 'watching' | 'plays' | 'away'
+export function previewRole (p: PlayerLike): PreviewRole | null {
+  if (isComputerPlayer(p)) return 'computer'
+  if (ownPageConnected(p)) return 'watching'
+  if (heldByPreview(p)) return isConnected(p) ? 'plays' : 'away'
+  // (the computer takes over only the seat of someone who left)
+  if (truthyFlag(p.data?.ai)) return 'away'
+  return null
+}
+
+/**
+ * Where the player's seat is, and so what a preview of them does, in words (the player list's
+ * tooltip and screen-reader text). `shownHere`: their page is shown on this page.
+ */
+export function seatText (p: PlayerLike, shownHere = false): string {
+  const text = (() => {
+    switch (previewRole(p)) {
+      case 'computer': return 'played by the computer, so a preview is read-only'
+      case 'watching': return 'their own page is connected, so a preview is read-only'
+      case 'plays': return 'a preview plays this seat: their own page hasn’t been in this session'
+      // (another console's preview, or this one's)
+      case 'away': return heldByPreview(p) ? 'away: a preview stands in for them' : 'away: the computer plays their seat'
+      default: return 'not connected'
+    }
+  })()
+  return shownHere ? `${text}, shown here` : text
+}
+
+/** The same in a word, for the list (only where it changes what a preview does). */
+export function seatWord (p: PlayerLike): string {
+  const role = previewRole(p)
+  return role === 'computer' || role === 'watching' ? 'Watching' : role === 'away' ? 'Away' : ''
+}
+
+/** Why a preview only watches, for the roles where it does (as the participant page says it). */
+export const WATCHING_WHY: Record<'computer' | 'watching', string> = {
+  computer: 'the computer plays this seat, so you see what it does but can’t answer for it',
+  watching: 'their own page is connected, so you see their screen but can’t answer for them',
+}
+
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 /** Players in natural id order: p2 before p10. */
 export function sortPlayers<T extends PlayerLike> (list: readonly T[]): T[] {

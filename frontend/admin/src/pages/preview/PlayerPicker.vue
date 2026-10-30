@@ -37,11 +37,17 @@
             <span class="pp__id" :title="p.id">{{ playerName(p.id) }}</span>
             <span v-if="isTestPlayer(p)" class="pp__tag" title="Test player (testmode)"><FlaskConical :size="12" aria-hidden="true" /><span class="sr-only">, test player</span></span>
             <span v-if="isAIPlayer(p)" class="pp__tag" title="Played by the computer"><Bot :size="12" aria-hidden="true" /><span class="sr-only">, computer player</span></span>
-            <span
-              class="pp__dot"
-              :class="{ 'is-on': isConnected(p) }"
-              :title="connectionText(p)"
-            /><span class="sr-only">, {{ connectionText(p) }}</span>
+            <span class="pp__seat">
+              <!-- (in a word; screen readers get the whole reason below) -->
+              <span v-if="seatWord(p)" class="pp__word" :class="`is-${seatWord(p).toLowerCase()}`" :title="connectionText(p)" aria-hidden="true">
+                <component :is="seatWord(p) === 'Away' ? UserX : Eye" :size="12" />{{ seatWord(p) }}
+              </span>
+              <span
+                class="pp__dot"
+                :class="{ 'is-on': isConnected(p) }"
+                :title="connectionText(p)"
+              /><span class="sr-only">, {{ connectionText(p) }}</span>
+            </span>
           </span>
         </BCheckbox>
       </li>
@@ -52,6 +58,7 @@
       <span class="pp__dot is-on" aria-hidden="true" /> connected
       <FlaskConical :size="12" aria-hidden="true" /> test
       <Bot :size="12" aria-hidden="true" /> computer
+      <Eye :size="12" aria-hidden="true" /> watching only
     </p>
   </section>
 </template>
@@ -59,11 +66,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { playerName } from '@/network/players'
-import { Bot, FlaskConical, ListOrdered, Search } from 'lucide-vue-next'
+import { Bot, Eye, FlaskConical, ListOrdered, Search, UserX } from 'lucide-vue-next'
 import { BButton, BCheckbox, BInput } from '@/ui'
 import {
-  heldByPreview, isAIPlayer, isComputerPlayer, isConnected, isTestPlayer, matchesPlayer, ownPageConnected, type PlayerLike,
-  type QuickPick,
+  isAIPlayer, isConnected, isTestPlayer, matchesPlayer, seatText, seatWord, type PlayerLike, type QuickPick,
 } from './preview'
 
 const props = defineProps<{
@@ -81,15 +87,10 @@ const visible = computed(() => props.players.filter(p => matchesPlayer(p, query.
 const testCount = computed(() => props.players.filter(isTestPlayer).length)
 const aiCount = computed(() => props.players.filter(isAIPlayer).length)
 
+// Where their seat is, also for a player shown here: that used to be all it said, so someone away
+// whom a preview here stands in for read "shown here", as if the preview were them.
 function connectionText (p: PlayerLike) {
-  if (props.selected.has(p.id)) return 'shown here'
-  if (isComputerPlayer(p)) return 'played by the computer, so a preview is read-only'
-  if (ownPageConnected(p)) return 'their own page is connected, so a preview is read-only'
-  // (another console's preview, which a preview from here would take the seat from)
-  if (heldByPreview(p)) {
-    return isConnected(p) ? 'a preview plays this seat: their own page hasn’t been in this session' : 'away: a preview stands in for them'
-  }
-  return 'not connected'
+  return seatText(p, props.selected.has(p.id))
 }
 </script>
 
@@ -121,7 +122,10 @@ function connectionText (p: PlayerLike) {
 .pp__label { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pp__id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); }
 .pp__tag { display: inline-grid; place-items: center; flex: none; color: var(--muted); }
-.pp__dot { flex: none; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--border-strong); }
+.pp__seat { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+.pp__word { display: inline-flex; align-items: center; gap: 3px; font-size: var(--text-xs); font-weight: 550; color: var(--text-soft); white-space: nowrap; }
+.pp__word.is-away { color: var(--warning-soft-text); }
+.pp__dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
 .pp__dot.is-on { background: var(--success); }
 .pp__none { font-size: var(--text-sm); color: var(--muted); padding: 8px 2px; }
 .pp__legend { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: var(--text-xs); color: var(--faint); }

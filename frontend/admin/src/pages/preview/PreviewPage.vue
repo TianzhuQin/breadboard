@@ -129,6 +129,7 @@
                 :interactive="memory.interactive"
                 :test="isTestPlayer(t)"
                 :ai="isAIPlayer(t)"
+                :role="t.missing ? null : previewRole(t)"
                 :paused="focusId === t.id ? 'focus' : tabbed.has(t.id) ? 'tab' : null"
                 :frame-key="`${globalNonce}-${nonces[t.id] || 0}`"
                 :note="t.missing && admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''"
@@ -176,8 +177,8 @@ import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
   FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl,
-  previewMemory as memory, previewPageUrl, quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike, type PreviewTarget,
-  type QuickPick,
+  previewMemory as memory, previewPageUrl, previewRole, quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike,
+  type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 

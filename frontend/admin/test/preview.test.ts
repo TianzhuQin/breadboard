@@ -4,7 +4,7 @@ import { reactive } from 'vue'
 import {
   DEVICES, FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
   isComputerPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth, ownPageConnected, previewMemory,
-  previewPageUrl, quickPick, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
+  previewPageUrl, previewRole, quickPick, seatText, seatWord, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
 } from '../src/pages/preview/preview'
 import { fetchPreviewToken } from '../src/pages/preview/previewLink'
 import { HttpError } from '../src/lib/http'
@@ -80,6 +80,29 @@ describe('who a player is', () => {
     expect([own, preview, away, standIn].map(ownPageConnected)).toEqual([true, false, false, false])
     expect([own, preview, away, standIn].map(heldByPreview)).toEqual([false, true, false, true])
     expect([own, preview, away, standIn].map(isConnected)).toEqual([true, true, false, false])
+  })
+
+  it('says what a preview of each player does', () => {
+    const list = [
+      P('_1', { ai: 1 }), // a computer player: watched
+      P('p1', { _system: { connected: true } }), // their own page: watched
+      P('t1', { testmode: true, _system: { connected: true, preview: true } }), // played by a preview
+      P('p2', { _system: { connected: false, preview: true } }), // away, a preview stands in
+      P('p3', { ai: 1, _system: { connected: false } }), // away, the computer took their seat
+      P('t2', { testmode: true }), // nobody on the seat
+    ]
+    expect(list.map(previewRole)).toEqual(['computer', 'watching', 'plays', 'away', 'away', null])
+    expect(list.map(p => seatWord(p))).toEqual(['Watching', 'Watching', '', 'Away', 'Away', ''])
+    expect(list.map(p => seatText(p))).toEqual([
+      'played by the computer, so a preview is read-only',
+      'their own page is connected, so a preview is read-only',
+      'a preview plays this seat: their own page hasn’t been in this session',
+      'away: a preview stands in for them',
+      'away: the computer plays their seat',
+      'not connected',
+    ])
+    // shown here, the reason still comes first
+    expect(seatText(list[3], true)).toBe('away: a preview stands in for them, shown here')
   })
 
   it('searches by id, or by "test" and "ai"', () => {
@@ -512,6 +535,60 @@ describe('PreviewPage', () => {
     expect(previewMemory.ids).toEqual(['p2'])
     expect(ui.notify.info).not.toHaveBeenCalled()
     w.unmount()
+  })
+
+  // At tile size the participant page's own "Watching only" banner is a few pixels high.
+  it('tags the tiles of a connected participant and of a computer player "Watching"', async () => {
+    addPlayer('_1', { ai: 1 })
+    addPlayer('p1', { _system: { connected: true } })
+    addPlayer('t1', { testmode: true })
+    await settle()
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['_1', 'p1', 't1']
+    const w = await mountPage()
+    try {
+      await settle()
+      const tile = (name: string) => w.findAll('.pt').find(t => t.find('.pt__id').text() === name)!
+      const tag = (name: string) => tile(name).find('.pt__tag.is-text')
+      expect(tag('AI 1 (_1)').text()).toBe('Watching')
+      expect(tag('AI 1 (_1)').attributes('title')).toBe('Watching: the computer plays this seat, so you see what it does but can’t answer for it')
+      expect(tag('p1').text()).toBe('Watching')
+      expect(tag('p1').attributes('title')).toBe('Watching: their own page is connected, so you see their screen but can’t answer for them')
+      expect(tag('t1').exists()).toBe(false)
+      // a small tile keeps the word for screen readers and the tooltip
+      previewMemory.size = 'S'
+      previewMemory.device = 'phone'
+      await settle()
+      expect(tag('p1').find('.sr-only').text()).toBe('Watching')
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('says in the list, in a word anyone can see, which previews only watch and who is away', async () => {
+    addPlayer('_1', { ai: 1 })
+    addPlayer('p1', { _system: { connected: true } })
+    addPlayer('p2', { _system: { connected: false, preview: true } })
+    addPlayer('t1', { testmode: true })
+    await settle()
+    const w = await mountPage()
+    try {
+      const row = (id: string) => w.findAll('.pp__item').find(li => li.find('.pp__id').text() === id)!
+      const word = (id: string) => row(id).find('.pp__word')
+      expect(word('AI 1 (_1)').text()).toBe('Watching')
+      expect(word('p1').text()).toBe('Watching')
+      expect(word('p1').attributes('title')).toBe('their own page is connected, so a preview is read-only')
+      expect(word('p2').text()).toBe('Away')
+      expect(word('t1').exists()).toBe(false)
+      // shown here: the reason is still there, before "shown here"
+      await row('p2').find('input[type="checkbox"]').setValue(true)
+      await flushPromises()
+      expect(row('p2').find('.pp__dot').attributes('title')).toBe('away: a preview stands in for them, shown here')
+      expect(row('p2').find('.sr-only:last-child').text()).toBe(', away: a preview stands in for them, shown here')
+      expect(w.find('.pp__legend').text()).toContain('watching only')
+    } finally {
+      w.unmount()
+    }
   })
 
   it('previews a computer player read-only, and says so', async () => {
