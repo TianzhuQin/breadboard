@@ -48,13 +48,13 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
   - 测试玩家（他自己的页面从没在这一场连上过）由预览来玩：预览算他在线，预览里的选择就是他的选择。
   - 预览不会把人加进游戏：不在网络里的人（比如恢复场次后还没回来的人），预览上写着 **Not in the game right now**，等他回来后自动显示他的页面。恢复场次或重新加载引擎以后，这些规则照样适用。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，在 **Parameters** 页面就能改，不用改代码；参与者看到的所有文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；参与者看到的所有文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 例子的文字是英文写的，放在 Content 页面的 **English** 下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
 
 - 在 Content 页面切换到中文，写上译文（可以先点 **Copy from English**，再改成中文），保存后参与者就看到中文。
 - 还没翻译的文字，参与者看到的仍是英文，所以可以一段一段地翻译。
-- 参与者读哪种语言，由启动参数 `language` 决定，默认是你的 Default language。在 **Parameters** 页把它改成 `eng`，参与者就都看英文。
+- 参与者读哪种语言，由启动参数 `language` 决定，默认是你的 Default language。在 **Parameters** 页把它的 **Default** 改成 `eng`，参与者就都看英文。注意：**New session** 会照上一场填好启动参数，不会自动换成新的 Default。所以自己新建一场时，要在 `language` 下点 **Use default**，确认是 `eng`，再点 **Create session**。
 
 实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 
@@ -62,7 +62,9 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 "一场"（session）就是实验的一次运行。
 
-1. 在 **Live session** 页点 **New session**，填 **Session name**（已经填好了，比如 Session 1，可以改），检查 **Launch parameters**（已填好默认值），点 **Create session**。这一场马上开放，参与者可以用链接加入。
+1. 在 **Live session** 页点 **New session**，填 **Session name**（已经填好了，比如 Session 1，可以改），检查 **Launch parameters**，点 **Create session**。这一场马上开放，参与者可以用链接加入。
+   - 第一场的启动参数填的是 **Parameters** 页上的默认值（Default）。以后每一场都照上一场填好；和默认值不一样时，对话框里写着 Filled in as in “Session 1”, the last session。
+   - 所以在 **Parameters** 页改了某个参数的 Default 以后，自己新建一场时，要在这个参数下点 **Use default**（或点 **Reset to defaults**，全部换回默认值），新的 Default 才会用上。自动运行开的场次总是用默认值。
 2. 把 **Links for participants** 里的链接发给参与者。**This session** 只在这一场运行时有效。**Whichever session is open** 总是指向这个实验当前开放、还没开始的那一场，可以一直用同一个。**Prolific study URL** 给 Prolific 用。参与者打开链接，在 **Your ID** 里输入一个 ID，点 **Continue**。
 3. 链接用的是你打开控制台时的网址。用 localhost 打开时，链接只在你自己的电脑上能用。放到服务器上以后，要用服务器的公开网址打开控制台，再复制链接。
 4. 人到齐后点 **Start the game**，在确认框里再点一次 **Start the game**。等待的人一起进入，实验开始。有等候室的实验（比如 Example: network game）人够了会自己开始，不用点。开始后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面"设置写在哪里"）。
@@ -107,14 +109,14 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 ## 用 Prolific 招募
 
-1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行（最好先做完下面第 5 步再打开）。
+1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行。最好先做完下面第 5 步再开场：已经开着的那一场不会自动用上之后设的完成码。
 2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 研究设置的 Data collection 部分，记录 Prolific ID 的方式选 **I'll use URL parameters**；链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。
 3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，参与者会看到 "No session is open right now"。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
 4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。**同一个人不会参加两次**：在这个实验里已经参加过的人（拿到过完成码，或者游戏结束时还在场）再打开 Prolific 链接，会看到 "You have already taken part in this study" 和他的完成码，不会被安排进新的一场（服务器重启后也一样）；场次被停止或因重启中断的人可以再加入。这个检查按整个实验算：如果要在 Prolific 上用同一批人做新一期，就复制一个实验。自己测试时请用 **Try it as a test participant**，它每次都会生成新的 Prolific ID。
 5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回，记下这个码。然后：
-   - **用 Example: network game（或复制它的实验）**：不用改代码。在 **Parameters** 页点 `prolificCode` 右边的铅笔，把 **Default** 填成这个码，点 **Save changes**。最好在打开自动运行之前做：已经开着的那一场仍用开场时的值。
-     - 自动运行已经开着时：趁还没有人进来，在 **Live session** 点 **Stop session**（自动运行会因此暂停），再到 **Autopilot** 页点 **Resume**，新开的那一场就用新的完成码。
-     - 自己新建一场时，**Launch parameters** 里也能看到和修改 `prolificCode`。
+   - **用 Example: network game（或复制它的实验）**：不用改代码。在 **Parameters** 页点 `prolificCode` 右边的铅笔，把 **Default** 填成这个码，点 **Save changes**。最好在开场和打开自动运行之前做：已经开着的那一场仍用开场时的值。
+     - 自动运行开的场次用的就是这个 Default。自动运行已经开着时：趁还没有人进来，在 **Live session** 点 **Stop session**（自动运行会因此暂停），再到 **Autopilot** 页点 **Resume**，新开的那一场就用新的完成码。
+     - 自己新建一场时要注意：**New session** 会照上一场填好启动参数（对话框里写着 Filled in as in “Session 1”, the last session），不会自动换成新的 Default。在 `prolificCode` 下点 **Use default**（或点 **Reset to defaults**），确认是你的完成码，再点 **Create session**。已经有一场开着时，这个按钮是 **Stop it and create**（确认框里再点一次），它会先停掉开着的那一场。
    - **自己写的实验**：在 **Recruitment** 页 **When a participant finishes** 的 **Your completion code** 里填上这个码，点 **Copy code**，把代码放进参与者结束的那一步。代码里的 `player` 要换成那一步里代表参与者的变量（例子游戏的 FinishStep 里是 `p`），并且只对从 Prolific 来的人调用（把 `C1A2B3C4` 换成你的完成码）：
 
      ```groovy
@@ -124,7 +126,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
      ```
 
      不加这个判断也不会出错：对不是从 Prolific 来的人，它什么都不做，只在服务器日志里写一行原因。
-   - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场，然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮。
+   - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场（用例子游戏时，确认 `prolificCode` 填的是你的完成码，不是的话点它下面的 **Use default**），然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮。
 
 参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 

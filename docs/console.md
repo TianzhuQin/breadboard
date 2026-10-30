@@ -401,9 +401,13 @@ recorded in a `prolificEntry` event. To send participants back to Prolific with 
 code when they finish:
 
 - **Example: network game**, and copies of it, do it by themselves: set `prolificCode` on the
-  Parameters page (its **Default**), preferably before turning on the autopilot. A session keeps the
-  value it opened with; to give the autopilot's open session the new one, stop that session on Live
-  session while nobody is in it, then press **Resume** on the Autopilot page.
+  Parameters page (its **Default**), preferably before you open a session or turn on the autopilot.
+  A session keeps the value it opened with. The autopilot opens its sessions with the defaults: to
+  give its open session the new code, stop that session on Live session while nobody is in it, then
+  press **Resume** on the Autopilot page. **New session** on Live session fills in the last
+  session's values instead ("Filled in as in “Session 1”, the last session"), not a Default changed
+  since: press **Use default** under `prolificCode` (or **Reset to defaults**) and check the code
+  before **Create session**.
 - In steps of your own, give your completion code to **When a participant finishes** and **Copy
   code**: it builds `recruitment.completeProlific(player, [completionCode: "…"])`. Put it in the step
   where participants finish, with that step's variable for the participant in place of `player`, and
@@ -417,9 +421,9 @@ code when they finish:
 
   For someone who didn't come from Prolific, `completeProlific` does nothing (the server's log says
   why), so a call without the check doesn't stop the game either.
-- Before you publish the study, open a session, go through it with **Try it as a test participant**
-  (press **Start the game** on Live session if the waiting room waits for more people), and check
-  that the code shows at the end.
+- Before you publish the study, open a session (with the example, check that its `prolificCode` is
+  your code), go through it with **Try it as a test participant** (press **Start the game** on Live
+  session if the waiting room waits for more people), and check that the code shows at the end.
 
 Participants then see the code and a **Finish and return to Prolific** button that takes them back
 to Prolific. **From Prolific in this session** lists who joined and who finished, with **Copy bonus
