@@ -226,9 +226,10 @@ that line); **Full error** has the rest, Breadboard's own code included.
 
 Under **Links for participants**, **This session** works while this session runs. **Whichever
 session is open** leads to this experiment's open session whose game hasn't started, so it can be
-shared once and reused. With these two, participants type an ID to join: any name or number you give
-them (up to 64 characters, not starting with `_`), one seat per ID. **Prolific study URL** goes into Prolific. The links use the address you
-opened the console at, so open it at the server's public address before copying them.
+shared once and reused. With these two, participants type an ID to join: any name or number you
+give them (up to 64 characters, not starting with `_`), one seat per ID. **Prolific study URL** goes
+into Prolific. The links use the address you opened the console at, so open it at the server's
+public address before copying them.
 
 ### Network
 
@@ -257,9 +258,9 @@ a property (`_system.connected=false`). The buttons above the table show **Every
 **AI players**, **Connected**, **Disconnected** or who **Has a choice**. **Columns** adds properties
 to the table, and **Download CSV** saves the players shown with every property. Computer players
 (`g.addAI`) are called AI 1 (`_1`), AI 2 (`_2`) and so on, here, on the Network and Preview pages
-and in Live session's events; scripts, filters and the data use their ids. A participant's page calls the people around
-them Person A, Person B, … in the order it first shows them, so a player's letter can differ from
-one participant's page to another.
+and in Live session's events; scripts, filters and the data use their ids. A participant's page
+calls the people around them Person A, Person B, … in the order it first shows them, so a player's
+letter can differ from one participant's page to another.
 
 Click a player (here or on the Network page) to see what is **On their screen** and their
 choices, their **Ties** and **Properties**. Clicking a choice submits it for them, after you
@@ -419,13 +420,13 @@ if (p._system?.recruitment?.source == "prolific") {
 Participants then see the code and a **Finish** button that takes them back to Prolific. An
 experiment with a `prolificCode` launch parameter, such as **Example: network game**, gives the code
 by itself: the card then says so, with the code it gives now, and you set it as that parameter's
-default on the Parameters page instead. **From
-Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event. **From Prolific
-in every session** lists them for every session of the experiment, newest first, from the sessions'
-data, so a session the autopilot has moved on from can still be paid: when each person joined,
-whether they finished, their code and bonus, and **Copy bonus list** for all of them (someone paid in
-two sessions gets one line with both amounts added up).
+default on the Parameters page instead. **From Prolific in this session** lists who joined and who
+finished, with **Copy bonus list** for Prolific's bulk bonus. Each completion is recorded as a
+`prolificComplete` event. **From Prolific in every session** lists them for every session of the
+experiment, newest first, from the sessions' data, so a session the autopilot has moved on from can
+still be paid: when each person joined, whether they finished, their code and bonus, and **Copy
+bonus list** for all of them (someone paid in two sessions gets one line with both amounts added
+up).
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game
