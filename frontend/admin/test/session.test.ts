@@ -300,6 +300,8 @@ describe('event feed', () => {
     expect(formatDataValue('choice', '_4')).toBe('_4')
     const w = mount(EventRow, { props: { event: { key: 'e1', id: 1, name: 'clientLogIn', at: Date.now(), data: { clientId: '_6', preview: 'true' } } } })
     expect(w.find('.live-evr__plain').text()).toBe('A researcher’s preview signed in as AI 6')
+    // (the whole line on hover too, where a narrow column clamps it)
+    expect(w.find('.live-evr__plain').attributes('title')).toBe('A researcher’s preview signed in as AI 6')
     expect(w.find('.live-evr__data').text()).toContain('AI 6 (_6)')
     w.unmount()
   })
