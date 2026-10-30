@@ -56,12 +56,38 @@ test("completeProlific requires a completion code") {
   assert threw : 'completeProlific without a completion code must throw'
 }
 
-test("completeProlific refuses a non-prolific player") {
-  def v = g.addPlayer('rec-prolific-4')
-  recruitment.registerMturk(v)
-  def threw = false
-  try { recruitment.completeProlific(v, [completionCode: 'X']) } catch (Exception e) { threw = true }
-  assert threw : 'completeProlific on an mturk player must throw'
+test("completeProlific does nothing for someone who didn't come from Prolific, and logs why") {
+  // (it used to throw, which stopped the step that called it, and with it the Prolific participants'
+  // end: the code copied from the console, called for everyone, did that in a lab session)
+  def tracked = []
+  eventTracker = [track: { name, data -> tracked << name }]
+  def log = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("application")
+  def logged = new ch.qos.logback.core.read.ListAppender()
+  logged.start()
+  log.addAppender(logged)
+  def level = log.level
+  log.level = ch.qos.logback.classic.Level.INFO
+  def mturk = g.addPlayer('rec-prolific-4')
+  recruitment.registerMturk(mturk)
+  def signedIn = g.addPlayer('rec-prolific-4b')   // from the session's sign-in link: no source at all
+  def prolific = g.addPlayer('rec-prolific-4c')
+  recruitment.registerProlific(prolific)
+  try {
+    assert recruitment.completeProlific(mturk, [completionCode: 'X']) == false
+    assert recruitment.completeProlific(signedIn, [completionCode: 'X']) == false
+    assert recruitment.completeProlific(prolific, [completionCode: 'X']) == true
+  } finally {
+    log.detachAppender(logged)
+    log.level = level
+  }
+  [mturk, signedIn].each { v ->
+    assert !v._system.recruitment.completed
+    assert v._system.recruitment.completionCode == null
+    assert logged.list.any { it.formattedMessage.contains(v.id) && it.formattedMessage.contains("didn't come from Prolific") }
+  }
+  assert mturk._system.recruitment.source == 'mturk'
+  assert prolific._system.recruitment.completionCode == 'X'
+  assert tracked == ['prolificComplete']
 }
 
 // --- completeProlific: the completion in the session's data --------------------------------------

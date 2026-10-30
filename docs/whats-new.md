@@ -22,7 +22,9 @@ form.
 Prolific participants get a pseudonymous client id (`pp-…`). The PID is never in a URL and never
 sent to other participants. It is logged as a `prolificEntry` event for payment, and stored in the
 player's own `_system.recruitment`, which drives the built-in Prolific completion screen
-(`recruitment.completeProlific(player, [completionCode: "..."])`).
+(`recruitment.completeProlific(player, [completionCode: "..."])`). For a player who didn't come
+from Prolific, `completeProlific` does nothing and returns false (the server's log says why); it
+used to throw, which stopped the step that called it.
 
 | Setting (in `conf/local.conf`) | Effect |
 |---|---|
