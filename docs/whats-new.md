@@ -412,6 +412,10 @@ restarts the running session.
 - **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
   `missedStart` (someone its start left out), `sessionFull` (someone a full room left out, with
   `clientId`), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+- **How the autopilot ended its session:** `sessionFailed` (a step failure stalled its game: `step`,
+  `line`, `error`; the `stepFailed` before it doesn't say whether the failure stalled the game),
+  `sessionStalled` (its game had nothing left to do after a step failed: `step`, `error`) and
+  `sessionTooLong` (`minutes`, `limit`).
 - **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
   researcher), in a session that a reload of the engine carries on.
 - **Tie edits:** `edgeEdit`, which records the actor.

@@ -4170,7 +4170,7 @@ public class ScriptBoard extends UntypedActor {
    * for good and no new session would open: it ends as when its steps don't load (stepsFailedToLoad:
    * participants are told it had to stop because of a problem with the study (problemScreens), the
    * computer players and the game's timers stop, nothing more is recorded, the session is stopped),
-   * and the autopilot pauses, saying where.
+   * with a sessionFailed event (step, line, error), and the autopilot pauses, saying where.
    * On the autopilot's thread, under the engine lock, which the failing thread may not wait for: it
    * can hold the autopilot's own lock (groovy/autopilot.groovy), which an engine change can wait for.
    */
@@ -4191,6 +4191,9 @@ public class ScriptBoard extends UntypedActor {
           if (live == null || !sessionId.equals(live.id) || !Autopilot.gameFailed(live, step, error)) {
             return;
           }
+          // The data says the autopilot ended it, and why: stepFailed alone doesn't say whether the
+          // failure stalled the game (one that didn't is recorded the same way), and nothing marked the end.
+          trackEvent("sessionFailed", sessionFailedData(step, error));
           // The computer players first, as a rebuild does: a pick asked for once the timers are
           // cancelled starts a timer of its own while they are on, so a takeover as the participants'
           // pages close (autopilot.handleDeparture) would play the stopped game on, and its finish()
@@ -4212,6 +4215,28 @@ public class ScriptBoard extends UntypedActor {
         }
       }
     });
+  }
+
+  // What briefError says of a failure at a line of the experiment's code: "line 71: what went wrong".
+  private static final java.util.regex.Pattern AT_LINE = java.util.regex.Pattern.compile("^line (\\d+): (.*)$",
+      java.util.regex.Pattern.DOTALL);
+
+  /**
+   * The data of sessionFailed, the event the autopilot's session ends with when a step failure stalls
+   * its game (endAutopilotSession): {@code step}, {@code line} (left out when the error names none) and
+   * {@code error}, what went wrong there; {@code brief} is briefError's "line N: what went wrong".
+   */
+  static LinkedHashMap<Object, Object> sessionFailedData(String step, String brief) {
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    data.put("step", step);
+    java.util.regex.Matcher at = brief == null ? null : AT_LINE.matcher(brief);
+    if (at != null && at.matches()) {
+      data.put("line", at.group(1));
+      data.put("error", at.group(2));
+    } else {
+      data.put("error", brief);
+    }
+    return data;
   }
 
   // ---- what the autopilot's guards of its own session see and do (Autopilot.guardOwnSession) ----

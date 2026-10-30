@@ -266,6 +266,13 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals(1, failed.size());
         assertEquals("finishStep", value(failed.get(0), "step"));
         assertTrue(value(failed.get(0), "error"), value(failed.get(0), "error").startsWith("line 3: No such property: roundz"));
+        // and that the autopilot ended the session for it: where, and what went wrong there
+        List<Event> ended = events(session, "sessionFailed");
+        assertEquals(1, ended.size());
+        assertEquals("finishStep", value(ended.get(0), "step"));
+        assertEquals("3", value(ended.get(0), "line"));
+        assertTrue(value(ended.get(0), "error"), value(ended.get(0), "error").startsWith("No such property: roundz"));
+        assertTrue("after the failure", ended.get(0).id > failed.get(0).id);
         assertNull("the link leads nowhere now", Autopilot.openInstance(experiment.id));
 
         // Not even the watchdog opens another until Resume
@@ -342,6 +349,7 @@ public class AutopilotSessionTest extends BaseTest {
         Thread.sleep(500);
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
         assertFalse(state(researcher).get("status").get("paused").asBoolean());
+        assertEquals(0, events(session, "sessionFailed").size());
     }
 
     private static ExperimentInstance named(Experiment experiment, String name) {

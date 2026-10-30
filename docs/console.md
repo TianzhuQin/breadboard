@@ -359,16 +359,17 @@ finishes without an error. In the autopilot's own session (also one of its exper
 when you pressed **Resume** or saved its settings), a failure that stalls ends the session, telling
 its participants that it had to stop because of a problem with the study (those who came from
 Prolific, that they can open the study again from Prolific later or return it; someone who was given
-a completion code keeps it on screen), and pauses the autopilot, and this page names the step and
-line; so does an OnJoinStep that fails before the game starts when no waiting room is set. A failure
-that doesn't stall, such as a typo after the next round has started, is only recorded and shown, and
-the game goes on. In a session you run by hand nothing is ended. When **Start the game**, the
-waiting room or the OnJoinStep started a game that didn't get going, the start is taken back, so
-newcomers can join and **Start the game** works again once you fix the step; a start the experiment
-makes on a timer or after a choice is taken back only if InitStep itself fails, and otherwise the
-game counts as started. In the autopilot's own session, a **Start the game** that didn't get going
-ends the session and pauses the autopilot, as its waiting room's start does: once Start is pressed,
-its waiting room no longer starts the game.
+a completion code keeps it on screen), records a `sessionFailed` event (`step`, `line`, `error`),
+and pauses the autopilot, and this page names the step and line; so does an OnJoinStep that fails
+before the game starts when no waiting room is set. A failure that doesn't stall, such as a typo
+after the next round has started, is only recorded and shown, and the game goes on. In a session you
+run by hand nothing is ended. When **Start the game**, the waiting room or the OnJoinStep started a
+game that didn't get going, the start is taken back, so newcomers can join and **Start the game**
+works again once you fix the step; a start the experiment makes on a timer or after a choice is
+taken back only if InitStep itself fails, and otherwise the game counts as started. In the
+autopilot's own session, a **Start the game** that didn't get going ends the session and pauses the
+autopilot, as its waiting room's start does: once Start is pressed, its waiting room no longer
+starts the game.
 
 **Games that never end.** The autopilot's own session is also ended when its game runs longer than
 **Longest session**, whatever keeps it going: its participants are told the session ran out of time
