@@ -119,12 +119,15 @@ awake_for () {
 }
 
 # start "what this start is" [more settings for the server]
+# (on the port given as -Dhttp.port, or, with PORT_IN_LOCAL_CONF set, on the one conf/local.conf gives)
+PORT_IN_LOCAL_CONF=""
 start () {
-  local what="$1" from
+  local what="$1" from port_arg="-Dhttp.port=$PORT"
   shift
+  [ -z "$PORT_IN_LOCAL_CONF" ] || port_arg=""
   touch "$WORK/server.log"
   from=$(( $(wc -l < "$WORK/server.log") + 1 ))
-  (cd "$APP" && use_proxy && exec ./breadboard.sh -Dhttp.port="$PORT" "$@") >> "$WORK/server.log" 2>&1 &
+  (cd "$APP" && use_proxy && exec ./breadboard.sh ${port_arg:+"$port_arg"} "$@") >> "$WORK/server.log" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 180); do
     if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi
@@ -261,12 +264,19 @@ stop
 
 # Again, with a conf/local.conf, whose settings win over conf/application-prod.conf's, and with a
 # proxy set for the internet, as many researchers have (here one that isn't there, on port 9): the
-# launcher's requests to this computer must not go through it.
-printf '%s\n' '# the settings this install changes' 'breadboard.wsUrl="ws://local-conf.smoke.test"' > "$APP/conf/local.conf"
+# launcher's requests to this computer must not go through it. Its port and memory are the ones
+# conf/local.conf gives, which the launcher passes on to Java (no -Dhttp.port is given here).
+printf '%s\n' '# the settings this install changes' 'breadboard.wsUrl="ws://local-conf.smoke.test"' \
+  "http.port = $PORT   # the lab's port" 'breadboard.memory: "768m"' > "$APP/conf/local.conf"
 # (readable by anyone, as a copy brought from an earlier release may be)
 chmod 644 "$APP/conf/local.conf"
 PROXY=http://127.0.0.1:9
+PORT_IN_LOCAL_CONF=1
 start "same database again, with conf/local.conf and a proxy set"
+PORT_IN_LOCAL_CONF=""
+ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qE -- "-Xmx768m .* -Dhttp\.port=$PORT launcher\.Main " \
+  || fail "the port and memory in conf/local.conf weren't passed on to Java: $(ps -ww -o args= -p "$SERVER" | tr ' ' '\n' | grep -E '^-(Xmx|Dhttp)')"
+pass "the port and memory set in conf/local.conf are the ones the server runs with"
 # It may hold keys: the launcher lets only its owner read it.
 case "$(ls -l "$APP/conf/local.conf")" in
   -rw-------*) pass "the launcher lets only its owner read conf/local.conf" ;;

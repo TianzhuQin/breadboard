@@ -66,11 +66,14 @@ $env:BREADBOARD_NO_BROWSER = '1'
 $empty = Join-Path $work 'empty.txt'
 Set-Content -LiteralPath $empty -Value ''
 
-# breadboard.bat in $folder, on $on; its output goes to $out and $err in $work.
-function Start-Breadboard([string]$folder, [int]$on, [string]$out, [string]$err, [switch]$Wait) {
+# breadboard.bat in $folder, on $on (with -NoPort, on the port its conf\local.conf gives); its output
+# goes to $out and $err in $work.
+function Start-Breadboard([string]$folder, [int]$on, [string]$out, [string]$err, [switch]$Wait, [switch]$NoPort) {
+  $arguments = @('/c', 'breadboard.bat')
+  if (-not $NoPort) { $arguments += "-Dhttp.port=$on" }
   $opts = @{
     FilePath               = 'cmd.exe'
-    ArgumentList           = @('/c', 'breadboard.bat', "-Dhttp.port=$on")
+    ArgumentList           = $arguments
     WorkingDirectory       = $folder
     PassThru               = $true
     NoNewWindow            = $true
@@ -214,6 +217,27 @@ if ($sixth.ExitCode -eq 0 -or -not $said.Contains('so it is not started again') 
 }
 Remove-Item -LiteralPath $localConf
 Pass "a server that can't start isn't started again, and logs\start-errors.log says why"
+
+# With no -Dhttp.port, it starts on the port its conf\local.conf gives (http.port), with the memory it
+# gives (breadboard.memory).
+$localPort = $Port + 4
+Set-Content -LiteralPath $localConf -Value @('# the lab''s settings', "http.port = $localPort   # the lab's port", 'breadboard.memory: "768m"')
+$seventh = Start-Breadboard $other 0 'seventh.log' 'seventh-err.log' -NoPort
+$deadline = (Get-Date).AddSeconds(240)
+$health = $null
+while (-not $health) {
+  if ($seventh.HasExited) { Fail "breadboard.bat stopped while starting on the port in conf\local.conf: $(Get-Said 'seventh.log')" }
+  if ((Get-Date) -gt $deadline) { Fail "the server did not answer on the port in conf\local.conf ($localPort) within 240 s: $(Get-Said 'seventh.log')" }
+  Start-Sleep -Seconds 2
+  try { $health = Invoke-RestMethod -Uri "http://localhost:$localPort/health" -TimeoutSec 10 } catch { $health = $null }
+}
+$java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($other) } | Select-Object -First 1
+if (-not $java -or -not $java.CommandLine.Contains('-Xmx768m') -or -not $java.CommandLine.Contains("-Dhttp.port=$localPort")) {
+  Fail "the port and memory in conf\local.conf weren't passed on to Java: $($java.CommandLine)"
+}
+Stop-Process -Id $java.ProcessId -Force
+Remove-Item -LiteralPath $localConf
+Pass 'the port and memory set in conf\local.conf are the ones the server runs with'
 
 Stop-Breadboard
 Start-Sleep -Seconds 3

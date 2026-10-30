@@ -50,10 +50,11 @@ it in its window and in `logs/application.log`, so only whoever runs the server 
 first account. Stop the server with Ctrl+C, or by closing its window. If the port is taken, the
 launcher says so: often Breadboard is running already, and its address is the one to open.
 
-Anything after the launcher's name is passed to the server as a setting:
+Anything after the launcher's name is passed to the server as a setting (on a Mac, in Terminal,
+`sh`, a space and the dragged `breadboard.sh` take the place of `./breadboard.sh`):
 
 ```bash
-./breadboard.sh -Dhttp.port=8080
+./breadboard.sh -Dhttp.port=8080           # this time on port 8080
 JAVA8_HOME=/opt/zulu8 ./breadboard.sh      # another Java 8 than the one in jre/
 BREADBOARD_NO_BROWSER=1 ./breadboard.sh    # don't open the browser
 BREADBOARD_KEEP_RUNNING=0 ./breadboard.sh  # don't start it again if it stops by itself
@@ -61,7 +62,8 @@ BREADBOARD_KEEP_RUNNING=0 ./breadboard.sh  # don't start it again if it stops by
 
 `JAVA8_HOME` can be the JDK's folder, its `bin` folder, or on macOS the JDK's folder as Finder shows
 it (`zulu-8.jdk`); one that holds no Java 8 is ignored, with a warning. The settings you change go in
-`conf/local.conf` (see [Settings](#settings)).
+`conf/local.conf` (see [Settings](#settings)), the port and the memory too, so that every start
+uses them, a double-click included.
 
 **Keeping it running.** Started in a terminal, by `Start Breadboard.command` (macOS), or by
 double-clicking `breadboard.bat`, the launcher starts the server again when it stops by itself (it
@@ -92,7 +94,7 @@ Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
-that file is gone). A server whose shutdown is stuck (an experiment's script that never ends) is
+that file is gone). To give it more memory, set `breadboard.memory` in `conf/local.conf`. A server whose shutdown is stuck (an experiment's script that never ends) is
 stopped after 20 seconds. When it stops normally, a running session's game stops at once (no page
 joins it again, no computer player or timer plays it on), a `serverStopping` event is recorded in
 it, and its participants are told the session ended because the server was stopped or restarted,
@@ -145,6 +147,8 @@ The ones to look at before participants join:
 | `breadboard.rootUrl` | `http://localhost:9000` | The public address. Mechanical Turk HITs send workers here. (The links the console shows for participants use the address the console was opened at: see [console.md](console.md).) |
 | `breadboard.secureCookies` | `false` | `true` when participants reach the server over HTTPS. |
 | `session.secure` | (off) | `true` when researchers reach the console over HTTPS. |
+| `http.port` | `9000` | The port. The launchers read it from `conf/local.conf` (only there) and pass it on; `-Dhttp.port=` given when starting wins. |
+| `breadboard.memory` | `1g` | How much memory the server may use for its data (Java's heap), in megabytes or gigabytes: `1500m`, `2g`. Read by the launchers, only from `conf/local.conf`. |
 | `breadboard.allowLateJoin` | `false` | Let people join a session after its game started. |
 | `breadboard.clientUpdateRate` | `500` | How often participants' pages are updated, in milliseconds. |
 | `amt.accessKey`, `amt.secretKey` | from `AMT_ACCESS_KEY`, `AMT_SECRET_KEY` | Your AWS keys, for Mechanical Turk. |
@@ -453,10 +457,12 @@ launcher goes on with the others. Point it at the JDK's folder, or remove it.
 rest of Breadboard isn't. Right-click the zip, **Extract All**, and open `breadboard.bat` in the new
 folder.
 
-**"Port 9000 is in use"** (or "Breadboard is already running on port 9000"): another program, or
-a Breadboard started earlier, holds the port. If it is Breadboard, open its address; otherwise
-start on another port with `-Dhttp.port=9001`. (A proxy set for the internet, such as
-`http_proxy`, doesn't matter: the launchers check the port directly.)
+**"Another program is using port 9000"** (on Windows **"Port 9000 is in use"**), or **"Breadboard
+is already running on port 9000"**: another program, or a Breadboard started earlier, holds the
+port. If it is Breadboard, open its address. Otherwise stop that program, or use another port: the
+line `http.port=9001` in `conf/local.conf` for every start, or `-Dhttp.port=9001` once, as the
+message shows. (A proxy set for the internet, such as `http_proxy`, doesn't matter: the launchers
+check the port directly.)
 
 **The server's window shows nothing new**: the window is probably paused. A click into a Windows
 console window starts selecting text, which pauses it, and Ctrl+S pauses a terminal. The server

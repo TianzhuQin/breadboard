@@ -1,15 +1,16 @@
 #!/bin/sh
 # Start Breadboard. Open http://localhost:9000 once it says it is listening.
 #
-#   ./breadboard.sh                       # port 9000
+#   ./breadboard.sh                       # port 9000, or http.port in conf/local.conf
 #   ./breadboard.sh -Dhttp.port=8080      # other settings go to the server as -D options
 #
 # Needs Java 8: the first Java 8 among JAVA8_HOME's (the JDK's folder, its bin folder, or a macOS JDK
 # folder as Finder shows it), the one that comes with this download (jre/), (on macOS) the one that
 # /usr/libexec/java_home finds, JAVA_HOME's, and java on PATH. JAVA_OPTS adds options for Java
-# itself, e.g. JAVA_OPTS=-Xmx2g. The database lives in db/ (with copies in backups/), application.secret
-# (which signs sign-ins and invitation links) in conf/application.secret, and the settings you change
-# in conf/local.conf. Run in a terminal, it opens the console in the browser once it is up
+# itself. The database lives in db/ (with copies in backups/), application.secret (which signs
+# sign-ins and invitation links) in conf/application.secret, and the settings you change in
+# conf/local.conf, where http.port=8080 sets the port, and breadboard.memory=2g how much memory the
+# server may use for its data (1g), for every start. Run in a terminal, it opens the console in the browser once it is up
 # (BREADBOARD_NO_BROWSER=1 stops that). On macOS it keeps the computer awake while the server runs.
 # On Linux, in a desktop session, it asks systemd (and on GNOME the desktop too) to keep the computer
 # awake; if the computer still suspends (some desktops do, such as Cinnamon), turn off automatic
@@ -88,18 +89,65 @@ if ! "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
   MEMORY_OPTS=""
 fi
 
-# The port: 9000, or the one given with -Dhttp.port=...; and the file the server writes its process
-# id to: RUNNING_PID in this folder, or the one given with -Dpidfile.path=... (/dev/null: none). (Also
-# from JAVA_OPTS, which go to Java before the settings given here.)
-PORT=9000
+# The value of a setting written on a line of its own in conf/local.conf (key=value, key: value or
+# key = "value", with a comment after it or not), the last one if there are several; nothing when
+# there is none, or the file can't be read. $1 is the key, as a sed pattern.
+local_setting() {
+  [ -r conf/local.conf ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*[=:][[:space:]]*//p" conf/local.conf \
+    | sed -e 's/[[:space:]]*#.*$//' -e 's#[[:space:]]*//.*$##' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' \
+    | tail -n 1
+}
+
+# The port: 9000, or http.port in conf/local.conf, or the one given with -Dhttp.port=..., which wins
+# (Play reads the port only from -Dhttp.port, so the launcher passes on the one in conf/local.conf);
+# how much memory the server may use for its data (Java's heap, -Xmx): 1g, or breadboard.memory in
+# conf/local.conf (-Xmx given here, or in JAVA_OPTS, wins); and the file the server writes its
+# process id to: RUNNING_PID in this folder, or the one given with -Dpidfile.path=... (/dev/null:
+# none). (Also from JAVA_OPTS, which go to Java before the settings given here.)
+PORT=""
+PORT_OPT=""
+MEMORY=1g
+MEMORY_GIVEN=""
 PID_FILE=RUNNING_PID
 # shellcheck disable=SC2086 # JAVA_OPTS is a list of options
 for arg in $JAVA_OPTS "$@"; do
   case "$arg" in
     -Dhttp.port=*) PORT="${arg#-Dhttp.port=}" ;;
+    -Xmx*) MEMORY_GIVEN="${arg#-Xmx}" ;;
     -Dpidfile.path=*) PID_FILE="${arg#-Dpidfile.path=}" ;;
   esac
 done
+LOCAL_PORT="$(local_setting 'http\.port')"
+if [ -n "$LOCAL_PORT" ]; then
+  case "$LOCAL_PORT" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]|[1-9][0-9][0-9][0-9][0-9]) [ "$LOCAL_PORT" -le 65535 ] || LOCAL_PORT="?$LOCAL_PORT" ;;
+    *) LOCAL_PORT="?$LOCAL_PORT" ;;
+  esac
+  case "$LOCAL_PORT" in
+    \?*)
+      echo "conf/local.conf gives http.port as ${LOCAL_PORT#?}, which isn't a port number (1 to 65535): write it as, e.g.," >&2
+      echo "  http.port=8080" >&2
+      exit 1
+      ;;
+  esac
+  if [ -z "$PORT" ]; then
+    PORT="$LOCAL_PORT"
+    PORT_OPT="-Dhttp.port=$PORT"
+  fi
+fi
+PORT="${PORT:-9000}"
+LOCAL_MEMORY="$(local_setting 'breadboard\.memory')"
+if [ -n "$LOCAL_MEMORY" ]; then
+  case "$LOCAL_MEMORY" in
+    [1-9][mMgG]|[1-9][0-9][mMgG]|[1-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][0-9][mMgG]) MEMORY="$LOCAL_MEMORY" ;;
+    *)
+      echo "conf/local.conf gives breadboard.memory as $LOCAL_MEMORY: write it in megabytes or gigabytes, e.g." >&2
+      echo "  breadboard.memory=2g" >&2
+      exit 1
+      ;;
+  esac
+fi
 URL="http://localhost:$PORT"
 
 # The real folder, not a symbolic link to it (e.g. /opt/breadboard), which may be moved to the next
@@ -144,9 +192,14 @@ port_taken() {
   [ "$CURL" -ne 7 ] || return 1
   if printf '%s' "$ANSWER" | grep -q '"database"'; then
     TAKEN="Breadboard is already running on port $PORT: open $URL"
+  elif [ -n "$PORT_OPT" ]; then
+    TAKEN="Another program is using port $PORT (http.port in conf/local.conf). Stop it, or change that
+line to another port, e.g.  http.port=$((PORT + 1))"
   else
-    TAKEN="Another program is using port $PORT. Stop it, or start Breadboard on another port:
-  ./breadboard.sh -Dhttp.port=$((PORT + 1))"
+    # (the command works from wherever the terminal is)
+    TAKEN="Another program is using port $PORT. Stop it, or start Breadboard on another port: for every
+start, with the line  http.port=$((PORT + 1))  in conf/local.conf, or once, with
+  sh \"$HERE/breadboard.sh\" -Dhttp.port=$((PORT + 1))"
   fi
 }
 if port_taken; then
@@ -341,12 +394,12 @@ fi
 # instead of taking all the computer's memory. launcher.Main is Play's start with an output that
 # never waits for this window: one that doesn't take it (paused, or a pipe nobody reads) can't hold
 # the server up.
-# shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options
-set -- "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
+# shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options, PORT_OPT one or none
+set -- "$JAVA" "-Xmx$MEMORY" -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
   -Duser.timezone=UTC \
   -Dconfig.file=conf/application-prod.conf -Dlogger.file=conf/logger.xml \
   -cp "$CP" \
-  "$@" \
+  $PORT_OPT "$@" \
   launcher.Main "$HERE"
 
 if [ -z "$KEEP_RUNNING" ]; then
@@ -390,9 +443,20 @@ note() {
 signalled() {
   [ "$1" -gt 128 ] && [ "$1" -lt 160 ]
 }
+# Twice the memory the server has, as breadboard.memory is written, for when it ran out of it
+more_memory() {
+  HAS="${MEMORY_GIVEN:-$MEMORY}"
+  case "$HAS" in
+    [1-9]*[gG]) echo "$((${HAS%?} * 2))g" ;;
+    [1-9]*[mM])
+      if [ $((${HAS%?} * 2 % 1024)) -eq 0 ]; then echo "$((${HAS%?} * 2 / 1024))g"; else echo "$((${HAS%?} * 2))m"; fi
+      ;;
+    *) echo 2g ;;
+  esac
+}
 stop_reason() {
   case "$1" in
-    3) echo "it ran out of memory: a script may keep too much data. JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs/out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards" ;;
+    3) echo "it ran out of memory: a script may keep too much data. A line such as breadboard.memory=$(more_memory) in conf/local.conf gives it more than the ${MEMORY_GIVEN:-$MEMORY} it has. What was in memory is in logs/out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards" ;;
     137) echo "it was killed with signal 9, perhaps by the system when memory ran low" ;;
     134|139) echo "Java crashed with signal $(($1 - 128)); its report is in hs_err_pid*.log in this folder" ;;
     *)

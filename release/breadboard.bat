@@ -5,10 +5,11 @@ REM Start Breadboard: double-click it. The console opens in the browser once the
 REM (SET BREADBOARD_NO_BROWSER=1 stops that); close the window or press Ctrl+C to stop it. While it
 REM runs, the computer doesn't go to sleep by itself.
 REM Other settings go to the server as -D options, e.g.  breadboard.bat -Dhttp.port=8080; the settings
-REM you change go in conf\local.conf.
+REM you change go in conf\local.conf, where http.port=8080 sets the port, and breadboard.memory=2g how
+REM much memory the server may use for its data (1g), for every start.
 REM Needs Java 8: the first Java 8 among JAVA8_HOME's (the JDK's folder, or its bin folder), the one
 REM that comes with this download (jre\), JAVA_HOME's, and java on PATH. JAVA_OPTS adds options for
-REM Java itself, e.g. SET JAVA_OPTS=-Xmx2g
+REM Java itself.
 REM
 REM Keep running: when the server stops by itself (it ran out of memory, Java crashed), this window
 REM says why, waits a few seconds and starts it again; after 5 restarts in 10 minutes it is left
@@ -69,9 +70,34 @@ SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX
 "%JAVA%" %MEMORY_OPTS% -version >NUL 2>&1
 IF ERRORLEVEL 1 SET "MEMORY_OPTS="
 
-REM The port: 9000, or the one given with -Dhttp.port=... (cmd splits that option at the =).
-SET "PORT=9000"
-CALL :findport %*
+REM The port: 9000, or http.port in conf\local.conf, or the one given with -Dhttp.port=... (here or in
+REM JAVA_OPTS; cmd splits that option at the =), which wins: Play reads the port only from
+REM -Dhttp.port, so the one in conf\local.conf is passed on as one (PORT_OPT). And how much memory the
+REM server may use for its data (Java's heap, -Xmx): 1g, or breadboard.memory in conf\local.conf. Each
+REM is read from a line of its own (key=value, key: value or key = "value", with a comment after it
+REM or not), the last one if there are several; a value that isn't one ("?") is refused.
+SET "PORT="
+CALL :findport %JAVA_OPTS% %*
+SET "MEMORY=1g"
+SET "LOCAL_PORT="
+SET "LOCAL_MEMORY="
+IF EXIST "conf\local.conf" FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$port = $null; $memory = $null; foreach ($line in [IO.File]::ReadAllLines((Join-Path (Get-Location) 'conf\local.conf'))) { if ($line -match '\A\s*(http\.port|breadboard\.memory)\s*[=:]\s*(.*?)\s*(#.*|//.*)?\z') { $value = $Matches[2] -replace '\A\x22(.*)\x22\z', '$1'; if ($Matches[1] -eq 'http.port') { $port = $value } else { $memory = $value } } }; if ($port -ne $null) { if ($port -match '\A[1-9][0-9]{0,4}\z' -and [int]$port -le 65535) { 'http.port ' + $port } else { 'http.port ?' } }; if ($memory -ne $null) { if ($memory -match '\A[1-9][0-9]{0,4}[mMgG]\z') { 'breadboard.memory ' + $memory } else { 'breadboard.memory ?' } }" 2^>NUL') DO (
+  IF "%%A"=="http.port" SET "LOCAL_PORT=%%B"
+  IF "%%A"=="breadboard.memory" SET "LOCAL_MEMORY=%%B"
+)
+IF "%LOCAL_PORT%"=="?" (
+  CALL :refuse say_badport
+  EXIT /B 1
+)
+IF "%LOCAL_MEMORY%"=="?" (
+  CALL :refuse say_badmemory
+  EXIT /B 1
+)
+SET "PORT_OPT="
+IF NOT DEFINED PORT IF DEFINED LOCAL_PORT SET "PORT_OPT=-Dhttp.port=%LOCAL_PORT%"
+IF NOT DEFINED PORT IF DEFINED LOCAL_PORT SET "PORT=%LOCAL_PORT%"
+IF NOT DEFINED PORT SET "PORT=9000"
+IF DEFINED LOCAL_MEMORY SET "MEMORY=%LOCAL_MEMORY%"
 
 REM One already running from this folder, on whatever port, has the database open: say so, instead
 REM of the database's stack trace.
@@ -218,7 +244,7 @@ REM it) can't hold the server up. ERRORLEVEL is 1 until Java sets it: if cmd can
 REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
 REM purpose (0).
 CMD /D /C EXIT 1
-"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* launcher.Main "%CD%\." %JAVA_ERRORS%
+"%JAVA%" -Xmx%MEMORY% -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %PORT_OPT% %* launcher.Main "%CD%\." %JAVA_ERRORS%
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
@@ -234,7 +260,8 @@ IF EXIST "logs\start-errors.log" IF NOT DEFINED SERVICE GOTO couldnotstart
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
 IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
 IF DEFINED SERVICE IF EXIST "logs\start-errors.log" SET "WHY=it could not start, exit code %EXIT_CODE%; logs\start-errors.log and logs\service-errors.log may say why"
-IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. SET JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
+IF "%EXIT_CODE%"=="3" CALL :morememory
+IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. A line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf gives it more than the %MEMORY% it has. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
 CALL :now
 SET /A "SINCE=NOW-(R1)"
 IF %SINCE% LSS 600 IF NOT DEFINED SERVICE GOTO giveup
@@ -320,8 +347,25 @@ ECHO Breadboard is already running from this folder ^(process %RUNNING%^): open 
 GOTO :EOF
 
 :say_port
+SET /A "NEXT_PORT=PORT+1"
 ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
-ECHO To start another one, choose another port, e.g.  breadboard.bat -Dhttp.port=9001
+IF DEFINED PORT_OPT GOTO say_port_local
+ECHO To start another one, choose another port: for every start, with the line  http.port=%NEXT_PORT%
+ECHO in conf\local.conf, or once, from a Command Prompt in this folder:  breadboard.bat -Dhttp.port=%NEXT_PORT%
+GOTO :EOF
+:say_port_local
+ECHO To start another one, change the line http.port=%PORT% in conf\local.conf to another port, e.g.
+ECHO   http.port=%NEXT_PORT%
+GOTO :EOF
+
+:say_badport
+ECHO conf\local.conf gives http.port a value that isn't a port number ^(1 to 65535^): write it as, e.g.,
+ECHO   http.port=8080
+GOTO :EOF
+
+:say_badmemory
+ECHO conf\local.conf gives breadboard.memory a value Breadboard can't read: write it in megabytes or
+ECHO gigabytes, e.g.  breadboard.memory=2g
 GOTO :EOF
 
 :say_unwritable
@@ -365,6 +409,18 @@ GOTO :EOF
 
 :addjar
 IF DEFINED CP (SET "CP=%CP%;lib\%~1") ELSE (SET "CP=lib\%~1")
+GOTO :EOF
+
+:morememory
+REM MORE_MEMORY: twice MEMORY, as breadboard.memory is written (2g for 1g), for when it ran out of it.
+SET "MEMORY_UNIT=%MEMORY:~-1%"
+SET /A "MEMORY_MB=%MEMORY:~0,-1%"
+IF /I "%MEMORY_UNIT%"=="g" SET /A "MEMORY_MB*=1024"
+SET /A "MORE_MB=MEMORY_MB*2"
+SET /A "MORE_REST=MORE_MB %% 1024"
+SET /A "MORE_GB=MORE_MB / 1024"
+SET "MORE_MEMORY=%MORE_MB%m"
+IF "%MORE_REST%"=="0" SET "MORE_MEMORY=%MORE_GB%g"
 GOTO :EOF
 
 :findport

@@ -49,7 +49,11 @@ the lid closed, it sleeps anyway. On a Mac, also turn on **Prevent automatic sle
 display is off** (System Settings → Battery → Options; on a Mac mini or iMac, System Settings →
 Energy).
 
-Another port: `./breadboard.sh -Dhttp.port=8080` (or `breadboard.bat -Dhttp.port=8080`).
+Another port: put the line `http.port=8080` in `conf/local.conf` (see below), and every start uses
+it, a double-click too. To use one just once, start it in Terminal: type `sh` and a space, drag
+`breadboard.sh` into the window, type ` -Dhttp.port=8080` and press Return (on Linux,
+`./breadboard.sh -Dhttp.port=8080`; on Windows, in a Command Prompt in this folder,
+`breadboard.bat -Dhttp.port=8080`).
 
 ## Your settings
 
@@ -63,6 +67,10 @@ breadboard.allowLateJoin=true
 
 Then restart Breadboard. `conf/application-prod.conf` lists every setting with what it does, but
 don't change it there: a new release brings its own, while `conf/local.conf` is yours to keep.
+
+Two settings there are for the launchers: `http.port=8080` sets the port (9000 otherwise), and
+`breadboard.memory=2g` how much memory the server may use for its data (1g otherwise; give it more
+if it runs out of memory).
 
 ## Before participants join
 
