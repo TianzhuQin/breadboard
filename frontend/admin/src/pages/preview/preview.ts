@@ -193,7 +193,8 @@ export const DEVICES: Record<DeviceKind, { width: number, height: number, label:
 export type TileSize = 'S' | 'M' | 'L'
 /** Tile widths in CSS pixels for each device and size. */
 export const TILE_WIDTHS: Record<DeviceKind, Record<TileSize, number>> = {
-  desktop: { S: 260, M: 360, L: 540 },
+  // (two Medium ones fit in a row beside the player list in a 1280 px window)
+  desktop: { S: 260, M: 320, L: 540 },
   phone: { S: 170, M: 230, L: 320 },
 }
 export const MIN_TILE_WIDTH = 140

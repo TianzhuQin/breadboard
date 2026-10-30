@@ -18,7 +18,7 @@
       >
         <template #actions>
           <BButton variant="primary" :icon="Plus" @click="router.push('/session?new=1')">New session</BButton>
-          <BButton :icon="Database" @click="router.push('/sessions')">Resume an earlier one</BButton>
+          <BButton v-if="hasStopped" :icon="Database" @click="router.push('/sessions')">Resume an earlier one</BButton>
         </template>
       </BEmpty>
     </BPanel>
@@ -151,6 +151,8 @@
         :count="tiles.length"
         :initial-device="memory.device"
         :reload-key="focusId ? nonces[focusId] || 0 : 0"
+        :role="focusTile && !focusTile.missing ? previewRole(focusTile) : null"
+        :note="focusTile ? noteOf(focusTile) : ''"
         @close="closeFocus"
         @step="step"
         @open-tab="focusId && openTab(focusId)"
@@ -190,6 +192,8 @@ const exp = computed(() => admin.experiment)
 const inst = computed(() => admin.instance)
 const isRunning = computed(() => inst.value?.status === 'RUNNING')
 const statusWord = computed(() => (inst.value?.status || '').toLowerCase())
+/** The experiment has a stopped session to resume. */
+const hasStopped = computed(() => (exp.value?.instances || []).some(i => i.status === 'STOPPED'))
 
 const joinLink = computed(() => exp.value && inst.value ? joinUrl(exp.value.id, inst.value.id) : '')
 /** Whose page a tile or link shows: each one fetches its own preview token for it. */
@@ -344,6 +348,7 @@ function reloadAll () { globalNonce.value++ }
 const tabbed = reactive(new Set<string>())
 const focusId = ref<string | null>(null)
 const focusIndex = computed(() => tiles.value.findIndex(t => t.id === focusId.value))
+const focusTile = computed(() => tiles.value[focusIndex.value] || null)
 function step (delta: number) {
   const next = tiles.value[focusIndex.value + delta]
   if (next) {
@@ -482,7 +487,8 @@ function readFlag (key: string) {
 </script>
 
 <style>
-.pv { display: grid; grid-template-columns: 296px minmax(0, 1fr); gap: 20px; align-items: start; }
+/* (the list's width leaves room for two Medium tiles in a row at 1280 px: test/preview.test.ts) */
+.pv { display: grid; grid-template-columns: 272px minmax(0, 1fr); gap: 20px; align-items: start; }
 .pv__side {
   position: sticky;
   top: 16px;

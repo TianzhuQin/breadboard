@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { reactive } from 'vue'
 import {
-  DEVICES, FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
+  DEVICES, FIRST_LOOK_MAX_MS, TILE_WIDTHS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
   isComputerPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth, ownPageConnected, previewMemory,
   previewPageUrl, previewRole, quickPick, seatText, seatWord, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
   awayText,
@@ -200,6 +200,14 @@ describe('preview sizes', () => {
     expect(half.height).toBe(Math.round((DEVICES.phone.height + 24) / 2))
   })
 
+  it('fits two Medium tiles in a row beside the player list in a 1280 px window', () => {
+    // the window, less the sidebar (248), the page's padding (2 × 28), the list (272) and its gap (20),
+    // and a scroll bar (17)
+    const room = 1280 - 248 - 2 * 28 - 272 - 20 - 17
+    expect(2 * tileWidth('desktop', 'M', room) + 18).toBeLessThanOrEqual(room)
+    expect(TILE_WIDTHS.desktop.M).toBeGreaterThanOrEqual(300)
+  })
+
   it('never makes a tile wider than the space there is', () => {
     expect(tileWidth('desktop', 'L')).toBe(540)
     expect(tileWidth('desktop', 'L', 343)).toBe(343)
@@ -258,7 +266,13 @@ describe('PreviewPage', () => {
     store.admin.instance = null
     const w = await mountPage()
     expect(w.text()).toContain('No session is running')
+    // nothing to resume: no offer to
+    expect(w.text()).not.toContain('Resume an earlier one')
     w.unmount()
+    store.admin.experiment = { id: 7, name: 'Trust game', instances: [{ id: 40, name: 'pilot 0', status: 'FINISHED' }, { id: 41, name: 'pilot 1', status: 'STOPPED' }] }
+    const w1 = await mountPage()
+    expect(w1.text()).toContain('Resume an earlier one')
+    w1.unmount()
 
     store.admin.instance = { id: 44, name: 'pilot', status: 'STOPPED', creationTime: '', hitId: '', hits: [], data: [] }
     const w2 = await mountPage()
@@ -635,6 +649,23 @@ describe('PreviewPage', () => {
     }
   })
 
+  it('says full size, too, that the preview stands in for someone away', async () => {
+    addPlayer('p2', { _system: { connected: false, preview: true } })
+    await settle()
+    store.admin.instance = { ...store.admin.instance, hasStarted: true }
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p2']
+    const w = await mountPage()
+    try {
+      await settle()
+      await w.find('button.pt__cover').trigger('click')
+      await settle()
+      expect(document.body.querySelector('.b-dialog__subtitle')!.textContent).toBe('Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave. Clicks here are real choices for this player, and are recorded.')
+    } finally {
+      w.unmount()
+    }
+  })
+
   it('says the steps decide when the session isn\'t the autopilot\'s, and that a waiting room doesn\'t count someone away', async () => {
     addPlayer('p2', { _system: { connected: false, preview: true } })
     await settle()
@@ -738,6 +769,8 @@ describe('PreviewPage', () => {
     await settle()
     expect(document.body.querySelector('.b-dialog__title')!.textContent).toBe('What AI 6 (_6) sees')
     expect(document.body.querySelector('.pfx iframe')!.getAttribute('title')).toBe('Participant page of AI 6 (_6)')
+    // what a click does, for this player: nothing, the computer plays it
+    expect(document.body.querySelector('.b-dialog__subtitle')!.textContent).toBe('Watching: the computer plays this seat, so you see what it does but can’t answer for it.')
     w.unmount()
   })
 
@@ -792,6 +825,7 @@ describe('PreviewPage', () => {
     expect(route.query.player).toBeUndefined()
     expect(previewMemory.ids).toEqual(['p2'])
     expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).toContain('/game/7/44/p2/connected')
+    expect(document.body.querySelector('.b-dialog__subtitle')!.textContent).toBe('Watching: their own page is connected, so you see their screen but can’t answer for them.')
     expect(ui.notify.info).toHaveBeenCalledWith('p2 is connected right now', expect.any(String))
     const PreviewFocus = (await import('../src/pages/preview/PreviewFocus.vue')).default
     w.findComponent(PreviewFocus).vm.$emit('close')
@@ -842,6 +876,7 @@ describe('PreviewPage', () => {
     expect(w.find('.pt iframe').exists()).toBe(false)
     expect(w.find('.pt').text()).toContain('Shown full size')
     expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).toContain('/game/7/44/p1/connected')
+    expect(document.body.querySelector('.b-dialog__subtitle')!.textContent).toBe('Live: clicks here are real choices for this player, and are recorded.')
     w.unmount()
   })
 })

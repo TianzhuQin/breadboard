@@ -4,7 +4,7 @@
     size="full"
     flush
     :title="playerId ? `What ${name} sees` : ''"
-    subtitle="Live: clicks here are real choices for this player, and are recorded. Read-only while their own page is connected."
+    :subtitle="subtitle"
     @update:open="(v: boolean) => { if (!v) emit('close') }"
   >
     <div v-if="playerId" class="pfx">
@@ -41,7 +41,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, ExternalLink, Monitor, RotateCw, Smartphone } from 'lucide-vue-next'
 import { BButton, BDialog, BTabs, type TabItem } from '@/ui'
 import PreviewFrame from './PreviewFrame.vue'
-import { DEVICES, frameGeometry, naturalWidth, widthToFit, type DeviceKind, type PreviewTarget } from './preview'
+import { DEVICES, WATCHING_WHY, frameGeometry, naturalWidth, widthToFit, type DeviceKind, type PreviewRole, type PreviewTarget } from './preview'
 import { playerName } from '@/network/players'
 
 const props = defineProps<{
@@ -52,11 +52,24 @@ const props = defineProps<{
   initialDevice: DeviceKind
   /** Changing it loads the page again (the page reloads its tile's, e.g. when the player joins). */
   reloadKey?: number
+  /** What a preview of this player does (preview.ts previewRole). */
+  role?: PreviewRole | null
+  /** What their tile says under the page: that they aren't in the game, or that they are away. */
+  note?: string
 }>()
 const emit = defineEmits<{ close: [], step: [delta: number], 'open-tab': [] }>()
 
 // "AI 6 (_6)" for a computer player, as on its tile and in the list
 const name = computed(() => props.playerId ? playerName(props.playerId) : '')
+// What a click here does for this player: it used to say "real choices … Read-only while their own
+// page is connected" for everyone, a computer player too.
+const subtitle = computed(() => {
+  const role = props.role
+  if (role === 'computer' || role === 'watching') return `Watching: ${WATCHING_WHY[role]}.`
+  if (role === 'away') return `${props.note || 'Away: you are standing in, but they count as away.'} Clicks here are real choices for this player, and are recorded.`
+  // (or that they aren't in the game)
+  return props.note || 'Live: clicks here are real choices for this player, and are recorded.'
+})
 const device = ref<DeviceKind>(props.initialDevice)
 const zoom = ref<'fit' | 'actual'>('fit')
 const nonce = ref(0)
