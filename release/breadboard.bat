@@ -101,9 +101,14 @@ REM quotes (as Word, a web page or an input method types them) make the file unr
 REM server, whose message then misleads: CURLY is the first line that has them (outside straight
 REM quotes and comments, where they are fine), which is named instead. A comment (# or //) starts
 REM outside straight quotes: after one left open, as in a "https://... whose closing quote is curly,
-REM it is all the value.
+REM it is all the value. An -Xmx given here or in JAVA_OPTS wins over breadboard.memory: MEMORY_GIVEN
+REM is the size it gives, and MEMORY_GIVEN_IN says where it was given (:findmemory).
 SET "PORT="
 CALL :findport %JAVA_OPTS% %*
+SET "MEMORY_GIVEN="
+SET "MEMORY_GIVEN_IN="
+CALL :findmemory JAVA_OPTS %JAVA_OPTS%
+CALL :findmemory command %*
 SET "MEMORY=1g"
 SET "LOCAL_PORT="
 SET "LOCAL_MEMORY="
@@ -289,8 +294,7 @@ IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\
 REM (1: the server's own stop after an error that stopped its engine, Global.exitIfActorsStop)
 IF "%EXIT_CODE%"=="1" SET "WHY=exit code 1: the server stopped itself after an error, which logs\application.log shows"
 IF DEFINED SERVICE IF EXIST "logs\start-errors.log" SET "WHY=it could not start, exit code %EXIT_CODE%; logs\start-errors.log and logs\service-errors.log may say why"
-IF "%EXIT_CODE%"=="3" CALL :morememory
-IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. A line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf gives it more than the %MEMORY% it has. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
+IF "%EXIT_CODE%"=="3" CALL :outofmemory
 CALL :now
 SET /A "SINCE=NOW-(R1)"
 IF %SINCE% LSS 600 IF NOT DEFINED SERVICE GOTO giveup
@@ -327,8 +331,7 @@ GOTO start
 REM (-1: Play's, for a server that couldn't start; 3: out of memory)
 SET "WHY=exit code %EXIT_CODE%"
 IF "%EXIT_CODE%"=="-1" SET "WHY=it could not start, exit code -1"
-IF "%EXIT_CODE%"=="3" CALL :morememory
-IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf gives it more than the %MEMORY% it has"
+IF "%EXIT_CODE%"=="3" CALL :outofmemory
 CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
 GOTO failed
 
@@ -467,12 +470,31 @@ GOTO :EOF
 IF DEFINED CP (SET "CP=%CP%;lib\%~1") ELSE (SET "CP=lib\%~1")
 GOTO :EOF
 
+:outofmemory
+REM WHY, for a server that ran out of memory (exit code 3), with how to give it more: it had MEMORY,
+REM unless -Xmx was given (MEMORY_GIVEN, in MEMORY_GIVEN_IN), which wins over breadboard.memory.
+CALL :morememory
+SET "MEMORY_ADVICE=A line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf gives it more than the %MEMORY% it has."
+IF "%MEMORY_GIVEN_IN%"=="JAVA_OPTS" SET "MEMORY_ADVICE=-Xmx%MEMORY_GIVEN% in JAVA_OPTS gives it %MEMORY_GIVEN%, and wins over breadboard.memory: raise that, e.g. to -Xmx%MORE_MEMORY%, or take it out of JAVA_OPTS and put a line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf."
+IF "%MEMORY_GIVEN_IN%"=="command" SET "MEMORY_ADVICE=-Xmx%MEMORY_GIVEN%, given to breadboard.bat, gives it %MEMORY_GIVEN%, and wins over breadboard.memory: start it with more, e.g. -Xmx%MORE_MEMORY%, or without -Xmx and with a line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf."
+SET "WHY=it ran out of memory: a script may keep too much data. %MEMORY_ADVICE% What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
+GOTO :EOF
+
 :morememory
-REM MORE_MEMORY: twice MEMORY, as breadboard.memory is written (2g for 1g), for when it ran out of it.
-SET "MEMORY_UNIT=%MEMORY:~-1%"
-SET /A "MEMORY_MB=%MEMORY:~0,-1%"
-IF /I "%MEMORY_UNIT%"=="g" SET /A "MEMORY_MB*=1024"
+REM MORE_MEMORY: twice what the server had (MEMORY, or MEMORY_GIVEN when -Xmx was given), as
+REM breadboard.memory and -Xmx are written: in gigabytes when that is a whole number of them (2g for
+REM 1g), otherwise in megabytes; 2g for a size in bytes, which cmd may not count that far.
+SET "HAS=%MEMORY%"
+IF DEFINED MEMORY_GIVEN SET "HAS=%MEMORY_GIVEN%"
+SET "MORE_MEMORY=2g"
+SET "MEMORY_UNIT=%HAS:~-1%"
+SET "MEMORY_MB="
+IF /I "%MEMORY_UNIT%"=="g" SET /A "MEMORY_MB=%HAS:~0,-1%*1024" 2>NUL
+IF /I "%MEMORY_UNIT%"=="m" SET /A "MEMORY_MB=%HAS:~0,-1%" 2>NUL
+IF /I "%MEMORY_UNIT%"=="k" SET /A "MEMORY_MB=%HAS:~0,-1%/1024" 2>NUL
+IF NOT DEFINED MEMORY_MB GOTO :EOF
 SET /A "MORE_MB=MEMORY_MB*2"
+IF %MORE_MB% LEQ 0 GOTO :EOF
 SET /A "MORE_REST=MORE_MB %% 1024"
 SET /A "MORE_GB=MORE_MB / 1024"
 SET "MORE_MEMORY=%MORE_MB%m"
@@ -484,6 +506,18 @@ IF "%~1"=="" GOTO :EOF
 IF /I "%~1"=="-Dhttp.port" SET "PORT=%~2"
 SHIFT
 GOTO findport
+
+:findmemory
+REM MEMORY_GIVEN: the size the last -Xmx among the options after the first gives, and MEMORY_GIVEN_IN
+REM where those were given, the first: JAVA_OPTS, or command for this script's own command line.
+SET "XMX_IN=%~1"
+:findmemory_next
+SHIFT
+IF "%~1"=="" GOTO :EOF
+SET "XMX_ARG=%~1"
+IF "%XMX_ARG:~0,4%"=="-Xmx" SET "MEMORY_GIVEN_IN=%XMX_IN%"
+IF "%XMX_ARG:~0,4%"=="-Xmx" SET "MEMORY_GIVEN=%XMX_ARG:~4%"
+GOTO findmemory_next
 
 :porttaken
 REM PORT_TAKEN: 1 when something answers on the port, at 127.0.0.1 or at its IPv6 address, ::1 (a

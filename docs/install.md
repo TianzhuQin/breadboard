@@ -168,7 +168,7 @@ The ones to look at before participants join:
 | `breadboard.secureCookies` | `false` | `true` when participants reach the server over HTTPS. |
 | `session.secure` | (off) | `true` when researchers reach the console over HTTPS. |
 | `http.port` | `9000` | The port. The launchers read it from `conf/local.conf` (only there) and pass it on; `-Dhttp.port=` given when starting wins. |
-| `breadboard.memory` | `1g` | How much memory the server may use for its data (Java's heap), in megabytes or gigabytes: `1500m`, `2g`. Read by the launchers, only from `conf/local.conf`. |
+| `breadboard.memory` | `1g` | How much memory the server may use for its data (Java's heap), in megabytes or gigabytes: `1500m`, `2g`. Read by the launchers, only from `conf/local.conf`. An `-Xmx` in `JAVA_OPTS` (as 3.0's launchers suggested) or given when starting wins over it. |
 | `breadboard.allowLateJoin` | `false` | Let people join a session after its game started. |
 | `breadboard.clientUpdateRate` | `500` | How often participants' pages are updated, in milliseconds. |
 | `amt.accessKey`, `amt.secretKey` | from `AMT_ACCESS_KEY`, `AMT_SECRET_KEY` | Your AWS keys, for Mechanical Turk. |

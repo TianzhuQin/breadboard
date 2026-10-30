@@ -146,22 +146,34 @@ local_setting() {
 # The port: 9000, or http.port in conf/local.conf, or the one given with -Dhttp.port=..., which wins
 # (Play reads the port only from -Dhttp.port, so the launcher passes on the one in conf/local.conf);
 # how much memory the server may use for its data (Java's heap, -Xmx): 1g, or breadboard.memory in
-# conf/local.conf (-Xmx given here, or in JAVA_OPTS, wins); and the file the server writes its
-# process id to: RUNNING_PID in this folder, or the one given with -Dpidfile.path=... (/dev/null:
-# none). (Also from JAVA_OPTS, which go to Java before the settings given here.)
+# conf/local.conf (-Xmx given here, or in JAVA_OPTS, wins: MEMORY_GIVEN, and where, MEMORY_GIVEN_IN);
+# and the file the server writes its process id to: RUNNING_PID in this folder, or the one given with
+# -Dpidfile.path=... (/dev/null: none). (Also from JAVA_OPTS, which go to Java before the settings
+# given here.)
 PORT=""
 PORT_OPT=""
 MEMORY=1g
 MEMORY_GIVEN=""
+MEMORY_GIVEN_IN=""
 PID_FILE=RUNNING_PID
+# (the options $2 and after, given in $1: JAVA_OPTS, or the command line)
+read_options() {
+  GIVEN_IN="$1"
+  shift
+  for arg in "$@"; do
+    case "$arg" in
+      -Dhttp.port=*) PORT="${arg#-Dhttp.port=}" ;;
+      -Xmx*)
+        MEMORY_GIVEN="${arg#-Xmx}"
+        MEMORY_GIVEN_IN="$GIVEN_IN"
+        ;;
+      -Dpidfile.path=*) PID_FILE="${arg#-Dpidfile.path=}" ;;
+    esac
+  done
+}
 # shellcheck disable=SC2086 # JAVA_OPTS is a list of options
-for arg in $JAVA_OPTS "$@"; do
-  case "$arg" in
-    -Dhttp.port=*) PORT="${arg#-Dhttp.port=}" ;;
-    -Xmx*) MEMORY_GIVEN="${arg#-Xmx}" ;;
-    -Dpidfile.path=*) PID_FILE="${arg#-Dpidfile.path=}" ;;
-  esac
-done
+read_options JAVA_OPTS $JAVA_OPTS
+read_options "the command line" "$@"
 # Curly double quotes (U+201C, U+201D), which TextEdit's Smart Quotes (or an input method) types in
 # place of straight ones ("), make conf/local.conf unreadable to the server, whose message then
 # misleads ("try enclosing the value in double quotes"): name their lines instead. Inside straight
@@ -552,20 +564,39 @@ note() {
 signalled() {
   [ "$1" -gt 128 ] && [ "$1" -lt 160 ]
 }
-# Twice the memory the server has, as breadboard.memory is written, for when it ran out of it
+# Twice the memory the server has, as breadboard.memory (and -Xmx) is written, for when it ran out
+# of it: in gigabytes when that is a whole number of them (2g for 1g), otherwise in megabytes.
 more_memory() {
   HAS="${MEMORY_GIVEN:-$MEMORY}"
   case "$HAS" in
-    [1-9]*[gG]) echo "$((${HAS%?} * 2))g" ;;
-    [1-9]*[mM])
-      if [ $((${HAS%?} * 2 % 1024)) -eq 0 ]; then echo "$((${HAS%?} * 2 / 1024))g"; else echo "$((${HAS%?} * 2))m"; fi
-      ;;
-    *) echo 2g ;;
+    [1-9]*[gG]) MB=$((${HAS%?} * 1024)) ;;
+    [1-9]*[mM]) MB=${HAS%?} ;;
+    [1-9]*[kK]) MB=$((${HAS%?} / 1024)) ;;
+    [1-9]*[0-9]) MB=$((HAS / 1048576)) ;;
+    *) MB=1024 ;;
   esac
+  MB=$((MB * 2))
+  if [ "$MB" -le 0 ]; then
+    echo 2g
+  elif [ $((MB % 1024)) -eq 0 ]; then
+    echo "$((MB / 1024))g"
+  else
+    echo "${MB}m"
+  fi
+}
+# Why a server that ran out of memory (exit code 3) stopped, and how to give it more: it had MEMORY,
+# unless -Xmx was given (MEMORY_GIVEN, in MEMORY_GIVEN_IN), which wins over breadboard.memory.
+out_of_memory() {
+  case "$MEMORY_GIVEN_IN" in
+    '') MORE="A line such as breadboard.memory=$(more_memory) in conf/local.conf gives it more than the $MEMORY it has." ;;
+    JAVA_OPTS) MORE="-Xmx$MEMORY_GIVEN in JAVA_OPTS gives it $MEMORY_GIVEN, and wins over breadboard.memory: raise that, e.g. to -Xmx$(more_memory), or take it out of JAVA_OPTS and put a line such as breadboard.memory=$(more_memory) in conf/local.conf." ;;
+    *) MORE="-Xmx$MEMORY_GIVEN, given to breadboard.sh, gives it $MEMORY_GIVEN, and wins over breadboard.memory: start it with more, e.g. -Xmx$(more_memory), or without -Xmx and with a line such as breadboard.memory=$(more_memory) in conf/local.conf." ;;
+  esac
+  echo "it ran out of memory: a script may keep too much data. $MORE What was in memory is in logs/out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
 }
 stop_reason() {
   case "$1" in
-    3) echo "it ran out of memory: a script may keep too much data. A line such as breadboard.memory=$(more_memory) in conf/local.conf gives it more than the ${MEMORY_GIVEN:-$MEMORY} it has. What was in memory is in logs/out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards" ;;
+    3) out_of_memory ;;
     137) echo "it was killed with signal 9, perhaps by the system when memory ran low" ;;
     134|139) echo "Java crashed with signal $(($1 - 128)); its report is in hs_err_pid*.log in this folder" ;;
     *)

@@ -11,9 +11,10 @@
 # that a read-only folder runs with -Dpidfile.path, that the data is the server's account's only,
 # and that keep-running doesn't start again a server that can't start, but does start again one
 # that ran out of memory while nobody read its window (when there is a javac, for the Java agent
-# that fills the heap), with what Java said about it in logs/jvm-pid<N>.log. A release that carries
-# its own Java (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake
-# while the server runs.
+# that fills the heap), with what Java said about it in logs/jvm-pid<N>.log and how to give it more
+# (the -Xmx in JAVA_OPTS, which wins over breadboard.memory). A release that carries its own Java
+# (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while the
+# server runs.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -529,7 +530,9 @@ pass "a server that can't start isn't started again, and logs/start-errors.log s
 # is), a server that runs out of memory is started again all the same: Java says so in
 # logs/jvm-pid<N>.log, not in the window, which would hold it up for good. A Java agent, built here
 # when there is a javac, fills the heap once the file it is given appears (and is deleted, so that
-# the server started again doesn't). A small heap (breadboard.memory) keeps the heap dump small.
+# the server started again doesn't). Its heap is small, which keeps the heap dump small, and is set
+# with -Xmx in JAVA_OPTS, which wins over breadboard.memory: the launcher must say to give it more
+# there.
 oom_agent () {
   [ -n "$JAVAC" ] || return 1
   mkdir -p "$WORK/oom/classes"
@@ -571,12 +574,12 @@ EOF
 running_pid () { tr -cd '0-9' 2>/dev/null < "$APP/RUNNING_PID" || true; }
 health () { curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$BASE/health" || true; }
 if oom_agent; then
-  printf '%s\n' 'breadboard.memory=192m' > "$APP/conf/local.conf"
+  printf '%s\n' 'breadboard.memory=1g' > "$APP/conf/local.conf"
   mkfifo "$WORK/window"
   # (the window's reader, which never reads)
   sleep 900 < "$WORK/window" &
   READER=$!
-  (cd "$APP" && JAVA_OPTS="-javaagent:$WORK/oom/agent.jar=$WORK/oom/go" BREADBOARD_KEEP_RUNNING=1 \
+  (cd "$APP" && JAVA_OPTS="-Xmx192m -javaagent:$WORK/oom/agent.jar=$WORK/oom/go" BREADBOARD_KEEP_RUNNING=1 \
     exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/window" 2>&1 < /dev/null &
   SERVER=$!
   UP=""
@@ -618,14 +621,14 @@ EOF
   fi
   grep -q "Terminating due to java.lang.OutOfMemoryError: Java heap space" "$APP/logs/jvm-pid$FIRST.log" 2>/dev/null \
     || fail "logs/jvm-pid$FIRST.log doesn't say that Java ran out of memory: $(tail -5 "$APP/logs/jvm-pid$FIRST.log" 2>&1)"
-  grep -q "Breadboard stopped by itself (it ran out of memory: " "$APP/logs/application.log" \
-    || fail "the launcher didn't say that the server ran out of memory: $(tail -20 "$APP/logs/application.log")"
+  grep -qF "Breadboard stopped by itself (it ran out of memory: a script may keep too much data. -Xmx192m in JAVA_OPTS gives it 192m, and wins over breadboard.memory: raise that, e.g. to -Xmx384m," "$APP/logs/application.log" \
+    || fail "the launcher didn't say that the server ran out of memory, and how to give it more: $(tail -20 "$APP/logs/application.log")"
   stop
   kill "$READER" 2>/dev/null || true
   wait "$READER" 2>/dev/null || true
   READER=""
   rm -f "$WORK/window" "$APP/conf/local.conf" "$APP/logs/out-of-memory.hprof"
-  pass "with nobody reading its window, a server that runs out of memory is started again, and logs/jvm-pid<N>.log says why"
+  pass "with nobody reading its window, a server that runs out of memory is started again, logs/jvm-pid<N>.log says why, and the launcher how to give it more (the -Xmx in JAVA_OPTS)"
 else
   echo "skip a server that runs out of memory with nobody reading its window: no javac here to build the agent that fills the heap"
 fi
