@@ -4,11 +4,14 @@
 # participant pages, back up the database, then restart it on the same database and sign in again.
 # The restart has a proxy set for the internet (http_proxy, as many researchers have) and a
 # conf/local.conf, whose setting must be in effect and which only its owner may read once the
-# launcher has started. It also checks what the launcher says to a second copy (from the same
-# folder, and on the same port), about folders it can't write to and a conf/local.conf it can't
-# read, and that a read-only folder runs with -Dpidfile.path. A release that carries its own Java
-# (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while the
-# server runs.
+# launcher has started, and whose port and memory it passes on to Java. It also checks what the
+# launcher says to a second copy (from the same folder, where in a terminal it opens the running
+# one's console, and on the same port), to a program that holds the port (at [::1] only, too), about
+# curly quotes in conf/local.conf, folders it can't write to and a conf/local.conf it can't read,
+# that a read-only folder runs with -Dpidfile.path, that the data is the server's account's only,
+# and that keep-running doesn't start again a server that can't start. A release that carries its
+# own Java (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while
+# the server runs.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -179,6 +182,9 @@ pages () {
   get /health
   grep -q '"status":"ok"' "$WORK/body" || fail "/health doesn't say ok: $(cat "$WORK/body")"
   grep -q '"diskFreeMb":[0-9]' "$WORK/body" || fail "/health doesn't say how much disk space is free: $(cat "$WORK/body")"
+  # (HEAD too, for uptime monitors that check that way: GET's status, and no body)
+  [ "$(curl -s --max-time 30 -I -o /dev/null -w '%{http_code} %{size_download}' "$BASE/health")" = "200 0" ] \
+    || fail "HEAD /health didn't answer 200 without a body: $(curl -s --max-time 30 -I "$BASE/health" | head -3)"
   get /
   grep -q 'admin/admin.js' "$WORK/body" || fail "the console page doesn't load admin.js"
   get /legacy-admin

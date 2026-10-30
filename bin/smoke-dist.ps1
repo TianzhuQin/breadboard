@@ -3,8 +3,10 @@
 # account, sign in, back up the database, check what a second start says (from the same folder:
 # that Breadboard runs from it already, and where; from another copy, on the same port: that the
 # port is in use, and as a service, in its logs\application.log too), check that as a service a
-# mistake in conf\local.conf is in logs\service-errors.log, then stop it and look for errors in its
-# log. While it runs, a helper must keep the computer awake.
+# mistake in conf\local.conf is in logs\service-errors.log, and otherwise that a server that can't
+# start isn't started again, that the port and memory in conf\local.conf are the ones used, that
+# curly quotes in it are named, and that a program on ::1 holds the port, then stop it and look for
+# errors in its log. While it runs, a helper must keep the computer awake.
 #
 # It is unzipped into a folder whose path has spaces, parentheses and an "&" (as Explorer's Extract
 # All of a second download, "... (1)", or a lab's "R&D" folder has), and the other copy into one
@@ -101,6 +103,9 @@ while (-not $health) {
   try { $health = Invoke-RestMethod -Uri "$base/health" -TimeoutSec 10 } catch { $health = $null }
 }
 if ($health.status -ne 'ok') { Fail "/health says $($health | ConvertTo-Json -Compress)" }
+# (HEAD too, for uptime monitors that check that way)
+$head = Invoke-WebRequest -Uri "$base/health" -Method Head -UseBasicParsing
+if ($head.StatusCode -ne 200) { Fail "HEAD /health answered $($head.StatusCode)" }
 Pass 'server started (from a folder whose path has spaces, parentheses and an "&")'
 
 $java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($app) } | Select-Object -First 1

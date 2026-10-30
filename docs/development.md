@@ -182,7 +182,7 @@ new push cancels the run still going for the same branch or pull request.
 | Server tests | Runs `bin/sbt8 test` on Zulu Java 8, with the sbt and Ivy caches kept between runs. |
 | Release package | After both pass: builds the release from the `frontend-build` artifact (`SKIP_FRONTEND=1 bin/make-dist`) and runs `bin/smoke-dist` on it, then makes the downloads that carry their own Java (`bin/bundle-java`) and runs `bin/smoke-dist` on the Linux one. Keeps the zips and their `.sha256` files as the `breadboard-release` artifact for 7 days. |
 | macOS package | Runs `bin/smoke-dist` on the `-macos-arm64` zip, on its own Java. |
-| Windows package | Runs `bin/smoke-dist.ps1` on the `-windows-x64` zip: `breadboard.bat` on its own Java, the first account, a backup, and the message when the port is taken. |
+| Windows package | Runs `bin/smoke-dist.ps1` on the `-windows-x64` zip: `breadboard.bat` on its own Java, the first account, a backup, the message when the port is taken (also by a program on `::1` only), the port and memory set in `conf\local.conf`, curly quotes in it named, and a server that can't start not started again. |
 
 ## Making a release
 
@@ -236,11 +236,16 @@ new push cancels the run still going for the same branch or pull request.
    `bin/smoke-dist` unzips the release into a temporary folder and starts it with
    `breadboard.sh` on an empty database (port 19000, or `PORT`). It checks the release's layout
    and the generated `application.secret` (which must not show on the server's command line),
-   loads both consoles, the bundles and a participant page, creates the first account and signs
-   in, then restarts on the same database, with a `conf/local.conf` (which the launcher must make
-   private) and a proxy set, and checks again. It also checks what the launcher says when it can't
-   start (a second copy, the port taken, a folder it can't write to, a `conf/local.conf` it can't
-   read), and on macOS that the computer is kept awake while the server runs. It fails if the
+   loads both consoles, the bundles, a participant page and `/health` (also with HEAD), creates the
+   first account and signs in, and checks that the database, its backups and the logs are the
+   server's account's only. Then it restarts on the same database, with a `conf/local.conf` (which
+   the launcher must make private, and whose `http.port` and `breadboard.memory` it must pass on to
+   Java) and a proxy set, and checks again. It also checks what the launcher says when it can't
+   start (a second copy, which in a terminal opens the running one's console instead; the port
+   taken, also by a program on `[::1]` only; curly quotes in `conf/local.conf`; a folder it can't
+   write to; a `conf/local.conf` it can't read, named before the port is looked at), that
+   keep-running doesn't start again a server that couldn't start (and `logs/start-errors.log` says
+   why), and on macOS that the computer is kept awake while the server runs. It fails if the
    server logs an error. With `--db` it starts on a copy of an older release's database instead
    (and checks that it was backed up first); when that database already has accounts, it only
    checks that the server starts and serves its pages. CI runs the Windows zip through
