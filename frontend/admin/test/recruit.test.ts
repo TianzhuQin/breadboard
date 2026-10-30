@@ -364,6 +364,25 @@ describe('Prolific helpers', () => {
     expect(w.find('.rc-note--success').text()).toMatch(/leads to Saturday/)
   })
 
+  it('says, while the autopilot opens the next session by itself, that the link holds newcomers until it opens', async () => {
+    const StudyLinkCard = (await import('@/pages/recruit/prolific/StudyLinkCard.vue')).default
+    const exp = { id: 12, name: 'Game', instances: [] }
+    const started = { id: 9, name: 'Autopilot 3', status: 'RUNNING', hasStarted: true }
+    const stubs = { RouterLink: { template: '<a><slot /></a>' } }
+    const w = mount(StudyLinkCard, { props: { experiment: exp as any, target: null, started: started as any, autopilot: true }, global: { stubs } })
+    const note = () => w.find('.rc-note--info').text().replace(/\s+/g, ' ')
+    expect(w.find('.rc-note--warning').exists()).toBe(false)
+    expect(note()).toBe('The game in Autopilot 3 has started. The autopilot opens the next session when it ends; until then, the link shows a page that waits for that session and takes newcomers in as soon as it opens.')
+    expect(w.text()).not.toContain('No session is open right now')
+    // between two of its sessions
+    await w.setProps({ started: null })
+    expect(note()).toMatch(/^The autopilot opens the next session in a moment; until then, the link shows a page that waits for it/)
+    // a session open to newcomers
+    await w.setProps({ target: { id: 10, name: 'Autopilot 4', status: 'RUNNING', hasStarted: false } as any })
+    expect(w.find('.rc-note--success').text().replace(/\s+/g, ' ')).toContain('Once its game has started, newcomers wait on a page that takes them into the autopilot’s next session as soon as it opens.')
+    w.unmount()
+  })
+
   it('lists Prolific players and their bonuses', () => {
     const nodes = [
       { id: 'p1', data: { _system: { recruitment: { source: 'prolific', prolificPid: 'PID-B', completed: true, completionCode: 'C1', bonus: 1.255 } } } },
@@ -471,6 +490,45 @@ describe('Recruitment page', () => {
     expect(w.text()).toContain('conf/local.conf')
     expect(w.text()).toContain('copy conf/local.conf into each new release when you upgrade')
     expect(w.text()).not.toContain('application-prod.conf')
+    w.unmount()
+  })
+})
+
+describe('Recruitment page with the autopilot', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.mocked(http.get).mockReset()
+    admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [{ id: 7, name: 'Autopilot 7', status: 'RUNNING', hasStarted: true, hits: [] }] }
+    admin.instance = { id: 7, name: 'Autopilot 7', status: 'RUNNING', hasStarted: true, hits: [] }
+  })
+
+  async function page (autopilot: any) {
+    vi.mocked(http.get).mockImplementation(async (url: string) => {
+      if (url === '/autopilot') return autopilot
+      throw new HttpError(404, 'Not found')
+    })
+    const router = makeRouter()
+    router.push('/recruit')
+    await router.isReady()
+    const w = mount({ render: () => h(RouterView) }, { global: { plugins: [router], stubs: { teleport: true } }, attachTo: document.body })
+    await flushPromises()
+    return w
+  }
+
+  it('says the autopilot opens the next session when this game ends, and that late arrivals wait for it', async () => {
+    const w = await page({ settings: { continuous: true, nextSessionDelaySeconds: 10 }, status: { on: true, experimentId: 3, experimentName: 'Trust game', instance: { id: 7, name: 'Autopilot 7', status: 'RUNNING' } } })
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('The game in Autopilot 7 has started. The autopilot opens the next session when it ends')
+    expect(text()).toContain('Late arrivals wait for the next session.')
+    expect(text()).not.toContain('let Autopilot keep one open')
+    w.unmount()
+  })
+
+  it('says the link leads nowhere while the autopilot is paused', async () => {
+    const w = await page({ settings: { continuous: true }, status: { on: true, paused: true, problemKind: 'paused', experimentId: 3, instance: { id: 7, name: 'Autopilot 7', status: 'RUNNING' } } })
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('has already started, so right now the link shows “No session is open right now”')
+    expect(text()).toContain('Late arrivals are turned away politely.')
     w.unmount()
   })
 })

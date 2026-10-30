@@ -18,7 +18,22 @@
         <CircleCheck :size="16" aria-hidden="true" />
         <span>
           Right now it leads to <strong>{{ target.name }}</strong>, the session the engine is running, whose game hasn’t started.
-          Once that session’s game has started, newcomers are turned away until another session opens.
+          <template v-if="autopilot">
+            Once its game has started, newcomers wait on a page that takes them into the autopilot’s next session as soon as it opens.
+          </template>
+          <template v-else>Once that session’s game has started, newcomers are turned away until another session opens.</template>
+        </span>
+      </div>
+      <!-- The autopilot opens the next session by itself: the link holds newcomers until then. -->
+      <div v-else-if="autopilot" class="rc-note rc-note--info">
+        <Hourglass :size="16" aria-hidden="true" />
+        <span v-if="started">
+          The game in <strong>{{ started.name }}</strong> has started. The autopilot opens the next session when it ends;
+          until then, the link shows a page that waits for that session and takes newcomers in as soon as it opens.
+        </span>
+        <span v-else>
+          The autopilot opens the next session in a moment; until then, the link shows a page that waits for it and
+          takes newcomers in as soon as it opens.
         </span>
       </div>
       <div v-else-if="started" class="rc-note rc-note--warning">
@@ -48,7 +63,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { CircleCheck, ExternalLink, TriangleAlert } from 'lucide-vue-next'
+import { CircleCheck, ExternalLink, Hourglass, TriangleAlert } from 'lucide-vue-next'
 import { BButton, BPanel } from '@/ui'
 import type { Experiment, Instance } from '@/store/types'
 import CopyButton from '../CopyButton.vue'
@@ -61,6 +76,11 @@ const props = defineProps<{
   target: Instance | null
   /** a running session whose game has started (why there is no target) */
   started?: Instance | null
+  /**
+   * The autopilot runs this experiment and opens its next session by itself (on, continuous, neither
+   * paused nor done): until then, the link holds newcomers on a page that waits for that session.
+   */
+  autopilot?: boolean
 }>()
 
 // written as data so the template doesn't read the braces as its own syntax

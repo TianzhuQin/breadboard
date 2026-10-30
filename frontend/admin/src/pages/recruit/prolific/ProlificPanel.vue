@@ -16,13 +16,17 @@
         </div>
       </div>
 
-      <StudyLinkCard :experiment="admin.experiment" :target="target.open" :started="target.started" />
+      <StudyLinkCard :experiment="admin.experiment" :target="target.open" :started="target.started" :autopilot="autopilotOpensNext" />
 
       <BPanel title="When a participant arrives" subtitle="What Breadboard does with each person Prolific sends.">
         <ol class="pl-steps">
           <li>
             <span class="pl-steps__n" aria-hidden="true">1</span>
-            <div><strong>They join the open session.</strong> Breadboard forwards them to the session the engine is running, when it is this experiment’s and its game hasn’t started. Otherwise they see “No session is open right now”.</div>
+            <div>
+              <strong>They join the open session.</strong> Breadboard forwards them to the session the engine is running, when it is this experiment’s and its game hasn’t started.
+              <template v-if="autopilotOpensNext">Otherwise they wait on a page that takes them into the autopilot’s next session as soon as it opens.</template>
+              <template v-else>Otherwise they see “No session is open right now”.</template>
+            </div>
           </li>
           <li>
             <span class="pl-steps__n" aria-hidden="true">2</span>
@@ -30,7 +34,8 @@
           </li>
           <li>
             <span class="pl-steps__n" aria-hidden="true">3</span>
-            <div><strong>Late arrivals are turned away politely.</strong> Once the game has started, newcomers are asked to return the study on Prolific.</div>
+            <div v-if="autopilotOpensNext"><strong>Late arrivals wait for the next session.</strong> Once the game has started, newcomers are told a session is in progress and can keep the page open until the autopilot opens the next one, or return the study on Prolific.</div>
+            <div v-else><strong>Late arrivals are turned away politely.</strong> Once the game has started, newcomers are asked to return the study on Prolific.</div>
           </li>
           <li>
             <span class="pl-steps__n" aria-hidden="true">4</span>
@@ -58,6 +63,7 @@ import { computed } from 'vue'
 import { TriangleAlert } from 'lucide-vue-next'
 import { BPanel } from '@/ui'
 import { admin, instances } from '@/store/admin'
+import { autopilotRuns, useAutopilotStatus } from '../../session/autopilot'
 import NeedsExperiment from '@/shell/NeedsExperiment.vue'
 import StudyLinkCard from './StudyLinkCard.vue'
 import CompletionCard from './CompletionCard.vue'
@@ -71,6 +77,14 @@ const givesCode = computed(() => (admin.experiment?.steps || []).some(st =>
     const at = line.indexOf('completeProlific')
     return at >= 0 && !line.slice(0, at).includes('//')
   })))
+
+// The autopilot opens this experiment's next session by itself (on, continuous, neither paused nor
+// done): until then, the study link holds newcomers on a page that waits for that session.
+const autopilot = useAutopilotStatus()
+const autopilotOpensNext = computed(() => {
+  const s = autopilot.value
+  return autopilotRuns(s, admin.experiment?.id) && !!s && s.continuous && !s.halted
+})
 
 /** Where /play/<e>/prolific leads: the engine's session, while its game hasn't started. */
 const target = computed(() => {
