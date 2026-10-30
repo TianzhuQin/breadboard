@@ -389,8 +389,9 @@ Live session and Autopilot show the sign-in links. The Recruitment page has a ta
 one for Mechanical Turk.
 
 **Prolific.** **Study URL** is the address to paste into your study on Prolific (**Copy URL**). In
-Prolific, choose to record Prolific IDs with URL parameters, and leave the parts like
-`{{%PROLIFIC_PID%}}` as they are. The link leads to this experiment's open session whose game
+Prolific's Data collection section, choose **I'll use URL parameters** to record Prolific IDs, and
+leave the parts like `{{%PROLIFIC_PID%}}` as they are. The link leads to this experiment's open
+session whose game
 hasn't started, and the page says which one that is now, or warns that participants would see
 "No session is open right now". **Try it as a test participant** opens it with a made-up Prolific
 ID, taking a seat like a real participant.
@@ -462,7 +463,7 @@ of event with a column per data name.
 | **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
 | **Export all**, **Export filtered** | A session's events | The same columns and times as the session's file. Events without data keep a row. |
-| **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |
+| **Export as table** | A session's events, By event, under an event's name | One row per event of that kind, one column per data name. |
 | **Download CSV** | Players | The players shown, with every property. |
 
 **For Excel**, next to the download buttons, makes the CSV files of this page (and Live session's
