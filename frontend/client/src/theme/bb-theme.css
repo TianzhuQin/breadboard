@@ -176,11 +176,13 @@
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.28);
 }
 /* a researcher's preview that only watches: a quiet strip above the page rather than a box over
-   it, since it may stay for the whole session */
+   it, since it may stay for the whole session (across the whole top: side margins of auto would
+   shrink it to its text inside Vuetify's column) */
 .bb-app .bb-connection.bb-connection--watching.v-alert {
   position: static;
   transform: none;
   width: auto;
+  margin: 0;
   border-radius: 0;
   background: #e0f2fe !important;
   color: #075985 !important;
