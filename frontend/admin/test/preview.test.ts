@@ -444,6 +444,47 @@ describe('PreviewPage', () => {
     w.unmount()
   })
 
+  // A tile kept across a Stop and Resume (or a reload of the engine), of someone who hasn't joined
+  // again: the server adds nobody for a preview of a real session, and the page says they aren't in
+  // the game. Once they are back in the network, their page is loaded again.
+  it('says a player who isn\'t in the game isn\'t, and loads their page again once they join', async () => {
+    addPlayer('p2')
+    await settle()
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p1', 'p2']
+    const w = await mountPage()
+    try {
+      await settle()
+      const tile = (id: string) => w.findAll('.pt').find(t => t.find('.pt__id').text() === id)!
+      expect(tile('p1').find('.pt__note').text()).toBe('Not in the game right now: a preview adds nobody. Their page shows here once they join.')
+      expect(tile('p2').find('.pt__note').exists()).toBe(false)
+      const first = tile('p1').find('iframe').attributes('src')
+      expect(first).toMatch(/\/game\/7\/44\/p1\/connected\?preview=1#bbt=tok-p1-\d$/)
+      const p2Src = tile('p2').find('iframe').attributes('src')
+
+      addPlayer('p1')
+      await settle()
+      expect(tile('p1').find('.pt__note').exists()).toBe(false)
+      const again = tile('p1').find('iframe').attributes('src')
+      expect(again).toMatch(/#bbt=tok-p1-\d$/)
+      expect(again).not.toBe(first)
+      expect(tile('p2').find('iframe').attributes('src')).toBe(p2Src)
+
+      // the same in the full-size view: shown while they are away, loaded again as they come back
+      store.graph.clear()
+      addPlayer('p2')
+      await settle()
+      await tile('p1').find('button.pt__cover').trigger('click')
+      await settle()
+      const shown = document.body.querySelector('.pfx iframe')!.getAttribute('src')
+      addPlayer('p1')
+      await settle()
+      expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).not.toBe(shown)
+    } finally {
+      w.unmount()
+    }
+  })
+
   // (named as the console names it everywhere else: "AI 1 (_1)", not the bare id)
   it('says that a single computer player is one, by its name', async () => {
     addPlayer('_1', { ai: 1 })

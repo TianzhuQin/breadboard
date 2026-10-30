@@ -24,7 +24,7 @@
       </div>
       <div ref="stage" class="pfx__stage" :class="{ 'is-actual': zoom === 'actual' }">
         <PreviewFrame
-          :key="`${playerId}-${nonce}`"
+          :key="`${playerId}-${nonce}-${reloadKey ?? 0}`"
           :target="target"
           :title="`Participant page of ${name}`"
           :device="device"
@@ -50,6 +50,8 @@ const props = defineProps<{
   index: number
   count: number
   initialDevice: DeviceKind
+  /** Changing it loads the page again (the page reloads its tile's, e.g. when the player joins). */
+  reloadKey?: number
 }>()
 const emit = defineEmits<{ close: [], step: [delta: number], 'open-tab': [] }>()
 

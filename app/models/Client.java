@@ -58,7 +58,9 @@ public class Client extends Model {
   // or stands in for them while it is away. Standing in used to be a mark on the one preview that
   // watched as their page went, so any newer preview of them (the console opens new ones all the
   // time: a tile opened full size, a reload, the Preview page visited again) counted as them coming
-  // back: the computer was switched off, and nobody played the seat while it stayed open.
+  // back: the computer was switched off, and nobody played the seat while it stayed open. A Client
+  // made after a rebuild of the engine (a Resume, a reload that carries the session on) is told so by
+  // ScriptBoard, which keeps it per session (ownPageHeld()).
   private volatile boolean ownPageHeld;
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
@@ -230,6 +232,14 @@ public class Client extends Model {
   }
 
   /**
+   * Their own page held their seat earlier in this session, with a Client the engine's rebuild has
+   * dropped since (ScriptBoard keeps that per session): a preview never counts as them being there.
+   */
+  void ownPageHeld() {
+    ownPageHeld = true;
+  }
+
+  /**
    * The session is over for this participant: {@code screen} is their last screen from now on (null:
    * the one they have stays), and no game view replaces it or reaches their sockets (writeGraph).
    * Under the monitor updateGraph holds, so an update under way (the client update actor's, every few
@@ -375,6 +385,7 @@ public class Client extends Model {
     Connection holder = seat;
     return holder != null && holder.isOpen() && holder.preview;
   }
+
   /** Whether this socket holds the seat now, open: what it sends acts for the participant. */
   public boolean holdsSeat(Connection connection) {
     return connection != null && connection == seat && connection.isOpen();

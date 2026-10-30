@@ -83,6 +83,20 @@ public class ScriptBoard extends UntypedActor {
         }
       });
 
+  // For each recent real session, the participants whose own page has held their seat in it
+  // (Client.ownPageHeld): read from its data (clientConnected without preview) the first time it is
+  // needed, kept up to date after. A Client lasts only as long as the engine it joined, and every
+  // rebuild drops them all: after a Resume, or a reload that carries the session on, a preview of a
+  // former participant made a new one and counted as them being there again. As many sessions as
+  // there are last screens: forgetting one only means reading its data again.
+  private static final Map<Long, Set<String>> ownPagesHeld = Collections.synchronizedMap(
+      new LinkedHashMap<Long, Set<String>>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, Set<String>> eldest) {
+          return size() > ENDED_SESSIONS_KEPT;
+        }
+      });
+
   // AMT lifecycle timers scheduled by the HitCreated handler. Tracked so they can be
   // cancelled on reload / on re-submit instead of being orphaned (MEMORY_LEAKS.md L6).
   // CopyOnWriteArrayList because the static state is shared across ScriptBoard actors.
@@ -285,6 +299,63 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  /**
+   * Whether {@code clientId}'s own page has held their seat in this real session before (see
+   * ownPagesHeld). Never for the test session, whose players are played through previews.
+   */
+  static boolean ownPageHeldBefore(ExperimentInstance session, String clientId) {
+    Set<String> held = ownPagesOf(session);
+    return held != null && held.contains(clientId);
+  }
+
+  /** Their own page holds their seat in this session now (see ownPagesHeld). */
+  static void ownPageHolds(ExperimentInstance session, String clientId) {
+    Set<String> held = ownPagesOf(session);
+    if (held != null) {
+      held.add(clientId);
+    }
+  }
+
+  // The session's own pages (ownPagesHeld), read from its data when it isn't known yet; null for the
+  // test session, which isn't recorded.
+  private static Set<String> ownPagesOf(ExperimentInstance session) {
+    if (session == null || session.id == null || session.isTestInstance()) {
+      return null;
+    }
+    synchronized (ownPagesHeld) {
+      Set<String> held = ownPagesHeld.get(session.id);
+      if (held == null) {
+        held = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        held.addAll(ownPagesRecorded(session.id));
+        ownPagesHeld.put(session.id, held);
+      }
+      return held;
+    }
+  }
+
+  // Who the session's data says was connected by their own page (clientConnected without preview).
+  private static List<String> ownPagesRecorded(Long sessionId) {
+    List<String> ids = new ArrayList<String>();
+    try {
+      List<SqlRow> rows = Ebean.createSqlQuery("select distinct who.value as client_id from events conn"
+          + " join event_data who on who.event_id = conn.id"
+          + " where conn.experiment_instance_id = :session and conn.name = 'clientConnected' and who.name = 'clientId'"
+          + " and not exists (select 1 from event_data p where p.event_id = conn.id and p.name = 'preview' and p.value = 'true')")
+          .setParameter("session", sessionId)
+          .findList();
+      for (SqlRow row : rows) {
+        String id = row.getString("client_id");
+        if (id != null) {
+          ids.add(id);
+        }
+      }
+    } catch (RuntimeException e) {
+      // (only those seen from now on, then)
+      Logger.warn("Could not read who has been in session " + sessionId + ": " + e);
+    }
+    return ids;
+  }
+
   /** What a page that reconnects to a session that has ended is sent: its last screen, if known. */
   static ObjectNode endedSessionScreen(Long instanceId, String clientId) {
     Map<String, ObjectNode> screens = endedSessionScreens.get(instanceId);
@@ -440,6 +511,22 @@ public class ScriptBoard extends UntypedActor {
     player.put("ended", "notRunning");
     player.put("text", "<h3>The session has already started</h3><p>It began before you arrived, so it can't "
         + "take anyone new. Please contact the researcher.</p>");
+    return frame;
+  }
+
+  /**
+   * What a researcher's preview of someone who isn't in the game of a real session is sent (see
+   * addClient): nothing is there to show, and the preview adds nobody.
+   */
+  static ObjectNode notInGameScreen(String clientId) {
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "notInGame");
+    player.put("text", "<h3>Not in the game</h3><p>" + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(clientId)
+        + " isn't in this session's game right now, so there is nothing to show. A preview adds nobody to the game: "
+        + "participants join from their own page. Reload this preview once they have joined.</p>");
     return frame;
   }
 
@@ -1227,6 +1314,18 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
 
+      if (byResearcher && !experimentInstance.isTestInstance() && !hasPlayer(clientId)
+          && (client == null || !Boolean.TRUE.equals(experimentInstance.hasStarted))) {
+        // A researcher's preview of someone who isn't in the game of a real session: it says so, and
+        // adds nobody (only the test session takes the test players a preview names). It used to add
+        // them before the start, as a page of theirs would, OnJoinStep and all, and they counted as
+        // connected: the console's Preview page keeps its tiles across a Stop and Resume (or a reload
+        // that carries the session on), so a waiting room could start with nobody but previews in it.
+        // Someone the game left out, or took out after the start, is shown their last screen below.
+        finalScreen(in, out, notInGameScreen(clientId));
+        return;
+      }
+
       if (client == null && experimentInstance.hasStarted && !hasPlayer(clientId)) {
         // Someone new after the start (sign-in already turns them away, so e.g. an old page): say
         // so instead of leaving the page connecting for ever. Someone whose player is in the game
@@ -1243,6 +1342,10 @@ public class ScriptBoard extends UntypedActor {
         // New client, let's create a new Client object (another page of this id may come in at the
         // same moment: two tabs opened at once)
         Client created = new Client(clientId, experimentInstance);
+        if (byResearcher && ownPageHeldBefore(experimentInstance, clientId)) {
+          // (their own page held the seat with a Client a rebuild of the engine has dropped since)
+          created.ownPageHeld();
+        }
         client = clients.putIfAbsent(clientId, created);
         if (client == null) {
           client = created;
@@ -1252,6 +1355,9 @@ public class ScriptBoard extends UntypedActor {
       // preview. Client.connect says what becomes of this socket, and of the one before, which can
       // no longer act for this participant.
       Client.Arrival arrival = client.connect(connection);
+      if (!byResearcher && arrival != Client.Arrival.WATCHING) {
+        ownPageHolds(experimentInstance, clientId);
+      }
       final Client thisClient = client;
       watchForSilence();
 

@@ -138,6 +138,11 @@ public class ParticipantConnectionTest extends BaseTest {
         return page;
     }
 
+    /** A test player, as an experiment's steps make one: in the network, with no page of theirs yet. */
+    private static void testPlayer(String clientId) throws Exception {
+        engine().eval("def v = g.addPlayer('" + clientId + "'); v.testmode = true; null");
+    }
+
     private static final AdminSocketsTest.Matcher REPLACED = f -> "replaced".equals(f.path("bbClosed").asText());
     private static final AdminSocketsTest.Matcher WATCHING = f -> f.path("bbWatching").asBoolean(false);
     private static final AdminSocketsTest.Matcher NOT_WATCHING = f -> f.has("bbWatching") && !f.get("bbWatching").asBoolean();
@@ -584,6 +589,7 @@ public class ParticipantConnectionTest extends BaseTest {
 
     @Test
     public void theParticipantComingBackTakesTheSeatFromAPreviewWhichThenWatches() throws Throwable {
+        testPlayer("p1");
         Page preview = connect("p1", true);
         assertEquals("the participant is away: it holds the seat", 0, preview.count(WATCHING));
         assertTrue(preview.count(VIEW) >= 1);
@@ -627,6 +633,7 @@ public class ParticipantConnectionTest extends BaseTest {
         // A preview of someone away holds their seat: connected (that is how test players are
         // played), and marked as a preview's, for the console, which their neighbours never see.
         Page neighbour = connect("p2");
+        testPlayer("p1");
         Page preview = connect("p1", true);
         assertEquals(Boolean.TRUE, system("p1").get("connected"));
         assertEquals(Boolean.TRUE, system("p1").get("preview"));
@@ -920,6 +927,130 @@ public class ParticipantConnectionTest extends BaseTest {
         }
     }
 
+    // ---- a preview adds nobody to a real session, and the rule outlives a rebuild of the engine -------
+
+    private static final AdminSocketsTest.Matcher NOT_IN_GAME = f -> "notInGame".equals(f.path("player").path("ended").asText());
+
+    @Test
+    public void aPreviewOfSomeoneWhoIsntInTheGameAddsNobody() throws Throwable {
+        engine().eval("autopilot.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 60]); null");
+        Page participant = connect("p1");
+        Page preview = connect("p9", true);
+        assertEquals(preview.frames.toString(), 1, preview.frames.size());
+        assertTrue(NOT_IN_GAME.matches(preview.frames.get(0)));
+        assertTrue(preview.frames.get(0).path("player").path("text").asText().contains("p9 isn't in this session's game"));
+        assertNull("no player", engine().eval("g.getVertex('p9')"));
+        assertNull("no seat", client("p9"));
+        assertEquals("the waiting room counts nobody else", 1, engine().eval("autopilot.connectedPlayers().size()"));
+        assertNull("nor does the wait for more begin", engine().eval("autopilot.startAt"));
+        assertEquals(0, events("clientConnected", "p9"));
+        // nor after the start (it used to say the session had started, as to a newcomer)
+        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+        Page later = connect("p8", true);
+        assertTrue(later.frames.toString(), NOT_IN_GAME.matches(later.frames.get(0)));
+        assertNull(client("p8"));
+        assertFalse(participant.closed);
+        engine().eval("autopilot.stop(); null");
+    }
+
+    /**
+     * Stop and Resume: the engine is rebuilt for the same session, and every Client goes with the old
+     * one. The console's Preview page keeps its tiles, which load again: a preview of a former
+     * participant made them a new Client, counted as connected, and, before the start, added their
+     * player again (OnJoinStep and all), so the waiting room could start a game with nobody but
+     * previews in it.
+     */
+    @Test
+    public void aPreviewOfAFormerParticipantAfterAResumeNeitherAddsThemNorCountsAsThem() throws Throwable {
+        Page participant = connect("p1");
+        participant.hangUp();
+        console.send("StopGame", "id", session.id);
+        await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        console.send("SelectInstance", "id", session.id);
+        await("resumed", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.RUNNING
+            && engineRuns(session) && client("p1") == null);
+        engine().eval("autopilot.waitingRoom([minPlayers: 2, maxPlayers: 5, waitSeconds: 60]); null");
+        Page other = connect("p2");
+        assertEquals(1, engine().eval("autopilot.connectedPlayers().size()"));
+
+        Page tile = connect("p1", true);
+        assertTrue(tile.frames.toString(), NOT_IN_GAME.matches(tile.frames.get(0)));
+        assertNull("no player re-created", engine().eval("g.getVertex('p1')"));
+        assertNull(client("p1"));
+        assertEquals("the waiting room's count is the same", 1, engine().eval("autopilot.connectedPlayers().size()"));
+        assertNull(engine().eval("autopilot.startAt"));
+        assertEquals("no connection recorded since the one before the stop", 1, events("clientConnected", "p1"));
+        assertEquals(0, events("clientConnected", "p1", true));
+
+        // Even with their player in the network again (a script added it), a preview only stands in for
+        // them: their own page held the seat before the stop, as the session's data says (read again
+        // here, as after a restart of the server).
+        engine().eval("g.addPlayer('p1'); null");
+        ((Map<?, ?>) field("ownPagesHeld").get(null)).clear();
+        Page again = connect("p1", true);
+        assertSame(again.out, client("p1").out);
+        assertEquals(0, again.count(WATCHING));
+        assertEquals(Boolean.FALSE, system("p1").get("connected"));
+        assertEquals(Boolean.TRUE, system("p1").get("preview"));
+        assertEquals(1, engine().eval("autopilot.connectedPlayers().size()"));
+        assertNull(engine().eval("autopilot.startAt"));
+        assertEquals(1, events("clientConnected", "p1"));
+        assertEquals(0, events("clientConnected", "p1", true));
+        // Their own page coming back counts, as ever.
+        Page back = connect("p1");
+        assertEquals(1, again.count(WATCHING));
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(2, engine().eval("autopilot.connectedPlayers().size()"));
+        assertEquals(2, events("clientConnected", "p1"));
+        assertFalse(other.closed);
+        assertFalse(back.closed);
+        engine().eval("autopilot.stop(); null");
+    }
+
+    @Test
+    public void aPreviewOfAFormerParticipantAfterAReloadThatCarriesTheSessionOnNeverCountsAsThem() throws Throwable {
+        Page participant = connect("p1");
+        final Client before = client("p1");
+        console.send("ReloadEngine");
+        await("rebuilt", () -> participant.closed && client("p1") == null);
+        assertEquals("carried on", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertTrue(engineRuns(session));
+        engine().eval("autopilot.waitingRoom([minPlayers: 1, maxPlayers: 5, waitSeconds: 60]); null");
+
+        // The tile reconnects before their page does.
+        Page tile = connect("p1", true);
+        assertTrue(tile.frames.toString(), NOT_IN_GAME.matches(tile.frames.get(0)));
+        assertNull(engine().eval("g.getVertex('p1')"));
+        assertNull(client("p1"));
+        assertEquals(0, engine().eval("autopilot.connectedPlayers().size()"));
+        assertNull("no start for a preview", engine().eval("autopilot.startAt"));
+
+        engine().eval("g.addPlayer('p1'); null");
+        Page again = connect("p1", true);
+        assertNotSame(before, client("p1"));
+        assertEquals(Boolean.FALSE, system("p1").get("connected"));
+        assertEquals(Boolean.TRUE, system("p1").get("preview"));
+        assertEquals(0, engine().eval("autopilot.connectedPlayers().size()"));
+        assertNull(engine().eval("autopilot.startAt"));
+        assertEquals(1, events("clientConnected", "p1"));
+        assertEquals(0, events("clientConnected", "p1", true));
+        // their page reconnects: it takes the seat, and the preview watches it
+        Page back = connect("p1");
+        assertEquals(1, again.count(WATCHING));
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(2, events("clientConnected", "p1"));
+        assertFalse(back.closed);
+        engine().eval("autopilot.stop(); null");
+    }
+
+    /** Whether the engine runs this session now (its game listener's). */
+    private static boolean engineRuns(ExperimentInstance session) throws Exception {
+        Method m = ScriptBoard.class.getDeclaredMethod("engineSession");
+        m.setAccessible(true);
+        ExperimentInstance running = (ExperimentInstance) m.invoke(null);
+        return running != null && session.id.equals(running.id);
+    }
+
     @Test
     public void testPlayersOfATestSessionArePlayedThroughPreviews() throws Throwable {
         // The researcher's test session (0) runs once no real one does: they create test players by
@@ -1031,6 +1162,7 @@ public class ParticipantConnectionTest extends BaseTest {
 
     @Test
     public void aPreviewOverAPreviewTakesTheSeat() throws Throwable {
+        testPlayer("p1");
         Page tile = connect("p1", true);
         Page tab = connect("p1", true);
         assertEquals(1, tile.count(REPLACED));

@@ -131,7 +131,7 @@
                 :ai="isAIPlayer(t)"
                 :paused="focusId === t.id ? 'focus' : tabbed.has(t.id) ? 'tab' : null"
                 :frame-key="`${globalNonce}-${nonces[t.id] || 0}`"
-                :note="t.missing && admin.engine !== 'loading' ? 'Not in the network right now, so the page may show nothing.' : ''"
+                :note="t.missing && admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''"
                 @focus="focusId = t.id"
                 @reload="reload(t.id)"
                 @open-tab="openTab(t.id)"
@@ -149,6 +149,7 @@
         :index="focusIndex"
         :count="tiles.length"
         :initial-device="memory.device"
+        :reload-key="focusId ? nonces[focusId] || 0 : 0"
         @close="closeFocus"
         @step="step"
         @open-tab="focusId && openTab(focusId)"
@@ -329,6 +330,18 @@ function closeFocus () {
   if (id) reload(id)
 }
 watch(focusId, (id) => { if (id) tabbed.delete(id) })
+
+// A player who isn't in the network (the session was resumed, or its engine reloaded, and they
+// haven't joined again yet) is shown as not in the game: a preview of a real session adds nobody, and
+// its page stops there. Once they are in the network again, their page is loaded again, to show them.
+const wasMissing = new Set<string>()
+watch(tiles, (list) => {
+  for (const t of list) {
+    if (t.missing) wasMissing.add(t.id)
+    else if (wasMissing.delete(t.id)) reload(t.id)
+  }
+  for (const id of [...wasMissing]) if (!list.some(t => t.id === id)) wasMissing.delete(id)
+}, { immediate: true })
 
 async function openTab (id: string) {
   const target = targetOf(id)

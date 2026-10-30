@@ -185,10 +185,12 @@ is played through the preview: it signs in as that player, and they count as con
 connections it causes are recorded with `preview` = `true`). Anyone else (someone whose own page
 has been in the session and isn't now: they left, or the computer took their seat) can be answered
 for in a preview, but counts as away all the same, like anyone who leaves, however often you open,
-reload or enlarge the preview: the computer takes their seat after the usual wait (when it plays
-for people who leave), or goes on playing it, and a waiting room doesn't count them. So **AI
-players** shows the computer players and the seats the computer took over, and the computer goes on
-playing all of them. When a player's own page comes back, it takes over, and the preview goes on
+reload or enlarge the preview, also after a **Resume** or a reload of the engine: the computer takes
+their seat after the usual wait (when it plays for people who leave), or goes on playing it, and a
+waiting room doesn't count them. So **AI players** shows the computer players and the seats the
+computer took over, and the computer goes on playing all of them. A preview never adds anyone to the
+game: the tile of a player who isn't in the network (someone who left before a **Resume**, say, and
+hasn't joined again) says they aren't in the game, and shows their page once they are back. When a player's own page comes back, it takes over, and the preview goes on
 read-only. In the list, a green dot means the seat is connected; its tooltip says whether by their
 own page or by a preview (maybe another console's), or that a preview stands in for someone away.
 The first look at a session shows the test players whose seat is neither connected nor held by a

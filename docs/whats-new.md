@@ -329,7 +329,16 @@ playing, and a waiting room doesn't count them.
   departure goes on as anyone's: the computer takes over after `afterSeconds` (or goes on playing a
   seat it took over), and the waiting room stops counting them once `departureGraceSeconds` have
   passed. It used to count as them coming back, so nobody played the seat for as long as the
-  preview was open, and a start went ahead with a seat nobody played.
+  preview was open, and a start went ahead with a seat nobody played. This holds for the whole
+  session, also once the engine has been rebuilt for it (**Resume**, or a reload that carries it on),
+  which used to forget whose own page had been there.
+- **A preview adds nobody.** In a real session, a preview of someone who isn't in the network (the
+  console keeps its tiles across a Stop and Resume, say, of people who haven't joined again) is sent
+  a screen saying they aren't in the game (`player.ended` = `"notInGame"`), and nothing else
+  happens: it used to add them before the game started, OnJoinStep and all, counted as connected,
+  so a waiting room could start a game with nobody but previews in it. Only an experiment's test
+  session takes the test players a preview names. The console's Preview page loads such a tile
+  again once the player is back in the network.
 - **Started without them.** Someone the autopilot's start left out (see the autopilot above) is
   recorded as a `missedStart` event. Whenever their page comes back, even after the next session
   has opened, it gets a screen saying the session went ahead without them (Prolific participants
