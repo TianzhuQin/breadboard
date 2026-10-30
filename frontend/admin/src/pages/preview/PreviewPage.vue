@@ -65,7 +65,7 @@
 
       <div class="pv">
         <aside class="pv__side" :class="{ 'is-collapsed': !pickerOpen }">
-          <button type="button" class="pv__side-toggle" :aria-expanded="pickerOpen ? 'true' : 'false'" aria-controls="pv-picker" @click="pickerOpen = !pickerOpen">
+          <button type="button" class="pv__side-toggle" :aria-expanded="pickerOpen ? 'true' : 'false'" aria-controls="pv-picker" @click="togglePicker">
             <Users :size="16" aria-hidden="true" />
             <span>Players · {{ memory.ids.length }} of {{ players.length }} shown</span>
             <ChevronDown :size="16" class="pv__side-chev" aria-hidden="true" />
@@ -245,6 +245,20 @@ watch(() => [inst.value?.id, tiles.value.some(t => !t.missing && previewRole(t) 
 // ---- choosing ---------------------------------------------------------------------------------
 
 const listKey = ref(0)
+
+// On narrow screens the list sits above the previews. Once some are chosen it is folded away: when
+// the page opens with previews chosen, and when the page chooses them (the first look, or a player
+// opened from the player panel), unless the researcher has opened or closed the list themselves.
+const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
+const pickerOpen = ref(true)
+let pickerToggled = false
+function togglePicker () {
+  pickerToggled = true
+  pickerOpen.value = !pickerOpen.value
+}
+function foldPicker () {
+  if (narrow && !pickerToggled && memory.ids.length) pickerOpen.value = false
+}
 
 function tooMany () {
   notify.warning(`Up to ${MAX_PREVIEWS} previews at a time`, 'Each preview is a whole participant page; more would slow your browser down. Remove some first.')
@@ -443,6 +457,7 @@ function takeFirstLook () {
   const tests = autoPicked(players.value).filter(p => !selected.value.has(p.id))
   if (!tests.length) return
   memory.ids = [...memory.ids, ...tests.map(p => p.id)].slice(0, MAX_PREVIEWS)
+  foldPicker()
 }
 watch(() => [inst.value?.id, graph.version.value] as const, ([id]) => {
   if (id == null) return
@@ -470,15 +485,14 @@ watch(() => [route.query.player, players.value.length] as const, ([q]) => {
   const p = players.value.find(x => x.id === id)
   if (!id || !p) return
   router.replace({ query: { ...route.query, player: undefined } })
-  add(id)
+  if (add(id)) foldPicker()
   if (selected.value.has(id)) focusId.value = id
 }, { immediate: true })
 
 // ---- the panel and the notice -----------------------------------------------------------------
 
-// On narrow screens the list sits above the previews; once some are chosen it starts folded away.
-const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
-const pickerOpen = ref(!(narrow && memory.ids.length))
+// the list starts folded away on narrow screens once some previews are chosen (see foldPicker)
+foldPicker()
 // (a new key whenever what previews do changes, so the notice is shown once more: previews of
 // connected players became read-only, then those of computer players, then a preview of someone who
 // left stopped counting as them)

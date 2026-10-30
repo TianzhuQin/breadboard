@@ -435,6 +435,71 @@ describe('PreviewPage', () => {
     }
   })
 
+  // On a narrow screen the list sits above the previews. Once the first look has chosen players it
+  // folds away, so the previews come first. (It stayed open: the first look comes a moment after the
+  // page opens, and the list was folded only when the page opened with previews chosen.)
+  it('folds the list away on a narrow screen once the first look has chosen players', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q === '(max-width: 900px)', media: q, addEventListener () {}, removeEventListener () {} }))
+    const mounted: any[] = []
+    const open = async () => {
+      const w = await mountPage()
+      mounted.push(w)
+      return w
+    }
+    const close = (w: any) => {
+      mounted.splice(mounted.indexOf(w), 1)
+      w.unmount()
+    }
+    const folded = (w: any) => {
+      const expanded = w.find('.pv__side-toggle').attributes('aria-expanded')
+      expect(expanded).toBe(w.find('.pv__side').classes().includes('is-collapsed') ? 'false' : 'true')
+      return expanded === 'false'
+    }
+    try {
+      addPlayer('t1', { testmode: true })
+      addPlayer('t2', { testmode: true })
+      addPlayer('p3')
+      await settle()
+      const w = await open()
+      expect(folded(w)).toBe(false)
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1', 't2'])
+      expect(folded(w)).toBe(true)
+      expect(w.find('.pv__side-toggle').text()).toContain('2 of 3 shown')
+      close(w)
+
+      // back on the page, with those previews chosen: folded from the start
+      const w1 = await open()
+      expect(folded(w1)).toBe(true)
+      close(w1)
+
+      // a list the researcher has closed and opened again meanwhile stays as they left it
+      Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false })
+      const w2 = await open()
+      await w2.find('.pv__side-toggle').trigger('click')
+      expect(folded(w2)).toBe(true)
+      await w2.find('.pv__side-toggle').trigger('click')
+      expect(folded(w2)).toBe(false)
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1', 't2'])
+      expect(folded(w2)).toBe(false)
+      close(w2)
+
+      // from the player panel: folded at once, under that player's full-size view
+      Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false })
+      route.query = { player: 'p3' }
+      const w3 = await open()
+      expect(previewMemory.ids).toEqual(['p3'])
+      expect(folded(w3)).toBe(true)
+      await firstLook()
+      expect([...previewMemory.ids].sort()).toEqual(['p3', 't1', 't2'])
+      expect(folded(w3)).toBe(true)
+    } finally {
+      for (const w of mounted) w.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('takes the first look in a network that keeps changing, after FIRST_LOOK_MAX_MS at most', async () => {
     addPlayer('t1', { testmode: true })
     await settle()
