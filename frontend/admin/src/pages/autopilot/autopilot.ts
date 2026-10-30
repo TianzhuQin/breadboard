@@ -539,23 +539,67 @@ export function waitingRoomLive (nodes: Iterable<{ id: string, data: Record<stri
   return best
 }
 
-const AUTOPILOT_EVENTS = new Set(['autopilotStart', 'autopilotCancelled', 'aiTakeover', 'aiReturned', 'sessionTooLong', 'sessionStalled'])
+const AUTOPILOT_EVENTS = new Set([
+  'autopilotStart', 'autopilotCancelled', 'aiTakeover', 'aiReturned', 'sessionTooLong', 'sessionStalled',
+  // failures, stops and restarts: what keeps a session from running as it should
+  'stepFailed', 'sessionFailed', 'stepsFailedToLoad', 'sessionStopped', 'serverStopping', 'engineReloaded',
+])
 
-/** The autopilot's recent events in words, newest first. */
+export type ActivityTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral'
+
+/** The line a failure was on: the event's own `line`, or the "line 72: …" its error starts with. */
+function lineOf (d: Record<string, any>): number | null {
+  const n = Number(d.line)
+  if (Number.isInteger(n) && n > 0) return n
+  const m = /^line (\d+):/.exec(String(d.error ?? ''))
+  return m ? Number(m[1]) : null
+}
+/** "RoundStep failed at line 72" */
+function failedAt (step: unknown, line: number | null): string {
+  return `${step ? String(step) : 'A step'} failed${line ? ` at line ${line}` : ''}`
+}
+
+/** The autopilot's recent events in words, newest first: its games, takeovers, failures and stops. */
 export function autopilotActivity (events: { name: string, datetime: string, data: Record<string, any> }[], limit = 6) {
-  const out: { key: string, at: string, text: string, tone: 'success' | 'warning' | 'info' | 'neutral' }[] = []
+  const out: { key: string, at: string, text: string, tone: ActivityTone }[] = []
+  // the step whose failure the session was then ended for (sessionFailed, newer): that failure didn't let the game go on
+  let endedFor: string | null = null
   for (let i = events.length - 1; i >= 0 && out.length < limit; i--) {
     const e = events[i]
     if (!AUTOPILOT_EVENTS.has(e.name)) continue
     const d = e.data || {}
     let text = ''
-    let tone: 'success' | 'warning' | 'info' | 'neutral' = 'neutral'
+    let tone: ActivityTone = 'neutral'
     if (e.name === 'autopilotStart') { text = `Game started with ${d.players ?? '?'} ${String(d.players) === '1' ? 'person' : 'people'}`; tone = 'success' }
     if (e.name === 'autopilotCancelled') { text = `Called off: only ${d.players ?? '?'} joined`; tone = 'warning' }
     if (e.name === 'aiTakeover') { text = `The computer took over ${d.playerId ?? 'a player'}'s seat`; tone = 'info' }
     if (e.name === 'aiReturned') { text = `${d.playerId ?? 'A player'} came back and plays again`; tone = 'info' }
     if (e.name === 'sessionTooLong') { text = `Ended: the game ran out of time (longest session: ${d.limit ?? '?'} min)`; tone = 'warning' }
-    if (e.name === 'sessionStalled') { text = `Stopped: nothing was left to do after ${d.step ? `the step ${d.step}` : 'a step'} failed`; tone = 'warning' }
+    if (e.name === 'sessionStalled') { text = `Stopped: nothing was left to do after ${d.step ? `the step ${d.step}` : 'a step'} failed`; tone = 'danger' }
+    if (e.name === 'sessionFailed') {
+      endedFor = d.step ? String(d.step) : ''
+      text = `Ended: ${failedAt(d.step, lineOf(d))} and stalled the game`
+      tone = 'danger'
+    }
+    if (e.name === 'stepFailed') {
+      const stalled = endedFor !== null && (endedFor === '' || endedFor === String(d.step ?? ''))
+      if (stalled) endedFor = null
+      text = stalled ? failedAt(d.step, lineOf(d)) : `${failedAt(d.step, lineOf(d))}; the game went on`
+      tone = stalled ? 'danger' : 'warning'
+    }
+    if (e.name === 'stepsFailedToLoad') {
+      // "InitStep: line 24: No such property: five"
+      const m = /^([^:]+): (?:line (\d+):)?/.exec(String(d.error ?? ''))
+      text = `Stopped before anyone joined: ${m ? failedAt(m[1].trim(), m[2] ? Number(m[2]) : null) : 'a step failed'} as the steps loaded`
+      tone = 'danger'
+    }
+    if (e.name === 'sessionStopped') { text = `Stopped${d.by ? ` by ${d.by}` : ' by a researcher'}`; tone = 'warning' }
+    if (e.name === 'serverStopping') { text = 'Ended: the server was stopped'; tone = 'warning' }
+    if (e.name === 'engineReloaded') {
+      const restarted = d.restarted === true || d.restarted === 'true'
+      text = `The engine was reloaded${d.by ? ` by ${d.by}` : ''}${restarted ? '; the game started again from the beginning' : ''}`
+      tone = 'info'
+    }
     out.push({ key: `${i}-${e.name}`, at: e.datetime, text, tone })
   }
   return out

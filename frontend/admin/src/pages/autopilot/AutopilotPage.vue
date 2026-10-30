@@ -374,6 +374,7 @@ import { HttpError } from '@/lib/http'
 import { admin, experiments, graph } from '@/store/admin'
 import { describeError } from '../experiments/experiments'
 import { liveEventOf } from '../sessions/sessionData'
+import { mergeEvents } from '../session/events'
 import AutopilotStatus from './AutopilotStatus.vue'
 import { useUnsavedGuard } from './useUnsavedGuard'
 import {
@@ -453,9 +454,13 @@ const live = computed(() => {
 const activity = computed(() => {
   const inst = state.value?.status.instance
   if (!isCurrent.value || !inst) return []
-  // only what its own session recorded: pushes from every session reach this console
+  // only what its own session recorded: pushes from every session reach this console; with what it
+  // recorded before (in its User JSON), so a refresh of the page doesn't lose it
   const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
-  return autopilotActivity(admin.events.filter(e => liveEventOf(e, inst.id, live)))
+  const recorded = admin.instance && admin.instance.id === inst.id ? admin.instance.events : []
+  const events = mergeEvents(recorded, admin.events.filter(e => liveEventOf(e, inst.id, live)))
+  // (oldest first, as recorded)
+  return autopilotActivity(events.reverse().map(e => ({ name: e.name, datetime: new Date(e.at).toISOString(), data: e.data })))
 })
 
 // ---- loading -----------------------------------------------------------------------------------

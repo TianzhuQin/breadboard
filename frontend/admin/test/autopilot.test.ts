@@ -290,7 +290,31 @@ describe('words and links', () => {
     ])
     expect(list[0]).toMatchObject({ text: 'Ended: the game ran out of time (longest session: 120 min)', tone: 'warning' })
     expect(autopilotActivity([{ name: 'sessionStalled', datetime: '2026-10-29T10:03:00Z', data: { step: 'RoundStep', error: 'line 7: x' } }])[0])
-      .toMatchObject({ text: 'Stopped: nothing was left to do after the step RoundStep failed', tone: 'warning' })
+      .toMatchObject({ text: 'Stopped: nothing was left to do after the step RoundStep failed', tone: 'danger' })
+  })
+
+  it('lists step failures that let the game go on, and the failures and stops that ended it', () => {
+    const at = (m: number) => `2026-10-30T10:${String(m).padStart(2, '0')}:00Z`
+    const list = autopilotActivity([
+      { name: 'autopilotStart', datetime: at(1), data: { players: '2' } },
+      { name: 'stepFailed', datetime: at(2), data: { step: 'RoundStep', error: 'line 72: No such property: roundNote' } },
+      { name: 'stepFailed', datetime: at(3), data: { step: 'RoundStep', error: 'line 72: No such property: roundNote' } },
+      { name: 'stepFailed', datetime: at(4), data: { step: 'FinishStep', error: 'line 9: boom' } },
+      { name: 'sessionFailed', datetime: at(4), data: { step: 'FinishStep', line: '9', error: 'boom' } },
+    ], 10)
+    expect(list.map(a => [a.text, a.tone])).toEqual([
+      ['Ended: FinishStep failed at line 9 and stalled the game', 'danger'],
+      ['FinishStep failed at line 9', 'danger'],
+      ['RoundStep failed at line 72; the game went on', 'warning'],
+      ['RoundStep failed at line 72; the game went on', 'warning'],
+      ['Game started with 2 people', 'success'],
+    ])
+    expect(autopilotActivity([{ name: 'sessionStopped', datetime: at(5), data: { by: 'b@lab.org' } }])[0]).toMatchObject({ text: 'Stopped by b@lab.org', tone: 'warning' })
+    expect(autopilotActivity([{ name: 'serverStopping', datetime: at(5), data: { reason: 'x' } }])[0]).toMatchObject({ text: 'Ended: the server was stopped' })
+    expect(autopilotActivity([{ name: 'stepsFailedToLoad', datetime: at(5), data: { error: 'InitStep: line 24: No such property: five' } }])[0])
+      .toMatchObject({ text: 'Stopped before anyone joined: InitStep failed at line 24 as the steps loaded', tone: 'danger' })
+    expect(autopilotActivity([{ name: 'engineReloaded', datetime: at(5), data: { restarted: 'true', by: 'a@lab.org' } }])[0])
+      .toMatchObject({ text: 'The engine was reloaded by a@lab.org; the game started again from the beginning', tone: 'info' })
   })
 })
 
@@ -478,6 +502,33 @@ describe('Autopilot page', () => {
     expect(link.text()).toBe('Open InitStep at line 24')
     expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24')
     w.unmount()
+  })
+
+  it('lists what its session recorded before the page opened, and what arrives live, in its recent activity', async () => {
+    const recorded = [
+      { id: 1, name: 'autopilotStart', datetime: '2026-10-30T10:01:00.000Z', eventData: [{ id: 1, name: 'players', value: '2' }] },
+      { id: 2, name: 'stepFailed', datetime: '2026-10-30T10:02:00.000Z', eventData: [{ id: 2, name: 'step', value: 'RoundStep' }, { id: 3, name: 'error', value: 'line 72: No such property: x' }] },
+    ]
+    mockedAdmin.instance = { id: 4, name: 'auto 1', status: 'RUNNING', events: recorded } as any
+    try {
+      http.get.mockResolvedValue(stateJson({
+        settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+        status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 4, name: 'auto 1', status: 'RUNNING' }, links: null },
+      }))
+      const w = await mountPage()
+      const lines = () => w.findAll('.apst__activity li').map(li => li.text())
+      expect(lines()).toHaveLength(2)
+      expect(lines()[0]).toContain('RoundStep failed at line 72; the game went on')
+      expect(lines()[1]).toContain('Game started with 2 people')
+      // a failure arriving live
+      mockedAdmin.events.push({ id: 3, experimentInstanceId: 4, name: 'stepFailed', datetime: '2026-10-30T10:03:00.000Z', data: { step: 'RoundStep', error: 'line 72: No such property: x' } } as any)
+      await flushPromises()
+      expect(lines()).toHaveLength(3)
+      w.unmount()
+    } finally {
+      mockedAdmin.instance = null
+      mockedAdmin.events.splice(0)
+    }
   })
 
   it('says under "paused" why, in a line that matches the reason, or a neutral one', async () => {

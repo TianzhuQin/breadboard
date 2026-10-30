@@ -290,6 +290,7 @@ const noticeTime = computed(() => {
 .apst__dot.is-success { background: var(--success); }
 .apst__dot.is-warning { background: var(--warning); }
 .apst__dot.is-info { background: var(--info); }
+.apst__dot.is-danger { background: var(--danger); }
 .apst__foot { display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 20px; border-top: 1px solid var(--border); background: var(--surface-sunken); }
 .apst__foot > :first-child { flex: 1; min-width: 0; }
 .apst__err { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--warning-soft-text); }

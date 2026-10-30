@@ -329,7 +329,9 @@ first (that pauses it) or open a session of the other experiment (which ends the
 after asking), then press **Resume** here when you are done.
 
 The top of the page shows the autopilot's state, its **Open session** (with **Watch it live**),
-recent activity, any problem that keeps it from opening sessions, and the **Participant links**:
+its recent activity (games started, seats the computer took over, step failures, including those the
+game went on after, and what ended or stopped it), any problem that keeps it from opening sessions,
+and the **Participant links**:
 the **Sign-in link** (`/play/<experiment id>/login`) and the **Prolific link**. They always lead to
 the session open at the moment, so the same links keep working from one session to the next.
 
