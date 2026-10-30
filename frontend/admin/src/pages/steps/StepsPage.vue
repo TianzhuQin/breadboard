@@ -950,6 +950,8 @@ function clock (t: number) {
   .steps__head { padding: 10px 12px; }
   .steps__title { max-width: 60vw; }
   .steps__banner { padding: 10px 12px; flex-wrap: wrap; }
+  /* the buttons go under the text when they don't fit beside it, instead of squeezing it into a narrow column */
+  .steps__banner-text { flex: 1 1 240px; }
   .steps__about, .steps__alert { margin: 10px 12px 0; }
   .steps__editor { padding: 10px 12px; }
   .steps__foot { padding: 0 12px 12px; }
