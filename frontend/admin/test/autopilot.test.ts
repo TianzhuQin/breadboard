@@ -309,6 +309,11 @@ describe('words and links', () => {
       ['RoundStep failed at line 72; the game went on', 'warning'],
       ['Game started with 2 people', 'success'],
     ])
+    // a failure the game went on after, until it had nothing left to do
+    expect(autopilotActivity([
+      { name: 'stepFailed', datetime: at(2), data: { step: 'RoundStep', error: 'line 77: boom' } },
+      { name: 'sessionStalled', datetime: at(4), data: { step: 'RoundStep', error: 'line 77: boom' } },
+    ]).map(a => a.text)).toEqual(['Stopped: nothing was left to do after the step RoundStep failed', 'RoundStep failed at line 77'])
     expect(autopilotActivity([{ name: 'sessionStopped', datetime: at(5), data: { by: 'b@lab.org' } }])[0]).toMatchObject({ text: 'Stopped by b@lab.org', tone: 'warning' })
     expect(autopilotActivity([{ name: 'serverStopping', datetime: at(5), data: { reason: 'x' } }])[0]).toMatchObject({ text: 'Ended: the server was stopped' })
     expect(autopilotActivity([{ name: 'stepsFailedToLoad', datetime: at(5), data: { error: 'InitStep: line 24: No such property: five' } }])[0])

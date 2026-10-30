@@ -562,7 +562,8 @@ function failedAt (step: unknown, line: number | null): string {
 /** The autopilot's recent events in words, newest first: its games, takeovers, failures and stops. */
 export function autopilotActivity (events: { name: string, datetime: string, data: Record<string, any> }[], limit = 6) {
   const out: { key: string, at: string, text: string, tone: ActivityTone }[] = []
-  // the step whose failure the session was then ended for (sessionFailed, newer): that failure didn't let the game go on
+  // the step whose failure the session was then ended for (sessionFailed, or sessionStalled, newer): that failure
+  // didn't let the game go on
   let endedFor: string | null = null
   for (let i = events.length - 1; i >= 0 && out.length < limit; i--) {
     const e = events[i]
@@ -575,7 +576,12 @@ export function autopilotActivity (events: { name: string, datetime: string, dat
     if (e.name === 'aiTakeover') { text = `The computer took over ${d.playerId ?? 'a player'}'s seat`; tone = 'info' }
     if (e.name === 'aiReturned') { text = `${d.playerId ?? 'A player'} came back and plays again`; tone = 'info' }
     if (e.name === 'sessionTooLong') { text = `Ended: the game ran out of time (longest session: ${d.limit ?? '?'} min)`; tone = 'warning' }
-    if (e.name === 'sessionStalled') { text = `Stopped: nothing was left to do after ${d.step ? `the step ${d.step}` : 'a step'} failed`; tone = 'danger' }
+    if (e.name === 'sessionStalled') {
+      // (the failure it names didn't let the game go on for good either)
+      endedFor = d.step ? String(d.step) : ''
+      text = `Stopped: nothing was left to do after ${d.step ? `the step ${d.step}` : 'a step'} failed`
+      tone = 'danger'
+    }
     if (e.name === 'sessionFailed') {
       endedFor = d.step ? String(d.step) : ''
       text = `Ended: ${failedAt(d.step, lineOf(d))} and stalled the game`
