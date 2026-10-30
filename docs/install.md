@@ -47,13 +47,14 @@ Then start it:
 The launcher says where Breadboard is reached: `On this computer: http://localhost:9000`, and
 `On this network: http://192.168.…:9000`, this computer's address on its network (a lab's), for the
 other computers there: a line for each network it is on (Wi-Fi and an Ethernet adapter, say), the
-one it reaches the internet through first. The console opens in your browser once the server is up. On a new install
-it asks you to create the first researcher account. Opened from another computer (a server you
-reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
-it in its window and in `logs/application.log`, so only whoever runs the server can create that
-first account. Stop the server with Ctrl+C, or by closing its window. Started again while it runs
-(a second double-click, say), the launcher opens its console again. If the port is taken, the
-launcher says so: often Breadboard is running already, and its address is the one to open.
+one it reaches the internet through first. The console opens in your browser once the server is
+up. On a new install it asks you to create the first researcher account. Opened from another
+computer (a server you reach over the network, or through a proxy), it also asks for a
+**setup code**: the server prints it in its window and in `logs/application.log`, so only whoever
+runs the server can create that first account. Stop the server with Ctrl+C, or by closing its
+window. Started again while it runs (a second double-click, say), the launcher opens its console
+again. If the port is taken, the launcher says so: often Breadboard is running already, and its
+address is the one to open.
 
 Anything after the launcher's name is passed to the server as a setting (on a Mac, in Terminal,
 `sh`, a space and the dragged `breadboard.sh` take the place of `./breadboard.sh`):
@@ -99,13 +100,13 @@ Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
-that file is gone). To give it more memory, set `breadboard.memory` in `conf/local.conf`. A server whose shutdown is stuck (an experiment's script that never ends) is
-stopped after 20 seconds. When it stops normally, a running session's game stops at once (no page
-joins it again, no computer player or timer plays it on), a `serverStopping` event is recorded in
-it, and its participants are told the session ended because the server was stopped or restarted,
-and that they can open the study's link again in a few minutes to join the session open then (those
-from Prolific: open the study again from Prolific, or return it). Someone given a completion code
-keeps it on screen.
+that file is gone). To give it more memory, set `breadboard.memory` in `conf/local.conf`. A server
+whose shutdown is stuck (an experiment's script that never ends) is stopped after 20 seconds. When
+it stops normally, a running session's game stops at once (no page joins it again, no computer
+player or timer plays it on), a `serverStopping` event is recorded in it, and its participants are
+told the session ended because the server was stopped or restarted, and that they can open the
+study's link again in a few minutes to join the session open then (those from Prolific: open the
+study again from Prolific, or return it). Someone given a completion code keeps it on screen.
 
 On first start the launcher creates:
 
