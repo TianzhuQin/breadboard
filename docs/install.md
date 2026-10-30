@@ -48,7 +48,8 @@ one it reaches the internet through first. The console opens in your browser onc
 it asks you to create the first researcher account. Opened from another computer (a server you
 reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
 it in its window and in `logs/application.log`, so only whoever runs the server can create that
-first account. Stop the server with Ctrl+C, or by closing its window. If the port is taken, the
+first account. Stop the server with Ctrl+C, or by closing its window. Started again while it runs
+(a second double-click, say), the launcher opens its console again. If the port is taken, the
 launcher says so: often Breadboard is running already, and its address is the one to open.
 
 Anything after the launcher's name is passed to the server as a setting (on a Mac, in Terminal,
@@ -498,9 +499,10 @@ Smart Quotes off (see [Settings](#settings)), and start it again.
 brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.
 
 **"Breadboard is already running from this folder"**: a server started from this folder still runs
-(the message gives its process number and address): open it, or stop it first. A `RUNNING_PID` left
-behind by a crash is removed by the launchers themselves; if you start the server another way,
-delete `RUNNING_PID` after checking that no server is running.
+(the message gives its process number and address). Started in a terminal or by a double-click, the
+launcher opens that server's console in the browser; otherwise open its address. To start it again,
+stop it first. A `RUNNING_PID` left behind by a crash is removed by the launchers themselves; if you
+start the server another way, delete `RUNNING_PID` after checking that no server is running.
 
 **"db/ can't be written by …"**: the folder belongs to another account (often after unzipping with
 `sudo`). Fix its owner as the message says, e.g. `sudo chown -R breadboard: /opt/breadboard`.

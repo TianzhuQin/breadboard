@@ -10,8 +10,9 @@
 # itself. The database lives in db/ (with copies in backups/), application.secret (which signs
 # sign-ins and invitation links) in conf/application.secret, and the settings you change in
 # conf/local.conf, where http.port=8080 sets the port, and breadboard.memory=2g how much memory the
-# server may use for its data (1g), for every start. Run in a terminal, it opens the console in the browser once it is up
-# (BREADBOARD_NO_BROWSER=1 stops that). On macOS it keeps the computer awake while the server runs.
+# server may use for its data (1g), for every start. Run in a terminal, it opens the console in the
+# browser once it is up, and again when started a second time while it runs (BREADBOARD_NO_BROWSER=1
+# stops that). On macOS it keeps the computer awake while the server runs.
 # On Linux, in a desktop session, it asks systemd (and on GNOME the desktop too) to keep the computer
 # awake; if the computer still suspends (some desktops do, such as Cinnamon), turn off automatic
 # suspend in the power settings.
@@ -206,6 +207,28 @@ if [ -n "$LOCAL_MEMORY" ]; then
 fi
 URL="http://localhost:$PORT"
 
+# In a terminal on a desktop (started there, or by a double-click), the console is opened in the
+# browser once the server answers: open_console PORT waits for it (for up to 3 minutes).
+OPENER=""
+if [ -t 1 ] && [ -z "${BREADBOARD_NO_BROWSER:-}" ] && command -v curl >/dev/null 2>&1; then
+  if [ "$(uname)" = Darwin ]; then
+    OPENER=open
+  elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    OPENER=xdg-open
+  fi
+fi
+open_console() {
+  i=0
+  while [ $i -lt 180 ]; do
+    if curl -s --noproxy '*' -o /dev/null --max-time 2 "http://127.0.0.1:$1/health"; then
+      "$OPENER" "http://localhost:$1" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+}
+
 # Whether a Breadboard runs from this folder now: the pid file names it (its process id, written by
 # Play), and a crash or power cut leaves the file behind, naming a process that is gone or another
 # program. Sets RUNNING to the process id.
@@ -221,10 +244,19 @@ running_here() {
 }
 
 # One already running from this folder, on whatever port, has the database open: say so, instead
-# of the database's stack trace.
+# of the database's stack trace. In a terminal on a desktop (often a second double-click), its
+# console is opened, as the first start did.
 if running_here; then
   RUNNING_PORT="$(ps -ww -p "$RUNNING" -o args= 2>/dev/null | sed -n 's/.*-Dhttp\.port=\([0-9][0-9]*\).*/\1/p')"
-  echo "Breadboard is already running from this folder (process $RUNNING): open http://localhost:${RUNNING_PORT:-9000}, or stop it first." >&2
+  RUNNING_PORT="${RUNNING_PORT:-9000}"
+  if [ -n "$OPENER" ]; then
+    echo "Breadboard is already running from this folder (process $RUNNING): its console, http://localhost:$RUNNING_PORT, opens in the browser. To start it again, stop it first." >&2
+    # (not as a child of this process, which ends now; nor ended by the hangup that ending it may
+    # send, as the window is closed or its shell ends)
+    (trap '' HUP; open_console "$RUNNING_PORT" &)
+  else
+    echo "Breadboard is already running from this folder (process $RUNNING): open http://localhost:$RUNNING_PORT, or stop it first." >&2
+  fi
   exit 1
 fi
 
@@ -405,35 +437,16 @@ else
   echo "Ctrl+C stops it."
 fi
 
-# In a terminal on a desktop, open the console once the server answers (for up to 3 minutes).
-OPENER=""
+# In a terminal on a desktop, open the console once the server answers (see OPENER, above).
 OPENER_PID=""
-if [ -t 1 ] && [ -z "${BREADBOARD_NO_BROWSER:-}" ] && command -v curl >/dev/null 2>&1; then
-  if [ "$(uname)" = Darwin ]; then
-    OPENER=open
-  elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    OPENER=xdg-open
-  fi
-fi
 if [ -n "$OPENER" ]; then
-  open_console() {
-    i=0
-    while [ $i -lt 180 ]; do
-      if curl -s --noproxy '*' -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/health"; then
-        "$OPENER" "$URL" >/dev/null 2>&1 || true
-        return 0
-      fi
-      sleep 1
-      i=$((i + 1))
-    done
-  }
   if [ -n "$KEEP_RUNNING" ]; then
     # (this script stops it when it ends)
-    open_console &
+    open_console "$PORT" &
     OPENER_PID=$!
   else
     # (not as a child of this process, which Java takes over below: see the next part)
-    (open_console &)
+    (open_console "$PORT" &)
   fi
 fi
 

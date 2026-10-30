@@ -299,6 +299,24 @@ fi
 grep -q "already running from this folder" "$WORK/second.log" && grep -qF "http://localhost:$PORT," "$WORK/second.log" \
   || fail "a second copy from the same folder didn't say where the first one is: $(cat "$WORK/second.log")"
 pass "a second copy from the same folder says where the first one is"
+# Started again in a terminal (here a pseudo-terminal) while it runs, as by a second double-click, it
+# opens the running one's console instead: stand-ins for the browser's openers (open, xdg-open) say
+# what they were asked to open.
+mkdir -p "$WORK/openers"
+for opener in open xdg-open; do
+  printf '#!/bin/sh\necho "$*" >> "%s/opened"\n' "$WORK" > "$WORK/openers/$opener"
+  chmod +x "$WORK/openers/$opener"
+done
+(cd "$APP" && PATH="$WORK/openers:$PATH" DISPLAY="${DISPLAY:-:0}" \
+  python3 -c 'import pty, sys; pty.spawn(sys.argv[1:])' sh ./breadboard.sh -Dhttp.port="$((PORT + 1))") \
+  > "$WORK/second-terminal.log" 2>&1 < /dev/null || true
+for _ in $(seq 1 20); do
+  [ -s "$WORK/opened" ] && break
+  sleep 0.5
+done
+grep -qx "http://localhost:$PORT" "$WORK/opened" 2>/dev/null && grep -q "already running from this folder" "$WORK/second-terminal.log" \
+  || fail "started again in a terminal while it runs, it didn't open the running one's console: $(cat "$WORK/second-terminal.log")"
+pass "started again in a terminal while it runs, it opens the running one's console"
 stop
 
 # Again, with a conf/local.conf, whose settings win over conf/application-prod.conf's, and with a

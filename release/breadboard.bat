@@ -1,9 +1,9 @@
 @ECHO OFF
 REM (Without delayed expansion, a "!" in the folder's path is just a character.)
 SETLOCAL EnableExtensions DisableDelayedExpansion
-REM Start Breadboard: double-click it. The console opens in the browser once the server is up
-REM (SET BREADBOARD_NO_BROWSER=1 stops that); close the window or press Ctrl+C to stop it. While it
-REM runs, the computer doesn't go to sleep by itself.
+REM Start Breadboard: double-click it. The console opens in the browser once the server is up, and
+REM again at a second double-click while it runs (SET BREADBOARD_NO_BROWSER=1 stops that); close the
+REM window or press Ctrl+C to stop it. While it runs, the computer doesn't go to sleep by itself.
 REM Other settings go to the server as -D options, e.g.  breadboard.bat -Dhttp.port=8080; the settings
 REM you change go in conf\local.conf, where http.port=8080 sets the port, and breadboard.memory=2g how
 REM much memory the server may use for its data (1g), for every start.
@@ -124,9 +124,11 @@ IF NOT DEFINED PORT SET "PORT=9000"
 IF DEFINED LOCAL_MEMORY SET "MEMORY=%LOCAL_MEMORY%"
 
 REM One already running from this folder, on whatever port, has the database open: say so, instead
-REM of the database's stack trace.
+REM of the database's stack trace. Started by someone (often a second double-click), its console is
+REM opened, as the first start did (:openrunning).
 CALL :runninghere
 IF DEFINED RUNNING (
+  CALL :openrunning
   CALL :refuse say_running
   EXIT /B 1
 )
@@ -365,7 +367,11 @@ ECHO in -windows-x64^), or install a Java 8 JDK ^(for example Azul Zulu 8^) and 
 GOTO :EOF
 
 :say_running
+IF DEFINED OPENING GOTO say_running_opening
 ECHO Breadboard is already running from this folder ^(process %RUNNING%^): open http://localhost:%RUNNING_PORT%, or stop it first.
+GOTO :EOF
+:say_running_opening
+ECHO Breadboard is already running from this folder ^(process %RUNNING%^): its console, http://localhost:%RUNNING_PORT%, opens in the browser. To start it again, stop it first.
 GOTO :EOF
 
 :say_port
@@ -416,6 +422,17 @@ GOTO :EOF
 ECHO conf\local.conf can't be read by the account "%USERNAME%", so Breadboard can't start: it would
 ECHO run without your settings. Give that account read access to "%CD%\conf\local.conf" (right-click
 ECHO it, Properties, Security).
+GOTO :EOF
+
+:openrunning
+REM The console of the Breadboard already running from this folder (RUNNING_PORT) opens in the
+REM browser once it answers, from a helper in the background, as at a start (not as a service, nor
+REM with BREADBOARD_NO_BROWSER). OPENING says it does.
+SET "OPENING="
+IF DEFINED SERVICE GOTO :EOF
+IF DEFINED BREADBOARD_NO_BROWSER GOTO :EOF
+SET "OPENING=1"
+START "" /B powershell -NoProfile -Command "for ($i = 0; $i -lt 180; $i++) { try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %RUNNING_PORT%); $c.Close(); Start-Process 'http://localhost:%RUNNING_PORT%'; break } catch { Start-Sleep -Seconds 1 } }"
 GOTO :EOF
 
 :pause

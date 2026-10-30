@@ -33,7 +33,8 @@ Chinese.
 - **Linux**: unzip it (if `unzip` is missing: `sudo apt install unzip`) and run `./breadboard.sh`
   in this folder.
 
-The console opens in your browser once the server is up. Its window also says where Breadboard is:
+The console opens in your browser once the server is up (and again if you start Breadboard a second
+time while it runs). Its window also says where Breadboard is:
 `On this computer: http://localhost:9000`, and for the other computers on your network (a lab's)
 `On this network: http://192.168.…:9000`. The first time, the console asks you to create your
 researcher account; add your colleagues' accounts in Settings → Researchers. Stop the server with
