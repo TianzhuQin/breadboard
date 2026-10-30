@@ -90,12 +90,18 @@ export function seatWord (p: PlayerLike): string {
 
 /**
  * What the tile of someone away says ('away' above): the preview stands in for them, answering for
- * them, but they count as away, and what that means now. How long the computer waits before it takes
- * their seat is said when the console knows it (`takeoverSeconds`: the autopilot's own session, with
- * its takeover switched on); otherwise the steps decide, if they let the computer play at all.
+ * them, but they count as away, and what that means now. What the computer does with their seat is
+ * said when the console knows it, in the autopilot's own session with its takeover switched on: how
+ * long it waits before it takes the seat (`takeoverSeconds`), and whether it gives the seat back when
+ * their own page is back (`returnToHuman`, the Autopilot page's "Give the seat back when they
+ * return"). Otherwise the steps decide, if they let the computer play at all.
  */
-export function awayText (p: PlayerLike, opts: { gameStarted: boolean, takeoverSeconds?: number | null }): string {
-  if (truthyFlag(p.data?.ai)) return 'Away: you are standing in, and the computer plays their seat until their own page is back.'
+export function awayText (p: PlayerLike, opts: { gameStarted: boolean, takeoverSeconds?: number | null, returnToHuman?: boolean | null }): string {
+  if (truthyFlag(p.data?.ai)) {
+    if (opts.returnToHuman === true) return 'Away: you are standing in, and the computer plays their seat until their own page is back.'
+    if (opts.returnToHuman === false) return 'Away: you are standing in, and the computer plays their seat; it doesn’t give it back when they return.'
+    return 'Away: you are standing in, and the computer plays their seat; it gives it back when they return if the steps say so.'
+  }
   if (!opts.gameStarted) return 'Away: you are standing in, but they count as away, so a waiting room doesn’t count them.'
   const s = opts.takeoverSeconds
   if (s != null && s >= 0) return `Away: you are standing in; the computer takes over their seat ${s > 0 ? `after ${s} s away` : 'at once'}.`

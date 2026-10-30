@@ -117,8 +117,18 @@ describe('who a player is', () => {
     // (the steps decide, if they let the computer play at all)
     expect(awayText(away, { gameStarted: true, takeoverSeconds: null }))
       .toBe('Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.')
-    expect(awayText(P('p3', { ai: 1, _system: { connected: false, preview: true } }), { gameStarted: true, takeoverSeconds: 30 }))
+    // Someone whose seat the computer took: that they get it back when they return is said only when
+    // the console knows it (the autopilot's own session, with its takeover on: its "Give the seat back
+    // when they return"). With that off, the note promised a return that never came.
+    const taken = P('p3', { ai: 1, _system: { connected: false, preview: true } })
+    expect(awayText(taken, { gameStarted: true, takeoverSeconds: 30, returnToHuman: true }))
       .toBe('Away: you are standing in, and the computer plays their seat until their own page is back.')
+    expect(awayText(taken, { gameStarted: true, takeoverSeconds: 45, returnToHuman: false }))
+      .toBe('Away: you are standing in, and the computer plays their seat; it doesn’t give it back when they return.')
+    for (const opts of [{ gameStarted: true, takeoverSeconds: null, returnToHuman: null }, { gameStarted: true, takeoverSeconds: 30 }, { gameStarted: true }]) {
+      expect(awayText(taken, opts))
+        .toBe('Away: you are standing in, and the computer plays their seat; it gives it back when they return if the steps say so.')
+    }
   })
 
   it('searches by id, or by "test" and "ai"', () => {
@@ -647,6 +657,71 @@ describe('PreviewPage', () => {
       w.unmount()
       http.get.mockReset()
     }
+  })
+
+  // The autopilot's own session, with "Give the seat back when they return" off: the note said the
+  // computer played the seat "until their own page is back", and it kept it when they came back.
+  const autopilotTakingOver = (returnToHuman: boolean) => async (url: string) => url === '/autopilot'
+    ? { settings: { enabled: true, experimentId: 7, replaceDisconnected: { enabled: true, afterSeconds: 45, returnToHuman } }, source: 'admin', status: { on: true, experimentId: 7, instance: { id: 44, name: 'pilot', status: 'RUNNING' } } }
+    : undefined
+
+  it('says the computer keeps the seat of someone who returns when the autopilot doesn\'t give it back', async () => {
+    addPlayer('p3', { ai: 1, _system: { connected: false, preview: true } })
+    await settle()
+    store.admin.instance = { ...store.admin.instance, hasStarted: true }
+    http.get.mockImplementation(autopilotTakingOver(false))
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p3']
+    const w = await mountPage()
+    try {
+      await settle()
+      expect(http.get).toHaveBeenCalledWith('/autopilot')
+      expect(w.find('.pt__tag.is-away').text()).toBe('Away')
+      expect(w.find('.pt__note').text()).toBe('Away: you are standing in, and the computer plays their seat; it doesn’t give it back when they return.')
+      await w.find('button.pt__cover').trigger('click')
+      await settle()
+      expect(document.body.querySelector('.b-dialog__subtitle')!.textContent).toBe('Away: you are standing in, and the computer plays their seat; it doesn’t give it back when they return. Clicks here are real choices for this player, and are recorded.')
+    } finally {
+      w.unmount()
+      http.get.mockReset()
+    }
+  })
+
+  it('says the computer gives the seat back only when the autopilot says so, and otherwise that the steps decide', async () => {
+    addPlayer('p3', { ai: 1, _system: { connected: false, preview: true } })
+    await settle()
+    store.admin.instance = { ...store.admin.instance, hasStarted: true }
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p3']
+    const noteWith = async (get: (url: string) => Promise<any>) => {
+      http.get.mockImplementation(get)
+      const w = await mountPage()
+      try {
+        await settle()
+        return w.find('.pt__note').text()
+      } finally {
+        w.unmount()
+        http.get.mockReset()
+      }
+    }
+    expect(await noteWith(autopilotTakingOver(true)))
+      .toBe('Away: you are standing in, and the computer plays their seat until their own page is back.')
+    // a session that isn't the autopilot's, or one where the steps' own takeover is used
+    const steps = 'Away: you are standing in, and the computer plays their seat; it gives it back when they return if the steps say so.'
+    expect(await noteWith(async () => ({ settings: { enabled: false }, source: 'off', status: { on: false } }))).toBe(steps)
+    expect(await noteWith(async () => ({
+      settings: { enabled: true, experimentId: 7, replaceDisconnected: { enabled: false, afterSeconds: 45, returnToHuman: true } },
+      source: 'admin',
+      status: { on: true, experimentId: 7, instance: { id: 44, name: 'pilot', status: 'RUNNING' } },
+    }))).toBe(steps)
+    // the autopilot's own session is another one
+    expect(await noteWith(async () => ({
+      settings: { enabled: true, experimentId: 7, replaceDisconnected: { enabled: true, afterSeconds: 45, returnToHuman: true } },
+      source: 'admin',
+      status: { on: true, experimentId: 7, instance: { id: 45, name: 'next', status: 'RUNNING' } },
+    }))).toBe(steps)
+    // no answer from the server
+    expect(await noteWith(async () => { throw new Error('offline') })).toBe(steps)
   })
 
   it('says full size, too, that the preview stands in for someone away', async () => {

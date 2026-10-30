@@ -200,9 +200,11 @@ game: the tile of a player who isn't in the network (someone who left before a *
 hasn't joined again) says they aren't in the game, and shows their page once they are back. When a player's own page comes back, it takes over, and the preview goes on
 read-only. The tile of a player whose preview only watches (their own page is connected, or the
 computer plays the seat) is tagged **Watching**. The tile of someone away is tagged **Away**, and
-says what standing in for them means now: a waiting room doesn't count them, or the computer takes
-their seat after the usual wait (in the autopilot's own session, its **Take over after**), or plays
-it until they are back. In the list, a green dot means the seat is connected, and **Watching** or
+says what standing in for them means now: a waiting room doesn't count them, the computer takes
+their seat after the usual wait, or the computer plays it, and gives it back when they return if the
+steps say so. In the autopilot's own session, with its takeover on, the tile says when the computer
+takes over (its **Take over after**) and whether it gives the seat back (**Give the seat back when
+they return**). In the list, a green dot means the seat is connected, and **Watching** or
 **Away** says when a preview of that player only watches, or stands in for someone away; the
 tooltip says why: their own page, a preview (maybe another console's), or the computer.
 The first look at a session shows the test players whose seat is neither connected nor held by a

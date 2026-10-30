@@ -222,13 +222,15 @@ const tiles = computed(() => {
 function noteOf (t: { id: string, data: Record<string, any>, missing: boolean }): string {
   if (t.missing) return admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''
   if (previewRole(t) !== 'away') return ''
-  return awayText(t, { gameStarted: inst.value?.hasStarted === true, takeoverSeconds: takeover.value?.instanceId === inst.value?.id ? takeover.value?.seconds : null })
+  const known = takeover.value?.instanceId === inst.value?.id ? takeover.value : null
+  return awayText(t, { gameStarted: inst.value?.hasStarted === true, takeoverSeconds: known?.seconds ?? null, returnToHuman: known?.returnToHuman ?? null })
 }
 
-// How long the computer waits before it takes the seat of someone away, said on their tile, when the
-// console knows it: in the autopilot's own session, with its takeover switched on (otherwise the
-// steps decide). Asked once per session, when the first such tile shows.
-const takeover = ref<{ instanceId: number, seconds: number | null } | null>(null)
+// What the computer does with the seat of someone away, said on their tile, when the console knows
+// it: in the autopilot's own session, with its takeover switched on, how long it waits before it
+// takes the seat and whether it gives the seat back when they return (otherwise the steps decide).
+// Asked once per session, when the first such tile shows.
+const takeover = ref<{ instanceId: number, seconds: number | null, returnToHuman: boolean | null } | null>(null)
 let takeoverAsked: number | null = null
 watch(() => [inst.value?.id, tiles.value.some(t => !t.missing && previewRole(t) === 'away')] as const, async ([id, away]) => {
   if (id == null || !away || takeoverAsked === id) return
@@ -236,7 +238,8 @@ watch(() => [inst.value?.id, tiles.value.some(t => !t.missing && previewRole(t) 
   const state = await autopilotNow()
   const s = state?.status
   const own = !!state && !!s && s.on && s.instance?.id === id && state.settings.replaceDisconnected.enabled
-  takeover.value = { instanceId: id, seconds: own ? state!.settings.replaceDisconnected.afterSeconds : null }
+  const replace = own ? state!.settings.replaceDisconnected : null
+  takeover.value = { instanceId: id, seconds: replace ? replace.afterSeconds : null, returnToHuman: replace ? replace.returnToHuman : null }
 }, { immediate: true })
 
 // ---- choosing ---------------------------------------------------------------------------------
