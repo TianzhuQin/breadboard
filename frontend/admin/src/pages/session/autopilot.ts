@@ -1,6 +1,7 @@
 import { onMounted, ref, watch, type Ref } from 'vue'
 import { http } from '@/lib/http'
 import { admin } from '@/store/admin'
+import { normalizeState, problemKind, type EngineSession } from '../autopilot/autopilot'
 
 /** What this page needs from GET /autopilot (see the Autopilot page for the full settings). */
 export interface AutopilotStatus {
@@ -16,6 +17,13 @@ export interface AutopilotStatus {
    * "continuous" off); null when it carries on.
    */
   halted: 'paused' | 'done' | null
+  /**
+   * What the autopilot waits for before it can open its next session, by design (the server's
+   * problemKind "waiting"): another experiment's session that runs on the shared engine to end
+   * (`session`), or the engine itself, which another researcher has loaded with another experiment
+   * (`session` null). Null when it waits for neither.
+   */
+  waiting: { session: EngineSession | null } | null
 }
 
 /** The status's reason to open no new session until Resume (newer servers say problemKind too). */
@@ -53,6 +61,8 @@ export function useAutopilotStatus (): Ref<AutopilotStatus | null> {
 /** What GET /autopilot answered, as this page needs it; null when it isn't the autopilot's state. */
 export function autopilotStatusOf (s: any): AutopilotStatus | null {
   if (!s || typeof s !== 'object' || !s.status || typeof s.status !== 'object') return null
+  // (read as the Autopilot page reads it)
+  const state = normalizeState(s)
   return {
     on: !!s.status.on,
     experimentId: s.status.experimentId ?? null,
@@ -61,6 +71,7 @@ export function autopilotStatusOf (s: any): AutopilotStatus | null {
     continuous: !!(s.settings && s.settings.continuous),
     nextSessionDelaySeconds: Number(s.settings?.nextSessionDelaySeconds) || 0,
     halted: haltedOf(s.status),
+    waiting: problemKind(state) === 'waiting' ? { session: state.status.engineSession } : null,
   }
 }
 

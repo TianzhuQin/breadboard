@@ -950,6 +950,14 @@ describe('SessionPage', () => {
     expect(autopilotStatusOf(raw({ problemKind: 'done' }))!.halted).toBe('done')
     expect(autopilotStatusOf(raw({ done: true }))!.halted).toBe('done')
     expect(autopilotStatusOf(raw({ problemKind: 'waiting' }))!.halted).toBe(null)
+    // what it waits for, as the Autopilot page reads it: another experiment's session, or the engine
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' }))!.waiting).toEqual({ session: null })
+    expect(autopilotStatusOf(raw({}))!.waiting).toBe(null)
+    expect(autopilotStatusOf(raw({ paused: true, problemKind: 'paused', problem: 'It is paused: …', engineSession: other }))!.waiting).toBe(null)
+    expect(autopilotStatusOf(raw({ problemKind: 'error', problem: 'There is no admin account to open sessions as.', engineSession: other }))!.waiting).toBe(null)
     expect(autopilotStatusOf({ error: 'x' })).toBe(null)
 
     // with no session open, the empty page says so too

@@ -16,7 +16,13 @@
         </div>
       </div>
 
-      <StudyLinkCard :experiment="admin.experiment" :target="target.open" :started="target.started" :autopilot="autopilotOpensNext" />
+      <StudyLinkCard
+        :experiment="admin.experiment"
+        :target="target.open"
+        :started="target.started"
+        :autopilot="autopilotOpensNext"
+        :waiting="autopilotOpensNext ? autopilot?.waiting : null"
+      />
 
       <BPanel title="When a participant arrives" subtitle="What Breadboard does with each person Prolific sends.">
         <ol class="pl-steps">

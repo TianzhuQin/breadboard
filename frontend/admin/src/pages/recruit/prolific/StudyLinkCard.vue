@@ -31,6 +31,19 @@
           The game in <strong>{{ started.name }}</strong> has started. The autopilot opens the next session when it ends;
           until then, the link shows a page that waits for that session and takes newcomers in as soon as it opens.
         </span>
+        <!-- it waits for the shared engine, which can take as long as another experiment's session runs -->
+        <span v-else-if="otherSession">
+          Another experiment’s session, <strong>{{ otherSession.name }}</strong>{{ otherSession.more }}, is running on the
+          script engine, which every researcher on this server shares. The autopilot opens its next session once that one
+          has ended. Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as
+          soon as it opens.
+        </span>
+        <span v-else-if="waiting">
+          Another researcher has the script engine, which every researcher on this server shares, loaded with another
+          experiment, so the autopilot opens its next session once they have closed their console (the
+          <RouterLink to="/autopilot">Autopilot</RouterLink> page says who). Until then, the link shows a page that waits
+          for the autopilot’s session and takes newcomers in as soon as it opens.
+        </span>
         <span v-else>
           The autopilot opens the next session in a moment; until then, the link shows a page that waits for it and
           takes newcomers in as soon as it opens.
@@ -66,6 +79,7 @@ import { computed } from 'vue'
 import { CircleCheck, ExternalLink, Hourglass, TriangleAlert } from 'lucide-vue-next'
 import { BButton, BPanel } from '@/ui'
 import type { Experiment, Instance } from '@/store/types'
+import type { AutopilotStatus } from '../../session/autopilot'
 import CopyButton from '../CopyButton.vue'
 import LocalOnlyNote from '../../session/LocalOnlyNote.vue'
 import { prolificStudyUrl, prolificTestUrl, randomToken } from './prolific'
@@ -81,10 +95,22 @@ const props = defineProps<{
    * paused nor done): until then, the link holds newcomers on a page that waits for that session.
    */
   autopilot?: boolean
+  /** what the autopilot waits for before it can open its next session (another experiment's session, or the engine) */
+  waiting?: AutopilotStatus['waiting']
 }>()
 
 // written as data so the template doesn't read the braces as its own syntax
 const PID_PLACEHOLDER = '{{%PROLIFIC_PID%}}'
+
+/** The other experiment's session the autopilot waits for: “pilot 3”, then “ of “Trust game” (run by a@lab.org)”. */
+const otherSession = computed(() => {
+  const s = props.waiting?.session
+  if (!s) return null
+  return {
+    name: `“${s.name || `Session #${s.id}`}”`,
+    more: `${s.experimentName ? ` of “${s.experimentName}”` : ''}${s.owner ? ` (run by ${s.owner})` : ''}`,
+  }
+})
 
 const url = computed(() => prolificStudyUrl(window.location.origin, props.experiment.id))
 const parts = computed(() => url.value.split(/(\{\{%[A-Z_]+%\}\})/).filter(Boolean).map(text => ({ text, ph: /^\{\{%/.test(text) })))

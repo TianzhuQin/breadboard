@@ -377,6 +377,16 @@ describe('Prolific helpers', () => {
     // between two of its sessions
     await w.setProps({ started: null })
     expect(note()).toMatch(/^The autopilot opens the next session in a moment; until then, the link shows a page that waits for it/)
+    // waiting for another experiment's session on the shared engine to end: no "in a moment"
+    await w.setProps({ waiting: { session: { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' } } })
+    expect(note()).toBe('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine, which every researcher on this server shares. The autopilot opens its next session once that one has ended. Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as soon as it opens.')
+    await w.setProps({ waiting: { session: { id: 4, name: '', experimentId: null, experimentName: null, owner: null } } })
+    expect(note()).toMatch(/^Another experiment’s session, “Session #4”, is running on the script engine/)
+    // for a researcher who has the engine loaded with another experiment
+    await w.setProps({ waiting: { session: null } })
+    expect(note()).toBe('Another researcher has the script engine, which every researcher on this server shares, loaded with another experiment, so the autopilot opens its next session once they have closed their console (the Autopilot page says who). Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as soon as it opens.')
+    expect(note()).not.toContain('in a moment')
+    await w.setProps({ waiting: null })
     // a session open to newcomers
     await w.setProps({ target: { id: 10, name: 'Autopilot 4', status: 'RUNNING', hasStarted: false } as any })
     expect(w.find('.rc-note--success').text().replace(/\s+/g, ' ')).toContain('Once its game has started, newcomers wait on a page that takes them into the autopilot’s next session as soon as it opens.')
@@ -521,6 +531,26 @@ describe('Recruitment page with the autopilot', () => {
     expect(text()).toContain('The game in Autopilot 7 has started. The autopilot opens the next session when it ends')
     expect(text()).toContain('Late arrivals wait for the next session.')
     expect(text()).not.toContain('let Autopilot keep one open')
+    w.unmount()
+  })
+
+  it('says, while the autopilot waits for another experiment’s session to end, that it opens the next one then, not in a moment', async () => {
+    admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [{ id: 6, name: 'Autopilot 6', status: 'FINISHED', hasStarted: true, hits: [] }] }
+    admin.instance = { id: 6, name: 'Autopilot 6', status: 'FINISHED', hasStarted: true, hits: [] }
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const w = await page({
+      settings: { continuous: true, nextSessionDelaySeconds: 10 },
+      status: {
+        on: true, experimentId: 3, experimentName: 'Trust game', instance: null, engineSession: other, problemKind: 'waiting',
+        problem: 'Another session is running: "pilot 3" (a@lab.org). The autopilot opens its own session once that one has ended and the engine is free.',
+      },
+    })
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine')
+    expect(text()).toContain('The autopilot opens its next session once that one has ended.')
+    expect(text()).not.toContain('in a moment')
+    // (late arrivals still wait on the page that takes them into it)
+    expect(text()).toContain('Late arrivals wait for the next session.')
     w.unmount()
   })
 
