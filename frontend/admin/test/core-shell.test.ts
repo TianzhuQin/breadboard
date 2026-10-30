@@ -100,6 +100,41 @@ describe('the shell', () => {
     w.unmount()
   })
 
+  // The drawer stayed open after a switch, and the "Switched to …" toast covered the switcher.
+  it('closes the phone navigation once an experiment is picked', async () => {
+    const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
+    narrowWindow()
+    __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(1, 'A'), experimentInstance: '' })
+    graph.clear()
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const { w } = await mountShell()
+    const nav = () => w.find('#shell-nav')
+    const pick = async (name: string) => {
+      await w.find('.topbar__menu').trigger('click')
+      await tick()
+      expect(nav().attributes('inert')).toBeUndefined()
+      await w.find('.xsw__btn').trigger('click')
+      await nextTick()
+      await w.findAll('.xsw__opt').find(o => o.find('.xsw__opt-name').text() === name)!.trigger('click')
+    }
+    try {
+      await pick('B')
+      await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
+      // open until the server has switched
+      expect(nav().attributes('inert')).toBeUndefined()
+      __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '' })
+      await vi.waitFor(() => expect(nav().attributes('inert')).toBeDefined())
+      // picking the one already chosen closes it too
+      await pick('B')
+      await vi.waitFor(() => expect(nav().attributes('inert')).toBeDefined())
+    } finally {
+      connection.state.value = 'idle'
+      w.unmount()
+    }
+  })
+
   // Only Live session used to say so; elsewhere, and on a phone, there was an icon in the top bar.
   it('says on every page when the console isn\'t connected, and that a stopped server needs starting', async () => {
     connection.state.value = 'open'

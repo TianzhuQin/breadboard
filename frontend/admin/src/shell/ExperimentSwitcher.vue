@@ -72,6 +72,8 @@ import type { Experiment } from '@/store/types'
 import { notify } from '@/ui'
 import { uid } from '@/ui/uid'
 
+// (on a phone the sidebar is a drawer, which closes once an experiment is picked)
+const emit = defineEmits<{ picked: [] }>()
 const router = useRouter()
 const open = ref(false)
 const query = ref('')
@@ -110,14 +112,21 @@ function pickActive () {
 }
 async function pick (e: Experiment) {
   close(true)
-  if (admin.experiment && e.id === admin.experiment.id) return
+  if (admin.experiment && e.id === admin.experiment.id) {
+    emit('picked')
+    return
+  }
   if (!ensureConnected()) return
   // The engine is shared. While a session is live there, switching only changes what you work on and
   // leaves it running; otherwise the engine loads this experiment (asked about while anyone uses it).
   if (!await confirmSwitch({ title: `Switch to “${e.name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
   await actions.selectExperiment(e.id)
-  if (admin.experiment?.id === e.id) notify.success(`Switched to ${e.name}`, switchedNote() || undefined)
-  else notify.error(`Could not switch to ${e.name}`, admin.requestError?.request === 'SelectExperiment' ? admin.requestError.text : 'The server did not confirm the switch. The output panel may say why.')
+  if (admin.experiment?.id === e.id) {
+    notify.success(`Switched to ${e.name}`, switchedNote() || undefined)
+    emit('picked')
+  } else {
+    notify.error(`Could not switch to ${e.name}`, admin.requestError?.request === 'SelectExperiment' ? admin.requestError.text : 'The server did not confirm the switch. The output panel may say why.')
+  }
 }
 function go (to: string) {
   close()
