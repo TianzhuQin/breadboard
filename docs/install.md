@@ -89,9 +89,12 @@ Settings → Energy).
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
 that file is gone). A server whose shutdown is stuck (an experiment's script that never ends) is
-stopped after 20 seconds. When it stops normally, the participants of a running session are told
-the session ended because the server was stopped or restarted (someone given a completion code
-keeps it on screen), and a `serverStopping` event is recorded in it.
+stopped after 20 seconds. When it stops normally, a running session's game stops at once (no page
+joins it again, no computer player or timer plays it on), a `serverStopping` event is recorded in
+it, and its participants are told the session ended because the server was stopped or restarted,
+and that they can open the study's link again in a few minutes to join the session open then (those
+from Prolific: open the study again from Prolific, or return it). Someone given a completion code
+keeps it on screen.
 
 On first start the launcher creates:
 

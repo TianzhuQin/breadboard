@@ -223,8 +223,14 @@ public class AutopilotGuardTest extends BaseTest {
         final WebSocket.In<JsonNode> in = new WebSocket.In<JsonNode>();
         final List<JsonNode> frames = new CopyOnWriteArrayList<>();
         volatile boolean closed;
+        // Run as each frame arrives (on the thread that writes it), when set.
+        volatile java.util.function.Consumer<JsonNode> onFrame;
         final ThrottledWebSocketOut out = new ThrottledWebSocketOut(new WebSocket.Out<JsonNode>() {
-            public void write(JsonNode frame) { frames.add(frame); }
+            public void write(JsonNode frame) {
+                frames.add(frame);
+                java.util.function.Consumer<JsonNode> hook = onFrame;
+                if (hook != null) hook.accept(frame);
+            }
             public void close() { closed = true; }
         }, 0L);
 
@@ -446,6 +452,58 @@ public class AutopilotGuardTest extends BaseTest {
             assertEquals("C0DE42", page.lastPlayer().get("player").get("_system").get("recruitment").get("completionCode").asText());
             assertEquals("outOfTime", page.last().get("sessionOver").get("player").get("ended").asText());
             assertTrue(page.closed);
+        }
+    }
+
+    /**
+     * A page of someone already told, coming back while the others are still being told (its
+     * connection had dropped a moment before): the session counts as over by then. It used to count
+     * as running until everyone had been told, so the page was taken into the game again (a seat, a
+     * connection recorded after the end) and kept a frozen round.
+     */
+    @Test
+    public void aPageThatComesBackAsTheGuardEndsTheSessionGetsItsEndNotTheGame() throws Throwable {
+        final User researcher = user("comesback");
+        final Experiment experiment = createExperiment("Comes back as it ends");
+        createStep(experiment, "InitStep", WAITS_FOR_A_CHOICE);
+        own(researcher, experiment);
+        ObjectNode s = settings(experiment, 2, 2, 1);
+        s.put("continuous", false);   // (no next session as the test ends)
+        assertEquals(OK, status(post(researcher, s)));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        Page first = joins(experiment, session, "cb-1");
+        Page second = joins(experiment, session, "cb-2");
+        await("the start", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted)
+            && ((Number) engineValue("a.actions.size()")).intValue() == 2);
+        final Page[] back = new Page[2];
+        first.onFrame = f -> { if (f.path("player").has("ended") && back[0] == null) back[0] = rejoins(experiment, session, "cb-1"); };
+        second.onFrame = f -> { if (f.path("player").has("ended") && back[1] == null) back[1] = rejoins(experiment, session, "cb-2"); };
+
+        ahead = 61000L;
+        watchdog();
+        await("the session to be finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED
+            && first.closed && second.closed);
+        for (Page page : back) {
+            assertNotNull(page);
+            assertEquals(page.frames.toString(), "outOfTime", page.frames.get(0).path("player").path("ended").asText());
+        }
+        Field clients = ScriptBoard.class.getDeclaredField("clients");
+        clients.setAccessible(true);
+        java.util.Map<?, ?> seated = (java.util.Map<?, ?>) clients.get(null);
+        assertNull("not in the game again", seated.get("cb-1"));
+        assertNull(seated.get("cb-2"));
+        for (String id : new String[]{"cb-1", "cb-2"}) {
+            int connected = 0;
+            for (Event e : events(session, "clientConnected")) if (id.equals(value(e, "clientId"))) connected++;
+            assertEquals(id, 1, connected);
+        }
+    }
+
+    private static Page rejoins(Experiment experiment, ExperimentInstance session, String id) {
+        try {
+            return joins(experiment, session, id);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
