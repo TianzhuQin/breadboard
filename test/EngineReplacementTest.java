@@ -48,7 +48,10 @@ public class EngineReplacementTest extends BaseTest {
         play(t);
         WeakReference<ScriptEngine> replaced = new WeakReference<ScriptEngine>(engine());
         WeakReference<ClassLoader> itsClasses = new WeakReference<ClassLoader>(EngineCleanup.scriptLoader(engine()));
-        assertNotNull(itsClasses.get());
+        // (It asks the server's classpath through ScriptClasspath, which serves every engine and so
+        // must not keep one.)
+        assertTrue("the engine's loader asks " + itsClasses.get().getParent(),
+            itsClasses.get().getParent() instanceof ScriptClasspath);
         int keptMetaClasses = EngineCleanupTest.keptMetaClassesOfScripts();
         reload(t);
         play(t);

@@ -826,7 +826,9 @@ public class ScriptBoard extends UntypedActor {
       }
     });
 
-    engine = manager.getEngineByName("gremlin-groovy");
+    // Its scripts ask the server's classpath through ScriptClasspath, which remembers the names that
+    // aren't there: the compiler's thousands of misses no longer look in every jar at every rebuild.
+    engine = ScriptClasspath.newEngine(manager);
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("r", rand);
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("results", results);
 
