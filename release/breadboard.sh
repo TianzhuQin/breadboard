@@ -231,13 +231,24 @@ fi
 # only to make db/ and logs/ and for RUNNING_PID: one kept read-only (root's, under /opt) runs with
 # -Dpidfile.path elsewhere and a db/ and logs/ (and, for backups and images, backups/ and dev/) that
 # the server's account can write.
+# (One that is this account's own, only made read-only or unreadable, this account can fix itself,
+# with chmod, without an administrator.)
 ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
 cannot_write() {
-  echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
-  if [ -d "$2" ]; then
-    echo "  sudo chown -R $ME \"$2\"" >&2
+  if [ -O "$2" ]; then
+    echo "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:" >&2
+    if [ -d "$2" ]; then
+      echo "  chmod -R u+rwX \"$2\"" >&2
+    else
+      echo "  chmod u+rw \"$2\"" >&2
+    fi
   else
-    echo "  sudo chown $ME \"$2\"" >&2
+    echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
+    if [ -d "$2" ]; then
+      echo "  sudo chown -R $ME \"$2\"" >&2
+    else
+      echo "  sudo chown $ME \"$2\"" >&2
+    fi
   fi
   exit 1
 }

@@ -327,6 +327,9 @@ if [ "$(id -u)" != 0 ]; then
   fi
   chmod u+w "$APP/db"
   grep -q "db/ can't be written by" "$WORK/read-only.log" || fail "a db/ it can't write to wasn't reported: $(cat "$WORK/read-only.log")"
+  # (this account's own: chmod fixes it, without an administrator)
+  grep -q 'chmod -R u+rwX ".*/db"' "$WORK/read-only.log" && ! grep -q sudo "$WORK/read-only.log" \
+    || fail "a db/ of this account's that it can't write to wasn't given chmod as the fix: $(cat "$WORK/read-only.log")"
   pass "a db/ that can't be written is reported, with how to fix it"
 
   # So is a conf/local.conf it can't read (made or copied by another account): Java would take it for
@@ -339,6 +342,8 @@ if [ "$(id -u)" != 0 ]; then
   rm -f "$APP/conf/local.conf"
   grep -q "conf/local.conf can't be read by" "$WORK/unreadable.log" \
     || fail "a conf/local.conf it can't read wasn't reported: $(cat "$WORK/unreadable.log")"
+  grep -q 'chmod u+rw ".*/conf/local.conf"' "$WORK/unreadable.log" && ! grep -q sudo "$WORK/unreadable.log" \
+    || fail "a conf/local.conf of this account's that it can't read wasn't given chmod as the fix: $(cat "$WORK/unreadable.log")"
   pass "a conf/local.conf that can't be read is reported, with how to fix it"
 
   # A folder kept read-only (root's, under /opt) runs with a db/ and logs/ it can write and its pid

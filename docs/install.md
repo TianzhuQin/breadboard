@@ -498,8 +498,10 @@ delete `RUNNING_PID` after checking that no server is running.
 **"db/ can't be written by …"**: the folder belongs to another account (often after unzipping with
 `sudo`). Fix its owner as the message says, e.g. `sudo chown -R breadboard: /opt/breadboard`.
 **"conf/local.conf can't be read by …"** is the same for your settings file, often one copied with
-`sudo`: `sudo chown breadboard: /opt/breadboard/conf/local.conf`. (On Windows: right-click the file,
-**Properties**, **Security**, and give the account that runs Breadboard read access.)
+`sudo`: `sudo chown breadboard: /opt/breadboard/conf/local.conf`. When the folder or file is the
+account's own, only without write or read access for it, the message says `chmod` instead (e.g.
+`chmod u+rw ".../conf/local.conf"`), which needs no administrator. (On Windows: right-click the
+file, **Properties**, **Security**, and give the account that runs Breadboard read access.)
 
 **Event values cut short**: values are kept up to 1 MB each; a longer one is cut, ending in
 "…[truncated from N characters]".
