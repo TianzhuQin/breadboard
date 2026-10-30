@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { keepScriptDraft } from '../../design/design/scriptDraft.js'
 import { importUrl } from '../../design/experiment-import/experiment-import.controller.js'
+import { connectionNotice } from '../../design/client/connectionNotice.js'
 
 // The previous console (/legacy-admin, frontend/design). Its Script panel is bound to
 // breadboard.user.currentScript, and every User JSON the server sends is merged over breadboard.
@@ -32,5 +33,23 @@ describe('the previous console\'s Import', () => {
     expect(importUrl('/experiment/import', 'My study')).toBe('/experiment/import/My%20study')
     expect(importUrl('/experiment/import', 'Pilot A/B')).toBe('/experiment/import/Pilot%20A%2FB')
     expect(importUrl('/experiment/import', 'Wave #2?')).toBe('/experiment/import/Wave%20%232%3F')
+  })
+})
+
+// The older AngularJS participant client (frontend/design/client.js), in its line above the page
+describe('the older participant client\'s connection notice', () => {
+  it('says why a preview only watches: the player\'s own page, or the computer, has the seat', () => {
+    expect(connectionNotice({ connection: 'watching', preview: true, computerPlayer: false }))
+      .toBe('Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.')
+    // every preview of a computer player watches: there is no page of its own to speak of
+    expect(connectionNotice({ connection: 'watching', preview: true, computerPlayer: true }))
+      .toBe('Watching only: the computer plays this seat, so you see what it does but can’t answer for it.')
+  })
+
+  it('says where the seat went, and nothing while the page has it', () => {
+    expect(connectionNotice({ connection: 'elsewhere', preview: false })).toBe('This study is open in another tab or window. Reload this page to use it here.')
+    expect(connectionNotice({ connection: 'elsewhere', preview: true })).toBe('This player is open in another preview or tab.')
+    expect(connectionNotice({ connection: 'open', preview: false, computerPlayer: false })).toBe('')
+    expect(connectionNotice(undefined)).toBe('')
   })
 })

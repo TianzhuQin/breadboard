@@ -68,6 +68,9 @@ public class BaseTest {
         Ebean.createSqlUpdate("alter table experiments add column if not exists file_mode bit default 0;").execute();
         // Add @Version column to experiment_instances if not present
         Ebean.createSqlUpdate("alter table experiment_instances add column if not exists version integer default 0;").execute();
+        // The first test starts from an empty database too, as the others do: the server's start adds
+        // rows of its own (the list of languages, see LanguageController.languages).
+        new BaseTest().cleanDatabase();
     }
 
     /**

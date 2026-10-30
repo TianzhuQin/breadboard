@@ -112,6 +112,18 @@ public class ProlificReturningTest extends BaseTest {
         tracker.track(connected ? "clientConnected" : "clientDisconnected", data);
     }
 
+    /**
+     * The session's connection events all in one millisecond, as back-to-back ones often are: their
+     * order is then the order they were recorded in, which their ids give (see conf/ebean.properties).
+     */
+    private static void inOneMillisecond(ExperimentInstance session) {
+        com.avaje.ebean.Ebean.createSqlUpdate("update events set datetime = :t where experiment_instance_id = :session"
+            + " and name in ('clientConnected', 'clientDisconnected')")
+            .setParameter("t", new java.sql.Timestamp(System.currentTimeMillis()))
+            .setParameter("session", session.id)
+            .execute();
+    }
+
     private static void finishGame(ExperimentInstance session) {
         session.setHasStarted(Boolean.TRUE);
         session.finish();
@@ -165,6 +177,7 @@ public class ProlificReturningTest extends BaseTest {
         connection(seat(first, "PIDEND"), true);
         connection(seat(first, "PIDEND"), false);
         connection(seat(first, "PIDEND"), true);
+        inOneMillisecond(first);
         finishGame(first);
         ParticipantAuth.reset();
         ExperimentInstance next = openSession("next");
@@ -267,6 +280,8 @@ public class ProlificReturningTest extends BaseTest {
         assertEquals(SEE_OTHER, status(enter("PIDLEFT")));
         connection(seat(left, "PIDLEFT"), true);
         connection(seat(left, "PIDLEFT"), false);
+        // (back to back they often share a millisecond: a CI run failed here when they did)
+        inOneMillisecond(left);
         finishGame(left);
         // ... and the autopilot gave up waiting for enough people in the next: its game never started.
         ExperimentInstance cancelled = openSession("cancelled");

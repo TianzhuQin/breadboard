@@ -60,4 +60,34 @@ public class DataExportTest extends BaseTest {
         assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/csv/experiment/987654/data").withSession("uid", me.uid))));
         assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/csv/experiment/" + experiment.id + "/data"))));
     }
+
+    /**
+     * Events of the same millisecond come out in the order they were recorded, which their ids give:
+     * Ebean took ids from H2 twenty at a time, in the order of H2's hash (…, 20, 33, …, 40, 21, …), and
+     * such events came out of order (conf/ebean.properties).
+     */
+    @Test
+    public void eventsOfTheSameMillisecondComeOutInTheOrderTheyWereRecorded() {
+        Language lang = createLanguage("eng", "English");
+        User me = createUser("pi@lab.org", "PI", "password123", lang);
+        Experiment experiment = createExperiment("Busy");
+        ExperimentInstance session = createInstance("busy", experiment);
+        java.util.Date now = new java.util.Date();
+        for (int i = 0; i < 70; i++) {
+            Event e = new Event();
+            e.name = "Step" + i;
+            e.datetime = now;
+            e.experimentInstance = session;
+            e.save();
+        }
+        for (String url : new String[]{"/csv/data/" + session.id, "/csv/experiment/" + experiment.id + "/data"}) {
+            Result csv = route(fakeRequest(GET, url).withSession("uid", me.uid));
+            assertEquals(contentAsString(csv), OK, status(csv));
+            String[] lines = contentAsString(csv).split("\n");
+            assertEquals(71, lines.length);
+            for (int i = 0; i < 70; i++) {
+                assertTrue(url + " row " + (i + 1) + ": " + lines[i + 1], lines[i + 1].contains("\"Step" + i + "\""));
+            }
+        }
+    }
 }

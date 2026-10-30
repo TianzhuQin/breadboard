@@ -226,6 +226,14 @@ public class Global extends GlobalSettings {
 
     markInterruptedSessions();
 
+    // What the first account needs (its default language), before the first request: the list was
+    // added only when the console's setup page asked for it.
+    try {
+      LanguageController.languages();
+    } catch (Exception e) {
+      Logger.warn("Could not add the list of languages (the first request that needs it will): " + e.getMessage());
+    }
+
     // Open a session of the configured experiment so participants can join without an admin.
     models.Autopilot.start();
 

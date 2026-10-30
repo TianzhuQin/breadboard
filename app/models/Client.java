@@ -36,6 +36,9 @@ public class Client extends Model {
   // The autopilot's launch left them out of the game, as they had been away too long
   // (ScriptBoard.leftOutAtStart): lastFrame is the screen that tells them so.
   public volatile boolean leftOut;
+  // Their session is over (see end): lastFrame is their end screen for good, and the game sends them
+  // nothing more.
+  private volatile boolean ended;
 
   // The page that holds the seat, and researchers' previews watching it: they get every frame the
   // seat holder gets and can't act. Watchers stay when the participant's page reconnects.
@@ -55,7 +58,9 @@ public class Client extends Model {
   // or stands in for them while it is away. Standing in used to be a mark on the one preview that
   // watched as their page went, so any newer preview of them (the console opens new ones all the
   // time: a tile opened full size, a reload, the Preview page visited again) counted as them coming
-  // back: the computer was switched off, and nobody played the seat while it stayed open.
+  // back: the computer was switched off, and nobody played the seat while it stayed open. A Client
+  // made after a rebuild of the engine (a Resume, a reload that carries the session on) is told so by
+  // ScriptBoard, which keeps it per session (ownPageHeld()).
   private volatile boolean ownPageHeld;
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
@@ -224,6 +229,33 @@ public class Client extends Model {
   /** Whether this is a computer player, whose seat nobody holds (see isComputer). */
   public boolean computer() {
     return computer;
+  }
+
+  /**
+   * Their own page held their seat earlier in this session, with a Client the engine's rebuild has
+   * dropped since (ScriptBoard keeps that per session): a preview never counts as them being there.
+   */
+  void ownPageHeld() {
+    ownPageHeld = true;
+  }
+
+  /**
+   * The session is over for this participant: {@code screen} is their last screen from now on (null:
+   * the one they have stays), and no game view replaces it or reaches their sockets (writeGraph).
+   * Under the monitor updateGraph holds, so an update under way (the client update actor's, every few
+   * hundred milliseconds) finishes first and none comes after. Returns their last screen.
+   */
+  public synchronized ObjectNode end(ObjectNode screen) {
+    if (screen != null) {
+      lastFrame = screen;
+    }
+    ended = true;
+    return lastFrame;
+  }
+
+  /** Whether their session is over (see end). */
+  public boolean ended() {
+    return ended;
   }
 
   // (under seatLock)
@@ -536,6 +568,10 @@ public class Client extends Model {
   }
 
   public void writeGraph(Vertex me, Graph graph) {
+    if (ended) {
+      // (their end screen stays their last: a page that comes back gets it)
+      return;
+    }
     ObjectNode jsonOutput = view(me, graph);
     // Each socket is sent it only if its last frame showed something else: a page that just
     // connected, or a preview that just started watching, gets the whole view.
@@ -726,13 +762,21 @@ public class Client extends Model {
 
   /** Close every socket of this participant, the previews watching included (their session is over). */
   public void disconnect () {
+    disconnect(null);
+  }
+
+  /**
+   * disconnect, writing {@code last} to each socket first ({@code null}: nothing), so no other frame
+   * reaches it after that one (see Connection.close).
+   */
+  public void disconnect (JsonNode last) {
     List<Connection> all;
     synchronized (seatLock) {
       all = connections();
       watchers.clear();
     }
     for (Connection connection : all) {
-      connection.close(null);
+      connection.close(last);
     }
   }
 
