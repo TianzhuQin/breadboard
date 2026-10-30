@@ -194,7 +194,9 @@ hasn't joined again) says they aren't in the game, and shows their page once the
 read-only. In the list, a green dot means the seat is connected; its tooltip says whether by their
 own page or by a preview (maybe another console's), or that a preview stands in for someone away.
 The first look at a session shows the test players whose seat is neither connected nor held by a
-preview, theirs or another console's (which a preview here would take it from).
+preview, theirs or another console's (which a preview here would take it from). It is taken once
+the session's players have loaded, however the page was opened; in a session without test players,
+when the first ones appear, unless you have chosen whose pages to see by then.
 
 ## Running a session
 

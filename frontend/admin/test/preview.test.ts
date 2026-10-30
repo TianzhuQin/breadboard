@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { reactive } from 'vue'
 import {
-  DEVICES, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer, isComputerPlayer, isConnected, isTestPlayer, joinUrl,
-  matchesPlayer, naturalWidth, ownPageConnected, previewMemory, previewPageUrl, quickPick, shownReadOnly, sortPlayers,
-  tileWidth, truthyFlag, widthToFit,
+  DEVICES, FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
+  isComputerPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth, ownPageConnected, previewMemory,
+  previewPageUrl, quickPick, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
 } from '../src/pages/preview/preview'
 import { fetchPreviewToken } from '../src/pages/preview/previewLink'
 import { HttpError } from '../src/lib/http'
@@ -195,6 +195,11 @@ describe('PreviewPage', () => {
     await new Promise(r => setTimeout(r, 40))
     await flushPromises()
   }
+  async function firstLook () {
+    // the first look waits until the network has been quiet a moment
+    await new Promise(r => setTimeout(r, FIRST_LOOK_QUIET_MS + 60))
+    await flushPromises()
+  }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -247,7 +252,7 @@ describe('PreviewPage', () => {
     addPlayer('p5', { testmode: true })
     await settle()
     const w = await mountPage()
-    await settle()
+    await firstLook()
     const frames = w.findAll('iframe')
     expect(frames).toHaveLength(2)
     expect(http.post).toHaveBeenCalledWith('/preview-token', { experimentId: 7, experimentInstanceId: 44, clientId: 'p1' })
@@ -258,12 +263,92 @@ describe('PreviewPage', () => {
     w.unmount()
   })
 
+  // On a direct load (or a reload) the page is there before the network: the server sends each
+  // player, then their properties. The first look used to be taken at the first players seen, before
+  // their testmode had arrived, and showed no test players, or only some of them.
+  it('takes the first look once the network has come in, also on a direct load', async () => {
+    const w = await mountPage()
+    try {
+      // the players first …
+      addPlayer('t1')
+      addPlayer('t2')
+      addPlayer('p3')
+      await settle()
+      expect(w.find('.pp__count').text()).toBe('0 of 3 shown')
+      // … then their properties
+      await new Promise(r => setTimeout(r, 60))
+      store.graph.apply({ action: 'nodePropertyChanged', id: 't1', key: 'testmode', value: true })
+      store.graph.apply({ action: 'nodePropertyChanged', id: 't2', key: 'testmode', value: true })
+      await settle()
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1', 't2'])
+      expect(w.findAll('.pt iframe')).toHaveLength(2)
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('takes the first look when the first test players appear, and only once', async () => {
+    addPlayer('p1')
+    await settle()
+    const w = await mountPage()
+    try {
+      await firstLook()
+      expect(previewMemory.ids).toEqual([])
+      expect(w.text()).toContain('Choose whose page to see')
+      // test players made later (in the Script console, say)
+      addPlayer('t1', { testmode: true })
+      await settle()
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1'])
+      // later ones are the researcher's to add
+      addPlayer('t2', { testmode: true })
+      await settle()
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1'])
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('leaves the first look to the researcher once they have chosen', async () => {
+    addPlayer('p1')
+    addPlayer('t1', { testmode: true })
+    await settle()
+    const w = await mountPage()
+    try {
+      // ticked before the network had been quiet long enough
+      await w.findAll('.pp__item').find(li => li.text().includes('p1'))!.find('input[type="checkbox"]').setValue(true)
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['p1'])
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('takes the first look in a network that keeps changing, after FIRST_LOOK_MAX_MS at most', async () => {
+    addPlayer('t1', { testmode: true })
+    await settle()
+    const started = Date.now()
+    const w = await mountPage()
+    // a property that changes more often than the network is ever quiet
+    const ticker = setInterval(() => store.graph.apply({ action: 'nodePropertyChanged', id: 't1', key: 'clock', value: Date.now() }), 100)
+    try {
+      while (!previewMemory.ids.length && Date.now() - started < FIRST_LOOK_MAX_MS + 1500) await new Promise(r => setTimeout(r, 50))
+      expect(previewMemory.ids).toEqual(['t1'])
+      expect(Date.now() - started).toBeGreaterThanOrEqual(FIRST_LOOK_MAX_MS - 100)
+    } finally {
+      clearInterval(ticker)
+      w.unmount()
+    }
+  })
+
   it('runs each preview in an opaque origin on its own token, never on the researcher\'s sign-in', async () => {
     addPlayer('p1', { testmode: true })
     addPlayer('p2', { testmode: true })
     await settle()
     const w = await mountPage()
-    await settle()
+    await firstLook()
     const frames = w.findAll('iframe')
     expect(frames).toHaveLength(2)
     for (const f of frames) {
@@ -292,15 +377,16 @@ describe('PreviewPage', () => {
     addPlayer('p1', { testmode: true })
     await settle()
     const w = await mountPage()
-    await settle()
+    await firstLook()
     expect(w.find('iframe').attributes('src')).toMatch(/\/game\/7\/44\/p1\/connected\?preview=1#bbt=tok-p1-1$/)
     await w.find('.pt__acts button').trigger('click') // Reload
     await flushPromises()
     expect(http.post).toHaveBeenCalledTimes(2)
     expect(w.find('iframe').attributes('src')).toMatch(/#bbt=tok-p1-2$/)
 
+    // (a new session: its first look is taken anew)
     store.admin.instance = { id: 45, name: 'pilot 2', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] }
-    await settle()
+    await firstLook()
     expect(http.post).toHaveBeenLastCalledWith('/preview-token', { experimentId: 7, experimentInstanceId: 45, clientId: 'p1' })
     expect(w.find('iframe').attributes('src')).toBe(`${window.location.origin}/game/7/45/p1/connected?preview=1#bbt=tok-p1-3`)
     w.unmount()
@@ -313,7 +399,7 @@ describe('PreviewPage', () => {
     http.post.mockRejectedValueOnce(new HttpError(400, 'That session is not of this experiment.'))
     http.post.mockImplementation(mintToken)
     const w = await mountPage()
-    await settle()
+    await firstLook()
     expect(w.find('iframe').exists()).toBe(false)
     const err = w.find('.pf__error')
     expect(err.attributes('role')).toBe('alert')
@@ -333,7 +419,7 @@ describe('PreviewPage', () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => tab as any)
     try {
       const w = await mountPage()
-      await settle()
+      await firstLook()
       let answer!: (v: any) => void
       http.post.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
       const PreviewTile = (await import('../src/pages/preview/PreviewTile.vue')).default
@@ -362,7 +448,7 @@ describe('PreviewPage', () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => tab as any)
     try {
       const w = await mountPage()
-      await settle()
+      await firstLook()
       http.post.mockRejectedValueOnce(new HttpError(400, 'Unknown session'))
       const PreviewTile = (await import('../src/pages/preview/PreviewTile.vue')).default
       w.findComponent(PreviewTile).vm.$emit('open-tab')
@@ -609,7 +695,7 @@ describe('PreviewPage', () => {
     addPlayer('p1', { testmode: true })
     await settle()
     const w = await mountPage()
-    await settle()
+    await firstLook()
     await w.find('button.pt__cover').trigger('click')
     await flushPromises()
     // one connection per player: the tile no longer holds a page

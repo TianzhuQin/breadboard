@@ -89,6 +89,16 @@ export function autoPicked<T extends PlayerLike> (players: readonly T[]): T[] {
   return quickPick(players, 'test').filter(p => !isConnected(p) && !heldByPreview(p)).slice(0, MAX_PREVIEWS)
 }
 
+/**
+ * When the first look at a session is taken: once its network has been quiet this long. The server
+ * sends each player before their properties (testmode among them), so a look taken while the
+ * network comes in, as on a direct load of the page or a reload, found no test players, or only
+ * some of them.
+ */
+export const FIRST_LOOK_QUIET_MS = 300
+/** …or this long after the first players were seen, at the latest, in a network that keeps changing. */
+export const FIRST_LOOK_MAX_MS = 2000
+
 // ---- addresses --------------------------------------------------------------------------------
 
 /** One player of one session, whose page a researcher previews. */

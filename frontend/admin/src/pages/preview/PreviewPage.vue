@@ -175,8 +175,9 @@ import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  MAX_PREVIEWS, autoPicked, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl,
-  quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike, type PreviewTarget, type QuickPick,
+  FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl,
+  previewMemory as memory, previewPageUrl, quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike, type PreviewTarget,
+  type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 
@@ -250,6 +251,7 @@ function toggle (id: string, on: boolean) {
   if (memory.ids.length >= MAX_PREVIEWS) { tooMany(); listKey.value++; return }
   noteReadOnly(shownReadOnly([p], selected.value))
   memory.ids = [...memory.ids, id]
+  chosenByHand()
 }
 
 /** A quick pick replaces what is shown. */
@@ -266,17 +268,20 @@ function pick (kind: QuickPick, n?: number) {
   noteReadOnly(shownReadOnly(chosen, selected.value))
   memory.ids = chosen.map(p => p.id)
   listKey.value++
+  chosenByHand()
 }
 
 function remove (id: string) {
   memory.ids = memory.ids.filter(x => x !== id)
   tabbed.delete(id)
   if (focusId.value === id) focusId.value = null
+  chosenByHand()
 }
 function clearAll () {
   memory.ids = []
   tabbed.clear()
   focusId.value = null
+  chosenByHand()
 }
 
 // ---- showing ----------------------------------------------------------------------------------
@@ -374,9 +379,38 @@ async function openTab (id: string) {
 
 // ---- following the session ---------------------------------------------------------------
 
-// A new session starts from a clean slate; on the first look the test players are shown, as in
-// the old Testing panel (but not those whose seat is connected: see autoPicked).
-watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
+// A new session starts from a clean slate. The first look at it shows its test players, as the old
+// Testing panel did (but not those whose seat is connected: see autoPicked), however the page was
+// reached. It waits until the network has come in (FIRST_LOOK_QUIET_MS): the server sends each
+// player before their properties, so a look taken at the first players seen found no test players
+// on a direct load or a reload. A session without test players gets its first look when the first
+// ones appear. Whatever the researcher chooses first (a tick, a quick pick, Clear) is the first look.
+let firstLookTimer: ReturnType<typeof setTimeout> | null = null
+let firstPlayersAt = 0
+function cancelFirstLook () {
+  if (firstLookTimer) clearTimeout(firstLookTimer)
+  firstLookTimer = null
+  firstPlayersAt = 0
+}
+function chosenByHand () {
+  memory.autoPicked = true
+  cancelFirstLook()
+}
+function takeFirstLook () {
+  firstLookTimer = null
+  firstPlayersAt = 0
+  if (memory.autoPicked) return
+  if (memory.ids.length) {
+    memory.autoPicked = true
+    return
+  }
+  // none yet: the look waits for the first test players
+  if (!testCount.value) return
+  memory.autoPicked = true
+  const tests = autoPicked(players.value)
+  if (tests.length) memory.ids = tests.map(p => p.id)
+}
+watch(() => [inst.value?.id, graph.version.value] as const, ([id]) => {
   if (id == null) return
   if (memory.instanceId !== id) {
     memory.instanceId = id
@@ -384,13 +418,16 @@ watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
     memory.autoPicked = false
     tabbed.clear()
     focusId.value = null
+    cancelFirstLook()
   }
-  if (!memory.autoPicked && players.value.length) {
-    memory.autoPicked = true
-    const tests = autoPicked(players.value)
-    if (tests.length && !memory.ids.length) memory.ids = tests.map(p => p.id)
-  }
+  if (memory.autoPicked || !players.value.length) return
+  // each change of the network puts the look off a little, but not for longer than FIRST_LOOK_MAX_MS
+  const now = Date.now()
+  if (!firstPlayersAt) firstPlayersAt = now
+  if (firstLookTimer) clearTimeout(firstLookTimer)
+  firstLookTimer = setTimeout(takeFirstLook, Math.max(0, Math.min(FIRST_LOOK_QUIET_MS, firstPlayersAt + FIRST_LOOK_MAX_MS - now)))
 }, { immediate: true })
+onBeforeUnmount(cancelFirstLook)
 
 // "Preview their screen" from the player panel links here with ?player=<id>: show that player full size.
 watch(() => [route.query.player, players.value.length] as const, ([q]) => {
