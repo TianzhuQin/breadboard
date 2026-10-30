@@ -117,7 +117,7 @@ public class ExperimentController extends Controller {
       return "Names can't contain / or \\ or line breaks.";
     }
     if (name.length() > 120) {
-      return "Keep the name under 120 characters.";
+      return "Keep the name to 120 characters or fewer.";
     }
     return null;
   }

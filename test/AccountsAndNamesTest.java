@@ -166,7 +166,7 @@ public class AccountsAndNamesTest extends BaseTest {
         user.ownedExperiments.add(a);
         user.update();
         user.saveManyToManyAssociations("ownedExperiments");
-        final String why = "Keep the name under 120 characters.";
+        final String why = "Keep the name to 120 characters or fewer.";
         final String tooLong = new String(new char[121]).replace('\0', 'n');
         final String longest = tooLong.substring(1);
 
