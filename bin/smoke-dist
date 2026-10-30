@@ -9,9 +9,11 @@
 # one's console, and on the same port), to a program that holds the port (at [::1] only, too), about
 # curly quotes in conf/local.conf, folders it can't write to and a conf/local.conf it can't read,
 # that a read-only folder runs with -Dpidfile.path, that the data is the server's account's only,
-# and that keep-running doesn't start again a server that can't start. A release that carries its
-# own Java (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while
-# the server runs.
+# and that keep-running doesn't start again a server that can't start, but does start again one
+# that ran out of memory while nobody read its window (when there is a javac, for the Java agent
+# that fills the heap), with what Java said about it in logs/jvm-pid<N>.log. A release that carries
+# its own Java (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake
+# while the server runs.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -49,6 +51,8 @@ WORK="$(mktemp -d)"
 SERVER=""
 cleanup () {
   [ -z "${HOLDER:-}" ] || kill "$HOLDER" 2>/dev/null || true
+  # (the window nobody reads, at the end: once it is gone, what waits for it goes on)
+  [ -z "${READER:-}" ] || kill "$READER" 2>/dev/null || true
   if [ -n "$SERVER" ] && kill -0 "$SERVER" 2>/dev/null; then
     kill "$SERVER" 2>/dev/null || true
     wait "$SERVER" 2>/dev/null || true
@@ -96,6 +100,22 @@ case "$(basename "$ZIP")" in
   *-linux-*) ;;
   *) [ -x "$APP/Start Breadboard.command" ] || fail "the zip has no Start Breadboard.command" ;;
 esac
+# A javac, to build the Java agent of the check at the end (without one, that check is skipped):
+# JAVA8_HOME's or JAVA_HOME's (looked for before a release that carries its own Java sets them aside,
+# below), or the one on PATH (on macOS, not /usr/bin/javac when no Java is installed: it only offers
+# to install one).
+JAVAC=""
+for candidate in "${JAVA8_HOME:-}/bin/javac" "${JAVA8_HOME:-}/Contents/Home/bin/javac" "${JAVA_HOME:-}/bin/javac" \
+    "$(command -v javac || true)"; do
+  case "$candidate" in
+    /bin/javac|/Contents/Home/bin/javac|'') continue ;;
+  esac
+  if [ -f "$candidate" ] && [ -x "$candidate" ] \
+      && { [ "$candidate" != /usr/bin/javac ] || [ ! -x /usr/libexec/java_home ] || /usr/libexec/java_home >/dev/null 2>&1; }; then
+    JAVAC="$candidate"
+    break
+  fi
+done
 if [ -d "$APP/jre" ]; then
   [ -x "$APP/jre/bin/java" ] || fail "the zip's jre/ has no bin/java"
   # Zulu's licence and notices go with it (LICENSE.md says they are there)
@@ -275,6 +295,11 @@ if [ -n "$OLD_DB" ]; then
   ls "$APP"/backups/breadboard-*-upgrade.zip >/dev/null 2>&1 || fail "no backup was made before upgrading the older database"
   pass "the older database was backed up before it was brought up to date"
 fi
+# What Java itself says (that it ran out of memory) goes into logs/jvm-pid<N>.log, not the window,
+# where one that takes no output would hold Java up for good (see the check at the end).
+ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- " -XX:-DisplayVMOutput " && [ -f "$APP/logs/jvm-pid$SERVER.log" ] \
+  || fail "what Java itself says doesn't go into logs/jvm-pid$SERVER.log: $(ls "$APP/logs")"
+pass "what Java itself says goes into logs/jvm-pid<N>.log, not the window"
 pages
 
 get /autopilot 401
@@ -499,4 +524,109 @@ grep -q "before the server started (it could not start, exit code 255), so it is
 grep -q "conf/local.conf: 1" "$APP/logs/start-errors.log" 2>/dev/null \
   || fail "logs/start-errors.log doesn't say why the server couldn't start: $(cat "$APP/logs/start-errors.log" 2>&1)"
 pass "a server that can't start isn't started again, and logs/start-errors.log says why"
+
+# With keep running on and nobody reading its window (here a pipe that is full, as a paused window
+# is), a server that runs out of memory is started again all the same: Java says so in
+# logs/jvm-pid<N>.log, not in the window, which would hold it up for good. A Java agent, built here
+# when there is a javac, fills the heap once the file it is given appears (and is deleted, so that
+# the server started again doesn't). A small heap (breadboard.memory) keeps the heap dump small.
+oom_agent () {
+  [ -n "$JAVAC" ] || return 1
+  mkdir -p "$WORK/oom/classes"
+  cat > "$WORK/oom/SmokeOutOfMemory.java" <<'EOF'
+public class SmokeOutOfMemory {
+  public static void premain(final String go) {
+    Thread filler = new Thread(new Runnable() {
+      public void run() {
+        java.io.File file = new java.io.File(go);
+        try {
+          while (!file.delete()) {
+            Thread.sleep(200);
+          }
+        } catch (InterruptedException e) {
+          return;
+        }
+        java.util.List<long[]> heap = new java.util.ArrayList<long[]>();
+        while (true) {
+          heap.add(new long[1 << 16]);
+        }
+      }
+    }, "smoke-out-of-memory");
+    filler.setDaemon(true);
+    filler.start();
+  }
+}
+EOF
+  "$JAVAC" -source 1.8 -target 1.8 -nowarn -d "$WORK/oom/classes" "$WORK/oom/SmokeOutOfMemory.java" \
+    > "$WORK/oom/javac.log" 2>&1 || return 1
+  python3 - "$WORK/oom/classes" "$WORK/oom/agent.jar" <<'EOF' || return 1
+import os, sys, zipfile
+with zipfile.ZipFile(sys.argv[2], 'w') as jar:
+    jar.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\nPremain-Class: SmokeOutOfMemory\n\n')
+    for name in os.listdir(sys.argv[1]):
+        jar.write(os.path.join(sys.argv[1], name), name)
+EOF
+}
+# (the process id in RUNNING_PID, or nothing; and the status /health answers with, or 000)
+running_pid () { tr -cd '0-9' 2>/dev/null < "$APP/RUNNING_PID" || true; }
+health () { curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$BASE/health" || true; }
+if oom_agent; then
+  printf '%s\n' 'breadboard.memory=192m' > "$APP/conf/local.conf"
+  mkfifo "$WORK/window"
+  # (the window's reader, which never reads)
+  sleep 900 < "$WORK/window" &
+  READER=$!
+  (cd "$APP" && JAVA_OPTS="-javaagent:$WORK/oom/agent.jar=$WORK/oom/go" BREADBOARD_KEEP_RUNNING=1 \
+    exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/window" 2>&1 < /dev/null &
+  SERVER=$!
+  UP=""
+  for _ in $(seq 1 180); do
+    kill -0 "$SERVER" 2>/dev/null || fail "the launcher stopped while starting: $(tail -20 "$APP/logs/application.log")"
+    if [ "$(health)" = 200 ]; then
+      UP=1
+      break
+    fi
+    sleep 1
+  done
+  FIRST="$(running_pid)"
+  [ -n "$UP" ] && [ -n "$FIRST" ] || fail "the server did not answer within 180 s"
+  # Nothing more goes into the window.
+  python3 - "$WORK/window" <<'EOF'
+import os, sys
+window = os.open(sys.argv[1], os.O_WRONLY | os.O_NONBLOCK)
+for size in (4096, 1):
+    try:
+        while True:
+            os.write(window, b'x' * size)
+    except BlockingIOError:
+        pass
+EOF
+  touch "$WORK/oom/go"
+  AGAIN=""
+  for _ in $(seq 1 120); do
+    kill -0 "$SERVER" 2>/dev/null || fail "the launcher ended after the server ran out of memory: $(tail -20 "$APP/logs/application.log")"
+    if [ -n "$(running_pid)" ] && [ "$(running_pid)" != "$FIRST" ] && [ "$(health)" = 200 ]; then
+      AGAIN=1
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$AGAIN" ]; then
+    STILL=""
+    if kill -0 "$FIRST" 2>/dev/null; then STILL=", which is still there"; fi
+    fail "with nobody reading its window, a server that ran out of memory (process $FIRST$STILL) wasn't started again: $(tail -20 "$APP/logs/application.log")"
+  fi
+  grep -q "Terminating due to java.lang.OutOfMemoryError: Java heap space" "$APP/logs/jvm-pid$FIRST.log" 2>/dev/null \
+    || fail "logs/jvm-pid$FIRST.log doesn't say that Java ran out of memory: $(tail -5 "$APP/logs/jvm-pid$FIRST.log" 2>&1)"
+  grep -q "Breadboard stopped by itself (it ran out of memory: " "$APP/logs/application.log" \
+    || fail "the launcher didn't say that the server ran out of memory: $(tail -20 "$APP/logs/application.log")"
+  stop
+  kill "$READER" 2>/dev/null || true
+  wait "$READER" 2>/dev/null || true
+  READER=""
+  rm -f "$WORK/window" "$APP/conf/local.conf" "$APP/logs/out-of-memory.hprof"
+  pass "with nobody reading its window, a server that runs out of memory is started again, and logs/jvm-pid<N>.log says why"
+else
+  echo "skip a server that runs out of memory with nobody reading its window: no javac here to build the agent that fills the heap"
+fi
 echo "The release in $(basename "$ZIP") works."

@@ -100,13 +100,14 @@ Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
-that file is gone). To give it more memory, set `breadboard.memory` in `conf/local.conf`. A server
-whose shutdown is stuck (an experiment's script that never ends) is stopped after 20 seconds. When
-it stops normally, a running session's game stops at once (no page joins it again, no computer
-player or timer plays it on), a `serverStopping` event is recorded in it, and its participants are
-told the session ended because the server was stopped or restarted, and that they can open the
-study's link again in a few minutes to join the session open then (those from Prolific: open the
-study again from Prolific, or return it). Someone given a completion code keeps it on screen.
+that file is gone). Java says so, and what it ran out of, in `logs/jvm-pid<N>.log` (see below). To
+give it more memory, set `breadboard.memory` in `conf/local.conf`. A server whose shutdown is stuck
+(an experiment's script that never ends) is stopped after 20 seconds. When it stops normally, a
+running session's game stops at once (no page joins it again, no computer player or timer plays it
+on), a `serverStopping` event is recorded in it, and its participants are told the session ended
+because the server was stopped or restarted, and that they can open the study's link again in a
+few minutes to join the session open then (those from Prolific: open the study again from Prolific,
+or return it). Someone given a completion code keeps it on screen.
 
 On first start the launcher creates:
 
@@ -116,6 +117,7 @@ On first start the launcher creates:
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
 | `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux the launcher lets only its owner read it, as it may hold keys. The account the server runs as must be able to read it. |
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
+| `logs/jvm-pid<N>.log` | What Java itself says, such as that the server ran out of memory, which would otherwise go to the server's window. One for each start, N being Java's process id; at the next start, those in which Java said nothing are deleted, and at most 10 are kept. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
 
 On macOS and Linux, `db/`, `backups/` and `logs/`, and what is in them, can be read only by the
@@ -341,8 +343,8 @@ From then on it also starts whenever you log in. To stop it, and keep it stopped
 
 What the server prints for a window (`StandardOutPath`) goes nowhere: what it logs is in
 `logs/application.log` anyway, and this copy, kept, would only grow, with colour codes. That also
-throws away what experiments print (`println`), and the line Java prints when the server runs out
-of memory: `logs/out-of-memory.hprof` shows that it did (and launchd starts it again).
+throws away what experiments print (`println`). When the server runs out of memory, Java says so in
+`logs/jvm-pid<N>.log`, not there, and launchd starts it again.
 `logs/launchd.log` (`StandardErrorPath`) gets what goes wrong outside the server's log, such as why
 the launcher couldn't start the server, or what Java says when it can't start (a crash of Java
 leaves its report in `hs_err_pid*.log` in the Breadboard folder).
@@ -492,7 +494,10 @@ console window starts selecting text, which pauses it, and Ctrl+S pauses a termi
 doesn't wait for it: what it prints waits for the window, and once about a megabyte is waiting, the
 rest is left out of the window, with a line that says how many lines were. `logs/application.log`
 has everything the server logs; what experiment scripts print (`println`, chat messages) is only in
-the window. Press Esc (or Ctrl+Q in a terminal) to let the window go on.
+the window, and what Java itself says (that the server ran out of memory) is in
+`logs/jvm-pid<N>.log`. Only a crash of Java itself, which is rare, waits for the window to show its
+first lines: the server is started again once the window goes on. Press Esc (or Ctrl+Q in a
+terminal) to let the window go on.
 
 **A setting in `conf/local.conf` has a typo**: the server doesn't start, and says which line of
 `conf/local.conf` it couldn't read, in its window and in `logs/start-errors.log` (as a service also

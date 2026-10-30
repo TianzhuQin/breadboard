@@ -24,6 +24,10 @@ import java.io.UnsupportedEncodingException;
  * when the process ends before that (a mistake in conf/local.conf, the port taken), those errors are
  * written into it. A launcher that finds the file after Java ended knows that the server never
  * started, and doesn't start it again: it would only fail the same way.
+ *
+ * What Java itself says (that it ran out of memory), which it writes straight to the window, the
+ * launchers send into a file of each start's own instead, logs/jvm-pid&lt;N&gt;.log: this deletes
+ * the earlier ones in which Java said nothing, and keeps the newest of the others (JvmLogs).
  */
 public final class Main {
 
@@ -47,6 +51,11 @@ public final class Main {
       err.drain(until);
       out.drain(until);
     }, "breadboard-console-at-exit"));
+    try {
+      JvmLogs.prune(new File(home, "logs"), JvmLogs.KEEP, JvmLogs.ownName());
+    } catch (RuntimeException e) {
+      // they stay until the next start
+    }
 
     play.core.server.NettyServer.main(args);
     // Play returns once the server listens. When it can't start, it ends the process itself

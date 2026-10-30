@@ -82,11 +82,19 @@ fi
 
 # Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
 # and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-# would fill the disk): delete logs/out-of-memory.hprof once it has been looked at. These options
-# need Java 8u92 or newer; an older Java 8 runs without them.
-MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof"
+# would fill the disk): delete logs/out-of-memory.hprof once it has been looked at. What Java itself
+# says then (that it ran out of memory, and of what; the heap dump) goes into logs/jvm-pid<its
+# process id>.log, not to this window: Java writes it to the window directly, and one that doesn't
+# take output (paused, or a pipe nobody reads) held it up there for good, before it ended, so that
+# it was never started again (Keep running, below). Each start has a file of its own: launcher.Main
+# deletes the earlier ones in which Java said nothing, and keeps at most 10. These options need Java
+# 8u92 or newer; an older Java 8 runs without them.
+MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
 # shellcheck disable=SC2086 # a list of options
-if ! "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
+if "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
+  # (not in the check: there, Java would make such a file too)
+  MEMORY_OPTS="$MEMORY_OPTS -XX:+LogVMOutput -XX:LogFile=logs/jvm-%p.log"
+else
   MEMORY_OPTS=""
 fi
 
@@ -376,7 +384,8 @@ remove_pid_file
 starting() {
   printf '%s\n' "Breadboard's Java was started at $(date -u '+%Y-%m-%d %H:%M:%S') UTC, and the server hasn't listened yet." \
     "Once it listens, this file is deleted. If Java ends before, what it printed as errors is written here;" \
-    "if nothing else is, it ended before it could: what it printed in Breadboard's window says why." \
+    "if nothing else is, it ended before it could: what it printed in Breadboard's window says why, and the" \
+    "newest logs/jvm-pid*.log has what Java itself said (such as that it ran out of memory)." \
     > logs/start-errors.log 2>/dev/null || true
 }
 
@@ -489,7 +498,8 @@ fi
 # take that much memory besides the heap, so that a leak of them ends in a restart (out of memory)
 # instead of taking all the computer's memory. launcher.Main is Play's start with an output that
 # never waits for this window: one that doesn't take it (paused, or a pipe nobody reads) can't hold
-# the server up.
+# the server up, nor, with MEMORY_OPTS (above), Java as it runs out of memory. (Only a crash of Java
+# itself, which is rare, still waits for the window to take its first lines.)
 # shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options, PORT_OPT one or none
 set -- "$JAVA" "-Xmx$MEMORY" -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
   -Duser.timezone=UTC \

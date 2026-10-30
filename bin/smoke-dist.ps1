@@ -6,7 +6,8 @@
 # mistake in conf\local.conf is in logs\service-errors.log, and otherwise that a server that can't
 # start isn't started again, that the port and memory in conf\local.conf are the ones used, that
 # curly quotes in it are named, and that a program on ::1 holds the port, then stop it and look for
-# errors in its log. While it runs, a helper must keep the computer awake.
+# errors in its log. While it runs, a helper must keep the computer awake, and what Java itself says
+# must go into logs\jvm-pid<N>.log, not the window.
 #
 # It is unzipped into a folder whose path has spaces, parentheses and an "&" (as Explorer's Extract
 # All of a second download, "... (1)", or a lab's "R&D" folder has), and the other copy into one
@@ -111,6 +112,15 @@ Pass 'server started (from a folder whose path has spaces, parentheses and an "&
 $java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($app) } | Select-Object -First 1
 if (-not $java -or $java.ExecutablePath -ne (Join-Path $app 'jre\bin\java.exe')) { Fail "the server doesn't run on the Java in jre\ ($($java.ExecutablePath))" }
 Pass 'it runs on the Java that comes with it'
+
+# What Java itself says (that it ran out of memory) goes into logs\jvm-pid<N>.log, not the window,
+# where one that takes no output (a click into it starts selecting text) would hold Java up for good.
+# (breadboard.bat writes Java's %p, the process id, as %%p.)
+$jvmLog = Join-Path $app "logs\jvm-pid$($java.ProcessId).log"
+if (-not $java.CommandLine.Contains(' -XX:-DisplayVMOutput ') -or -not $java.CommandLine.Contains(' -XX:LogFile=logs\jvm-%p.log ') -or -not (Test-Path -LiteralPath $jvmLog)) {
+  Fail "what Java itself says doesn't go into logs\jvm-pid$($java.ProcessId).log: $($java.CommandLine)"
+}
+Pass 'what Java itself says goes into logs\jvm-pid<N>.log, not the window'
 
 # The helper that keeps the computer awake runs beside it, one for its window.
 $awake = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($server.Id) AND Name = 'powershell.exe'" |

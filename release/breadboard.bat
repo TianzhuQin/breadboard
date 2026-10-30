@@ -64,11 +64,19 @@ EXIT /B 1
 
 REM Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
 REM and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-REM would fill the disk): delete logs\out-of-memory.hprof once it has been looked at. These options
-REM need Java 8u92 or newer; an older Java 8 runs without them.
-SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof"
+REM would fill the disk): delete logs\out-of-memory.hprof once it has been looked at. What Java itself
+REM says then (that it ran out of memory, and of what; the heap dump) goes into logs\jvm-pidN.log, N
+REM being its process id, not to this window: Java writes it to the window directly, and one that
+REM doesn't take output (a click into it starts selecting text, which pauses it) held it up there for
+REM good, before it ended, so that it was never started again (keep running, below). Each start has
+REM a file of its own: launcher.Main deletes the earlier ones in which Java said nothing, and keeps
+REM at most 10. These options need Java 8u92 or newer; an older Java 8 runs without them.
+SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
 "%JAVA%" %MEMORY_OPTS% -version >NUL 2>&1
 IF ERRORLEVEL 1 SET "MEMORY_OPTS="
+REM (Not in the check: there, Java would make such a file too. The doubled percent sign is one, for
+REM Java, which puts the process id in its place.)
+IF DEFINED MEMORY_OPTS SET "MEMORY_OPTS=%MEMORY_OPTS% -XX:+LogVMOutput -XX:LogFile=logs\jvm-%%p.log"
 
 REM conf\local.conf holds the settings changed for this Breadboard (see below). One the server can't
 REM read (made or copied by another account) would be left out without a word, as if there were
@@ -251,13 +259,15 @@ IF DEFINED SERVICE SET "JAVA_ERRORS=2>>logs\service-errors.log"
 REM logs\start-errors.log says that Java is starting: launcher.Main deletes it once the server listens,
 REM and when Java ends before that, it writes what Java printed as errors into it. So the file is
 REM there after Java ended only when the server never started.
->"logs\start-errors.log" ECHO Breadboard's Java was started on %DATE% at %TIME%, and the server hasn't listened yet. Once it listens, this file is deleted. If Java ends before, what it printed as errors is written here; if nothing else is, it ended before it could: what it printed in Breadboard's window says why.
+>"logs\start-errors.log" ECHO Breadboard's Java was started on %DATE% at %TIME%, and the server hasn't listened yet. Once it listens, this file is deleted. If Java ends before, what it printed as errors is written here; if nothing else is, it ended before it could: what it printed in Breadboard's window says why, and the newest logs\jvm-pid*.log has what Java itself said (such as that it ran out of memory).
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.) MaxMetaspaceSize:
 REM the classes made for the experiments' scripts (anew at every engine reload) may take that much
 REM memory besides the heap, so that a leak of them ends in a restart (out of memory) instead of
 REM taking all the computer's memory. launcher.Main is Play's start with an output that never waits
 REM for this window: one that doesn't take it (a click into it starts selecting text, which pauses
-REM it) can't hold the server up. ERRORLEVEL is 1 until Java sets it: if cmd can't open
+REM it) can't hold the server up, nor, with MEMORY_OPTS (above), Java as it runs out of memory. (Only
+REM a crash of Java itself, which is rare, still waits for the window to take its first lines.)
+REM ERRORLEVEL is 1 until Java sets it: if cmd can't open
 REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
 REM purpose (0).
 CMD /D /C EXIT 1
