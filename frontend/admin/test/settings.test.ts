@@ -256,6 +256,40 @@ describe('researcher accounts', () => {
     w.unmount()
   })
 
+  it('gives a colleague the server\'s address on the network, not localhost, with the sign-in details', async () => {
+    const { admin } = await import('@/store/admin') as any
+    const written: string[] = []
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t: string) => { written.push(t) } }, configurable: true })
+    http.post.mockResolvedValue({ researchers: rows, email: 'new@lab.org', password: 'Abc23456789xyz' })
+    const add = async (w: any) => {
+      await w.find('.set-people__add input').setValue('new@lab.org')
+      await w.find('form.set-people__add').trigger('submit')
+      await flushPromises()
+    }
+    const copy = async (w: any) => {
+      await w.findAll('.set-people__handout button').find((b: any) => b.text() === 'Copy sign-in details')!.trigger('click')
+      await flushPromises()
+      return written[written.length - 1]
+    }
+    // (the tests' page is at localhost)
+    admin.lanAddresses = ['http://10.254.125.201:19801']
+    let w = await mountPage()
+    await add(w)
+    expect(w.find('.set-people__handout').text()).toContain('the server\'s address on this network, http://10.254.125.201:19801/')
+    expect(await copy(w)).toBe('Breadboard: http://10.254.125.201:19801/\nEmail: new@lab.org\nPassword: Abc23456789xyz')
+    expect(w.find('.local-note').exists()).toBe(false)
+    w.unmount()
+
+    // no address on a network known: the details say localhost, and the note says it only works here
+    admin.lanAddresses = []
+    w = await mountPage()
+    await add(w)
+    expect(await copy(w)).toBe(`Breadboard: ${window.location.origin}/\nEmail: new@lab.org\nPassword: Abc23456789xyz`)
+    expect(w.find('.set-people__handout .local-note').text().replace(/\s+/g, ' ')).toContain(`The copied details use ${window.location.host}, which only works on this computer.`)
+    w.unmount()
+    delete admin.lanAddresses
+  })
+
   it('asks before removing an account', async () => {
     const w = await mountPage()
     const remove = w.findAll('.set-people__row')[1].findAll('button').find(b => /Remove/.test(b.text()))!
