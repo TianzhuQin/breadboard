@@ -762,6 +762,8 @@ public class ScriptBoard extends UntypedActor {
         buildEngine(experiment);
       }
     } catch (Throwable failed) {
+      // It loaded none of the steps: they count as changed ("Reload needed") from now on.
+      EngineSteps.settled();
       // Every console saw "Reloading", so every console hears that it failed, not only the one
       // that asked (which also gets the error itself).
       toAllAdmins(reloadFailed(failed));
@@ -2665,6 +2667,9 @@ public class ScriptBoard extends UntypedActor {
       List<Long> ended;
       try {
         synchronized (REBUILD_LOCK) {
+          // No build is under way while this holds the lock: one that stopped before its steps
+          // loaded (a launch that threw half-way) left the engine without them (EngineSteps).
+          EngineSteps.settled();
           ObjectNode engineNow = engineJson();
           news.put("engine", engineNow);
           JsonNode sessionId = engineNow.get("sessionId");

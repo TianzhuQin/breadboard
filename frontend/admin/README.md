@@ -68,7 +68,7 @@ to a production build.
 - The User JSON's `engine` says what the shared engine runs, `gameStarted` whether its game
   has started since the engine was last built, and `stepsChanged` whether steps of its experiment
   were saved (or deleted) since it loaded them, which Run of a step's saved code or a reload catches
-  up ("Reload needed"; `models.EngineSteps`). Every console hears `{"notify": {"GameStarted": …}}`
+  up ("Reload needed"; `models.EngineSteps`). It is false while a rebuild's steps are loading. Every console hears `{"notify": {"GameStarted": …}}`
   (or `GameStartFailed`) when a game starts without a console asking, or when a Start answered
   with an error got the game going all the same, and then asks again.
 - Every console also hears `{"engine": {…}}` (as in the User JSON) whenever what the engine runs

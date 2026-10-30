@@ -16,6 +16,11 @@ import java.util.Map;
  * <p>Steps are told apart by their id, and what the engine has of each is the code it last ran. A
  * step that was never saved doesn't count, even when it was run. In file mode there is nothing to
  * tell: a step file saved there runs at once while the engine runs its experiment.
+ *
+ * <p>While a build loads its steps, nothing counts as changed: the engine is loading what is saved.
+ * A console asks what the engine runs as soon as the engine says it rebuilt, which is before its
+ * steps have loaded, and it used to be told "Reload needed" for steps that nobody had saved. The
+ * push that follows every build (ScriptBoard.engineChanged) says what the build loaded.
  */
 public final class EngineSteps {
 
@@ -24,6 +29,9 @@ public final class EngineSteps {
   // code). Empty from the start of a build until its steps have loaded.
   private static Long experimentId = null;
   private static final Map<Long, String> loaded = new HashMap<Long, String>();
+  // A build's steps are loading: from building() until loaded(), or settled() for a build that
+  // stopped before its steps loaded.
+  private static boolean loading = false;
 
   private EngineSteps() {}
 
@@ -32,6 +40,7 @@ public final class EngineSteps {
     synchronized (LOCK) {
       experimentId = experiment == null ? null : experiment.id;
       loaded.clear();
+      loading = true;
     }
   }
 
@@ -52,6 +61,18 @@ public final class EngineSteps {
       experimentId = experiment.id;
       loaded.clear();
       loaded.putAll(steps);
+      loading = false;
+    }
+  }
+
+  /**
+   * No build is under way now: the build failed, or the caller holds the engine's lock, which a
+   * build holds from its start until its steps have loaded. A build that stopped before its steps
+   * loaded left the engine without them, so they count as changed from now on ("Reload needed").
+   */
+  static void settled() {
+    synchronized (LOCK) {
+      loading = false;
     }
   }
 
@@ -76,7 +97,7 @@ public final class EngineSteps {
   /**
    * Whether {@code experiment}'s saved steps differ from what the engine has of them: a step saved
    * since, a new one, or one deleted (the engine keeps what it defined). False for an experiment the
-   * engine wasn't built for, and in file mode.
+   * engine wasn't built for, in file mode, and while a build's steps are loading.
    */
   static boolean changed(Experiment experiment) {
     if (experiment == null || experiment.id == null || Boolean.TRUE.equals(experiment.fileMode)) {
@@ -84,7 +105,7 @@ public final class EngineSteps {
     }
     Map<Long, String> has;
     synchronized (LOCK) {
-      if (!experiment.id.equals(experimentId)) {
+      if (!experiment.id.equals(experimentId) || loading) {
         return false;
       }
       has = new HashMap<Long, String>(loaded);

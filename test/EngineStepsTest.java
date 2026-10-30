@@ -175,6 +175,87 @@ public class EngineStepsTest extends BaseTest {
         await("reloaded", () -> told(b, e, false) && Integer.valueOf(5).equals(engine().eval("noteValue")));
     }
 
+    /**
+     * A step that holds its build while system property {@code gate} is "closed" (20 s at most), so a
+     * test can ask what the engine runs while the steps load. It sets {@code gate}.in as it starts.
+     */
+    private static String gateStep(String gate) {
+        return "System.setProperty('" + gate + ".in', 'yes')\n"
+            + "def gateUntil = System.currentTimeMillis() + 20000\n"
+            + "while (System.getProperty('" + gate + "') == 'closed' && System.currentTimeMillis() < gateUntil) { Thread.sleep(20) }\n"
+            + "gateValue = 1";
+    }
+
+    private static int indexSince(AdminSocketsTest.Tab t, int from, AdminSocketsTest.Matcher m) {
+        for (int i = from; i < t.frames.size(); i++) if (m.matches(t.frames.get(i))) return i;
+        return -1;
+    }
+
+    /**
+     * Reload engine, with its steps held at the gate. As every console does, ask for the User JSON as
+     * soon as the engine says it rebuilt (admin.ts askEngineInfo), and return what it says the engine
+     * runs; {@code meanwhile} runs once the steps have begun to load. The gate stays closed.
+     */
+    private static JsonNode askedWhileTheStepsLoad(final AdminSocketsTest.Tab a, final String gate, Runnable meanwhile) throws Exception {
+        System.clearProperty(gate + ".in");
+        System.setProperty(gate, "closed");
+        final int before = a.frames.size();
+        a.send("ReloadEngine");
+        await("the engine says it rebuilt", () -> indexSince(a, before, f -> f.path("notify").has("ScriptEngineReloaded")) >= 0);
+        await("its steps load", () -> System.getProperty(gate + ".in") != null);
+        meanwhile.run();
+        final int asked = a.frames.size();
+        a.send("Update");
+        await("the User JSON", () -> indexSince(a, asked, AdminSocketsTest.userJson()) >= 0);
+        JsonNode answer = a.frames.get(indexSince(a, asked, AdminSocketsTest.userJson()));
+        assertNull("the steps are still loading", engine().get("gateValue"));
+        return answer.has("engine") ? answer.get("engine") : answer.get("user").get("engine");
+    }
+
+    @Test
+    public void aConsoleThatAsksWhileARebuildsStepsLoadIsNotToldToReload() throws Throwable {
+        final String gate = "bb.test.enginesteps." + UUID.randomUUID();
+        try {
+            final User alice = user("alice");
+            final Experiment e = createExperiment("Slow steps");
+            createStep(e, "Gate", gateStep(gate));
+            final AdminSocketsTest.Tab a = loggedIn(alice);
+            final Step note = loadedNote(e, alice, a);
+
+            // Reload engine with nothing saved: nothing to reload, while the steps load and after.
+            JsonNode during = askedWhileTheStepsLoad(a, gate, () -> {});
+            assertEquals(e.id.longValue(), during.get("experimentId").asLong());
+            assertFalse("nothing was saved", during.get("stepsChanged").asBoolean());
+            final int loading = a.frames.size();
+            System.clearProperty(gate);
+            await("the push after the steps loaded", () -> indexSince(a, loading, f -> f.has("engine") && !f.has("user")) >= 0);
+            assertTrue(told(a, e, false));
+            for (int i = loading; i < a.frames.size(); i++) {
+                JsonNode engine = a.frames.get(i).has("user") ? null : a.frames.get(i).get("engine");
+                if (engine != null) assertFalse("never said since: " + engine, engine.path("stepsChanged").asBoolean());
+            }
+
+            // Reloaded for a step saved before: the same.
+            assertEquals(OK, status(saveStep(alice, note.id, e.id, "Note", "noteValue = 2")));
+            await("saved", () -> told(a, e, true));
+            during = askedWhileTheStepsLoad(a, gate, () -> {});
+            assertFalse("the engine is loading what was saved", during.get("stepsChanged").asBoolean());
+            System.clearProperty(gate);
+            await("loaded", () -> told(a, e, false) && Integer.valueOf(2).equals(engine().get("noteValue")));
+
+            // A step saved while they load, after the build took them: needs a reload once they have loaded.
+            during = askedWhileTheStepsLoad(a, gate, () ->
+                assertEquals(OK, status(saveStep(alice, note.id, e.id, "Note", "noteValue = 3"))));
+            assertFalse(during.get("stepsChanged").asBoolean());
+            System.clearProperty(gate);
+            await("the save is told", () -> told(a, e, true));
+            assertEquals(2, engine().get("noteValue"));
+        } finally {
+            System.clearProperty(gate);
+            System.clearProperty(gate + ".in");
+        }
+    }
+
     @Test
     public void aDeletedOrNewStepNeedsAReloadButAnotherExperimentsStepsDont() throws Throwable {
         final User alice = user("alice");
