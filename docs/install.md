@@ -35,9 +35,12 @@ Then start it:
   **Unblock** and click **OK**. Otherwise Windows (Smart App Control) may refuse to run
   `breadboard.bat`, which came from the internet. Then right-click the zip, choose **Extract All**,
   and double-click `breadboard.bat` in the new folder. (Opened inside the zip, it says to extract
-  the zip first.) The first time, Windows Firewall asks about Java: tick **Private networks**, so
-  that the lab's computers can reach Breadboard, and click **Allow**. If SmartScreen still warns,
-  choose **More info** → **Run anyway**.
+  the zip first.) The first time, Windows Firewall asks whether Java may communicate on networks.
+  For the lab's computers to reach Breadboard, tick the kind of network this computer is on,
+  **Private networks** or **Public networks** (Windows often counts a network it joins for the first
+  time as public; Settings → Network & internet says which), and click **Allow access**, which needs
+  an administrator. Breadboard works on this computer either way. If SmartScreen still warns, choose
+  **More info** → **Run anyway**.
 - **Linux**: unzip it (if `unzip` is missing: `sudo apt install unzip`) and run `./breadboard.sh` in
   the folder.
 

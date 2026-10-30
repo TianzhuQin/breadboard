@@ -28,8 +28,10 @@ Chinese.
 - **Windows**: before you unzip the download, right-click it, choose **Properties**, tick
   **Unblock** and click **OK** (otherwise Windows may refuse to run `breadboard.bat`, which came
   from the internet). Then right-click the zip, choose **Extract All**, and double-click
-  `breadboard.bat` in the new folder. The first time, Windows Firewall asks about Java: tick
-  **Private networks**, so that the lab's computers can reach Breadboard, and click **Allow**.
+  `breadboard.bat` in the new folder. The first time, Windows Firewall asks about Java. For the
+  lab's computers to reach Breadboard, tick the kind of network you are on, **Private networks** or
+  **Public networks** (Windows often counts a new network as public; Settings → Network & internet
+  says which), and click **Allow access**, which needs an administrator.
 - **Linux**: unzip it (if `unzip` is missing: `sudo apt install unzip`) and run `./breadboard.sh`
   in this folder.
 
@@ -124,8 +126,8 @@ and start Breadboard again.
 ## Upgrading from an earlier release
 
 1. Stop the old server and make a copy of its `db/breadboard.h2.db`.
-2. Copy that file into this folder's `db/`. From a 3.x release, also copy `conf/application.secret`;
-   if you use file mode, copy the `dev/` folder too.
+2. Copy that file into this folder's `db/`. From a 3.x release, also copy `conf/application.secret`
+   and the `backups/` folder (3.0 had none); if you use file mode, copy the `dev/` folder too.
 3. Copy your `conf/local.conf` into this folder's `conf/`. Releases before 3.1 had none: if you
    changed settings in the old `conf/application-prod.conf` (such as `breadboard.rootUrl`,
    `breadboard.secureCookies`, `session.secure`, AWS keys), put just those lines in
@@ -133,7 +135,8 @@ and start Breadboard again.
 4. Start this release. It updates the database's tables by itself.
 
 Experiments keep their participant pages. The new researcher console opens at the server's
-address; the previous one is still at `/legacy-admin`. Researchers sign in again after the upgrade.
+address; the previous one is still at `/legacy-admin`. From 3.x, with `conf/application.secret`
+copied, researchers stay signed in; from 2.x, they sign in again.
 The 2.x launchers also served HTTPS on port 9443 with a self-signed certificate; these don't, so
 use a reverse proxy as above (or see `docs/install.md`).
 
