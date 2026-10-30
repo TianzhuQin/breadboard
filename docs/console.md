@@ -140,7 +140,10 @@ has a session running, which a reload would end.
 Content holds the texts participants read: instructions, consent forms, messages. Scripts show a
 text with `c.get("Name")`, shown above the editor with a copy button. Each text is written once
 per language: **Languages** sets the experiment's languages, and the language bar switches between
-them. **New text** starts from an empty text or a copy of another. Edit in **Visual** or **HTML**;
+them. The steps choose the language participants read with `c.setDefaultLanguage("zho")` (the codes
+are the ones the language bar shows); a text that has no version in it yet is shown in English, or
+else in the language it was written in first. **New text** starts from an empty text or a copy of
+another. Edit in **Visual** or **HTML**;
 **Preview** shows the text as participants see it. **Save** saves this text, and the button at the
 top right saves every changed text (Ctrl+S). The **⋯** menu has **Rename** (F2), **Discard
 changes** and **Delete text…**. After a rename, scripts that use the old name need the new one.
