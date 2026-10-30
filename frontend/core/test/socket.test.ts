@@ -410,6 +410,29 @@ describe('Socket reconnecting', () => {
     expect(s.blocked).toBe(false)
   })
 
+  it('counts the attempts in a row that never opened, also after it has been open, from each time it opens', () => {
+    const s = track(new Socket('ws://lab/connect'))
+    const unopened: number[] = []
+    s.on('unopened', (n: number) => unopened.push(n))
+    s.connect()
+    expect(s.hasOpened).toBe(false)
+    FakeSocket.all[0].fail()
+    untilNextAttempt().accept()
+    expect(s.hasOpened).toBe(true)
+    latest().drop()
+    untilNextAttempt().fail()
+    untilNextAttempt().fail()
+    // (one that doesn't open in time counts too)
+    untilNextAttempt()
+    vi.advanceTimersByTime(15000)
+    expect(unopened).toEqual([1, 1, 2, 3])
+    // a connection that opened and dropped is no attempt that never opened
+    untilNextAttempt().accept()
+    latest().drop()
+    untilNextAttempt().fail()
+    expect(unopened).toEqual([1, 1, 2, 3, 1])
+  })
+
   it('drops queued answers that waited longer than they may, and sends the rest', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const s = track(new Socket('ws://lab/connect'))

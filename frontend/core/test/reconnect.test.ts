@@ -96,6 +96,13 @@ async function openPage (fetch: ReturnType<typeof stateAnswers>, accept = true) 
   return { Breadboard, players, messages, connections, ended: () => ended }
 }
 
+/** Let the clock run until the page makes its next attempt (at most the longest wait), and return it. */
+async function nextAttempt () {
+  const n = FakeSocket.all.length
+  for (let t = 0; t <= 31000 && FakeSocket.all.length === n; t += 100) await vi.advanceTimersByTimeAsync(100)
+  return FakeSocket.all[FakeSocket.all.length - 1]
+}
+
 /** The server goes away and comes back: the page's next attempt is taken. */
 async function reconnect (k: number) {
   FakeSocket.all[k - 1].drop()
@@ -299,6 +306,74 @@ describe('the page\'s connection, as the participant hears of it', () => {
     expect(FakeSocket.all.length).toBe(4)
     FakeSocket.all[3].accept()
     expect(page.Breadboard.connection).toBe('open')
+  })
+
+  it('says the network may block it when, having been open, it can\'t open again while the server answers over HTTP', async () => {
+    const fetch = stateAnswers([200, CONFIG])
+    const page = await openPage(fetch)
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 4; k++) (await nextAttempt()).fail()
+    expect(page.Breadboard.connection).toBe('lost')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    // the fifth in a row: the page asks the server over plain HTTP, which answers, and tries the
+    // live connection again at once (a server that has just come back would take it)
+    ;(await nextAttempt()).fail()
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(FakeSocket.all.length).toBe(7)
+    expect(page.Breadboard.connection).toBe('lost')
+    FakeSocket.all[6].fail()
+    expect(page.Breadboard.connection).toBe('blocked')
+    // it goes on trying, and is open once the network lets it through
+    await settle()
+    ;(await nextAttempt()).accept()
+    expect(page.Breadboard.connection).toBe('open')
+    // (blocked until then: the next attempt is still under it)
+    const since = page.connections.slice(page.connections.indexOf('blocked'))
+    expect(since.filter(c => c !== 'blocked')).toEqual(['open'])
+  })
+
+  it('takes the attempt right after the server answers over HTTP, when the server has just come back', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 5; k++) (await nextAttempt()).fail()
+    await settle()
+    FakeSocket.all[6].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.connections).not.toContain('blocked')
+  })
+
+  it('stays lost while the server doesn\'t answer over HTTP either: it is down', async () => {
+    let calls = 0
+    const fetch = vi.fn(async () => {
+      if (calls++ === 0) return { status: 200, json: async () => CONFIG }
+      throw new TypeError('Failed to fetch')
+    })
+    const page = await openPage(fetch as any)
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 8; k++) {
+      ;(await nextAttempt()).fail()
+      await settle()
+    }
+    expect(fetch.mock.calls.length).toBe(5)
+    expect(page.Breadboard.connection).toBe('lost')
+    expect(page.connections).not.toContain('blocked')
+  })
+
+  it('takes a proxy\'s "bad gateway" for a server that is down, and says it is blocked no more once the server is', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG], [200, CONFIG], [502, {}]))
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 5; k++) (await nextAttempt()).fail()
+    await settle()
+    FakeSocket.all[6].fail()
+    expect(page.Breadboard.connection).toBe('blocked')
+    // the server stops answering (the proxy in front of it says so)
+    await settle()
+    for (let k = 0; k < 3; k++) {
+      ;(await nextAttempt()).fail()
+      await settle()
+    }
+    expect(page.Breadboard.connection).toBe('lost')
   })
 
   it('tries again at once when the participant asks', async () => {

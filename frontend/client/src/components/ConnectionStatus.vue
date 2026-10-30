@@ -9,8 +9,9 @@
     class="bb-connection"
     :class="{ 'bb-connection--watching': state === 'watching' }"
   >
-    <!-- What a page says while it reconnects: `state` is 'lost', or 'blocked' (it has never
-         connected: the network may not let it). `time` is how long until the next attempt (ms),
+    <!-- What a page says while it reconnects: `state` is 'lost', or 'blocked' (it can't connect
+         while the server answers over plain HTTP, or has never connected: the network may not let
+         it). `time` is how long until the next attempt (ms),
          counting down, and 0 while one is under way; `tryNow` does what the button does. Pages
          written for 3.0 put their message here: only these states show it. -->
     <slot v-if="reconnecting" :time="time" :state="state" :tryNow="tryNow">

@@ -43,13 +43,14 @@ type Queued = { message: any, at: number, maxAge?: number }
  * nothing more.
  *
  * Events: 'connect' (an attempt starts), 'open', 'message' (data, event), 'close', 'error', 'retry'
- * (the wait in ms before the next attempt), 'refused' and 'blocked' (below).
+ * (the wait in ms before the next attempt), 'unopened', 'refused' and 'blocked' (below).
  *
+ * After each attempt that didn't open, it emits 'unopened' with the number of such attempts in a row.
  * When the server takes the connection and closes it again without sending anything, several
  * times in a row, it emits 'refused': reconnecting alone is not going to change that. When the
  * connection has never opened after several attempts, it emits 'blocked': the network may not let
- * it through. It goes on trying in both cases, and at once when the browser says the network is
- * back, or the page is shown again (from the background, or the back/forward cache).
+ * it through. It goes on trying in all these cases, and at once when the browser says the network
+ * is back, or the page is shown again (from the background, or the back/forward cache).
  */
 export class Socket extends Emitter {
   public state: SocketState = SocketState.CLOSED
@@ -87,7 +88,7 @@ export class Socket extends Emitter {
   private maxRefusals = 3
   /** The connection has opened at least once */
   private everOpened = false
-  /** Attempts in a row that never opened */
+  /** Attempts in a row that never opened (since the connection last opened) */
   private unopened = 0
   /** Listening for the network or the page coming back */
   private watchingPage = false
@@ -99,6 +100,11 @@ export class Socket extends Emitter {
     this.onVisibility = this.onVisibility.bind(this)
     this.onPageShow = this.onPageShow.bind(this)
     this.beat = this.beat.bind(this)
+  }
+
+  /** Whether the connection has opened at least once (one that never has may be 'blocked') */
+  get hasOpened (): boolean {
+    return this.everOpened
   }
 
   /**
@@ -432,9 +438,13 @@ export class Socket extends Emitter {
       this.refusals = 0
       this.emit('refused')
     }
-    if (unopened && !this.everOpened && ++this.unopened >= BLOCKED_AFTER && !this.blocked) {
-      this.blocked = true
-      this.emit('blocked')
+    if (unopened) {
+      this.unopened++
+      if (!this.everOpened && this.unopened >= BLOCKED_AFTER && !this.blocked) {
+        this.blocked = true
+        this.emit('blocked')
+      }
+      this.emit('unopened', this.unopened)
     }
   }
 

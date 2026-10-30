@@ -20,6 +20,11 @@ const ANSWER_MAX_AGE_MS = 5000
 // The heartbeat of a participant's socket: the server answers {"action":"Ping"} with {"pong": <time>}
 // (servers before 3.1 ignore it).
 const PING = JSON.stringify({ action: 'Ping' })
+// A participant's page whose connection had opened, and then can't open it again this many times
+// in a row, asks the server over plain HTTP whether it is there (see checkServer)
+const BLOCKED_AFTER_DROP = 5
+// How long that question may take
+const SERVER_CHECK_TIMEOUT_MS = 10 * 1000
 
 /** Whether a frame is the server's answer to PING (every frame passes here: most are not parsed) */
 function isPong (text: any): boolean {
@@ -187,10 +192,19 @@ function showPreviewEnded () {
   app.appendChild(page)
 }
 
-/** Ask for this page's state (/state), with its token */
-function requestState () {
+/** Ask for this page's state (/state), with its token; given up after `timeoutMs`, if set */
+function requestState (timeoutMs?: number) {
   const token = participantToken()
-  return http.get<BreadboardConfig>('state', token ? { headers: { [TOKEN_HEADER]: token } } : {})
+  const init: any = token ? { headers: { [TOKEN_HEADER]: token } } : {}
+  if (!timeoutMs || typeof AbortController === 'undefined') return http.get<BreadboardConfig>('state', init)
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), timeoutMs)
+  init.signal = abort.signal
+  // (an answer is never the browser's copy of an earlier one)
+  init.cache = 'no-store'
+  const answer = http.get<BreadboardConfig>('state', init)
+  answer.then(() => clearTimeout(timer), () => clearTimeout(timer))
+  return answer
 }
 
 /** Where /state's answer sends a page whose credentials the server doesn't take; else null */
@@ -245,7 +259,9 @@ export const ENDED_EVENT = 'bb:ended'
  * - 'connecting': the first attempt is under way
  * - 'open'
  * - 'lost': it dropped, or an attempt failed; it is reconnecting
- * - 'blocked': it has never opened, after several attempts: the network may not let it through
+ * - 'blocked': it can't open: it never has, after several attempts, or it had and then can't again
+ *   although the server answers over plain HTTP. The network may not let it through; it goes on
+ *   trying.
  * - 'elsewhere': another page took the seat: the study was opened in another tab or window (or, on
  *   a preview, the researcher opened another preview of this player); see useHere
  * - 'ended': the session is over for this page; it no longer reconnects
@@ -275,6 +291,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private dropped = false
   /** The server said the current connection only watches; every new connection starts without */
   private watchingNow = false
+  /**
+   * The connection had opened, and now can't again although the server answers over plain HTTP:
+   * the network lets the page reach the server but not open its live connection (see checkServer)
+   */
+  private liveBlocked = false
+  /** checkServer found the server answering over HTTP and tried the connection again at once */
+  private serverAnswered = false
+  /** checkServer is waiting for the server */
+  private checkingServer = false
 
   /** Whether the live connection is open: what the page sends now reaches the server now */
   get isOpen (): boolean {
@@ -286,7 +311,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     if (this.ended) return 'ended'
     if (this.replaced) return 'elsewhere'
     if (this.isOpen) return this.watchingNow ? 'watching' : 'open'
-    if (this.socket && this.socket.blocked) return 'blocked'
+    if (this.socket && (this.socket.blocked || this.liveBlocked)) return 'blocked'
     return this.dropped ? 'lost' : 'connecting'
   }
 
@@ -357,6 +382,12 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       this.socket.on('close', () => { this.dropped = true })
       // (before CONNECTION_EVENT below: a new connection is the player's own until the server says)
       this.socket.on('connect', () => { this.watchingNow = false })
+      this.socket.on('open', () => {
+        this.liveBlocked = false
+        this.serverAnswered = false
+      })
+      // A participant's page that had connected and can't again: the network, or the server?
+      if (config.clientId) this.socket.on('unopened', (inARow: number) => this.onUnopened(inARow))
       // Propagate all socket events out to the Breadboard object
       for (const event of ['connect', 'open', 'close', 'error', 'retry']) {
         this.socket.on(event, (...args: any) => this.emit(event, ...args))
@@ -657,6 +688,56 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     } finally {
       this.checkingSeat = false
     }
+  }
+
+  /**
+   * An attempt to connect again didn't open, `inARow` in a row. From the BLOCKED_AFTER_DROP-th on,
+   * the page asks the server over plain HTTP (checkServer) after each one. When the server answered
+   * and the attempt made right after that didn't open either, the network lets the page reach the
+   * server but not open its live connection: 'blocked', which tells the participant to try another
+   * network. A page that has never connected is the socket's own 'blocked'.
+   */
+  private onUnopened (inARow: number) {
+    if (!this.socket.hasOpened || inARow < BLOCKED_AFTER_DROP) return
+    if (this.serverAnswered) {
+      this.serverAnswered = false
+      this.setLiveBlocked(true)
+    }
+    this.checkServer()
+  }
+
+  /**
+   * Ask for the page's state over plain HTTP. When the server doesn't answer (or answers that it
+   * can't serve: a proxy's 502), it is down, and 'lost' is what the participant should hear. When it
+   * answers, the live connection is tried again at once, unless the page already says it is
+   * 'blocked' (a server that has just come back takes it).
+   */
+  private async checkServer () {
+    if (this.checkingServer || this.ended || this.replaced) return
+    this.checkingServer = true
+    let answers = false
+    try {
+      const res = await requestState(SERVER_CHECK_TIMEOUT_MS)
+      answers = res.status < 500
+    } catch (e) {
+      // (it can't be reached)
+    } finally {
+      this.checkingServer = false
+    }
+    if (this.isOpen || this.ended || this.replaced) return
+    if (!answers) {
+      this.serverAnswered = false
+      this.setLiveBlocked(false)
+    } else if (!this.liveBlocked) {
+      this.serverAnswered = true
+      this.socket.reconnectNow()
+    }
+  }
+
+  private setLiveBlocked (blocked: boolean) {
+    if (this.liveBlocked === blocked) return
+    this.liveBlocked = blocked
+    this.emit(CONNECTION_EVENT)
   }
 
   /**

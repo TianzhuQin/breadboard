@@ -242,6 +242,13 @@ and notices a connection that died without closing. `<ConnectionStatus />` says 
 with **Try now** while it reconnects. When the study is opened in another tab or window, the newer
 page takes over and the older one stops, with **Use it here** to take it back.
 
+**A network that blocks the live connection.** A page that has never connected after three tries
+says the network may not let it through, and suggests another network or browser. So does a page
+that was connected and then can't connect again: after five failed tries in a row it asks the
+server over plain HTTP after each try. If the server answers, the page tries once more at once, and
+if that fails too, the network lets it reach the server but not open its live connection. If the
+server doesn't answer, it is down, and the page goes on saying the connection was lost.
+
 `Breadboard.connection` says how the connection is, and Breadboard emits `bb:connection` whenever
 it may have changed (`Breadboard.on('bb:connection', () => ...)`):
 
@@ -250,7 +257,7 @@ it may have changed (`Breadboard.on('bb:connection', () => ...)`):
 | `connecting` | The first try is under way. |
 | `open` | Connected. |
 | `lost` | It dropped, and is reconnecting. |
-| `blocked` | It has never connected after several tries: the network may not let it. It goes on trying. |
+| `blocked` | It can't connect, and the network may not let it (see above). It goes on trying. |
 | `elsewhere` | Another page has the seat, e.g. the study opened in another tab. `Breadboard.useHere()` takes it back. |
 | `ended` | The session is over for this page; it no longer reconnects. |
 | `watching` | A researcher's preview that only watches (below). |
