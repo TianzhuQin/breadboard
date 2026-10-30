@@ -68,12 +68,14 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | **Run this experiment unattended** | 关 | 总开关。在 **Experiment** 里选要运行的实验。 |
 | **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场。 |
 | **Longest session** | 120 分钟 | 从游戏开始算起。游戏超过这个时间就会被结束：参与者看到这一场时间已用完（已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionTooLong` 事件，过了暂停时间再开下一场，Autopilot 页会写明是哪一场。连续 3 场都超时，自动运行就暂停。留空表示不限。新的设置默认 120 分钟；用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。 |
-| **Start the game automatically when enough people are here** | 开 | 等待室：先到的人看到等待页面。 |
-| **Minimum players** / **Maximum players** | 2 / 不限 | 到了最少人数就可以开始；到了最多人数，马上开始倒计时。 |
-| **Wait for more people** | 60 秒 | 最少人数到齐后，再等迟到的人多久。 |
-| **Give up after** | 不限 | 从第一个人到达算起。到时人数还不够，这一场取消，并告诉等待的人。 |
-| **Countdown** | 5 秒 | 开始前参与者看到的倒计时。 |
-| **Let the computer play for people who leave** | 开 | 有人中途关掉页面，过了 **Take over after**（30 秒）由电脑替他玩。勾选 **Give the seat back when they return**，他回来后可以接着玩。 |
+| **Use the waiting room set here** | 开；实验步骤自己设了等候室时为关 | 等候室：先到的人看到等待页面，人够了游戏自己开始。打开时用下面四项设置。关着时，如果实验步骤自己设了等候室，就用步骤里的（点 **Show what the steps say** 可以看到），下面四项也不显示；如果步骤没设，要有人点 **Start the game**，游戏才会开始。 |
+| **Minimum players** / **Maximum players** | 2 / 不限 | 只在上面的开关打开时有效。到了最少人数就可以开始；到了最多人数，马上开始倒计时。 |
+| **Wait for more people** | 60 秒 | 只在上面的开关打开时有效。最少人数到齐后，再等迟到的人多久。 |
+| **Give up after** | 600 秒 | 只在上面的开关打开时有效。从第一个人到达算起，到时人数还不够，这一场就取消，并告诉等待的人。留空表示一直等。 |
+| **Countdown** | 5 秒 | 只在上面的开关打开时有效。开始前参与者看到的倒计时。 |
+| **Let the computer play for people who leave, as set here** | 开；实验步骤自己设了时为关 | 有人中途关掉页面，过了 **Take over after**（30 秒）由电脑替他玩；勾选 **Give the seat back when they return**，他回来后可以接着玩。关着时用实验步骤里的设置。 |
+
+**用 Example: network game 时**，它的步骤自己设好了等候室和电脑代玩，这两个开关保持关着就行。最少人数、等待时间和网络人数在 **Parameters** 页改（`minPlayers`、`waitSeconds`、`networkSize`）。
 
 **要用 Prolific 招募？** 先按下面[用 Prolific 招募](#用-prolific-招募)的第 5 步设好完成码，试一遍，再打开自动运行。
 
