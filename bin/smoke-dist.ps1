@@ -152,8 +152,9 @@ Pass 'a second start from the same folder says where the first one is'
 $other = Expand-Release (Join-Path $work 'another copy! (2)')
 $third = Start-Breadboard $other $Port 'third.log' 'third-err.log' -Wait
 $said = Get-Said 'third.log'
-if ($third.ExitCode -ne 1 -or -not $said.Contains("Port $Port is in use")) {
-  Fail "another copy started on the same port didn't say the port is in use (exit code $($third.ExitCode)): $said"
+# (with a command for another port that works from any Command Prompt: breadboard.bat's full path)
+if ($third.ExitCode -ne 1 -or -not $said.Contains("Port $Port is in use") -or -not $said.Contains("\breadboard.bat`" -Dhttp.port=$($Port + 1)")) {
+  Fail "another copy started on the same port didn't say the port is in use, with a command for another one (exit code $($third.ExitCode)): $said"
 }
 Pass 'another copy on the same port says the port is in use (from a folder whose path has a "!")'
 

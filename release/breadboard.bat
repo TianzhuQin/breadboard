@@ -373,7 +373,8 @@ SET /A "NEXT_PORT=PORT+1"
 ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
 IF DEFINED PORT_OPT GOTO say_port_local
 ECHO To start another one, choose another port: for every start, with the line  http.port=%NEXT_PORT%
-ECHO in conf\local.conf, or once, from a Command Prompt in this folder:  breadboard.bat -Dhttp.port=%NEXT_PORT%
+ECHO in conf\local.conf, or once, from a Command Prompt:
+ECHO   "%CD%\breadboard.bat" -Dhttp.port=%NEXT_PORT%
 GOTO :EOF
 :say_port_local
 ECHO To start another one, change the line http.port=%PORT% in conf\local.conf to another port, e.g.
