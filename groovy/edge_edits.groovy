@@ -177,9 +177,11 @@ class EdgeEdits {
       }
     }
     log(player.id.toString(), op, v1, v2, reason == null, reason)
-    // applied: the network changed now. False when onEdit took the edit instead (e.g. to apply
-    // proposals later), so the client can say "sent" rather than "done".
-    player.send(resultEvent, [ok: reason == null, applied: reason == null && rule?.onEdit == null,
+    // applied: the network changed now. False when onEdit only took the edit (e.g. to apply proposals
+    // later), so the client can say "sent" rather than "done"; true when onEdit made the change itself
+    // (the network game example does, to record a cut as its own TieCut event).
+    boolean applied = reason == null && (rule?.onEdit == null || g.hasEdge(v1, v2) == (op == "add"))
+    player.send(resultEvent, [ok: reason == null, applied: applied,
                               op: op, a: data?.a, b: data?.b, reason: reason])
     refreshAll()
   }
