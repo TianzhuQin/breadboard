@@ -152,20 +152,25 @@ People who come back after a session was given up get its "could not start" noti
 to `onCancel` too.
 
 The server opens a session at startup. Participants enter through `/play/{e}/login` or
-`/play/{e}/prolific?...` and wait in the waiting room. Someone whose connection drops there counts
-as gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor
-gets the session given up. The game starts by itself. People who left before the start get no
-seat, and are told so if they come back (see below). With `maxPlayers`, at most that many are
-seated, the first to arrive: once that many are here (or away for a moment, keeping their seat) the
-countdown begins, and the study's links send nobody more to the session; anyone else there as the
-game starts is taken out of the network and told the session is full, with how to join the next
-one (`player.ended = "sessionFull"`, and a `sessionFull` event). They used to be seated however many
-were there. With `replaceDisconnected`, someone away for
-less than a minute (or `afterSeconds`, if that is longer) keeps their seat, which the computer plays
-until they are back; without it nobody would play that seat, so they get none either.
-Someone who drops out mid-game is played by the computer after the grace period. A new session
-opens when the game finishes. Waiting-room settings saved in the console replace the steps' own
-even for people who are already waiting: the limits count from the first arrival.
+`/play/{e}/prolific?...` and wait in the waiting room. While no session takes participants (a game is
+under way, a full room counts down, or the next session is about to open) and the autopilot opens the
+next one by itself (it is on, continuous, and neither paused nor done), these links show a page that
+says so and loads itself again every few seconds, which then goes into the session; they used to
+say "No session is open right now" and to try again later (Prolific participants: to return the
+study), which they still do while the autopilot is off, paused or done. Someone whose connection
+drops there counts as gone only after `departureGraceSeconds`, so a moment's drop neither starts the
+wait again nor gets the session given up. The game starts by itself. People who left before the
+start get no seat, and are told so if they come back (see below). With `maxPlayers`, at most that
+many are seated, the first to arrive: once that many are here (or away for a moment, keeping their
+seat) the countdown begins, and the study's links send nobody more to the session; anyone else there
+as the game starts is taken out of the network and told the session is full, with how to join the
+next one (`player.ended = "sessionFull"`, and a `sessionFull` event). They used to be seated however
+many were there. With `replaceDisconnected`, someone away for less than a minute (or `afterSeconds`,
+if that is longer) keeps their seat, which the computer plays until they are back; without it nobody
+would play that seat, so they get none either. Someone who drops out mid-game is played by the
+computer after the grace period. A new session opens when the game finishes. Waiting-room settings
+saved in the console replace the steps' own even for people who are already waiting: the limits
+count from the first arrival.
 
 ## The participant page
 

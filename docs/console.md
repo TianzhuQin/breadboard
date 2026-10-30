@@ -326,7 +326,12 @@ after asking), then press **Resume** here when you are done.
 The top of the page shows the autopilot's state, its **Open session** (with **Watch it live**),
 recent activity, any problem that keeps it from opening sessions, and the **Participant links**:
 the **Sign-in link** (`/play/<experiment id>/login`) and the **Prolific link**. They always lead to
-the session open at the moment, so the same links keep working from one session to the next.
+the session open at the moment, so the same links keep working from one session to the next. While
+none takes participants (its game is under way, its full waiting room counts down, or the next one is
+about to open), they show a page that says a session is in progress and the next one opens when it
+ends; it checks again every few seconds and takes people in once a session opens (Prolific
+participants read that they can keep it open, or return the study if they can't wait). When the
+autopilot is off, paused or done, they say that no session is open.
 
 **What pauses it.** Ending the autopilot's session from the console pauses the autopilot: stopping
 it, or anything that reloads the engine (creating or resuming another session, reloading); selecting
@@ -389,8 +394,10 @@ one for Mechanical Turk.
 Prolific, choose to record Prolific IDs with URL parameters, and leave the parts like
 `{{%PROLIFIC_PID%}}` as they are. The link leads to this experiment's open session whose game
 hasn't started, and the page says which one that is now, or warns that participants would see
-"No session is open right now". **Try it as a test participant** opens it with a made-up Prolific
-ID, taking a seat like a real participant.
+"No session is open right now" (while the autopilot opens the next session by itself, they see a
+page that waits for it instead: see [above](#running-sessions-with-nobody-at-the-console)).
+**Try it as a test participant** opens it with a made-up Prolific ID, taking a seat like a real
+participant.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
 recorded in a `prolificEntry` event. **When a participant finishes** builds the line for your last

@@ -395,7 +395,8 @@ public class ClientLogin extends Controller {
       return notFound(invalidLink());
     }
     if (open == null) {
-      if ("prolific".equals(entry)) {
+      boolean prolific = "prolific".equals(entry);
+      if (prolific) {
         // Someone who already took part is given their code again, not asked to return the study.
         // (With a session open, prolificEntry checks, after the redirect below.)
         String pid = request().getQueryString("PROLIFIC_PID");
@@ -403,6 +404,14 @@ public class ClientLogin extends Controller {
         if (takenPart != null) {
           return ok(takenPart);
         }
+      }
+      if (Autopilot.opensNextBySelf(experiment.id)) {
+        // The autopilot opens the next session by itself, within seconds of the one under way (its
+        // game, or a full room counting down) ending: a page that waits for it, asking again by
+        // itself, rather than one that turned people away until they tried again by hand.
+        return holding(experiment.id, prolific);
+      }
+      if (prolific) {
         // A Prolific study's places are timed: waiting makes no sense, returning lets someone else in.
         return ok(participantMessage.render("No session is open right now",
             "There is no session taking participants at the moment. Please return the study on Prolific."));
@@ -411,6 +420,27 @@ public class ClientLogin extends Controller {
           "There is no session taking participants at the moment. Please try again in a few minutes, or contact the researcher."));
     }
     return redirect("/game/" + experimentId + "/" + open.id + "/" + entry + query);
+  }
+
+  /** How often (seconds) the holding page asks again whether a session is open. */
+  static final int HOLDING_RETRY_SECONDS = 4;
+
+  /**
+   * The page for someone who opens the study's link while the autopilot has no session open but opens
+   * the next by itself (between sessions, during a game, or while a full room counts down): it says a
+   * session is in progress (or opens in a moment) and the next opens when it ends, and loads the same
+   * link again every few seconds, which goes into the session once one is open. A {@code prolific}
+   * participant may keep it open, or return the study if they can't wait.
+   */
+  static Result holding(Long experimentId, boolean prolific) {
+    boolean underWay = Autopilot.sessionUnderWay(experimentId);
+    String title = underWay ? "A session is in progress" : "The next session opens soon";
+    String opens = underWay ? "The next one opens as soon as it has ended, and this page takes you into it by itself"
+        : "It opens in a moment, and this page takes you into it by itself";
+    String message = opens + (prolific ? ", so you can keep it open. If you can't wait, please return the study on Prolific."
+        : ": please keep it open.");
+    response().setHeader("Cache-Control", "no-store");
+    return ok(participantHolding.render(title, message, HOLDING_RETRY_SECONDS));
   }
 
   private static final String PLAY_COOKIE = "bb_seat_";

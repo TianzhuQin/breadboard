@@ -237,6 +237,68 @@ public class AutopilotFlowTest extends BaseTest {
         assertFalse("not sent back to the seat that only says it is full", contentAsString(link).contains("already taking part"));
     }
 
+    // ---- the study's link while no session takes participants --------------------------------------
+
+    private static String page(String uri) {
+        return contentAsString(route(fakeRequest(GET, uri)));
+    }
+
+    @Test
+    public void theStudyLinkWaitsForTheNextSessionWhileTheAutopilotOpensItByItself() throws Exception {
+        final User researcher = user("holding");
+        final Experiment experiment = experimentOf(researcher, "Holding page");
+        ObjectNode s = settings(experiment, 1, 1, 0);   // the game starts as soon as one is here
+        s.put("nextSessionDelaySeconds", 30);
+        assertEquals(OK, status(post(researcher, s)));
+        final ExperimentInstance session = openSession(experiment);
+        String login = "/play/" + experiment.id + "/login";
+        String prolific = "/play/" + experiment.id + "/prolific?PROLIFIC_PID=HOLD1&STUDY_ID=S&SESSION_ID=X";
+        assertEquals("a session is open: straight to it", SEE_OTHER, status(route(fakeRequest(GET, login))));
+        connect(experiment, session, "h-1");
+        await("the game", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted));
+
+        // During the game: a session is in progress, and the next opens when it ends. The page asks again
+        // by itself, every few seconds.
+        Result during = route(fakeRequest(GET, login));
+        String text = contentAsString(during);
+        assertTrue(text, text.contains("A session is in progress"));
+        assertTrue(text, text.contains("The next one opens as soon as it has ended, and this page takes you into it by itself: please keep it open."));
+        assertTrue(text, text.contains("<meta http-equiv=\"refresh\" content=\"4\">"));
+        assertFalse(text, text.contains("try again in a few minutes"));
+        assertEquals("no-store", header("Cache-Control", during));
+        String forProlific = page(prolific);
+        // (the page escapes the apostrophe of "can't")
+        assertTrue(forProlific, forProlific.contains("so you can keep it open. If you can&#x27;t wait, please return the study on Prolific."));
+        assertTrue(forProlific, forProlific.contains("http-equiv=\"refresh\""));
+
+        // Between sessions: the next one opens in a moment.
+        engine().eval("gameListener.finish(); null");
+        await("finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        String between = page(login);
+        assertTrue(between, between.contains("The next session opens soon"));
+        assertTrue(between, between.contains("http-equiv=\"refresh\""));
+
+        // Paused or done, or off, nothing opens by itself: the page says so, and asks nobody to wait.
+        setAutopilot("pausedBecause", "a test paused it");
+        String paused = page(login);
+        assertTrue(paused, paused.contains("No session is open right now"));
+        assertTrue(paused, paused.contains("Please try again in a few minutes, or contact the researcher."));
+        assertFalse(paused, paused.contains("http-equiv=\"refresh\""));
+        assertTrue(page(prolific).contains("There is no session taking participants at the moment. Please return the study on Prolific."));
+        setAutopilot("pausedBecause", null);
+        setAutopilot("doneBecause", "its one session finished");
+        assertFalse(page(login).contains("http-equiv=\"refresh\""));
+        setAutopilot("doneBecause", null);
+        assertTrue(page(login).contains("http-equiv=\"refresh\""));
+        // (changed in the database, as a save would, without the save opening a session)
+        Ebean.createSqlUpdate("update autopilot_settings set continuous = false").execute();
+        String once = page(login);
+        assertTrue(once, once.contains("No session is open right now"));
+        Ebean.createSqlUpdate("update autopilot_settings set continuous = true, enabled = false").execute();
+        String off = page(login);
+        assertTrue(off, off.contains("No session is open right now"));
+    }
+
     @Test
     public void theFullScreenSaysWhatToDoOnProlificAndWhenNoNextSessionOpensByItself() throws Exception {
         final User researcher = user("fullwords");

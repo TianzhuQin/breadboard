@@ -1188,6 +1188,13 @@ public final class Autopilot {
     }
   }
 
+  /** Whether the engine runs a live session of this experiment now (its game, or its waiting room). */
+  public static boolean sessionUnderWay(Long experimentId) {
+    ExperimentInstance live = liveEngineSession();
+    return experimentId != null && live != null && !live.isTestInstance() && live.experiment != null
+        && experimentId.equals(live.experiment.id);
+  }
+
   /** The session the engine runs right now, if it is still going (RUNNING or TESTING); else null. */
   static ExperimentInstance liveEngineSession() {
     ExperimentInstance session = ScriptBoard.engineSession();
