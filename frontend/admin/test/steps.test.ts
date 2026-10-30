@@ -793,6 +793,16 @@ describe('StepsPage', () => {
       const text = () => w.text().replace(/\s+/g, ' ')
       expect(text()).toContain('Saved: the autopilot’s next session uses it. The session it has open now goes on with the steps it started with.')
       expect(text()).not.toContain('The engine isn\'t running your latest steps')
+      // the autopilot runs as another account: a reload from this one would end its session
+      expect(text()).toContain('Reloading the engine from your account would end that session and pause the autopilot.')
+      // it runs as this account: a reload carries its session on, and starts its game again
+      admin.user = { ...admin.user, engine: { experimentId: 7, experimentName: 'Trust game', sessionId: 5, sessionName: 'Autopilot · 1', owner: 'r@lab.org', gameStarted: true, stepsChanged: true } }
+      // (the server's stepsChanged keeps it so; this store's stand-in clears it on the new engine info)
+      await flushPromises()
+      admin.engine = 'stale'
+      await flushPromises()
+      expect(text()).toContain('Reload the engine only to use them there now: its game then starts again from the beginning.')
+      expect(text()).not.toContain('would end that session')
       // the step's own line under the editor says the same
       const d = ensureBucket(7, false).drafts.find(x => x.name === 'InitStep')!
       expect(w.find('.steps__title').text()).toBe('InitStep')
@@ -821,6 +831,7 @@ describe('StepsPage', () => {
       settleConfirm(false)
       admin.instance = null
       admin.engine = 'ready'
+      admin.user = { ...admin.user, engine: undefined }
       w.unmount()
     }
   })

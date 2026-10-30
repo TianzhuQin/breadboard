@@ -133,7 +133,8 @@ latest steps** and offers **Reload engine**, in every researcher's console. **Ru
 run** (Ctrl+Enter), loads just this step's code into the live engine instead. It doesn't start the
 step. While the autopilot's own session is open, the page says instead that the autopilot's next
 session uses what is saved, and **Reload engine** is the lesser button there: a reload would start
-that session's game again. While the engine runs another
+that session's game again (from the account the autopilot runs as; from any other, it would end that
+session and pause the autopilot, and the page says so). While the engine runs another
 experiment, **Run** is off and the page says why: saving still works, and the next session of this
 experiment uses what is saved. **Reload engine** then loads this experiment, unless the other one
 has a session running, which a reload would end.

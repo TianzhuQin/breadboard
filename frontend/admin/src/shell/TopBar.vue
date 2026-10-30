@@ -102,7 +102,10 @@ const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps�
 const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, saved: CircleCheck, stale: TriangleAlert }[engineState.value]))
 const engineTitle = computed(() => engineState.value === 'saved'
   ? autopilotsSession.value
-    ? 'Saved: the autopilot’s next session uses it. Reload the engine only to use the saved steps in its session now, whose game then starts again.'
+    // (a reload carries the autopilot's session on only for the account it runs as)
+    ? `Saved: the autopilot’s next session uses it. ${reloadKeeps() === admin.instance?.id
+      ? 'Reload the engine only to use the saved steps in its session now, whose game then starts again.'
+      : 'Reloading the engine from your account would end its session and pause the autopilot.'}`
     : 'The next session you open uses the saved steps. Reload the engine only to try them now (Script console, Preview).'
   : admin.engine === 'stale'
     ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')

@@ -30,7 +30,10 @@
         <!-- the autopilot's own session runs: what is saved goes into its next one, nothing to reload for -->
         <p v-if="savedForAutopilot" class="steps__banner-text">
           <strong>Saved: the autopilot’s next session uses it.</strong> The session it has open now goes on with the
-          steps it started with. Reload the engine only to use them there now: its game then starts again from the beginning.
+          steps it started with.
+          <template v-if="reloadCarriesOn">Reload the engine only to use them there now: its game then starts again from the beginning.</template>
+          <!-- (the server carries the autopilot's session through a reload only for the account that runs it) -->
+          <template v-else>Reloading the engine from your account would end that session and pause the autopilot.</template>
         </p>
         <p v-else class="steps__banner-text">
           <strong>“{{ admin.experiment?.name }}” runs unattended.</strong> The next session the autopilot opens uses
@@ -43,7 +46,9 @@
           variant="ghost"
           :icon="RotateCw"
           :disabled="!!reloadBlocked"
-          :title="reloadBlocked || 'Loads the saved steps into the autopilot’s session now: its game starts again from the beginning'"
+          :title="reloadBlocked || (reloadCarriesOn
+            ? 'Loads the saved steps into the autopilot’s session now: its game starts again from the beginning'
+            : 'Ends the autopilot’s session and pauses the autopilot, then loads the saved steps')"
           @click="reloadEngine"
         >Reload engine</BButton>
         <BButton size="sm" @click="router.push('/autopilot')">Autopilot</BButton>
@@ -297,6 +302,9 @@ const unattended = computed(() => !!autopilot.value?.on && !!admin.experiment &&
 // so the page says that instead of asking for a reload, which would start its game again.
 const autopilotsSession = computed(() => sessionLive.value && autopilotRunsSession(autopilot.value, admin.experiment?.id, admin.instance?.id))
 const savedForAutopilot = computed(() => autopilotsSession.value && admin.engine === 'stale' && !admin.engineProblem)
+// Whether a reload from this account carries the open session on (the server's ReloadEngine): the
+// autopilot's is carried on only for the account it runs as; for any other it ends, pausing the autopilot.
+const reloadCarriesOn = computed(() => admin.instance != null && reloadKeeps() === admin.instance.id)
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 const modKey = isMac ? 'Cmd' : 'Ctrl'
 const modSymbol = isMac ? '⌘' : 'Ctrl+'
