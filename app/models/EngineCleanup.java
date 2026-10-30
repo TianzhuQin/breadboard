@@ -53,6 +53,9 @@ public final class EngineCleanup {
       // The type factory, which every mapper shares, keeps those classes too.
       JsonSetup.install();
       TypeFactory.defaultInstance().clearCache();
+      // Java's class loaders keep a lock for each class name made up from its scripts' (Script141$UP,
+      // Script141BeanInfo), new with every engine.
+      ScriptClasspath.forgetMadeUpNames();
     } catch (Exception e) {
       Logger.error("Could not release the replaced script engine; it may stay in memory", e);
     }

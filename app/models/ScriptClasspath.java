@@ -1,10 +1,16 @@
 package models;
 
 import groovy.lang.Script;
+import play.Logger;
 
 import javax.script.ScriptEngine;
 import javax.script.ScriptEngineManager;
+import java.lang.reflect.Field;
 import java.net.URL;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -21,6 +27,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * while the server runs, so a name missing once is missing for good, and asking again is cheap. The
  * scripts' own classes are never asked here: each engine's loader has them, and answers for them
  * before it asks this one.
+ *
+ * <p>Some names are new with every engine: those made up from the names the engine gives its
+ * scripts (see {@link #madeUpForAScript}). They are never on the classpath, so they aren't asked
+ * there. Java's class loaders keep a lock object for every class name they are asked for, found or
+ * not, for good, and Java and Groovy still ask the server's loader for some of those names directly
+ * (a class's BeanInfo, its custom metaclass): {@link #forgetMadeUpNames} lets go of their locks when
+ * an engine is dropped. Each engine used to leave about 250 such names behind, for good.
  */
 public final class ScriptClasspath extends ClassLoader {
 
@@ -59,8 +72,7 @@ public final class ScriptClasspath extends ClassLoader {
    * It is in front of the loader the engine would ask otherwise: {@code context} when that one has
    * Groovy's own classes, else Groovy's. The same one serves every engine while that loader stays,
    * and each engine made starts a new generation of what it remembers: names asked for only by the
-   * engine before last go (each build asks for some made of its scripts' names, Script141$UP, which
-   * never come again), the others stay.
+   * engine before last go, the others stay.
    */
   static synchronized ScriptClasspath forNextEngine(ClassLoader context) {
     ClassLoader classpath = Script.class.getClassLoader();
@@ -82,7 +94,7 @@ public final class ScriptClasspath extends ClassLoader {
 
   @Override
   protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-    if (classes.contains(name)) {
+    if (madeUpForAScript(simpleName(name)) || classes.contains(name)) {
       throw new ClassNotFoundException(name);
     }
     try {
@@ -95,7 +107,9 @@ public final class ScriptClasspath extends ClassLoader {
 
   @Override
   public URL getResource(String name) {
-    if (resources.contains(name)) {
+    String file = name.substring(name.lastIndexOf('/') + 1);
+    int extension = file.lastIndexOf('.');
+    if (madeUpForAScript(extension > 0 ? file.substring(0, extension) : file) || resources.contains(name)) {
       return null;
     }
     URL found = classpath.getResource(name);
@@ -103,6 +117,85 @@ public final class ScriptClasspath extends ClassLoader {
       resources.add(name);
     }
     return found;
+  }
+
+  /**
+   * Whether {@code simpleName} (a class's name without its package) is one made up from the name the
+   * engine gave a script, Script141: the script's class itself, one inside it (Script141$UP, which
+   * the compiler tries for every name the script uses, in every package it imports, and the
+   * script's closures), or what Java and Groovy look for beside each class (Script141BeanInfo,
+   * Script141Customizer, Script141MetaClass). The numbers go on from engine to engine.
+   */
+  static boolean madeUpForAScript(String simpleName) {
+    if (!simpleName.startsWith("Script")) {
+      return false;
+    }
+    int digits = "Script".length();
+    int end = digits;
+    while (end < simpleName.length() && simpleName.charAt(end) >= '0' && simpleName.charAt(end) <= '9') {
+      end++;
+    }
+    if (end == digits) {
+      return false;
+    }
+    String rest = simpleName.substring(end);
+    return rest.isEmpty() || rest.charAt(0) == '$'
+        || rest.equals("BeanInfo") || rest.equals("Customizer") || rest.equals("MetaClass");
+  }
+
+  /**
+   * Lets go of the lock objects the server's class loaders (and Java's above them) keep for names
+   * made up from the scripts' (see {@link #madeUpForAScript}). Those that load classes in parallel
+   * keep one for every name they are asked for, found or not, for good: most of these names no longer
+   * reach them, but Java looks for each class's BeanInfo and Customizer through the thread's loader
+   * too, and Groovy for its custom metaclass through its own. No class of such a name is ever
+   * defined there, so its lock guards nothing. Called when an engine is dropped; never throws.
+   */
+  static void forgetMadeUpNames() {
+    if (LOCKS == null) {
+      return;
+    }
+    ScriptClasspath current;
+    synchronized (ScriptClasspath.class) {
+      current = shared;
+    }
+    Set<ClassLoader> loaders = Collections.newSetFromMap(new IdentityHashMap<ClassLoader, Boolean>());
+    for (ClassLoader first : new ClassLoader[]{current == null ? null : current.classpath,
+        Script.class.getClassLoader(), Thread.currentThread().getContextClassLoader()}) {
+      for (ClassLoader l = first; l != null && loaders.add(l); l = l.getParent()) {
+        try {
+          Map<?, ?> locks = (Map<?, ?>) LOCKS.get(l);
+          if (locks == null) {
+            continue; // (not one that loads in parallel: it locks itself)
+          }
+          for (Iterator<?> it = locks.keySet().iterator(); it.hasNext(); ) {
+            Object name = it.next();
+            if (name instanceof String && madeUpForAScript(simpleName((String) name))) {
+              it.remove();
+            }
+          }
+        } catch (Exception e) {
+          Logger.debug("Could not read the class loading locks of " + l + ": " + e);
+        }
+      }
+    }
+  }
+
+  /** ClassLoader's map of a lock object per class name, or null on a Java that has none we can reach. */
+  private static final Field LOCKS = locks();
+
+  private static Field locks() {
+    try {
+      Field locks = ClassLoader.class.getDeclaredField("parallelLockMap");
+      locks.setAccessible(true);
+      return locks;
+    } catch (Exception | LinkageError e) {
+      return null;
+    }
+  }
+
+  private static String simpleName(String className) {
+    return className.substring(className.lastIndexOf('.') + 1);
   }
 
   /** How many class and resource names it remembers now (for the tests). */

@@ -21,6 +21,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.Assert.*;
@@ -82,6 +83,22 @@ public class EngineCleanupTest {
             Thread.sleep(50);
         }
         assertEquals("an object of an experiment's own class", laterTask.call());
+    }
+
+    @Test
+    public void replacingEnginesLeavesNothingBehindInJavasClassLoaders() throws Exception {
+        // Java's class loaders keep a lock object for every class name they are asked for, found or
+        // not, for good, and each engine asked them for about 250 names made up from its scripts' own
+        // (Script141$UP, Script141BeanInfo), new with every engine: a little memory per session that
+        // never came back.
+        replaced(played(new ScriptTestHarness(false)));
+        replaced(played(new ScriptTestHarness(false)));
+        int before = classLoaderLocks();
+        for (int i = 0; i < 3; i++) {
+            replaced(played(new ScriptTestHarness(false)));
+        }
+        int added = classLoaderLocks() - before;
+        assertTrue("3 more engines left " + added + " names in Java's class loaders", added < 30);
     }
 
     @Test
@@ -176,6 +193,21 @@ public class EngineCleanupTest {
         WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
         replaced(engine);
         return classes;
+    }
+
+    /**
+     * How many class names the class loaders above the engines (the server's classpath) keep a lock
+     * object for (ClassLoader.parallelLockMap).
+     */
+    private static int classLoaderLocks() throws Exception {
+        Field locks = ClassLoader.class.getDeclaredField("parallelLockMap");
+        locks.setAccessible(true);
+        int n = 0;
+        for (ClassLoader l = Thread.currentThread().getContextClassLoader(); l != null; l = l.getParent()) {
+            Map<?, ?> map = (Map<?, ?>) locks.get(l);
+            if (map != null) n += map.size();
+        }
+        return n;
     }
 
     /** Collects garbage until {@code ref} is cleared, for at most {@code timeoutMs}. */
