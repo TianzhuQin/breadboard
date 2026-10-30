@@ -43,7 +43,7 @@
         </ol>
       </BPanel>
 
-      <CompletionCard :experiment-id="admin.experiment.id" />
+      <CompletionCard :experiment-id="admin.experiment.id" :parameters="admin.experiment.parameters" />
     </div>
 
     <aside class="pl__side">

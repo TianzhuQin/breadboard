@@ -89,10 +89,12 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 里选择用 URL 参数记录 Prolific ID，链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。Prolific 的参与者都是从互联网来的，所以这个网址必须用服务器的公开网址：用公开网址打开控制台，再复制。如果你是用 localhost 或实验室内网的地址打开控制台的，页面会提醒你。
 3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，参与者会看到 "No session is open right now"。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
 4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。**同一个人不会参加两次**：在这个实验里已经参加过的人（拿到过完成码，或者游戏结束时还在场）再打开 Prolific 链接，会看到 "You have already taken part in this study" 和他的完成码，不会被安排进新的一场（服务器重启后也一样）；场次被停止或因重启中断的人可以再加入。这个检查按整个实验算：如果要在 Prolific 上用同一批人做新一期，就复制一个实验。自己测试时请用 **Try it as a test participant**，它每次都会生成新的 Prolific ID。
-5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回。然后在 **When a participant finishes** 的 **Your completion code** 里填上这个码，用 **Copy code** 复制生成的代码，放进实验步骤里参与者结束的地方（比如最后一步）。它的核心是这一行（把 `C1A2B3C4` 换成你的完成码）：
+5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回。实验有 `prolificCode` 这个启动参数时（比如 Example: network game），它自己会把完成码给从 Prolific 来的人：**When a participant finishes** 会写明现在用的是哪个码，你只要在 **Parameters** 页把 `prolificCode` 的默认值（**Default**）设成你的完成码，不用改代码。没有这个参数时，在 **Your completion code** 里填上这个码，用 **Copy code** 复制生成的代码，放进实验步骤里参与者结束的地方（比如最后一步）。这段代码只给从 Prolific 来的人完成码（`completeProlific` 对别的参与者会出错）；代码里的 `p` 要换成那一步里代表参与者的变量（常见的是 `player`，或者 `g.V.each { p -> ... }` 里的 `p`）。它的核心是这几行（把 `C1A2B3C4` 换成你的完成码）：
 
 ```groovy
-recruitment.completeProlific(player, [completionCode: "C1A2B3C4"])
+if (p._system?.recruitment?.source == "prolific") {
+  recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
+}
 ```
 
 参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。

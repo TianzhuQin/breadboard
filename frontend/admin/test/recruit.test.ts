@@ -51,7 +51,7 @@ import { FORM_KEY, defaultHitForm, hitFormBody, loadHitForm, readSchedules, vali
 import { bonusToken, newRequestToken, TOKEN_RE } from '@/pages/recruit/mturk/bonusTokens'
 import { toasts } from '@/ui/toast'
 import { toRow } from '@/pages/recruit/mturk/rows'
-import { prolificBonusLines, prolificPlayers, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
+import { completionSnippet, prolificBonusLines, prolificPlayers, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
 import BonusDialog from '@/pages/recruit/mturk/BonusDialog.vue'
 import CreateHitTab from '@/pages/recruit/mturk/CreateHitTab.vue'
 import RecruitPage from '@/pages/recruit/RecruitPage.vue'
@@ -375,6 +375,44 @@ describe('Prolific helpers', () => {
     expect(players.map(p => p.prolificPid)).toEqual(['PID-A', 'PID-B'])
     expect(players[0].connected).toBe(false)
     expect(prolificBonusLines(players)).toBe('PID-B,1.26')
+  })
+
+  it('gives code that completes Prolific participants only, and says to use the step\'s own name for the participant', () => {
+    expect(completionSnippet(' C7K2M9QX ')).toBe([
+      '// p is the participant: use the name your step gives them (often player, or p in g.V.each { p -> ... })',
+      'if (p._system?.recruitment?.source == "prolific") {',
+      '  recruitment.completeProlific(p, [',
+      "    completionCode: 'C7K2M9QX',",
+      "    message: 'Thank you for taking part!'",
+      '  ])',
+      '}',
+    ].join('\n'))
+    expect(completionSnippet('')).toContain("completionCode: 'YOUR-CODE',")
+  })
+
+  it('says an experiment with a prolificCode parameter gives the code by itself, and offers no code to paste', async () => {
+    const CompletionCard = (await import('@/pages/recruit/prolific/CompletionCard.vue')).default
+    const router = makeRouter()
+    const param = (defaultVal: string) => ({ id: 1, name: 'prolificCode', type: 'Text' as const, minVal: '', maxVal: '', defaultVal, description: '' })
+    let w = mount(CompletionCard, { props: { experimentId: 3, parameters: [param('C7K2M9QX')] }, global: { plugins: [router] } })
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('On the Parameters page, make that code the default of prolificCode. This experiment shows it to Prolific participants by itself when they finish: there is no code to add to its steps.')
+    expect(w.find('.pl-code-now').text()).toBe('Now: C7K2M9QX')
+    expect(w.find('pre.rc-code').exists()).toBe(false)
+    expect(w.findAll('button').some(b => b.text() === 'Copy code')).toBe(false)
+    await w.findAll('button').find(b => b.text() === 'Parameters')!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/parameters')
+    w.unmount()
+    // not set yet: said, as Prolific participants would get no code
+    w = mount(CompletionCard, { props: { experimentId: 3, parameters: [param('')] }, global: { plugins: [router] } })
+    expect(w.find('.pl-code-now').text()).toBe('Empty for now, so Prolific participants finish without a code.')
+    w.unmount()
+    // without one: the guarded code to copy
+    w = mount(CompletionCard, { props: { experimentId: 3, parameters: [] }, global: { plugins: [router] } })
+    expect(w.find('pre.rc-code').text()).toContain('if (p._system?.recruitment?.source == "prolific") {')
+    expect(w.findAll('button').some(b => b.text() === 'Copy code')).toBe(true)
+    w.unmount()
   })
 
   it('writes completion codes as safe Groovy strings', () => {

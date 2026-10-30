@@ -403,9 +403,21 @@ hasn't started, and the page says which one that is now, or warns that participa
 ID, taking a seat like a real participant.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
-recorded in a `prolificEntry` event. **When a participant finishes** builds the line for your last
-step from your completion code, `recruitment.completeProlific(player, [completionCode: "…"])`:
-participants then see the code and a **Finish** button that takes them back to Prolific. **From
+recorded in a `prolificEntry` event. **When a participant finishes** builds the code for your last
+step from your completion code. It completes participants from Prolific only, as
+`recruitment.completeProlific` refuses anyone else; change `p` to what your step calls the
+participant:
+
+```groovy
+if (p._system?.recruitment?.source == "prolific") {
+  recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
+}
+```
+
+Participants then see the code and a **Finish** button that takes them back to Prolific. An
+experiment with a `prolificCode` launch parameter, such as **Example: network game**, gives the code
+by itself: the card then says so, with the code it gives now, and you set it as that parameter's
+default on the Parameters page instead. **From
 Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
 Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
 

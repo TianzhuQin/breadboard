@@ -96,3 +96,23 @@ export function prolificBonusLines (players: ProlificPlayer[]): string {
 export function groovyString (s: string): string {
   return groovyLiteral(s)
 }
+
+/**
+ * The code for the step where a participant finishes: it completes Prolific participants only
+ * (completeProlific refuses anyone else, which would stop the step), and says that `p` stands for
+ * whatever the step calls the participant.
+ */
+export function completionSnippet (code: string): string {
+  return [
+    '// p is the participant: use the name your step gives them (often player, or p in g.V.each { p -> ... })',
+    'if (p._system?.recruitment?.source == "prolific") {',
+    '  recruitment.completeProlific(p, [',
+    `    completionCode: ${groovyString(code.trim() || 'YOUR-CODE')},`,
+    `    message: ${groovyString('Thank you for taking part!')}`,
+    '  ])',
+    '}',
+  ].join('\n')
+}
+
+/** The launch parameter some experiments (the network game example) give Prolific participants their code from. */
+export const CODE_PARAMETER = 'prolificCode'
