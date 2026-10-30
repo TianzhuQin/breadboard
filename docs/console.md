@@ -200,8 +200,8 @@ waiting room doesn't count them. So **AI players** shows the computer players an
 computer took over, and the computer goes on playing all of them. A preview never adds anyone to the
 game: the tile of a player who isn't in the network (someone who left before a **Resume**, say, and
 hasn't joined again) says they aren't in the game, and shows their page once they are back. When a player's own page comes back, it takes over, and the preview goes on
-read-only. The tile of a player whose preview only watches (their own page is connected, or the
-computer plays the seat) is tagged **Watching**. The tile of someone away is tagged **Away**, and
+read-only. The tile of a player whose preview only watches (their own page is connected, or it is a
+computer player) is tagged **Watching**. The tile of someone away is tagged **Away**, and
 says what standing in for them means now: a waiting room doesn't count them, the computer takes
 their seat after the usual wait, or the computer plays it, and gives it back when they return if the
 steps say so. In the autopilot's own session, with its takeover on, the tile says when the computer
