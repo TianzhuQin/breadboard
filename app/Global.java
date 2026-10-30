@@ -415,7 +415,8 @@ public class Global extends GlobalSettings {
    * characters (1 MiB), for databases built from the evolutions and older ones alike. Changed only
    * while it is shorter, since H2 copies the table to change a column; and not while the disk lacks
    * room for that copy (tried again at the next start; until then EventTracker keeps long values cut
-   * short).
+   * short). Said in the log only when the table has rows: on tables just made (a new database) it takes
+   * no time, and the line read as if something were wrong.
    */
   static void widenEventValues() {
     try {
@@ -436,8 +437,13 @@ public class Global extends GlobalSettings {
             + "Event values longer than " + length + " characters are kept cut short until it has.");
         return;
       }
-      Logger.info("Widening event_data.value to keep event values of up to " + EventTracker.VALUE_LIMIT
-          + " characters (once; on a large database this takes a while)");
+      String widening = "Widening event_data.value to keep event values of up to " + EventTracker.VALUE_LIMIT
+          + " characters (once; on a large database this takes a while)";
+      if (Ebean.createSqlQuery("select 1 as one from event_data limit 1").findUnique() == null) {
+        Logger.debug(widening);
+      } else {
+        Logger.info(widening);
+      }
       Ebean.createSqlUpdate("alter table event_data alter column value varchar(" + EventTracker.VALUE_LIMIT + ")").execute();
     } catch (Exception e) {
       Logger.warn("Could not widen event_data.value; event values longer than 255 characters are kept cut short: " + e.getMessage());
