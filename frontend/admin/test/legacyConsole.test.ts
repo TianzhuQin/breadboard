@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { keepScriptDraft } from '../../design/design/scriptDraft.js'
-import { importUrl } from '../../design/experiment-import/experiment-import.controller.js'
+import ExperimentImportCtrl, { importUrl } from '../../design/experiment-import/experiment-import.controller.js'
 import { connectionNotice } from '../../design/client/connectionNotice.js'
 
 // The previous console (/legacy-admin, frontend/design). Its Script panel is bound to
@@ -33,6 +33,33 @@ describe('the previous console\'s Import', () => {
     expect(importUrl('/experiment/import', 'My study')).toBe('/experiment/import/My%20study')
     expect(importUrl('/experiment/import', 'Pilot A/B')).toBe('/experiment/import/Pilot%20A%2FB')
     expect(importUrl('/experiment/import', 'Wave #2?')).toBe('/experiment/import/Wave%20%232%3F')
+  })
+
+  // Both were emptied, so the file had to be chosen again to fix only the name.
+  it('keeps the chosen file and the name when the server refuses the name', () => {
+    const scope: any = { $watch: () => {}, selectExperiment: () => () => {} }
+    let refuse: (err: any) => void = () => {}
+    const Upload = { upload: vi.fn(() => ({ then: (_ok: any, bad: (err: any) => void) => { refuse = bad } })) }
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      ExperimentImportCtrl(scope, Upload, (fn: () => void) => fn())
+      const file = { name: 'Second-study_2.zip' }
+      scope.import.file = file
+      scope.import.name = 'Bad/Name'
+      scope.importExperiment()
+      expect(Upload.upload).toHaveBeenCalledWith(expect.objectContaining({ url: '/experiment/import/Bad%2FName', data: { file } }))
+      refuse({ status: 400, data: 'Names can\'t contain / or \\ or line breaks.' })
+      expect(scope.import.error).toBe('Names can\'t contain / or \\ or line breaks.')
+      expect(scope.import.file).toBe(file)
+      expect(scope.import.name).toBe('Bad/Name')
+      // fixed and sent again: the refusal is gone
+      scope.import.name = 'Second study'
+      scope.importExperiment()
+      expect(scope.import.error).toBe('')
+      expect(Upload.upload).toHaveBeenLastCalledWith(expect.objectContaining({ url: '/experiment/import/Second%20study' }))
+    } finally {
+      quiet.mockRestore()
+    }
   })
 })
 

@@ -32,6 +32,8 @@ export default function ExperimentImportCtrl($scope, Upload, $timeout){
 
   $scope.importExperiment = function(){
     if(!$scope.import.file) return;
+    // (a retry: the last refusal no longer stands)
+    $scope.import.error = '';
     let name = $scope.import.name.length ? $scope.import.name : $scope.import.file.name;
     name = name.replace('.zip', '');
     Upload.upload({
@@ -63,11 +65,11 @@ export default function ExperimentImportCtrl($scope, Upload, $timeout){
     });
   };
 
+  // The file and the name stay, so a refused name is all that needs changing: both used to be
+  // emptied, and the file chosen again.
   function errorOnUpload(err) {
     console.error(err);
     $scope.import.error = (err.data) ? err.data : err;
-    $scope.import.file = null;
-    $scope.import.name = '';
   }
 
 }
