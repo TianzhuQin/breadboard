@@ -234,7 +234,10 @@
           </p>
           <p v-else-if="cur.engineBehind && !fileMode" class="steps__hint is-behind">
             <Info :size="14" aria-hidden="true" />
-            Saved. The live engine isn't using this version yet: <strong>Run</strong> loads it now (it doesn't start the step).
+            <template v-if="autopilotsSession">
+              Saved: the autopilot’s next session uses it. <strong>Run</strong> loads it into the session it has open now (it doesn't start the step).
+            </template>
+            <template v-else>Saved. The live engine isn't using this version yet: <strong>Run</strong> loads it now (it doesn't start the step).</template>
           </p>
           <p v-else class="steps__hint">
             <template v-if="fileMode">Edit the file on the server to change this step.</template>

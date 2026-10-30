@@ -793,6 +793,13 @@ describe('StepsPage', () => {
       const text = () => w.text().replace(/\s+/g, ' ')
       expect(text()).toContain('Saved: the autopilot’s next session uses it. The session it has open now goes on with the steps it started with.')
       expect(text()).not.toContain('The engine isn\'t running your latest steps')
+      // the step's own line under the editor says the same
+      const d = ensureBucket(7, false).drafts.find(x => x.name === 'InitStep')!
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      d.engineBehind = true
+      await flushPromises()
+      expect(w.find('.steps__hint.is-behind').text().replace(/\s+/g, ' ')).toBe('Saved: the autopilot’s next session uses it. Run loads it into the session it has open now (it doesn\'t start the step).')
+      d.engineBehind = false
       expect(w.find('.steps__banner.is-stale').exists()).toBe(false)
       // still there, as the lesser choice, and it asks first
       const reload = w.findAll('.steps__banner.is-unattended button').find(b => b.text() === 'Reload engine')!
