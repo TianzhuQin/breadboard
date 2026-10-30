@@ -123,6 +123,9 @@ recorded as `ColourPick` and `RoundResult` events. Open a session (or turn on th
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
 
+On a server without experiments, the Experiments page points to the example, and **New experiment**
+has it chosen, named "Network game".
+
 ### Steps
 
 Steps are the Groovy code that runs the experiment. The list has the **Built in** steps (InitStep,

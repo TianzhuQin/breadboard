@@ -520,6 +520,21 @@ describe('New experiment dialog', () => {
     w.unmount()
   })
 
+  it('names the example again each time it opens with the example chosen', async () => {
+    store.exps.splice(0, store.exps.length)
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    const name = () => document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(name()!.value).toBe('Network game')
+    await w.setProps({ open: false })
+    await flushPromises()
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(name()!.value).toBe('Network game')
+    w.unmount()
+  })
+
   it('does not send an empty name', async () => {
     const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
     await w.setProps({ open: true })
@@ -661,6 +676,30 @@ describe('Experiments page', () => {
   it('opens the Import dialog from ?action=import', async () => {
     const { w } = await mountAt('/experiments?action=import')
     expect(document.querySelector('.b-dialog__title')!.textContent).toBe('Import an experiment')
+    w.unmount()
+  })
+
+  // A newcomer's first look at the page didn't say that a ready-to-run example exists.
+  it('points a server without experiments to the ready-to-run example, which New experiment names', async () => {
+    store.exps.splice(0, store.exps.length)
+    ;(store as any).admin.experiment = null
+    const { w } = await mountAt('/experiments')
+    expect(w.find('.xempty').text()).toContain('start from Example: network game, a complete study that runs as it is')
+    expect(w.find('.xempty strong').text()).toBe('Example: network game')
+    await w.find('.xempty').findAll('button').find(b => b.text() === 'New experiment')!.trigger('click')
+    await flushPromises()
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input[value="example"]')!.checked).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
+    w.unmount()
+  })
+
+  // Opened with the page (the switcher's New), the dialog chose the example but left its name empty.
+  it('names the example when the New dialog opens with the page', async () => {
+    store.exps.splice(0, store.exps.length)
+    ;(store as any).admin.experiment = null
+    const { w } = await mountAt('/experiments?action=new')
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input[value="example"]')!.checked).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
     w.unmount()
   })
 

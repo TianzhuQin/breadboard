@@ -98,11 +98,10 @@
     </section>
 
     <div v-else class="xempty">
-      <BEmpty
-        :icon="FlaskConical"
-        title="Create your first experiment"
-        text="An experiment holds the steps, content and settings that run a study. Start from Breadboard's template, or import a .zip exported from another server."
-      >
+      <BEmpty :icon="FlaskConical" title="Create your first experiment">
+        An experiment holds the steps, content and settings that run a study. To see Breadboard at work,
+        start from <strong>Example: network game</strong>, a complete study that runs as it is. Or start
+        from Breadboard's template, or import a .zip exported from another server.
         <template #actions>
           <BButton variant="primary" :icon="Plus" @click="openNew()">New experiment</BButton>
           <BButton :icon="Upload" @click="openImport()">Import a .zip</BButton>
