@@ -75,6 +75,8 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | **Countdown** | 5 秒 | 开始前参与者看到的倒计时。 |
 | **Let the computer play for people who leave** | 开 | 有人中途关掉页面，过了 **Take over after**（30 秒）由电脑替他玩。勾选 **Give the seat back when they return**，他回来后可以接着玩。 |
 
+**要用 Prolific 招募？** 先按下面[用 Prolific 招募](#用-prolific-招募)的第 5 步设好完成码，试一遍，再打开自动运行。
+
 页面顶部显示当前状态、开放中的那一场（**Watch it live** 可以去看），以及给参与者的 **Sign-in link** 和 **Prolific link**。这两个链接总是指向当时开放的那一场，所以一直用同一个就行。
 
 **暂停与继续**：如果你在控制台里结束了自动运行的那一场（停止它，或做了会重新加载引擎的事，比如新建或恢复另一场、**Reload engine**；切换实验不会），自动运行就会暂停，控制台会先提醒你。暂停时它不开新场，所以除非你自己为这个实验开了一场，链接都进不去。回到 Autopilot 页点 **Resume** 继续。如果关掉了 **Open the next session when one finishes**，一场结束后按钮会变成 **Open another session**。暂停状态在服务器重启后仍然保留。
@@ -85,17 +87,26 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 ## 用 Prolific 招募
 
-1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行。
+1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行（最好先做完下面第 5 步再打开）。
 2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 里选择用 URL 参数记录 Prolific ID，链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。
 3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，参与者会看到 "No session is open right now"。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
 4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。**同一个人不会参加两次**：在这个实验里已经参加过的人（拿到过完成码，或者游戏结束时还在场）再打开 Prolific 链接，会看到 "You have already taken part in this study" 和他的完成码，不会被安排进新的一场（服务器重启后也一样）；场次被停止或因重启中断的人可以再加入。这个检查按整个实验算：如果要在 Prolific 上用同一批人做新一期，就复制一个实验。自己测试时请用 **Try it as a test participant**，它每次都会生成新的 Prolific ID。
-5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回。然后在 **When a participant finishes** 的 **Your completion code** 里填上这个码，用 **Copy code** 复制生成的代码，放进实验步骤里参与者结束的地方（比如最后一步）。它的核心是这一行（把 `C1A2B3C4` 换成你的完成码）：
+5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回，记下这个码。然后：
+   - **用 Example: network game（或复制它的实验）**：不用改代码。在 **Parameters** 页点 `prolificCode` 右边的铅笔，把 **Default** 填成这个码，点 **Save changes**。最好在打开自动运行之前做：已经开着的那一场仍用开场时的值。
+     - 自动运行已经开着时：趁还没有人进来，在 **Live session** 点 **Stop session**（自动运行会因此暂停），再到 **Autopilot** 页点 **Resume**，新开的那一场就用新的完成码。
+     - 自己新建一场时，**Launch parameters** 里也能看到和修改 `prolificCode`。
+   - **自己写的实验**：在 **Recruitment** 页 **When a participant finishes** 的 **Your completion code** 里填上这个码，点 **Copy code**，把代码放进参与者结束的那一步。代码里的 `player` 要换成那一步里代表参与者的变量（例子游戏的 FinishStep 里是 `p`），并且只对从 Prolific 来的人调用（把 `C1A2B3C4` 换成你的完成码）：
 
-```groovy
-recruitment.completeProlific(player, [completionCode: "C1A2B3C4"])
-```
+     ```groovy
+     if (p._system?.recruitment?.source == "prolific") {
+       recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
+     }
+     ```
 
-参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
+     不加这个判断也不会出错：对不是从 Prolific 来的人，它什么都不做，只在服务器日志里写一行原因。
+   - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场，然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮。
+
+参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 
 ## 导出数据
 

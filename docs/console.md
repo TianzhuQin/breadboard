@@ -119,8 +119,9 @@ length of rounds are launch parameters, so they change on the Parameters page, a
 participants read is on the Content page, to reword or translate. Picks, scores and cut ties are
 recorded as `ColourPick`, `RoundResult` and `TieCut` events. Its texts are written in English: when
 your default language is another, that language is added next to English, and participants read it
-(the `language` launch parameter), each text in English until it is translated. Open a session
-(or turn on the autopilot) and
+(the `language` launch parameter), each text in English until it is translated. With `prolificCode`
+set, participants who came from Prolific are given that completion code at the end (see
+[Recruiting participants](#recruiting-participants)). Open a session (or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
 
@@ -395,11 +396,33 @@ hasn't started, and the page says which one that is now, or warns that participa
 ID, taking a seat like a real participant.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
-recorded in a `prolificEntry` event. **When a participant finishes** builds the line for your last
-step from your completion code, `recruitment.completeProlific(player, [completionCode: "…"])`:
-participants then see the code and a **Finish** button that takes them back to Prolific. **From
-Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
+recorded in a `prolificEntry` event. To send participants back to Prolific with your completion
+code when they finish:
+
+- **Example: network game**, and copies of it, do it by themselves: set `prolificCode` on the
+  Parameters page (its **Default**), preferably before turning on the autopilot. A session keeps the
+  value it opened with; to give the autopilot's open session the new one, stop that session on Live
+  session while nobody is in it, then press **Resume** on the Autopilot page.
+- In steps of your own, give your completion code to **When a participant finishes** and **Copy
+  code**: it builds `recruitment.completeProlific(player, [completionCode: "…"])`. Put it in the step
+  where participants finish, with that step's variable for the participant in place of `player`, and
+  only for those who came from Prolific:
+
+  ```groovy
+  if (p._system?.recruitment?.source == "prolific") {
+    recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
+  }
+  ```
+
+  For someone who didn't come from Prolific, `completeProlific` does nothing (the server's log says
+  why), so a call without the check doesn't stop the game either.
+- Before you publish the study, open a session, go through it with **Try it as a test participant**
+  (press **Start the game** on Live session if the waiting room waits for more people), and check
+  that the code shows at the end.
+
+Participants then see the code and a **Finish and return to Prolific** button that takes them back
+to Prolific. **From Prolific in this session** lists who joined and who finished, with **Copy bonus
+list** for Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game
