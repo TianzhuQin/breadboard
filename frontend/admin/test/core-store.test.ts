@@ -328,11 +328,18 @@ describe('what a reload or resume carries on', () => {
     const ended = await engineUse()
     expect(ended.pausesAutopilot).toBe(true)
     expect(ended.endsSession).toBe(true)
-    expect(ended.who).toContain('Your session “Auto 3” is running.')
+    // (it is the autopilot's, though it runs as this account)
+    expect(ended.who).toContain('The autopilot has session “Auto 3” open.')
+    expect(ended.who).not.toContain('Your session')
 
-    // another account's engine: a reload here doesn't carry it on
+    // another account's engine: a reload here doesn't carry it on, and the session is the autopilot's
+    // or that account's, not this one's
     __receive({ user: { email: 'r@lab', experiments: [], currentScript: '' }, experiment: { id: 3, name: 'Trust', instances: [] }, experimentInstance: { id: 9, name: 'Auto 3', status: 'RUNNING' }, engine: { ...engine, owner: 'other@lab' } })
     expect(reloadKeeps()).toBeUndefined()
+    expect((await engineUse()).who).toContain('The autopilot has session “Auto 3” open.')
+    get.mockResolvedValue({ status: { on: false, instance: null } })
+    expect((await engineUse()).who).toContain('other@lab has session “Auto 3” running.')
+    get.mockResolvedValue({ status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })
 

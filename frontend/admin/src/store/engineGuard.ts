@@ -125,11 +125,17 @@ export async function engineUse (keeping?: number): Promise<{ who: string, pause
   const lines: string[] = []
   const own = running.value && admin.instance ? admin.instance : null
   const named = new Set<number>(keeping != null ? [keeping] : [])
+  const { auto, other, autopilotLive, known } = await engineSessions()
   if (own && !named.has(own.id)) {
-    lines.push(`Your session “${own.name}” is running.`)
+    // (the running session this console shows needn't be this account's own: it follows the
+    // autopilot's, and a colleague's, of the experiment it works on)
+    const e = admin.user?.engine
+    const owner = e && e.sessionId === own.id ? e.owner : null
+    if (auto && auto.id === own.id) lines.push(`The autopilot has session “${own.name}” open.`)
+    else if (owner && owner.toLowerCase() !== admin.email.toLowerCase()) lines.push(`${owner} has session “${own.name}” running.`)
+    else lines.push(`Your session “${own.name}” is running.`)
     named.add(own.id)
   }
-  const { auto, other, autopilotLive, known } = await engineSessions()
   if (auto && !named.has(auto.id)) {
     lines.push(`The autopilot has session “${auto.name}” open.`)
     named.add(auto.id)
