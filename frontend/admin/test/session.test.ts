@@ -380,6 +380,23 @@ describe('live session state', () => {
     expect(isLocalOrigin('https://bb.lab.org')).toBe(false)
   })
 
+  it('says a finished or stopped session\'s network card that the session has ended, not that nobody joined', async () => {
+    const NetworkPreview = (await import('../src/pages/session/NetworkPreview.vue')).default
+    const stubs = { AdminNetwork: { template: '<div class="net-stub"><slot name="empty" /></div>' }, RouterLink: true }
+    let w = mount(NetworkPreview, { props: { people: 0, ties: 0, ended: true }, global: { stubs } })
+    expect(w.find('.live-net__empty').text()).toBe('This session has ended.')
+    expect(w.find('.b-panel__subtitle').text()).toBe('The session has ended')
+    w.unmount()
+    w = mount(NetworkPreview, { props: { people: 0, ties: 0 }, global: { stubs } })
+    expect(w.find('.live-net__empty').text()).toBe('No one has joined yet.')
+    expect(w.find('.b-panel__subtitle').text()).toBe('0 people · 0 ties')
+    w.unmount()
+    // what is still there when it ended
+    w = mount(NetworkPreview, { props: { people: 2, ties: 1, ended: true }, global: { stubs } })
+    expect(w.find('.b-panel__subtitle').text()).toBe('2 people · 1 tie')
+    w.unmount()
+  })
+
   it('says under the links that participants type an ID to join', async () => {
     const JoinLinks = (await import('../src/pages/session/JoinLinks.vue')).default
     const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })

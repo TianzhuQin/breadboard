@@ -162,7 +162,7 @@
             :instance-id="inst.id"
             :joinable="isRunning"
           />
-          <NetworkPreview :people="stats.people" :ties="stats.ties" />
+          <NetworkPreview :people="stats.people" :ties="stats.ties" :ended="!isRunning" />
           <SessionParams :data="inst.data" :parameters="admin.experiment?.parameters" />
         </div>
       </div>
