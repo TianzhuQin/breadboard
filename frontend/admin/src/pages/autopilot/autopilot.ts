@@ -280,6 +280,22 @@ function failureOf (step: string, line: string | undefined, message: string, pro
   }
 }
 
+/**
+ * The paused status card's line under its title, by the reason the server gives (status.problem):
+ * a mistake in a step, sessions that ran out of time, or a researcher ending its session. Neutral
+ * when the reason is none of those (the reason itself is said below it).
+ */
+export function pausedLine (problem: string | null | undefined): string {
+  const p = problem || ''
+  const until = 'so it opens no new session until you press Resume.'
+  if (/didn't load \(/.test(p)) return `The steps of its last session didn’t load, ${until}`
+  if (/the step "[^"]+" failed during its session/.test(p)) return `A step failed in its last session, ${until}`
+  if (/sessions in a row ran longer than/.test(p)) return `Its last sessions ran out of time, ${until}`
+  if (/its session "[\s\S]*?" was stopped/.test(p)) return `Its session was stopped, ${until}`
+  if (/its session "[\s\S]*?" ended when/.test(p)) return `Its session was ended from the console, ${until}`
+  return 'It opens no new session until you press Resume (see why below).'
+}
+
 /** The button that resumes it: "Resume" after a pause, "Open another session" once it is done. */
 export function resumeLabel (halt: 'paused' | 'done'): string {
   return halt === 'paused' ? 'Resume' : 'Open another session'

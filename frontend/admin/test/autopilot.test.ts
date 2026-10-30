@@ -21,7 +21,7 @@ vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: fal
 
 import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
-  participantLinks, pauseFailure, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
+  participantLinks, pauseFailure, pausedLine, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
   stepsCall,
 } from '../src/pages/autopilot/autopilot'
@@ -477,6 +477,25 @@ describe('Autopilot page', () => {
     const link = box.find('a.apst__open-step')
     expect(link.text()).toBe('Open InitStep at line 24')
     expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24')
+    w.unmount()
+  })
+
+  it('says under "paused" why, in a line that matches the reason, or a neutral one', async () => {
+    expect(pausedLine('It is paused: the steps of its session "S" didn\'t load (InitStep: line 24: x), so that session was stopped.')).toBe('The steps of its last session didn’t load, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: the step "RoundStep" failed during its session "S" (line 71: x), so that session was stopped.')).toBe('A step failed in its last session, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: 3 sessions in a row ran longer than 1 minute (the longest a session may run) and were ended, the last one "S".')).toBe('Its last sessions ran out of time, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: its session "auto 1" was stopped by b@lab.org.')).toBe('Its session was stopped, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: its session "auto 1" ended when b@lab.org reloaded the engine.')).toBe('Its session was ended from the console, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused.')).toBe('It opens no new session until you press Resume (see why below).')
+    expect(pausedLine(null)).toBe('It opens no new session until you press Resume (see why below).')
+
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem: 'It is paused: 3 sessions in a row ran longer than 1 minute (the longest a session may run) and were ended, the last one "S".' },
+    }))
+    const w = await mountPage()
+    expect(w.find('.apst__sub').text()).toBe('Its last sessions ran out of time, so it opens no new session until you press Resume.')
+    expect(w.find('.apst__sub').text()).not.toContain('was stopped')
     w.unmount()
   })
 

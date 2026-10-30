@@ -9,7 +9,7 @@
         <!-- The way out of a pause is the same button whoever is in charge (POST /autopilot/resume),
              so this never asks for a save: application.conf autopilots have nothing to save. -->
         <p class="apst__sub">
-          <template v-if="halt === 'paused'">Its session was stopped, so it opens no new one for now.</template>
+          <template v-if="halt === 'paused'">{{ pausedLine(status.problem) }}</template>
           <template v-else-if="halt === 'done'">
             Its one session{{ expName ? ` of “${expName}”` : '' }} has finished, so it opens no new one for now.
           </template>
@@ -125,7 +125,7 @@ import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
 import LocalOnlyNote from '../session/LocalOnlyNote.vue'
 import EngineError from '../console/EngineError.vue'
-import { describeEngineSession, haltOf, pauseFailure, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import { describeEngineSession, haltOf, pauseFailure, pausedLine, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
 import { stepAt } from '../steps/stepsModel'
 
 const props = defineProps<{
