@@ -16,7 +16,7 @@ import static org.junit.Assert.*;
 /**
  * The engine ScriptBoard replaces (here by a reload; every launch does the same) can be garbage
  * collected: it used to stay in memory for good, one per session, until the server ran out of memory.
- * So can its classes: they stayed loaded until the class space was full.
+ * So can its classes: they stayed loaded until the class space was full. Later rebuilds unload them.
  */
 public class EngineReplacementTest extends BaseTest {
 
@@ -65,6 +65,31 @@ public class EngineReplacementTest extends BaseTest {
         assertNotNull("memory ran short: soft references were cleared", noShortage.get());
         assertEquals("Groovy keeps the changed metaclasses of one engine's classes, not two",
             keptMetaClasses, EngineCleanupTest.keptMetaClassesOfScripts());
+    }
+
+    @Test
+    public void laterRebuildsUnloadAReplacedEnginesClassesWithoutHelp() throws Exception {
+        // The JVM collects in full only now and then on its own, so the classes of replaced engines
+        // still piled up towards the class space's cap. Each rebuild collects garbage now: an engine is
+        // unloaded by the second rebuild after the one that replaced it (the first runs its timers'
+        // finalizers). Nothing here collects garbage itself.
+        User user = user("unloaded");
+        final AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Unloaded");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        play(t);
+        reload(t);
+        play(t);
+        WeakReference<ClassLoader> itsClasses = new WeakReference<ClassLoader>(EngineCleanup.scriptLoader(engine()));
+        // (A fourth rebuild in case its timers' finalizers hadn't run yet at the third.)
+        for (int rebuild = 1; rebuild <= 4 && itsClasses.get() != null; rebuild++) {
+            reload(t);
+            play(t);
+        }
+        assertNull("the classes of an engine replaced four rebuilds ago are still loaded", itsClasses.get());
     }
 
     // ---- helpers ------------------------------------------------------------------------------------

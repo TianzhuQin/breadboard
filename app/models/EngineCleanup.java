@@ -31,8 +31,8 @@ import java.util.Set;
  * scripts' classes and everything they held: about 3.6 MB of heap and 2 MB of class space per
  * session, until the server did little but collect garbage. Its classes (each engine compiles the
  * scripts and steps again, about 300 classes) then stayed loaded until the class space (metaspace)
- * was full, as Groovy and Java kept them in caches that only a shortage of memory empties; now they
- * are unloaded at the next full collection.
+ * was full, as Groovy and Java kept them in caches that only a shortage of memory empties. Now each
+ * engine's classes are unloaded by the second rebuild after it, as every rebuild collects garbage.
  */
 public final class EngineCleanup {
 
@@ -56,9 +56,26 @@ public final class EngineCleanup {
       // Java's class loaders keep a lock for each class name made up from its scripts' (Script141$UP,
       // Script141BeanInfo), new with every engine.
       ScriptClasspath.forgetMadeUpNames();
+      collectDropped();
     } catch (Exception e) {
       Logger.error("Could not release the replaced script engine; it may stay in memory", e);
     }
+  }
+
+  /**
+   * Collects garbage, which unloads the engines dropped before this one. On its own the JVM collects
+   * in full only now and then: when the old generation fills up, or when the class space reaches a
+   * limit that it then raises to 1.67 times what it has committed. So over a long run the class space
+   * still climbed towards its cap (512 MB), a few MB a session, before the JVM's own collections
+   * brought it down. A dropped engine takes two collections: the first runs the finalizers of its
+   * timers (a BBTimer is a java.util.Timer, which lets go of its thread in a finalizer, and that
+   * finalizer reaches the engine's classes), the next unloads it. Here, between sessions, at every
+   * rebuild, it takes about a tenth of a second, and no more than two dropped engines stay loaded.
+   */
+  private static void collectDropped() {
+    long start = System.nanoTime();
+    System.gc();
+    Logger.debug("Collected the garbage of dropped engines in " + (System.nanoTime() - start) / 1000000 + " ms");
   }
 
   /**
