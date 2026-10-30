@@ -284,6 +284,22 @@ describe('event feed', () => {
     expect(describeEvent('myEvent')).toBe('')
   })
 
+  it('explains failures, ends and the newer events in plain words, and failures stand out', () => {
+    for (const name of ['stepFailed', 'sessionStalled', 'sessionFailed']) expect(eventTone(name)).toBe('danger')
+    for (const name of ['sessionTooLong', 'serverStopping']) expect(eventTone(name)).toBe('warning')
+    // someone left out is no milestone (it ends in "Start", as a step's own event does)
+    expect(eventTone('missedStart')).toBe('warning')
+    expect(describeEvent('missedStart')).toBe('The game started without someone who was away')
+    expect(describeEvent('stepFailed')).toBe('A step failed: its code threw an error')
+    expect(describeEvent('sessionStalled')).toMatch(/nothing left to do/)
+    expect(describeEvent('sessionTooLong')).toMatch(/longest session/)
+    expect(describeEvent('serverStopping')).toMatch(/server was stopped/)
+    expect(describeEvent('sessionFailed')).toMatch(/autopilot ended the session/)
+    for (const name of ['aiChoice', 'prolificComplete', 'noCompletionCode', 'engineReloaded', 'sessionFull', 'participantComment', 'answerDropped', 'connectionGap']) {
+      expect(describeEvent(name), name).not.toBe('')
+    }
+  })
+
   it('counts distinct participants from arrival events, not AI seats', () => {
     const ev = mergeEvents([], [
       { id: 1, name: 'clientLogIn', datetime: '2026-10-27T10:00:00Z', data: { clientId: 'p1' } },

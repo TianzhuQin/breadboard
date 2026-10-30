@@ -143,14 +143,21 @@ export function summarizeData (data: Record<string, unknown>, max = 3): { shown:
 
 export type EventTone = 'success' | 'warning' | 'danger' | 'accent' | 'neutral'
 
-/** A colour for the event's dot, so arrivals, departures and milestones stand out. */
+// Failures, and what interrupted or ended a game, stand out; arrivals and milestones too.
+const DANGER = new Set(['autopilotcancelled', 'sessioninterrupted', 'stepsfailedtoload', 'stepfailed', 'sessionstalled', 'sessionfailed'])
+// ("Disconnected" itself is a tie being cut, not someone dropping out)
+const WARNING = new Set(['clientdisconnected', 'aitakeover', 'sessionstopped', 'sessiontoolong', 'serverstopping', 'missedstart', 'sessionfull'])
+const SUCCESS = new Set(['clientconnected', 'clientlogin', 'aireturned', 'prolificentry', 'prolificcomplete'])
+const ACCENT = new Set(['finished', 'sessionresumed', 'enginereloaded'])
+
+/** A colour for the event's dot, so arrivals, departures, failures and milestones stand out. */
 export function eventTone (name: string): EventTone {
   const n = (name || '').toLowerCase()
-  if (n === 'autopilotcancelled' || n === 'sessioninterrupted' || n === 'stepsfailedtoload' || n.endsWith('error')) return 'danger'
-  // ("Disconnected" itself is a tie being cut, not someone dropping out)
-  if (n === 'clientdisconnected' || n === 'aitakeover' || n === 'sessionstopped' || n.endsWith('timeout')) return 'warning'
-  if (n === 'clientconnected' || n === 'clientlogin' || n === 'aireturned' || n === 'prolificentry') return 'success'
-  if (n.endsWith('start') || n === 'finished' || n === 'sessionresumed') return 'accent'
+  if (DANGER.has(n) || n.endsWith('error')) return 'danger'
+  if (WARNING.has(n) || n.endsWith('timeout')) return 'warning'
+  if (SUCCESS.has(n)) return 'success'
+  // (a step's own "…Start"; missedStart, above, isn't one)
+  if (ACCENT.has(n) || n.endsWith('start')) return 'accent'
   return 'neutral'
 }
 
@@ -158,19 +165,33 @@ const KNOWN: Record<string, string> = {
   clientlogin: 'Someone signed in',
   clientconnected: 'A participant connected',
   clientdisconnected: 'A participant lost connection',
+  connectiongap: 'A participant\'s connection dropped for a moment, then came back',
+  answerdropped: 'A participant\'s answer was dropped: it waited too long for the connection',
+  participantcomment: 'A participant left a comment',
   prolificentry: 'Arrived from Prolific',
+  prolificcomplete: 'A Prolific participant was given their completion code',
+  nocompletioncode: 'A Prolific participant finished, but no completion code is set',
   aitakeover: 'The computer took over a seat',
   aireturned: 'A seat went back to its person',
+  aichoice: 'The computer chose for a seat it plays',
   autopilotstart: 'The waiting room started the game',
   autopilotcancelled: 'The waiting room gave up: too few people',
+  missedstart: 'The game started without someone who was away',
+  sessionfull: 'Someone arrived when the session was already full',
   finished: 'The session finished',
   edgeedit: 'A tie was changed',
   connected: 'Two people were tied',
   disconnected: 'A tie was cut',
   sessionstopped: 'A researcher stopped the session',
   sessionresumed: 'The session was resumed: its game starts again',
+  enginereloaded: 'A researcher reloaded the engine',
   sessioninterrupted: 'The server stopped while the session ran (a restart or crash)',
+  serverstopping: 'The server was stopped while the session ran',
   stepsfailedtoload: 'The steps didn\'t load, so the autopilot stopped the session',
+  stepfailed: 'A step failed: its code threw an error',
+  sessionfailed: 'A step failure stalled the game, so the autopilot ended the session',
+  sessionstalled: 'After a step failed, the game had nothing left to do, so it was ended',
+  sessiontoolong: 'The game ran longer than the longest session allowed, so it was ended',
 }
 
 /** A plain-words line for well-known events; '' for the experiment's own. */
