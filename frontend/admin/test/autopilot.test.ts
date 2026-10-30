@@ -367,16 +367,26 @@ describe('Autopilot page', () => {
     w.unmount()
   })
 
-  it('does not save invalid settings', async () => {
+  it('does not save invalid settings, and brings the field into clear view', async () => {
     http.get.mockResolvedValue(stateJson())
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
     const w = await mountPage()
+    // the page's toasts keep above its save bar
+    expect(document.documentElement.classList.contains('ap-lifts-toasts')).toBe(true)
     const min = w.findAll('input.b-input__el').find(i => i.attributes('min') === '1' && !i.attributes('placeholder'))!
     await min.setValue('0')
     expect(w.text()).toMatch(/At least 1\./)
     await w.find('form.ap-form').trigger('submit')
     await flushPromises()
     expect(http.post).not.toHaveBeenCalled()
+    // the field with the problem, into the middle of the window (not behind the bar at its bottom)
+    expect(scrolled).toHaveBeenCalledWith({ block: 'center' })
+    expect(scrolled.mock.contexts[0]).toBe(min.element)
+    expect(document.activeElement).toBe(min.element)
     w.unmount()
+    expect(document.documentElement.classList.contains('ap-lifts-toasts')).toBe(false)
+    delete (Element.prototype as any).scrollIntoView
   })
 
   it('asks before turning on, then posts the settings', async () => {

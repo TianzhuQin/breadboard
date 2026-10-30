@@ -555,13 +555,18 @@ async function refresh (byHand = false) {
 
 let poll: ReturnType<typeof setInterval> | undefined
 let soon: ReturnType<typeof setTimeout> | undefined
+// Toasts keep above the save bar at the bottom of this page (see .ap-lifts-toasts), rather than
+// landing on its Save button, under the pointer that just pressed it.
+const LIFT = 'ap-lifts-toasts'
 onMounted(() => {
   load()
   poll = setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 10000)
+  document.documentElement.classList.add(LIFT)
 })
 onBeforeUnmount(() => {
   clearInterval(poll)
   clearTimeout(soon)
+  document.documentElement.classList.remove(LIFT)
 })
 // a session opened, started or finished: look again (debounced, pushes come in bursts)
 watch(() => [admin.instance?.id, admin.instance?.status], () => {
@@ -636,7 +641,13 @@ async function save (takeOver = false) {
   if (Object.keys(errors.value).length) {
     notify.error('Check the highlighted settings', 'Some values need fixing before they can be saved.')
     await nextTick()
-    formEl.value?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+    const field = formEl.value?.querySelector<HTMLElement>('[aria-invalid="true"]')
+    if (field) {
+      // into the middle of the window, clear of the sticky save bar at its bottom (focus alone only
+      // scrolled it as far as the window's edge, behind the bar)
+      field.focus({ preventScroll: true })
+      if (typeof field.scrollIntoView === 'function') field.scrollIntoView({ block: 'center' })
+    }
     return
   }
   const next = toSettings(form.value)
@@ -806,6 +817,11 @@ useUnsavedGuard(dirty, {
 .ap-savebar__text { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--muted); }
 .ap-savebar.is-dirty .ap-savebar__text { color: var(--text); font-weight: 600; }
 .ap-savebar__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+/* toasts above the save bar (its bottom: 12px, about 60px tall), not on its buttons; on phones they
+   are at the top anyway */
+@media (min-width: 641px) {
+  html.ap-lifts-toasts .b-toasts { bottom: 88px; }
+}
 .ap-own__code { margin-top: 4px; }
 .ap-own__code summary { cursor: pointer; font-size: var(--text-xs); color: var(--muted); }
 .ap-own__code code { display: block; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
