@@ -444,6 +444,58 @@ describe('PreviewPage', () => {
     w.unmount()
   })
 
+  // (named as the console names it everywhere else: "AI 1 (_1)", not the bare id)
+  it('says that a single computer player is one, by its name', async () => {
+    addPlayer('_1', { ai: 1 })
+    addPlayer('p1')
+    await settle()
+    const w = await mountPage()
+    await w.findAll('.pp__item').find(li => li.text().includes('_1'))!.find('input[type="checkbox"]').setValue(true)
+    await flushPromises()
+    expect(previewMemory.ids).toEqual(['_1'])
+    expect(ui.notify.info).toHaveBeenCalledTimes(1)
+    expect(ui.notify.info).toHaveBeenCalledWith('AI 1 (_1) is a computer player',
+      'Its preview is read-only: you see what the computer does, and it goes on playing.')
+    w.unmount()
+  })
+
+  it('names a computer player in the full-size view as on its tile', async () => {
+    addPlayer('_6', { ai: 1 })
+    await settle()
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['_6']
+    const w = await mountPage()
+    await settle()
+    expect(w.find('.pt__id').text()).toBe('AI 6 (_6)')
+    await w.find('button.pt__cover').trigger('click')
+    await settle()
+    expect(document.body.querySelector('.b-dialog__title')!.textContent).toBe('What AI 6 (_6) sees')
+    expect(document.body.querySelector('.pfx iframe')!.getAttribute('title')).toBe('Participant page of AI 6 (_6)')
+    w.unmount()
+  })
+
+  it('names a computer player when its page can\'t be opened in a new tab', async () => {
+    addPlayer('_6', { ai: 1 })
+    await settle()
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['_6']
+    const tab = { opener: {} as any, location: { href: '' }, closed: false, close: vi.fn() }
+    const open = vi.spyOn(window, 'open').mockImplementation(() => tab as any)
+    const w = await mountPage()
+    try {
+      await settle()
+      http.post.mockRejectedValueOnce(new HttpError(400, 'Unknown session'))
+      const PreviewTile = (await import('../src/pages/preview/PreviewTile.vue')).default
+      w.findComponent(PreviewTile).vm.$emit('open-tab')
+      await flushPromises()
+      expect(tab.close).toHaveBeenCalled()
+      expect(ui.notify.error).toHaveBeenCalledWith('Couldn’t open AI 6 (_6)’s page in a new tab', 'Unknown session')
+    } finally {
+      w.unmount()
+      open.mockRestore()
+    }
+  })
+
   it('says once which players of a quick pick are shown read-only', async () => {
     addPlayer('p1', { _system: { connected: true } })
     addPlayer('p2', { _system: { connected: true } })

@@ -355,7 +355,7 @@ async function openTab (id: string) {
     try { w.close() } catch (err) { /* already gone */ }
     // nothing opened: the tile shows the page again
     tabbed.delete(id)
-    notify.error(`Couldn’t open ${id}’s page in a new tab`, describeError(e))
+    notify.error(`Couldn’t open ${playerName(id)}’s page in a new tab`, describeError(e))
   }
 }
 
