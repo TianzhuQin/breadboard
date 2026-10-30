@@ -17,6 +17,11 @@ export const EDGE_EDIT_RESULT_EVENT = 'bb:edge-edit-result'
 // A choice or tie change still waiting for the connection after this long (ms) is dropped instead
 // of sent: the participant has moved on, and the screen may no longer ask for it.
 const ANSWER_MAX_AGE_MS = 5000
+// What an answer (a choice, a tie change: see sendType) adds: when it was given, in the server's time
+// as the page reckons it from the heartbeat (see onPong). The server drops one that reaches it more
+// than 10 s after that (ScriptBoard.lateAnswer): it went into a connection that had died without
+// closing, and came through only as the network came back. The page is then sent its view again.
+const SENT_AT = 'bbSentAt'
 // The heartbeat of a participant's socket: the server answers {"action":"Ping"} with {"pong": <time>}
 // (servers before 3.1 ignore it).
 const PING = JSON.stringify({ action: 'Ping' })
@@ -353,6 +358,14 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private heardAt = 0
   /** When it last heard from the server before its connection dropped; null while it hasn't since */
   private outOfTouchSince: number | null = null
+  /**
+   * The server's clock minus the page's (ms), from the last pong: the server's time as it answered,
+   * minus when the ping it answers was sent. That is never less than the true difference (it is more
+   * by the time the ping took to arrive), so an answer's time (serverNow) is never earlier than when
+   * it was given: a pong the page handles late (in a background tab, or after a sleep) doesn't make a
+   * fresh answer look old. Null before the first pong.
+   */
+  private serverOffset: number | null = null
 
   constructor () {
     super()
@@ -456,7 +469,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         if (this.signedIn && (this.loginSentOn < 0 || this.outOfTouchSince !== null)) this.sendLogIn()
       })
       this.socket.on('message', () => { this.heardAt = Date.now() })
-      this.socket.on('pong', () => { this.heardAt = Date.now() })
+      this.socket.on('pong', (data: any, pingSentAt?: number) => this.onPong(data, pingSentAt))
       this.socket.on('close', () => {
         // (not the server closing a page another took the seat from, or whose session is over)
         if (this.heardAt > 0 && this.outOfTouchSince === null && !this.replaced && !this.ended) {
@@ -520,7 +533,9 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    * @param action
    * @param data
    * @param maxAge if the connection is down: how long (ms) it may wait for it before it is dropped
-   * instead of sent; by default it waits as long as it takes
+   * instead of sent; by default it waits as long as it takes. A message sent with one is an answer,
+   * as is any MakeChoice: it says when it was given, and the server drops it if it arrives more than
+   * 10 s after that (see SENT_AT).
    */
   sendType (action: string, data: SimpleMap<any> = {}, maxAge?: number) {
     // A page that only watches answers nothing for its player (the server would ignore it anyway).
@@ -528,9 +543,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       console.debug(`Not sent while watching: ${action}`)
       return
     }
-    const d = Object.assign(data, {
+    const d: SimpleMap<any> = Object.assign(data, {
       action
     })
+    // An answer says when it was given (see SENT_AT): what is sent with a `maxAge` (sendChoice,
+    // sendGroupChoice, sendEdgeEdit), and any choice (the older AngularJS client sends its own).
+    if (maxAge != null || action === MAKE_CHOICE) {
+      const sentAt = this.serverNow()
+      if (sentAt !== null) d[SENT_AT] = sentAt
+    }
     this.socket.send(JSON.stringify(d), maxAge)
   }
 
@@ -924,6 +945,25 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       this.serverAnswered = true
       this.socket.reconnectNow()
     }
+  }
+
+  /**
+   * The server answered a ping ({"pong": <its time>}), sent at `pingSentAt`: the page has heard from
+   * it, and knows how its clock stands to the server's (see serverOffset).
+   */
+  private onPong (data: any, pingSentAt?: number) {
+    this.heardAt = Date.now()
+    if (typeof pingSentAt !== 'number') return
+    let serverTime: any = null
+    try {
+      serverTime = JSON.parse(data).pong
+    } catch (e) {}
+    if (typeof serverTime === 'number' && isFinite(serverTime)) this.serverOffset = serverTime - pingSentAt
+  }
+
+  /** The server's time now, as the page reckons it (see serverOffset); null before the first pong */
+  private serverNow (): number | null {
+    return this.serverOffset === null ? null : Math.round(Date.now() + this.serverOffset)
   }
 
   private setLiveBlocked (blocked: boolean) {

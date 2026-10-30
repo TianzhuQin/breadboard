@@ -272,7 +272,11 @@ it may have changed (`Breadboard.on('bb:connection', () => ...)`):
 `PlayerChoices`'s `choice` slot get a `disabled` slot prop. A choice or tie change sent anyway
 (`Breadboard.sendChoice`, `sendGroupChoice`, `sendEdgeEdit`) waits for the connection for at most
 5 seconds and is then dropped, since the screen may have moved on. Other messages
-(`Breadboard.send`) wait as long as it takes, as before.
+(`Breadboard.send`) wait as long as it takes, as before. A choice or tie change also says when it
+was given, and the server drops one that reaches it more than 10 seconds after that: one clicked
+just before the connection died without a word came through only as the network came back, after
+the page had said the connection was lost, and used to count, 25 seconds late. The page then gets
+the participant's view again, so it shows the choice as still to be made.
 
 **`ConnectionStatus`'s slots.** The default slot replaces the message while the page reconnects
 (`lost` and `blocked`), with the slot props `time` (ms until the next try, counting down, and 0
@@ -318,7 +322,8 @@ playing, and a waiting room doesn't count them.
   `bb:connection` is emitted whenever a page takes the seat, so scripts may hear `connected: true`
   for someone who is connected already.
 - **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds
-  after, and gets `{"pong": <the server's time in ms>}`. A page that has pinged and then sends
+  after, and gets `{"pong": <the server's time in ms>}`, from which it reckons the server's time (see
+  below). A page that has pinged and then sends
   nothing for 30 seconds is closed and counts as gone, as when its socket closes: a connection that
   dies without closing (a phone out of range, a laptop put to sleep) used to look connected for
   good, so the computer never took that seat. Pages that never ping (from before 3.1) are left
@@ -336,6 +341,17 @@ playing, and a waiting room doesn't count them.
   a page of theirs is back by then. That close comes through only as the network comes back, just
   before the page's new socket or just after it, so the same outage used to be recorded as a
   `clientDisconnected` and a `clientConnected` 2 ms apart, or not at all.
+- **Answers that come too late.** A choice or tie change says when it was given, in the server's
+  time as the page reckons it from the pongs (`bbSentAt`, in `MakeChoice` and in the `CustomEvent`s
+  that `sendGroupChoice` and `sendEdgeEdit` send, and in anything sent with `Breadboard.sendType`'s
+  `maxAge`; the older AngularJS client's choices too). One that reaches the server more than 10
+  seconds after that is dropped: the page sent it into a connection that had died without closing,
+  which delivered it only as the network came back. The session records `answerDropped` (`player`,
+  `ageMs`: how long after it was given it arrived), and the page is sent the participant's view
+  again, so it shows what the server holds. The page reckons the server's time from when it sent the
+  ping a pong answers, never from when it got round to the pong (a tab in the background, a laptop
+  asleep), so a fresh click isn't taken for an old one. Messages that don't say when they were sent
+  are taken as they come.
 - **`player._system.disconnectedAt`**: since when (ms) the player has been away, next to
   `_system.connected`; it goes when they are back.
 - **Previews.** A researcher's preview of a player whose own page is connected, or of a computer
@@ -423,7 +439,9 @@ restarts the running session.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
   or goes (not for every page that takes over their seat), and `connectionGap` (`player`, `awayMs`)
   each time a participant's page connects again after its connection dropped, with how long it was
-  out of touch, also when that was too short to count as leaving.
+  out of touch, also when that was too short to count as leaving. `answerDropped` (`player`, `ageMs`):
+  a choice or tie change that reached the server more than 10 seconds after it was given, and didn't
+  count.
 - **Order:** events recorded in the same millisecond come out in the order they were recorded. Their
   ids follow that order now; they were given out twenty at a time, in an order of the database's
   own, so such events could come out the wrong way round.

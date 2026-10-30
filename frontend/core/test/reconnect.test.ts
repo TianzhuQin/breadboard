@@ -649,6 +649,67 @@ describe('answers given while the connection is down', () => {
   })
 })
 
+describe('answers, as the server hears of them', () => {
+  // The server's clock is an hour ahead of the page's; a ping takes 20 ms to reach it.
+  const AHEAD = 60 * 60 * 1000
+  const answers = (k: number) => FakeSocket.all[k].sentFrames().filter((m: any) => m.action !== 'Ping' && m.action !== 'LogIn')
+  /** The server answers the ping sent at `sentAt`, now */
+  const pong = (k: number, sentAt: number) => FakeSocket.all[k].frame({ pong: sentAt + AHEAD + 20 })
+
+  it('say when they were given, in the server\'s time as the page reckons it from the heartbeat', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    // before the server has answered a ping, the page can't tell
+    page.Breadboard.sendChoice('c0')
+    expect(answers(0)[0].bbSentAt).toBeUndefined()
+    // (the first ping went as the connection opened)
+    const pinged = Date.now()
+    await vi.advanceTimersByTimeAsync(300)
+    pong(0, pinged)
+    await vi.advanceTimersByTimeAsync(2000)
+    page.Breadboard.sendChoice('c1')
+    page.Breadboard.sendGroupChoice('g1')
+    page.Breadboard.sendEdgeEdit('remove', 'na', 'nb', 3)
+    // as the older AngularJS client sends a choice
+    page.Breadboard.sendType('MakeChoice', { choiceUID: 'c2', params: '{}' })
+    // the page's other messages don't
+    page.Breadboard.send('screen-tracker', { width: 800 })
+    await settle()
+    const now = Date.now() + AHEAD
+    const sent = answers(0).slice(1)
+    expect(sent.map((m: any) => m.action === 'CustomEvent' ? m.eventName : m.choiceUID))
+      .toEqual(['c1', 'c2', 'group-action-submit', 'bb:edge-edit', 'screen-tracker'])
+    // (a little later than the server's own time, by the 20 ms the ping took: never earlier)
+    for (const m of sent.slice(0, 4)) expect(m.bbSentAt).toBe(now + 20)
+    expect(sent[4].bbSentAt).toBeUndefined()
+  })
+
+  it('aren\'t made to look old by an answer to a ping that the page handled late', async () => {
+    // (a tab in the background, or a laptop asleep: the server answered at once, the page handles it
+    // a minute later)
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    const pinged = Date.now()
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    pong(0, pinged)
+    page.Breadboard.sendChoice('fresh')
+    expect(answers(0)[0].bbSentAt).toBe(Date.now() + AHEAD + 20)
+  })
+
+  it('keep the time they were given while they wait for the connection, and across connections', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    pong(0, Date.now())
+    FakeSocket.all[0].drop()
+    const given = Date.now() + AHEAD + 20
+    page.Breadboard.sendChoice('queued')
+    await vi.advanceTimersByTimeAsync(800)
+    FakeSocket.all[1].accept()
+    expect(answers(1)).toEqual([expect.objectContaining({ choiceUID: 'queued', bbSentAt: given })])
+    // (the new connection's server is the same: until it answers, the page goes by what it knows)
+    page.Breadboard.sendChoice('next')
+    expect(answers(1)[1].bbSentAt).toBe(Date.now() + AHEAD + 20)
+  })
+})
+
 describe('the token kept for a browser that comes back', () => {
   const KEY = 'breadboard-token:' + PAGE
   const keep = () => localStorage.setItem(KEY, JSON.stringify({ token: 'tok', until: Date.now() + 60 * 60 * 1000 }))

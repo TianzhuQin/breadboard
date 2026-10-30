@@ -636,6 +636,67 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(0L, c.outOfTouchSince(36500L));
     }
 
+    // ---- answers that come too late -----------------------------------------------------------------
+
+    /** The ageMs of each answerDropped of this participant, in order. */
+    private List<String> dropped(String clientId) {
+        List<String> ages = new ArrayList<>();
+        for (Event e : Event.find.where().eq("experimentInstance.id", session.id).eq("name", "answerDropped").order("id").findList()) {
+            String player = null;
+            String age = null;
+            for (EventData d : e.eventData) {
+                if ("player".equals(d.name)) player = d.value;
+                if ("ageMs".equals(d.name)) age = d.value;
+            }
+            if (clientId.equals(player)) ages.add(age);
+        }
+        return ages;
+    }
+
+    @Test
+    public void anAnswerThatReachesTheServerTooLateIsDroppedAndThePageIsShownWhatTheServerHolds() throws Throwable {
+        final long[] now = {System.currentTimeMillis()};
+        field("clock").set(null, (LongSupplier) () -> now[0]);
+        Page page = connect("p1");
+        // The page reckons the server's time from its pongs.
+        page.send("Ping");
+        assertEquals(now[0], page.last().get("pong").asLong());
+        engine().eval("picked = java.util.Collections.synchronizedList([]); "
+            + "a.add(g.getVertex('p1'), [name: 'Orange', result: { picked << 'Orange' }]); null");
+        String uid = String.valueOf(engine().eval("g.getVertex('p1').choices[0].uid"));
+        CustomEvents customEvents = new CustomEvents();
+        bus().on("CustomEvent", customEvents);
+        try {
+            // Clicked into a connection that had died without closing, and delivered 24.5 s later, as
+            // the network came back: dropped, and the page is sent the view again (the choice still on
+            // offer), so it doesn't show the pick as made. It used to be recorded 24.5 s late.
+            int views = page.count(VIEW);
+            page.send("MakeChoice", "choiceUID", uid, "bbSentAt", now[0] - 24500);
+            assertEquals(0, page.count(ANSWER));
+            assertEquals(Arrays.asList(), engine().eval("new ArrayList(picked)"));
+            assertEquals(views + 1, page.count(VIEW));
+            assertEquals(uid, page.last().get("player").get("choices").get(0).get("uid").asText());
+            page.send("CustomEvent", "eventName", "bb:edge-edit", "bbSentAt", now[0] - 11000);
+            assertEquals(0, customEvents.heard.size());
+            assertEquals(Arrays.asList("24500", "11000"), dropped("p1"));
+
+            // In time: taken, also when the page's reckoning puts it a little ahead, or it doesn't say.
+            page.send("CustomEvent", "eventName", "bb:edge-edit", "bbSentAt", now[0] - 9000);
+            page.send("CustomEvent", "eventName", "bb:edge-edit", "bbSentAt", now[0] + 2000);
+            page.send("CustomEvent", "eventName", "screen-tracker");
+            assertEquals(3, customEvents.heard.size());
+            page.send("MakeChoice", "choiceUID", uid, "bbSentAt", now[0] - 300);
+            assertEquals(1, page.count(ANSWER));
+            assertEquals(Arrays.asList("Orange"), engine().eval("new ArrayList(picked)"));
+            // A sign-in is never dropped.
+            page.send("LogIn", "clientId", "p1", "bbSentAt", now[0] - 60000);
+            assertEquals(1, events("clientLogIn", "p1"));
+            assertEquals(2, dropped("p1").size());
+        } finally {
+            bus().off("CustomEvent", customEvents);
+        }
+    }
+
     // ---- the game started without them -----------------------------------------------------------
 
     // The autopilot's launch, as it leaves out someone who has been away too long.

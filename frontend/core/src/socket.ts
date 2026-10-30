@@ -21,6 +21,9 @@ const PING_EVERY_MS = 5 * 1000
 const SILENCE_MS = 15 * 1000
 // reconnectNow() leaves an attempt this young alone ('pageshow' and 'visibilitychange' come together)
 const FRESH_ATTEMPT_MS = 1000
+// How many unanswered pings it keeps the times of (a server that never answers would have it keep
+// them all); a pong is paired with the oldest kept, so it is never taken for the answer to a later one
+const PINGS_KEPT = 20
 
 export interface SocketOptions {
   /** A heartbeat, sent every 5 s while the connection is open, e.g. '{"action":"Ping"}' */
@@ -42,9 +45,10 @@ type Queued = { message: any, at: number, maxAge?: number }
  * while it isn't connected. Once closed with close(), it stays closed: it never reconnects and sends
  * nothing more.
  *
- * Events: 'connect' (an attempt starts), 'open', 'message' (data, event), 'pong' (data: the server's
- * answer to the heartbeat, which is no 'message'), 'close', 'error', 'retry' (the wait in ms before
- * the next attempt), 'unopened', 'refused' and 'blocked' (below).
+ * Events: 'connect' (an attempt starts), 'open', 'message' (data, event), 'pong' (data, and when the
+ * ping it answers was sent, by Date.now(): the server's answer to the heartbeat, which is no
+ * 'message'), 'close', 'error', 'retry' (the wait in ms before the next attempt), 'unopened',
+ * 'refused' and 'blocked' (below).
  *
  * After each attempt that didn't open, it emits 'unopened' with the number of such attempts in a row.
  * When the server takes the connection and closes it again without sending anything, several
@@ -79,6 +83,8 @@ export class Socket extends Emitter {
   private lastHeard = 0
   /** When the first ping that nothing has come after was sent; 0 when there is none */
   private unansweredSince = 0
+  /** When each ping over the current connection that hasn't been answered yet was sent, oldest first */
+  private pingsSent: number[] = []
   /** When the current attempt started */
   private attemptAt = 0
   /** Stops listening to the current connection (see abandon) */
@@ -289,6 +295,7 @@ export class Socket extends Emitter {
       return
     }
     if (!this.unansweredSince) this.unansweredSince = now
+    if (this.pingsSent.length < PINGS_KEPT) this.pingsSent.push(now)
     this._send(this.options.ping)
     this.schedulePing()
   }
@@ -377,6 +384,7 @@ export class Socket extends Emitter {
     this.ponged = false
     this.lastHeard = Date.now()
     this.unansweredSince = 0
+    this.pingsSent = []
     this.emit('open')
     this.flush()
     // The first heartbeat at once: the server (and this page) only time a connection out once a
@@ -403,7 +411,8 @@ export class Socket extends Emitter {
       // Timed from the answer: a timer set from a network event isn't slowed down to once a minute
       // in a background tab, as a long chain of timers is.
       this.schedulePing()
-      this.emit('pong', ev.data)
+      // (the server answers the pings in turn: this one answers the oldest still unanswered)
+      this.emit('pong', ev.data, this.pingsSent.shift())
       return
     }
     this.emit('message', ev.data, ev)

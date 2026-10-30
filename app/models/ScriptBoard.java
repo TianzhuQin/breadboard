@@ -1572,7 +1572,8 @@ public class ScriptBoard extends UntypedActor {
    * as hearing from that socket (see closeSilentPages), and {"action": "Ping"} is answered on it with
    * {"pong": <the server's time in ms>}. What the page that holds the seat sends acts for the player.
    * A preview that only watches can't act: its sign-in is recorded (as a preview's), the rest is
-   * ignored. So is everything from a socket that has been replaced.
+   * ignored. So is everything from a socket that has been replaced, and an answer that reaches the
+   * server too late (see lateAnswer).
    */
   @SuppressWarnings("unchecked")
   private static void participantMessage(Client client, Client.Connection connection, final String clientId,
@@ -1582,6 +1583,9 @@ public class ScriptBoard extends UntypedActor {
       return;
     }
     if (!client.holdsSeat(connection) && !(client.watches(connection) && "LogIn".equals(action))) {
+      return;
+    }
+    if (lateAnswer(client, connection, clientId, event)) {
       return;
     }
     try {
@@ -1645,6 +1649,48 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  // When a page says it gave an answer (a choice, a tie change: frontend/core, breadboard.ts), in
+  // the server's time as the page reckons it from the pongs. An answer that reaches the server more
+  // than LATE_ANSWER_MS after that is dropped.
+  static final String ANSWER_SENT_AT = "bbSentAt";
+  static final long LATE_ANSWER_MS = 10000L;
+
+  /**
+   * Whether this message is an answer that reached the server more than LATE_ANSWER_MS after the page
+   * sent it: one the page sent into a connection that had died without closing, which delivered it
+   * only as the network came back (often after the page had said the connection was lost, and taken
+   * the answer back). It is dropped, and recorded as answerDropped (player, ageMs); the page is sent
+   * the participant's view again, so it shows what the server holds (the choice not made) rather
+   * than what it took for sent. Messages that don't say when they were sent (the sign-in, pages
+   * from before 3.1) are taken as they come.
+   */
+  private static boolean lateAnswer(Client client, Client.Connection connection, String clientId, JsonNode event) {
+    JsonNode sentAt = event == null ? null : event.get(ANSWER_SENT_AT);
+    if (sentAt == null || !sentAt.isNumber() || "LogIn".equals(actionOf(event))) {
+      return false;
+    }
+    long ageMs = clock.getAsLong() - sentAt.asLong();
+    if (ageMs <= LATE_ANSWER_MS) {
+      return false;
+    }
+    Logger.info("Dropped an answer of " + clientId + " that reached the server " + ageMs + " ms after it was given");
+    try {
+      if (eventTracker != null && eventTracker.sessionLive() && !Client.isComputer(clientId)) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("player", clientId);
+        data.put("ageMs", ageMs);
+        eventTracker.track("answerDropped", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not record the dropped answer of " + clientId, e);
+    }
+    ObjectNode view = client.lastFrame;
+    if (view != null) {
+      connection.write(view);
+    }
+    return true;
+  }
+
   // A message's "action", or "".
   private static String actionOf(JsonNode event) {
     JsonNode actionNode = event == null ? null : event.get("action");
@@ -1658,10 +1704,12 @@ public class ScriptBoard extends UntypedActor {
    */
   private static boolean heardFrom(Client.Connection connection, String action) {
     boolean ping = "Ping".equals(action);
-    connection.heard(ping, clock.getAsLong());
+    long now = clock.getAsLong();
+    connection.heard(ping, now);
     if (ping) {
+      // (the page reckons the server's time from it, to say when it gave an answer: see lateAnswer)
       ObjectNode pong = Json.newObject();
-      pong.put("pong", System.currentTimeMillis());
+      pong.put("pong", now);
       connection.writeAside(pong);
     }
     return ping;

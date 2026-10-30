@@ -486,6 +486,33 @@ describe('Socket heartbeat', () => {
     expect(FakeSocket.all[0].sent).toEqual(['PING', 'PING', 'PING'])
   })
 
+  it('says when the ping each answer answers was sent, the oldest unanswered first, on each connection', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const s = track(new Socket('ws://lab/connect', undefined, HEARTBEAT))
+    const pongs: any[] = []
+    s.on('pong', (data: any, sentAt: any) => pongs.push([data, sentAt]))
+    s.connect()
+    const opened = Date.now()
+    FakeSocket.all[0].accept()
+    // a second ping before the first is answered (the answers come late, in turn)
+    vi.advanceTimersByTime(5000)
+    vi.advanceTimersByTime(1500)
+    FakeSocket.all[0].message('PONG')
+    FakeSocket.all[0].message('PONG')
+    expect(pongs).toEqual([['PONG', opened], ['PONG', opened + 5000]])
+    // a new connection starts afresh: what its server answers is its own pings
+    FakeSocket.all[0].drop()
+    const again = untilNextAttempt()
+    const reopened = Date.now()
+    again.accept()
+    vi.advanceTimersByTime(200)
+    again.message('PONG')
+    expect(pongs[2]).toEqual(['PONG', reopened])
+    // an answer to no ping (none unanswered) says so
+    again.message('PONG')
+    expect(pongs[3]).toEqual(['PONG', undefined])
+  })
+
   it('keeps the answers to itself', () => {
     const s = track(new Socket('ws://lab/connect', undefined, HEARTBEAT))
     const messages: string[] = []
