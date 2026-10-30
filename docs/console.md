@@ -282,8 +282,11 @@ running session carries on: it takes people again, newcomers and those who held 
 game counts as not started, so **Start the game** runs InitStep again. Creating a session and
 resuming one restart the engine too, and so does switching experiments while no session is
 running. While anyone is using it, the console says who before doing any of these, and whether it
-pauses the autopilot. While another experiment's session is running, a reload is refused: it would
-end that session.
+pauses the autopilot. Before a reload that carries a session on (yours, or the autopilot's when it
+opened it as your account), it asks while that session's game is in progress or anyone is connected
+to it, and says that the game starts again from the beginning and that the people in it rejoin by
+themselves. While another experiment's session is running, a reload is refused: it would end that
+session.
 
 ## Running sessions with nobody at the console
 

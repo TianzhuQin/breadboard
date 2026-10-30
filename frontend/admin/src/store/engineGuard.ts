@@ -71,6 +71,39 @@ function runningLine (s: { name: string, experimentName: string | null, owner: s
     : `The engine is running ${session}.`
 }
 
+/** People (not computer players) whose page is connected to the engine's network right now. */
+function peopleConnected (): number {
+  let n = 0
+  for (const node of graph.nodes.values()) {
+    if (String(node.id).startsWith('_')) continue
+    const sys = (node.data as any)?._system
+    if (sys && typeof sys === 'object' && sys.connected === true) n++
+  }
+  return n
+}
+
+/**
+ * What a rebuild that carries session `keeping` on means for it, in words, when the engine runs it
+ * now ('' otherwise, or when its game hasn't started and nobody is connected): the session goes on in
+ * the new engine, but its game starts again from the beginning, and the people in it are disconnected
+ * and rejoin by themselves. Also the autopilot's own session (opened as this account, so it is
+ * "yours" to the server): a reload carries it on too, without pausing the autopilot.
+ */
+function carriedOn (keeping: number | undefined, auto: Named | null): string {
+  const e = admin.user?.engine
+  if (keeping == null || !e || e.sessionId !== keeping) return ''
+  const started = e.gameStarted === true
+  const here = peopleConnected()
+  if (!started && !here) return ''
+  const name = e.sessionName || (admin.instance && admin.instance.id === keeping ? admin.instance.name : String(keeping))
+  const whose = auto && auto.id === keeping ? `The autopilot’s session “${name}”` : `Your session “${name}”`
+  const people = here === 1 ? 'The 1 person in it is' : `The ${here} people in it are`
+  const rejoin = here ? ` ${people} disconnected for a moment and ${here === 1 ? 'rejoins' : 'rejoin'} by themselves.` : ''
+  return started
+    ? `${whose} carries on, but its game is in progress: reloading starts the game again from the beginning.${rejoin}`
+    : `${whose} carries on.${rejoin}`
+}
+
 /** Said when a rebuild would end the autopilot's live session (see engineUse). */
 export const REBUILD_PAUSES_AUTOPILOT = 'This also pauses the autopilot: it opens no new session by itself until someone presses Resume on the Autopilot page, so its participant links only lead somewhere while a session of its experiment is open.'
 
@@ -85,7 +118,8 @@ export async function engineUsers (): Promise<string> {
  * engine runs the autopilot's session, and the autopilot is on and not paused (say
  * REBUILD_PAUSES_AUTOPILOT then). A resume or reload that carries a session on passes its id as
  * `keeping`: that session isn't ended (nor the autopilot paused, when it is the autopilot's), though
- * the people in it are disconnected too.
+ * the people in it are disconnected too, and its game starts again: said when its game is in progress
+ * or anyone is connected to it (see carriedOn).
  */
 export async function engineUse (keeping?: number): Promise<{ who: string, pausesAutopilot: boolean, endsSession: boolean }> {
   const lines: string[] = []
@@ -110,6 +144,8 @@ export async function engineUse (keeping?: number): Promise<{ who: string, pause
     lines.push(runningLine({ name: e.sessionName || String(e.sessionId), experimentName: e.experimentName, owner: e.owner }))
   }
   const endsSession = lines.length > 0
+  const carried = carriedOn(keeping, auto)
+  if (carried) lines.unshift(carried)
   const n = graph.nodes.size
   // When the server says no session is running, people left in the network are what a finished or
   // stopped session left behind: clearing them disturbs no one, so it isn't worth a warning.
