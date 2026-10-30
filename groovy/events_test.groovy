@@ -50,9 +50,18 @@ test("clearAllPlayerListeners takes off every player's listeners") {
 
 test("a player's event reaches only that player's listeners, once") {
   def a = g.addPlayer("ev-once-a")
+  def b = g.addPlayer("ev-once-b")
   def heard = []
+  def heardByB = []
   a.once("ping", { v, data -> heard << data.n })
+  // another player listening to the same event hears only their own
+  b.on("ping", { v, data -> heardByB << data.n })
   events.emit("CustomEvent", [playerId: a.id, eventName: "ping", data: [n: 1]], [clientId: a.id])
   events.emit("CustomEvent", [playerId: a.id, eventName: "ping", data: [n: 2]], [clientId: a.id])
+  assert heard == [1]
+  assert heardByB == []
+  assert listening(b, "ping") == 1
+  events.emit("CustomEvent", [playerId: b.id, eventName: "ping", data: [n: 3]], [clientId: b.id])
+  assert heardByB == [3]
   assert heard == [1]
 }
