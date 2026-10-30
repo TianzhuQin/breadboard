@@ -314,4 +314,30 @@ describe('ParametersPage', () => {
     expect(firstDefault()).toBe('12')
     w.unmount()
   })
+
+  // On a phone the table is a stack of cards (CSS under 600 px) whose header is hidden, so each value
+  // names itself; the words show only there. (It scrolled sideways, with Max cut off.)
+  it('names each value in its cell, for the stacked layout on a phone', async () => {
+    const { default: ParametersPage } = await import('../src/pages/parameters/ParametersPage.vue')
+    store.admin.experiment = {
+      id: 12, name: 'Trust game', fileMode: false, steps: [],
+      parameters: [P({ id: 1, description: 'Rounds to play' }), P({ id: 2, name: 'label', type: 'Text', minVal: '', maxVal: '', defaultVal: 'blue' })],
+    }
+    store.admin.instance = { id: 3, name: 'pilot', status: 'RUNNING', data: [{ id: 1, name: 'nRounds', value: '8' }] }
+    const w = mount(ParametersPage, { attachTo: document.body })
+    try {
+      await nextTick()
+      const rows = w.findAll('tbody tr')
+      const labels = (i: number) => rows[i].findAll('.pp-lbl').map(l => l.text())
+      // (with a space before the value, for screen readers in the stacked layout)
+      expect(labels(0)).toEqual(['Min', 'Max', 'Default', 'Current session'])
+      expect(rows[0].findAll('td.is-num').map(td => td.text())).toEqual(['Min 1', 'Max 20'])
+      // a text parameter has no range, and no description here: the cards leave those out
+      expect(rows[1].findAll('td.is-blank')).toHaveLength(3)
+      expect(rows[0].findAll('td.is-blank')).toHaveLength(0)
+    } finally {
+      store.admin.instance = null
+      w.unmount()
+    }
+  })
 })
