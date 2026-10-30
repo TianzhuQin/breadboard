@@ -45,6 +45,7 @@ PROXY=""
 WORK="$(mktemp -d)"
 SERVER=""
 cleanup () {
+  [ -z "${HOLDER:-}" ] || kill "$HOLDER" 2>/dev/null || true
   if [ -n "$SERVER" ] && kill -0 "$SERVER" 2>/dev/null; then
     kill "$SERVER" 2>/dev/null || true
     wait "$SERVER" 2>/dev/null || true
@@ -228,6 +229,29 @@ only_mine () {
   done
 }
 
+# Another program (a stand-in for one) listening on the port, at the address $1 (127.0.0.1, ::1),
+# until let_port_go; false when it can't (no IPv6 here, for ::1).
+HOLDER=""
+hold_port () {
+  python3 -m http.server --bind "$1" "$PORT" > "$WORK/holder.log" 2>&1 &
+  HOLDER=$!
+  local url="http://$1:$PORT/"
+  case "$1" in *:*) url="http://[$1]:$PORT/" ;; esac
+  for _ in $(seq 1 40); do
+    kill -0 "$HOLDER" 2>/dev/null || break
+    curl -g -s -o /dev/null --max-time 2 "$url" && return 0
+    sleep 0.5
+  done
+  let_port_go
+  return 1
+}
+let_port_go () {
+  [ -n "$HOLDER" ] || return 0
+  kill "$HOLDER" 2>/dev/null || true
+  wait "$HOLDER" 2>/dev/null || true
+  HOLDER=""
+}
+
 backups () {
   local code name
   code="$(curl -s --max-time 60 -o "$WORK/body" -w '%{http_code}' -b "$WORK/cookies" -X POST "$BASE/backups")"
@@ -329,20 +353,12 @@ rm -f "$APP/conf/local.conf"
 # A program on the port's IPv6 loopback address only ([::1], where Node's dev servers listen for
 # localhost) is reported as using the port: the browser would open it in Breadboard's place. (Where
 # this computer has no IPv6, there is nothing to check.)
-python3 -m http.server --bind ::1 "$PORT" > "$WORK/ipv6-server.log" 2>&1 &
-V6=$!
-for _ in $(seq 1 40); do
-  kill -0 "$V6" 2>/dev/null || break
-  curl -g -s -o /dev/null --max-time 2 "http://[::1]:$PORT/" && break
-  sleep 0.5
-done
-if kill -0 "$V6" 2>/dev/null; then
+if hold_port ::1; then
   if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/ipv6-port.log" 2>&1 < /dev/null; then
-    kill "$V6" 2>/dev/null || true
+    let_port_go
     fail "it started while another program listened on [::1]:$PORT"
   fi
-  kill "$V6" 2>/dev/null || true
-  wait "$V6" 2>/dev/null || true
+  let_port_go
   grep -q "Another program is using port $PORT" "$WORK/ipv6-port.log" \
     || fail "a program on [::1]:$PORT wasn't reported as using the port: $(cat "$WORK/ipv6-port.log")"
   pass "a program on the port's IPv6 address, [::1], is reported as using the port"
@@ -376,12 +392,16 @@ if [ "$(id -u)" != 0 ]; then
   pass "a db/ that can't be written is reported, with how to fix it"
 
   # So is a conf/local.conf it can't read (made or copied by another account): Java would take it for
-  # missing, and the server would run without its settings.
+  # missing, and the server would run without its settings. It is said first, before the port (which
+  # that file may set) is looked at: here another program holds the port, and isn't what is said.
   printf '%s\n' 'breadboard.wsUrl="ws://local-conf.smoke.test"' > "$APP/conf/local.conf"
   chmod a-r "$APP/conf/local.conf"
+  hold_port 127.0.0.1 || fail "couldn't hold port $PORT for the check"
   if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/unreadable.log" 2>&1 < /dev/null; then
+    let_port_go
     fail "it started with a conf/local.conf it can't read"
   fi
+  let_port_go
   rm -f "$APP/conf/local.conf"
   grep -q "conf/local.conf can't be read by" "$WORK/unreadable.log" \
     || fail "a conf/local.conf it can't read wasn't reported: $(cat "$WORK/unreadable.log")"

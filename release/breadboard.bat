@@ -70,6 +70,19 @@ SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX
 "%JAVA%" %MEMORY_OPTS% -version >NUL 2>&1
 IF ERRORLEVEL 1 SET "MEMORY_OPTS="
 
+REM conf\local.conf holds the settings changed for this Breadboard (see below). One the server can't
+REM read (made or copied by another account) would be left out without a word, as if there were
+REM none: the server would run without those settings (its address, its port, HTTPS-only cookies,
+REM AWS keys). Say so instead, before anything is read from it.
+SET "UNREADABLE="
+IF EXIST "conf\local.conf" (
+  (TYPE "conf\local.conf" >NUL) 2>NUL || SET "UNREADABLE=1"
+)
+IF DEFINED UNREADABLE (
+  CALL :refuse say_unreadable
+  EXIT /B 1
+)
+
 REM The port: 9000, or http.port in conf\local.conf, or the one given with -Dhttp.port=... (here or in
 REM JAVA_OPTS; cmd splits that option at the =), which wins: Play reads the port only from
 REM -Dhttp.port, so the one in conf\local.conf is passed on as one (PORT_OPT). And how much memory the
@@ -163,17 +176,6 @@ IF NOT EXIST "conf\local.conf" (
   ECHO # They win over conf/application-prod.conf, which lists every setting and what it does. A new release
   ECHO # doesn't come with this file: copy it into the new release's conf folder when you upgrade.
 ) 2>NUL >"conf\local.conf"
-REM One the server can't read (made or copied by another account) would be left out without a word,
-REM as if there were none: the server would run without those settings (its address, HTTPS-only
-REM cookies, AWS keys). Say so instead.
-SET "UNREADABLE="
-IF EXIST "conf\local.conf" (
-  (TYPE "conf\local.conf" >NUL) 2>NUL || SET "UNREADABLE=1"
-)
-IF DEFINED UNREADABLE (
-  CALL :refuse say_unreadable
-  EXIT /B 1
-)
 
 REM Play refuses to start while RUNNING_PID exists: one left behind by a crash goes.
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL

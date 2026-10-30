@@ -89,6 +89,41 @@ if ! "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
   MEMORY_OPTS=""
 fi
 
+# The real folder, not a symbolic link to it (e.g. /opt/breadboard), which may be moved to the next
+# release while this one runs.
+HERE="$(pwd -P)"
+
+# A folder unpacked, or run once, by another account (often root) can't be written, and the
+# database then fails with a stack trace: say how to fix it instead (below). The same for a file
+# this account can't read.
+# (One that is this account's own, only made read-only or unreadable, this account can fix itself,
+# with chmod, without an administrator.)
+ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
+cannot_write() {
+  if [ -O "$2" ]; then
+    echo "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:" >&2
+    if [ -d "$2" ]; then
+      echo "  chmod -R u+rwX \"$2\"" >&2
+    else
+      echo "  chmod u+rw \"$2\"" >&2
+    fi
+  else
+    echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
+    if [ -d "$2" ]; then
+      echo "  sudo chown -R $ME \"$2\"" >&2
+    else
+      echo "  sudo chown $ME \"$2\"" >&2
+    fi
+  fi
+  exit 1
+}
+
+# conf/local.conf holds the settings changed for this Breadboard (see below). One the server can't
+# read (made or copied by another account, often root) would be left out without a word, as if
+# there were none: the server would run without those settings (its address, its port, HTTPS-only
+# cookies, AWS keys). Say so instead, before anything is read from it.
+[ ! -e conf/local.conf ] || [ -r conf/local.conf ] || cannot_write "conf/local.conf" "$HERE/conf/local.conf" read
+
 # The value of a setting written on a line of its own in conf/local.conf (key=value, key: value or
 # key = "value", with a comment after it or not), the last one if there are several; nothing when
 # there is none, or the file can't be read. $1 is the key, as a sed pattern.
@@ -169,10 +204,6 @@ if [ -n "$LOCAL_MEMORY" ]; then
 fi
 URL="http://localhost:$PORT"
 
-# The real folder, not a symbolic link to it (e.g. /opt/breadboard), which may be moved to the next
-# release while this one runs.
-HERE="$(pwd -P)"
-
 # Whether a Breadboard runs from this folder now: the pid file names it (its process id, written by
 # Play), and a crash or power cut leaves the file behind, naming a process that is gone or another
 # program. Sets RUNNING to the process id.
@@ -237,32 +268,10 @@ if port_taken; then
   exit 1
 fi
 
-# A folder unpacked, or run once, by another account (often root) can't be written, and the
-# database then fails with a stack trace: say how to fix it instead. The folder itself is written
-# only to make db/ and logs/ and for RUNNING_PID: one kept read-only (root's, under /opt) runs with
+# A folder Breadboard can't write to (see cannot_write, above). The folder itself is written only to
+# make db/ and logs/ and for RUNNING_PID: one kept read-only (root's, under /opt) runs with
 # -Dpidfile.path elsewhere and a db/ and logs/ (and, for backups and images, backups/ and dev/) that
 # the server's account can write.
-# (One that is this account's own, only made read-only or unreadable, this account can fix itself,
-# with chmod, without an administrator.)
-ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
-cannot_write() {
-  if [ -O "$2" ]; then
-    echo "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:" >&2
-    if [ -d "$2" ]; then
-      echo "  chmod -R u+rwX \"$2\"" >&2
-    else
-      echo "  chmod u+rw \"$2\"" >&2
-    fi
-  else
-    echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
-    if [ -d "$2" ]; then
-      echo "  sudo chown -R $ME \"$2\"" >&2
-    else
-      echo "  sudo chown $ME \"$2\"" >&2
-    fi
-  fi
-  exit 1
-}
 if [ ! -d db ] || [ ! -d logs ] || [ "$(dirname "$PID_FILE")" = . ]; then
   [ -w . ] || cannot_write "The Breadboard folder ($HERE)" "$HERE"
 fi
@@ -316,14 +325,10 @@ EOF
 fi
 # A copy brought from an earlier release (each release is a folder of its own) is made private too,
 # at every start, when the file is this account's: chmod takes the group's and others' access away.
-# Another account's file is left as it is.
+# Another account's file is left as it is. (One the server can't read was turned away above.)
 if [ -O conf/local.conf ]; then
   chmod go-rwx conf/local.conf 2>/dev/null || true
 fi
-# One the server can't read (made or copied by another account, often root) would be left out
-# without a word, as if there were none: the server would run without those settings (its address,
-# HTTPS-only cookies, AWS keys). Say so instead.
-[ ! -e conf/local.conf ] || [ -r conf/local.conf ] || cannot_write "conf/local.conf" "$HERE/conf/local.conf" read
 
 # Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
 remove_pid_file() {
