@@ -420,7 +420,11 @@ experiment with a `prolificCode` launch parameter, such as **Example: network ga
 by itself: the card then says so, with the code it gives now, and you set it as that parameter's
 default on the Parameters page instead. **From
 Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
+Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event. **From Prolific
+in every session** lists them for every session of the experiment, newest first, from the sessions'
+data, so a session the autopilot has moved on from can still be paid: when each person joined,
+whether they finished, their code and bonus, and **Copy bonus list** for all of them (someone paid in
+two sessions gets one line with both amounts added up).
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game

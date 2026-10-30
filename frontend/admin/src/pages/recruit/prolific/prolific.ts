@@ -1,6 +1,7 @@
 /** Prolific helpers: the study URL, the test link and the participants seen in the live session. */
 import { groovyLiteral } from '@/pages/console/snippets'
-import { moneyString } from '../mturk/lib'
+import { http } from '@/lib/http'
+import { bonusTotal, moneyString } from '../mturk/lib'
 
 /** Prolific's placeholder syntax; Prolific swaps these for each participant's ids. */
 export const PROLIFIC_QUERY = 'PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}'
@@ -80,13 +81,99 @@ export function prolificPlayers (nodes: Iterable<{ id: string, data: Record<stri
 
 /**
  * Prolific's bulk bonus box takes one "participant id,amount" per line. Amounts are rounded to
- * cents; players without a bonus are left out.
+ * cents; players without a bonus (or without a Prolific ID) are left out, and someone listed twice
+ * (paid in two sessions) gets one line with the amounts added up.
  */
-export function prolificBonusLines (players: ProlificPlayer[]): string {
-  return players
-    .filter(p => p.prolificPid && p.bonus != null && p.bonus > 0)
-    .map(p => `${p.prolificPid},${moneyString(p.bonus!)}`)
-    .join('\n')
+export function prolificBonusLines (players: Array<Pick<ProlificPlayer, 'prolificPid' | 'bonus'>>): string {
+  const byPid = new Map<string, number[]>()
+  for (const p of players) {
+    if (!p.prolificPid || p.bonus == null || !(p.bonus > 0)) continue
+    const amounts = byPid.get(p.prolificPid) || []
+    amounts.push(p.bonus)
+    byPid.set(p.prolificPid, amounts)
+  }
+  return [...byPid].map(([pid, amounts]) => `${pid},${moneyString(bonusTotal(amounts))}`).join('\n')
+}
+
+// ---- every session's Prolific participants ------------------------------------------------------
+
+/**
+ * A Prolific participant of one of the experiment's sessions, as its data records them (GET
+ * /experiment/:id/prolific, models.ProlificParticipants): their entry (prolificEntry), their
+ * completion (prolificComplete: code and bonus), or an end without a code (noCompletionCode, which
+ * the network game example records while its prolificCode is empty). Times are ISO-8601 UTC.
+ */
+export interface ProlificRecord {
+  sessionId: number
+  sessionName: string
+  sessionStatus: string
+  player: string
+  prolificPid: string
+  studyId: string
+  prolificSessionId: string
+  joinedAt: string | null
+  completed: boolean
+  completedAt: string | null
+  completionCode: string
+  bonus: number | null
+  finishedWithoutCode: boolean
+}
+
+/** The server's answer, read defensively: anything that isn't a participant is left out. */
+export function prolificRecordsOf (json: any): ProlificRecord[] {
+  const list = json && Array.isArray(json.participants) ? json.participants : []
+  const text = (v: any) => (typeof v === 'string' ? v : v == null ? '' : String(v))
+  const out: ProlificRecord[] = []
+  for (const p of list) {
+    if (!p || typeof p !== 'object' || !p.player) continue
+    const bonus = typeof p.bonus === 'number' ? p.bonus : parseFloat(p.bonus)
+    out.push({
+      sessionId: Number(p.sessionId),
+      sessionName: text(p.sessionName) || `Session ${p.sessionId}`,
+      sessionStatus: text(p.sessionStatus),
+      player: text(p.player),
+      prolificPid: text(p.prolificPid),
+      studyId: text(p.studyId),
+      prolificSessionId: text(p.prolificSessionId),
+      joinedAt: typeof p.joinedAt === 'string' ? p.joinedAt : null,
+      completed: p.completed === true,
+      completedAt: typeof p.completedAt === 'string' ? p.completedAt : null,
+      completionCode: text(p.completionCode),
+      bonus: Number.isFinite(bonus) && bonus > 0 ? bonus : null,
+      finishedWithoutCode: p.finishedWithoutCode === true,
+    })
+  }
+  return out
+}
+
+/** Every session's Prolific participants, newest session first. */
+export async function loadProlificRecords (experimentId: number): Promise<ProlificRecord[]> {
+  return prolificRecordsOf(await http.get(`/experiment/${experimentId}/prolific`))
+}
+
+export interface ProlificSessionGroup {
+  sessionId: number
+  sessionName: string
+  sessionStatus: string
+  records: ProlificRecord[]
+  joined: number
+  finished: number
+}
+
+/** The records by session, in the order they come (newest session first). */
+export function groupBySession (records: ProlificRecord[]): ProlificSessionGroup[] {
+  const groups = new Map<number, ProlificSessionGroup>()
+  for (const r of records) {
+    let g = groups.get(r.sessionId)
+    if (!g) {
+      g = { sessionId: r.sessionId, sessionName: r.sessionName, sessionStatus: r.sessionStatus, records: [], joined: 0, finished: 0 }
+      groups.set(r.sessionId, g)
+    }
+    g.records.push(r)
+    g.joined++
+    if (r.completed || r.finishedWithoutCode) g.finished++
+  }
+  return [...groups.values()]
 }
 
 /**

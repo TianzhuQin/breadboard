@@ -51,7 +51,7 @@ import { FORM_KEY, defaultHitForm, hitFormBody, loadHitForm, readSchedules, vali
 import { bonusToken, newRequestToken, TOKEN_RE } from '@/pages/recruit/mturk/bonusTokens'
 import { toasts } from '@/ui/toast'
 import { toRow } from '@/pages/recruit/mturk/rows'
-import { completionSnippet, prolificBonusLines, prolificPlayers, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
+import { completionSnippet, groupBySession, prolificBonusLines, prolificPlayers, prolificRecordsOf, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
 import BonusDialog from '@/pages/recruit/mturk/BonusDialog.vue'
 import CreateHitTab from '@/pages/recruit/mturk/CreateHitTab.vue'
 import RecruitPage from '@/pages/recruit/RecruitPage.vue'
@@ -573,6 +573,86 @@ describe('Bonus dialog', () => {
     const [items, reason] = w.emitted('pay')![0] as [{ row: { id: string }, amount: number }[], string]
     expect(items.map(i => [i.row.id, i.amount])).toEqual([['A1', 0.3], ['A2', 0.5], ['A3', 1.25]])
     expect(reason).toBe('Final game score.')
+  })
+})
+
+describe('Prolific participants of every session', () => {
+  const answer = {
+    participants: [
+      { sessionId: 12, sessionName: 'Autopilot 2', sessionStatus: 'RUNNING', player: 'pp-c', prolificPid: 'PID-C', studyId: 's', prolificSessionId: 'x', joinedAt: '2026-10-30T13:27:11.000Z', completed: true, completedAt: '2026-10-30T13:29:00.000Z', completionCode: 'C7K2M9QX', bonus: 0.5, finishedWithoutCode: false },
+      { sessionId: 12, sessionName: 'Autopilot 2', sessionStatus: 'RUNNING', player: 'pp-d', prolificPid: 'PID-D', studyId: 's', prolificSessionId: 'y', joinedAt: '2026-10-30T13:27:20.000Z', completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: false },
+      { sessionId: 11, sessionName: 'Autopilot 1', sessionStatus: 'FINISHED', player: 'pp-a', prolificPid: 'PID-A', studyId: 's', prolificSessionId: 'z', joinedAt: '2026-10-30T13:20:47.000Z', completed: true, completedAt: '2026-10-30T13:23:00.000Z', completionCode: 'C7K2M9QX', bonus: 1.255, finishedWithoutCode: false },
+      { sessionId: 11, sessionName: 'Autopilot 1', sessionStatus: 'FINISHED', player: 'pp-b', prolificPid: 'PID-B', studyId: 's', prolificSessionId: 'w', joinedAt: '2026-10-30T13:20:50.000Z', completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: true },
+      { sessionId: 11, sessionName: 'Autopilot 1', sessionStatus: 'FINISHED', player: 'pp-e', prolificPid: 'PID-E', studyId: 's', prolificSessionId: 'v', joinedAt: '2026-10-30T13:21:00.000Z', completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: false },
+      // anything else is left out
+      null, { sessionId: 9 },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.mocked(http.get).mockReset()
+    admin.experiment = { id: 3, name: 'Network game', parameters: [], instances: [] }
+    admin.instance = null
+  })
+
+  it('reads the server\'s list, groups it by session, and adds up one participant\'s bonuses for Prolific', () => {
+    const records = prolificRecordsOf(answer)
+    expect(records.map(r => r.player)).toEqual(['pp-c', 'pp-d', 'pp-a', 'pp-b', 'pp-e'])
+    expect(records[1]).toMatchObject({ completed: false, completionCode: '', bonus: null, finishedWithoutCode: false })
+    expect(groupBySession(records).map(g => [g.sessionName, g.joined, g.finished])).toEqual([['Autopilot 2', 2, 1], ['Autopilot 1', 3, 2]])
+    expect(prolificBonusLines(records)).toBe('PID-C,0.50\nPID-A,1.26')
+    // the same person paid in two sessions: one line, the amounts added up
+    expect(prolificBonusLines([{ prolificPid: 'PID-A', bonus: 1.25 }, { prolificPid: 'PID-B', bonus: null }, { prolificPid: 'PID-A', bonus: 0.5 }, { prolificPid: '', bonus: 2 }])).toBe('PID-A,1.75')
+    expect(prolificRecordsOf(null)).toEqual([])
+  })
+
+  it('lists who joined and who finished in every session, with codes, bonuses and Copy bonus list', async () => {
+    vi.mocked(http.get).mockImplementation(async (url: string) => {
+      if (url === '/experiment/3/prolific') return answer
+      throw new HttpError(404, 'Not found')
+    })
+    const ProlificHistory = (await import('@/pages/recruit/prolific/ProlificHistory.vue')).default
+    const written: string[] = []
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t: string) => { written.push(t) } }, configurable: true })
+    const w = mount(ProlificHistory, { props: { experimentId: 3 } })
+    await flushPromises()
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('5 joined · 3 finished · in 2 sessions')
+    expect(w.findAll('.pl-hist__session').map(r => r.text().replace(/\s+/g, ' '))).toEqual([
+      'Autopilot 2 Running 2 joined · 1 finished',
+      'Autopilot 1 Finished 3 joined · 2 finished',
+    ])
+    const rows = w.findAll('tbody tr:not(.pl-hist__session)').map(r => r.findAll('td').map(td => td.text().replace(/\s+/g, ' ')))
+    expect(rows.map(r => [r[0], r[2], r[3], r[4]])).toEqual([
+      ['PID-C Player pp-c', 'Finished', 'C7K2M9QX', '0.50'],
+      ['PID-D Player pp-d', 'Not yet', '', ''],
+      ['PID-A Player pp-a', 'Finished', 'C7K2M9QX', '1.26'],
+      ['PID-B Player pp-b', 'No code', '', ''],
+      ['PID-E Player pp-e', 'No', '', ''],
+    ])
+    await w.findAll('button').find(b => b.text() === 'Copy bonus list')!.trigger('click')
+    await flushPromises()
+    expect(written).toEqual(['PID-C,0.50\nPID-A,1.26'])
+    w.unmount()
+  })
+
+  it('says when nobody came from Prolific yet, and when the list can\'t be loaded', async () => {
+    const ProlificHistory = (await import('@/pages/recruit/prolific/ProlificHistory.vue')).default
+    vi.mocked(http.get).mockResolvedValueOnce({ participants: [] })
+    let w = mount(ProlificHistory, { props: { experimentId: 3 } })
+    await flushPromises()
+    expect(w.text()).toContain('Nobody has joined this experiment from Prolific yet.')
+    expect(w.find('table').exists()).toBe(false)
+    w.unmount()
+    vi.mocked(http.get).mockRejectedValueOnce(new HttpError(500, 'Database unavailable'))
+    w = mount(ProlificHistory, { props: { experimentId: 3 } })
+    await flushPromises()
+    expect(w.text()).toContain('Couldn\'t load the Prolific participants')
+    vi.mocked(http.get).mockResolvedValueOnce(answer)
+    await w.findAll('button').find(b => b.text().includes('Try again'))!.trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('5 joined · 3 finished')
+    w.unmount()
   })
 })
 

@@ -49,6 +49,7 @@
       </BPanel>
 
       <CompletionCard :experiment-id="admin.experiment.id" :parameters="admin.experiment.parameters" />
+      <ProlificHistory :experiment-id="admin.experiment.id" />
     </div>
 
     <aside class="pl__side">
@@ -69,6 +70,7 @@ import StudyLinkCard from './StudyLinkCard.vue'
 import CompletionCard from './CompletionCard.vue'
 import AutopilotCard from './AutopilotCard.vue'
 import ProlificPlayers from './ProlificPlayers.vue'
+import ProlificHistory from './ProlificHistory.vue'
 import { prolificTarget } from './prolific'
 
 // (a call that is commented out doesn't count)

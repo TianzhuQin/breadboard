@@ -65,7 +65,7 @@
               <dt><code>message</code></dt>
               <dd>Optional text (HTML) shown above the code.</dd>
               <dt><code>bonus</code></dt>
-              <dd>Optional amount kept with the player, for paying bonuses on Prolific (see “From Prolific in this session”).</dd>
+              <dd>Optional amount kept with the player, for paying bonuses on Prolific (see “From Prolific in every session”).</dd>
               <dt><code>noFeedback: true</code></dt>
               <dd>Hides the comments box on the last screen.</dd>
             </dl>
