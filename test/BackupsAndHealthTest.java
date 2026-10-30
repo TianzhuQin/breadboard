@@ -43,6 +43,21 @@ public class BackupsAndHealthTest extends BaseTest {
         assertTrue(body.has("uptimeSeconds"));
     }
 
+    /** Uptime monitors and proxies that check with HEAD get GET's status and headers, without the body. */
+    @Test
+    public void healthAnswersHeadAsItAnswersGetWithoutTheBody() {
+        Result get = route(fakeRequest(GET, "/health"));
+        Result head = route(fakeRequest("HEAD", "/health"));
+        assertNotNull("HEAD /health has a route", head);
+        assertEquals(OK, status(head));
+        assertEquals("no body", "", contentAsString(head));
+        assertEquals(contentType(get), contentType(head));
+        assertEquals("no-store", header("Cache-Control", head));
+        // the length of the body GET sends (its uptime and free space may have changed a digit meanwhile)
+        int length = Integer.parseInt(header("Content-Length", head));
+        assertTrue(length + " for " + contentAsString(get), Math.abs(length - contentAsBytes(get).length) <= 2);
+    }
+
     @Test
     public void eachHealthCheckWritesItsHeartbeatRow() throws Exception {
         assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
@@ -90,6 +105,9 @@ public class BackupsAndHealthTest extends BaseTest {
             assertTrue(said, said.contains("Health check: failing"));
             assertTrue("the details are in the log: " + said, said.toLowerCase().contains("lock"));
             assertTrue("it doesn't hang: " + took + " ms", took < 8000);
+            Result head = route(fakeRequest("HEAD", "/health"));
+            assertEquals("HEAD says so too", SERVICE_UNAVAILABLE, status(head));
+            assertEquals("", contentAsString(head));
             stuck.rollback();
         } finally {
             log.detachAppender(logged);

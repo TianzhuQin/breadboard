@@ -390,11 +390,12 @@ the task is wrong.
 
 ### Checking that it is up
 
-`GET /health` answers `{"status":"ok", "database":"ok", "diskFreeMb": …}` with status 200 while the
-server works: it writes to the database (so a full disk or a locked database shows), checks there
-are more than 100 MB free where the database is, and that the server's internals are running.
-Otherwise it answers 503 with `"status":"failing"` and a `"reason"`. Point an uptime monitor (or
-your proxy's health check) at `https://breadboard.example.org/health`. It needs no sign-in and says
+`GET /health` answers `{"status":"ok", "database":"ok", "diskFreeMb": …, "version":"v3.1.0",
+"uptimeSeconds": …}` with status 200 while the server works: it writes to the database (so a full
+disk or a locked database shows), checks there are more than 100 MB free where the database is, and
+that the server's internals are running. Otherwise it answers 503 with `"status":"failing"` and a
+`"reason"`. `HEAD /health` gives the same status without the body. Point an uptime monitor (or your
+proxy's health check) at `https://breadboard.example.org/health`. It needs no sign-in and says
 nothing about experiments or participants.
 
 **A restart ends running sessions.** The game state of a session lives in the server's memory,
