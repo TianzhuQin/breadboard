@@ -60,6 +60,10 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 | **Reconnecting…** | The console has lost its connection to the server. |
 | Output (Ctrl+J) | What the experiment's scripts print and return, and their errors. A red badge counts new errors. |
 
+While the console isn't connected, a notice under the top bar says so on every page, and on a phone
+the chip reads **Offline**. Each page shows what was last known until the console reconnects, which
+it does by itself. If Breadboard was stopped, start it again.
+
 There is one script engine per server, shared by every researcher's console and the autopilot.
 It runs one experiment at a time, which need not be the one you work on: while a session is running
 in it (yours, another researcher's or the autopilot's), switching experiments only changes what you

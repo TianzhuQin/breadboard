@@ -99,6 +99,38 @@ describe('the shell', () => {
     expect(w.find('#shell-nav').attributes('inert')).toBeUndefined()
     w.unmount()
   })
+
+  // Only Live session used to say so; elsewhere, and on a phone, there was an icon in the top bar.
+  it('says on every page when the console isn\'t connected, and that a stopped server needs starting', async () => {
+    connection.state.value = 'open'
+    const { w, router } = await mountShell()
+    try {
+      expect(w.find('.conn-notice').exists()).toBe(false)
+      connection.state.value = 'retrying'
+      await nextTick()
+      for (const page of ['/steps', '/parameters']) {
+        await router.push(page)
+        await nextTick()
+        const notice = w.find('.conn-notice')
+        expect(notice.attributes('role')).toBe('status')
+        expect(notice.text()).toContain('Not connected to the server.')
+        expect(notice.text()).toContain('If Breadboard was stopped, start it again; the console reconnects by itself.')
+      }
+      // the chip keeps its words at every width (a short one on a phone)
+      const chip = w.find('.topbar__conn')
+      expect(chip.find('.topbar__conn-text').text()).toBe('Reconnecting…')
+      expect(chip.find('.topbar__conn-short').text()).toBe('Offline')
+      expect(chip.find('.topbar__chip-text').exists()).toBe(false)
+      expect(w.find('.topbar').classes()).toContain('is-offline')
+      connection.state.value = 'open'
+      await nextTick()
+      expect(w.find('.conn-notice').exists()).toBe(false)
+      expect(w.find('.topbar__conn').exists()).toBe(false)
+    } finally {
+      connection.state.value = 'idle'
+      w.unmount()
+    }
+  })
 })
 
 describe('the output panel', () => {
