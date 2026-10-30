@@ -56,7 +56,7 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 | Item | |
 |---|---|
 | The session | Its status and name ("Running · Session 1"), or "No session". Click it to go to Live session. |
-| **Engine** | The script engine that runs the experiment. It reads **Reloading…** while it restarts, and **Reload needed** when steps were saved since it last loaded them (every researcher's console says so, also after a refresh) or a reload didn't finish. With no session running, or the autopilot's own session open, it reads **Steps saved** instead: the next session loads them. Its menu has **Reload engine**. |
+| **Engine** | The script engine that runs the experiment. It reads **Loading steps…** while it restarts, and **Reload needed** when steps were saved since it last loaded them (every researcher's console says so, also after a refresh) or a reload didn't finish. With no session running, or the autopilot's own session open, it reads **Steps saved** instead: the next session loads them. Its menu has **Reload engine**. |
 | **Reconnecting…** | The console has lost its connection to the server. |
 | Output (Ctrl+J) | What the experiment's scripts print and return, and their errors. A red badge counts new errors. |
 
