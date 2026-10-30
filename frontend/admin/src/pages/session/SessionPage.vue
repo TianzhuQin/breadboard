@@ -395,6 +395,8 @@ function clock (at: number) {
 .live-err__body { flex: 1; min-width: 0; }
 .live-err__title { font-weight: 650; color: var(--danger-soft-text); }
 .live-err__time { font-weight: 400; color: var(--muted); font-size: var(--text-sm); margin-left: 4px; }
+/* (no height limit here: EngineError is a flex column, so a cap squeezed its message and its "Full
+   error" to a few pixels; the message limits its own height) */
 .live-err__text {
   margin: 6px 0 0;
   font-size: var(--text-xs);
@@ -402,8 +404,6 @@ function clock (at: number) {
   color: var(--text-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 120px;
-  overflow: auto;
 }
 .live-err__actions { display: flex; gap: 6px; flex: none; }
 
