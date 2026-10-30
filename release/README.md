@@ -38,7 +38,8 @@ The console opens in your browser once the server is up. Its window also says wh
 `On this network: http://192.168.…:9000`. The first time, the console asks you to create your
 researcher account; add your colleagues' accounts in Settings → Researchers. Stop the server with
 Ctrl+C in its window, or by closing the window. If it stops by itself (it ran out of memory, say),
-it is started again after a few seconds.
+it is started again after a few seconds. If it can't start at all (a mistake in `conf/local.conf`,
+say), its window says why, and so does `logs/start-errors.log`.
 
 While the server runs, a Mac or a Windows computer doesn't go to sleep by itself. On Linux, started
 in a desktop session (not over SSH or as a service), the launcher asks systemd (and on GNOME the

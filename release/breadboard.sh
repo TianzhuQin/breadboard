@@ -17,9 +17,11 @@
 #
 # Keep running: run in a terminal, or with BREADBOARD_KEEP_RUNNING=1 (Start Breadboard.command sets
 # it), a server that stops by itself (it ran out of memory, Java crashed, it was killed) is started
-# again after a few seconds, saying why; after 5 restarts in 10 minutes it is left stopped. Ctrl+C,
-# closing the window and SIGTERM still stop it. Otherwise (BREADBOARD_KEEP_RUNNING=0, or no terminal,
-# as under systemd or launchd, which restart it themselves), this script becomes the server (exec).
+# again after a few seconds, saying why; after 5 restarts in 10 minutes it is left stopped, and so
+# is one that stopped before it ever started (a mistake in conf/local.conf, its port taken): what
+# Java printed as errors is then in logs/start-errors.log. Ctrl+C, closing the window and SIGTERM
+# still stop it. Otherwise (BREADBOARD_KEEP_RUNNING=0, or no terminal, as under systemd or launchd,
+# which restart it themselves), this script becomes the server (exec).
 set -e
 cd "$(dirname "$0")"
 # set again below for the server when this script starts it again
@@ -127,23 +129,29 @@ if running_here; then
 fi
 
 # Something already answering on the port (often Breadboard itself, started earlier): say so
-# instead of Play's stack trace. curl's 7 means nothing listens there. (--noproxy: a proxy set for
-# the internet, often one on this computer, would answer in the port's place; curl uses it even for
-# 127.0.0.1.)
-if command -v curl >/dev/null 2>&1; then
-  set +e
-  ANSWER="$(curl -s --noproxy '*' --max-time 8 "http://127.0.0.1:$PORT/health" 2>/dev/null)"
-  CODE=$?
-  set -e
-  if [ "$CODE" -ne 7 ]; then
-    if printf '%s' "$ANSWER" | grep -q '"database"'; then
-      echo "Breadboard is already running on port $PORT: open $URL" >&2
-    else
-      echo "Another program is using port $PORT. Stop it, or start Breadboard on another port:" >&2
-      echo "  ./breadboard.sh -Dhttp.port=$((PORT + 1))" >&2
-    fi
-    exit 1
+# instead of Play's stack trace (here, and again before the server is started again after it
+# stopped by itself). Sets TAKEN to what to say, and is true, when the port is taken. curl's 7 means
+# nothing listens there. (--noproxy: a proxy set for the internet, often one on this computer, would
+# answer in the port's place; curl uses it even for 127.0.0.1.)
+port_taken() {
+  TAKEN=""
+  command -v curl >/dev/null 2>&1 || return 1
+  if ANSWER="$(curl -s --noproxy '*' --max-time 8 "http://127.0.0.1:$PORT/health" 2>/dev/null)"; then
+    CURL=0
+  else
+    CURL=$?
   fi
+  [ "$CURL" -ne 7 ] || return 1
+  if printf '%s' "$ANSWER" | grep -q '"database"'; then
+    TAKEN="Breadboard is already running on port $PORT: open $URL"
+  else
+    TAKEN="Another program is using port $PORT. Stop it, or start Breadboard on another port:
+  ./breadboard.sh -Dhttp.port=$((PORT + 1))"
+  fi
+}
+if port_taken; then
+  echo "$TAKEN" >&2
+  exit 1
 fi
 
 # A folder unpacked, or run once, by another account (often root) can't be written, and the
@@ -217,6 +225,16 @@ remove_pid_file() {
   [ "$PID_FILE" = /dev/null ] || rm -f "$PID_FILE"
 }
 remove_pid_file
+
+# Before each start of Java, logs/start-errors.log says that it is starting. launcher.Main deletes it
+# once the server listens; when Java ends before that, it writes what Java printed as errors into
+# it. So the file is there after Java ended only when the server never started.
+starting() {
+  printf '%s\n' "Breadboard's Java was started at $(date -u '+%Y-%m-%d %H:%M:%S') UTC, and the server hasn't listened yet." \
+    "Once it listens, this file is deleted. If Java ends before, what it printed as errors is written here;" \
+    "if nothing else is, it ended before it could: what it printed in Breadboard's window says why." \
+    > logs/start-errors.log 2>/dev/null || true
+}
 
 # The jars in the order the build lists them (lib/classpath.txt): a few classes are in two of them.
 CP="$(sed 's#^#lib/#' lib/classpath.txt | paste -s -d: -)"
@@ -332,6 +350,7 @@ set -- "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512
   launcher.Main "$HERE"
 
 if [ -z "$KEEP_RUNNING" ]; then
+  starting
   exec "$@"
 fi
 
@@ -351,12 +370,13 @@ say() {
   printf '%s\n' "$1" >&2 &
   SAID=$!
 }
+# (SIGKILL: a helper stuck on the window would wait for it again to say it was asked to stop)
 let_said_out() {
   [ -n "$SAID" ] || return 0
-  (sleep 2; kill "$SAID" 2>/dev/null) &
+  (sleep 2; kill -KILL "$SAID" 2>/dev/null) &
   SAY_LIMIT=$!
   wait "$SAID" 2>/dev/null
-  kill "$SAY_LIMIT" 2>/dev/null
+  kill -KILL "$SAY_LIMIT" 2>/dev/null
 }
 # What happened, in this window and in logs/application.log (in the server's own format, in UTC)
 note() {
@@ -365,14 +385,18 @@ note() {
   say "$1"
 }
 
-# Why Java stopped, from its exit code
+# Why Java stopped, from its exit code. A signal N ends it with 128 + N (Java's own signals are 1 to
+# 31); Java's own exit codes go up to 255, which is -1 (Play's, for a server that couldn't start).
+signalled() {
+  [ "$1" -gt 128 ] && [ "$1" -lt 160 ]
+}
 stop_reason() {
   case "$1" in
     3) echo "it ran out of memory: a script may keep too much data. JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs/out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards" ;;
     137) echo "it was killed with signal 9, perhaps by the system when memory ran low" ;;
     134|139) echo "Java crashed with signal $(($1 - 128)); its report is in hs_err_pid*.log in this folder" ;;
     *)
-      if [ "$1" -gt 128 ]; then
+      if signalled "$1"; then
         echo "it was ended with signal $(($1 - 128))"
       else
         echo "exit code $1; logs/application.log may say why"
@@ -429,6 +453,7 @@ while :; do
     exit "${CODE:-$STOP_CODE}"
   fi
   [ -z "$CODE" ] || say "Starting Breadboard again."
+  starting
   "$@" &
   JAVA_PID=$!
   # (asked to stop just as it started, before stop_server could know its process id)
@@ -450,6 +475,17 @@ while :; do
     # stop took too long and the server cut it short: Global.stopIfShutdownHangs.)
     0|129|130|143) exit "$CODE" ;;
   esac
+  # The server never started (a mistake in conf/local.conf, its port taken by then, Java that can't
+  # start at all): started again, it would only fail the same way.
+  if [ -f logs/start-errors.log ]; then
+    if signalled "$CODE"; then
+      WHY="it was ended with signal $((CODE - 128))"
+    else
+      WHY="exit code $CODE"
+    fi
+    note "Breadboard stopped before the server started ($WHY), so it is not started again: it would only fail the same way. The lines above say why, and logs/start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+    exit "$CODE"
+  fi
 
   NOW="$(date +%s)"
   RECENT=""
@@ -479,6 +515,11 @@ while :; do
   fi
   if running_here; then
     say "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one."
+    exit "$CODE"
+  fi
+  # (another program may have taken the port meanwhile: the server would only fail to start)
+  if port_taken; then
+    note "Breadboard is not started again. $TAKEN"
     exit "$CODE"
   fi
   remove_pid_file

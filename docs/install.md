@@ -67,11 +67,15 @@ it (`zulu-8.jdk`); one that holds no Java 8 is ignored, with a warning. The sett
 double-clicking `breadboard.bat`, the launcher starts the server again when it stops by itself (it
 ran out of memory, or crashed), after a short wait that grows each time (5 s up to a minute), and
 gives up after 5 restarts within 10 minutes. It says why on its window and in
-`logs/application.log`. Ctrl+C, closing the window, or stopping it as a service ends it for good.
-`BREADBOARD_KEEP_RUNNING=0` turns this off, and `=1` turns it on anywhere else. Under systemd or
-launchd, the launcher becomes the server and the service manager starts it again. Run by Task
-Scheduler as a service (see [Running it for good](#running-it-for-good)), `breadboard.bat` starts it
-again itself and never gives up: after 5 restarts in 10 minutes, it tries once a minute.
+`logs/application.log`. Before each restart it checks the port again, and stops if another program
+has taken it. A server that stops before it ever started (a mistake in `conf/local.conf`, its port
+taken) isn't started again, as it would only fail the same way: the launcher says so, and
+`logs/start-errors.log` keeps what Java printed as errors. Ctrl+C, closing the window, or stopping
+it as a service ends it for good. `BREADBOARD_KEEP_RUNNING=0` turns this off, and `=1` turns it on
+anywhere else. Under systemd or launchd, the launcher becomes the server and the service manager
+starts it again. Run by Task Scheduler as a service (see [Running it for good](#running-it-for-good)),
+`breadboard.bat` starts it again itself and never gives up, also when it couldn't start: after 5
+restarts in 10 minutes, it tries once a minute.
 
 **Sleep.** While the server runs, the launchers keep the computer from going to sleep by itself
 (on macOS with `caffeinate`, on Windows by asking Windows to stay awake), and let it sleep again
@@ -462,9 +466,10 @@ has everything the server logs; what experiment scripts print (`println`, chat m
 the window. Press Esc (or Ctrl+Q in a terminal) to let the window go on.
 
 **A setting in `conf/local.conf` has a typo**: the server doesn't start, and says which line of
-`conf/local.conf` it couldn't read (as a service: in `logs/service-errors.log` on Windows,
-`logs/launchd.log` on a Mac, `journalctl -u breadboard` with systemd). Fix that line (text values go
-in double quotes; for a path on Windows, see [Settings](#settings)) and start it again.
+`conf/local.conf` it couldn't read, in its window and in `logs/start-errors.log` (as a service also
+in `logs/service-errors.log` on Windows, `logs/launchd.log` on a Mac, `journalctl -u breadboard`
+with systemd). Fix that line (text values go in double quotes; for a path on Windows, see
+[Settings](#settings)) and start it again.
 
 **The first start of a new install stopped halfway** (the server says the database "could not be
 brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.

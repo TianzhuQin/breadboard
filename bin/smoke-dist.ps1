@@ -192,6 +192,29 @@ while (-not ($said.Contains('local.conf') -and $logged.Contains('logs\service-er
 Stop-Process -Id $fifth.Id -Force -ErrorAction SilentlyContinue
 Pass 'as a service, a mistake in conf\local.conf is in logs\service-errors.log, which the restart note names'
 
+# Not as a service, with keep running on, a server that can't start (a mistake in conf\local.conf) isn't
+# started again: breadboard.bat says so and ends, and logs\start-errors.log keeps what Java printed as
+# errors. (PAUSE, at its end, reads the empty input and doesn't wait.)
+Set-Content -LiteralPath $localConf -Value 'breadboard.rootUrl="https://unclosed.smoke.test'
+$env:BREADBOARD_KEEP_RUNNING = '1'
+$sixth = Start-Breadboard $other ($Port + 3) 'sixth.log' 'sixth-err.log'
+# (its exit code is kept only once its handle has been asked for)
+$null = $sixth.Handle
+Remove-Item Env:BREADBOARD_KEEP_RUNNING
+if (-not $sixth.WaitForExit(120000)) {
+  Stop-Process -Id $sixth.Id -Force -ErrorAction SilentlyContinue
+  Fail "breadboard.bat kept trying to start a server that can't start: $(Get-Said 'sixth.log')"
+}
+$said = Get-Said 'sixth.log'
+$startErrors = Join-Path $other 'logs\start-errors.log'
+$kept = ''
+if (Test-Path -LiteralPath $startErrors) { $kept = "$(Get-Content -LiteralPath $startErrors -Raw)" }
+if ($sixth.ExitCode -eq 0 -or -not $said.Contains('so it is not started again') -or $said.Contains('Starting Breadboard again') -or -not $kept.Contains('local.conf')) {
+  Fail "a server that couldn't start was started again, or that wasn't said, or logs\start-errors.log doesn't say why (exit code $($sixth.ExitCode)): $said / $kept"
+}
+Remove-Item -LiteralPath $localConf
+Pass "a server that can't start isn't started again, and logs\start-errors.log says why"
+
 Stop-Breadboard
 Start-Sleep -Seconds 3
 $log = Join-Path $app 'logs\application.log'

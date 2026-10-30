@@ -1,5 +1,6 @@
 package launcher;
 
+import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
@@ -17,6 +18,12 @@ import java.io.UnsupportedEncodingException;
  * ("Play server process ID is ..."), so a server that the launcher started again after a crash
  * never answered, and nothing said why. Now what is printed waits in a queue, and what doesn't fit
  * is left out of the window (logs/application.log has everything the server logs).
+ *
+ * It also keeps what Java prints as errors until the server listens (StartErrors). The launchers
+ * make logs/start-errors.log before they start Java; once the server listens, it is deleted, and
+ * when the process ends before that (a mistake in conf/local.conf, the port taken), those errors are
+ * written into it. A launcher that finds the file after Java ended knows that the server never
+ * started, and doesn't start it again: it would only fail the same way.
  */
 public final class Main {
 
@@ -26,19 +33,29 @@ public final class Main {
   private Main() {}
 
   public static void main(String[] args) {
+    File home = new File(args.length > 0 ? args[0] : System.getProperty("user.dir"));
+    StartErrors startErrors = new StartErrors(new File(new File(home, "logs"), "start-errors.log"));
     QueuedOutput out = new QueuedOutput(new FileOutputStream(FileDescriptor.out), "breadboard-stdout");
-    QueuedOutput err = new QueuedOutput(new FileOutputStream(FileDescriptor.err), "breadboard-stderr");
+    QueuedOutput err = new QueuedOutput(new FileOutputStream(FileDescriptor.err), "breadboard-stderr", startErrors);
     // As Java makes them (System.initializeSystemClass): the console's encoding, when it has one
     System.setOut(printStream(out, System.getProperty("sun.stdout.encoding")));
     System.setErr(printStream(err, System.getProperty("sun.stderr.encoding")));
     // What is printed just before the process ends (why the server can't start) still goes out.
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      startErrors.writeIfTheServerNeverListened();
       long until = System.nanoTime() + DRAIN_AT_EXIT_MS * 1000000L;
       err.drain(until);
       out.drain(until);
     }, "breadboard-console-at-exit"));
 
     play.core.server.NettyServer.main(args);
+    // Play returns once the server listens. When it can't start, it ends the process itself
+    // (System.exit), except when the folder it is given isn't there: then it only says so.
+    if (play.api.Play.maybeApplication().isDefined()) {
+      startErrors.serverListens();
+    } else {
+      System.exit(-1);
+    }
   }
 
   /**

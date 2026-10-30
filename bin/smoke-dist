@@ -353,4 +353,30 @@ fi
 pass "no debug output in the logs, and conf/logger.xml loads without a problem"
 # H2's own log (TRACE_LEVEL_FILE=0 in conf/application-prod.conf)
 [ ! -e "$APP/db/breadboard.trace.db" ] || fail "H2 wrote db/breadboard.trace.db: $(head -5 "$APP/db/breadboard.trace.db")"
+
+# (After the look for errors above: what follows makes the server fail on purpose.)
+# A server that can't start (here a mistake in conf/local.conf) isn't started again, even with keep
+# running on: the launcher says so and ends, and logs/start-errors.log keeps what Java printed as
+# errors.
+printf '%s\n' 'breadboard.rootUrl="https://unclosed.smoke.test' > "$APP/conf/local.conf"
+(cd "$APP" && BREADBOARD_KEEP_RUNNING=1 exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/start-failure.log" 2>&1 < /dev/null &
+LAUNCHER=$!
+for _ in $(seq 1 120); do
+  kill -0 "$LAUNCHER" 2>/dev/null || break
+  sleep 1
+done
+if kill -0 "$LAUNCHER" 2>/dev/null; then
+  kill "$LAUNCHER" 2>/dev/null || true
+  wait "$LAUNCHER" 2>/dev/null || true
+  fail "the launcher kept trying to start a server that can't start: $(cat "$WORK/start-failure.log")"
+fi
+if wait "$LAUNCHER"; then
+  fail "a launcher whose server couldn't start ended as if all went well"
+fi
+rm -f "$APP/conf/local.conf"
+grep -q "so it is not started again" "$WORK/start-failure.log" && ! grep -q "Starting Breadboard again" "$WORK/start-failure.log" \
+  || fail "a server that couldn't start was started again, or the launcher didn't say it isn't: $(cat "$WORK/start-failure.log")"
+grep -q "conf/local.conf: 1" "$APP/logs/start-errors.log" 2>/dev/null \
+  || fail "logs/start-errors.log doesn't say why the server couldn't start: $(cat "$APP/logs/start-errors.log" 2>&1)"
+pass "a server that can't start isn't started again, and logs/start-errors.log says why"
 echo "The release in $(basename "$ZIP") works."

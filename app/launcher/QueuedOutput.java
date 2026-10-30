@@ -25,6 +25,8 @@ final class QueuedOutput extends OutputStream {
   static final int MAX_PIECE = 8 * 1024;
 
   private final OutputStream window;
+  /** Where the lines also go while the server starts (the error output's), or null */
+  private final StartErrors startErrors;
   private final BlockingQueue<byte[]> queue = new LinkedBlockingQueue<>();
   /** The bytes in the queue, and those being written out */
   private final AtomicLong waiting = new AtomicLong();
@@ -38,7 +40,13 @@ final class QueuedOutput extends OutputStream {
 
   /** Writes out to {@code window} from a thread named {@code name} (a daemon: it never keeps the process going). */
   QueuedOutput(OutputStream window, String name) {
+    this(window, name, null);
+  }
+
+  /** As above, and passes each line to {@code startErrors} too (see {@link StartErrors}). */
+  QueuedOutput(OutputStream window, String name, StartErrors startErrors) {
     this.window = window;
+    this.startErrors = startErrors;
     Thread writer = new Thread(this::writeOut, name);
     writer.setDaemon(true);
     writer.start();
@@ -86,6 +94,9 @@ final class QueuedOutput extends OutputStream {
   private void queueLine() {
     byte[] piece = line.toByteArray();
     line.reset();
+    if (startErrors != null) {
+      startErrors.add(piece);
+    }
     if (leftOut > 0) {
       // what was left out is said where it was, before what comes after it
       byte[] note = ((lineOpen ? "\n" : "") + "(" + leftOut + (leftOut == 1 ? " line" : " lines")

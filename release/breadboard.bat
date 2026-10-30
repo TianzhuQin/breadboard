@@ -12,8 +12,10 @@ REM Java itself, e.g. SET JAVA_OPTS=-Xmx2g
 REM
 REM Keep running: when the server stops by itself (it ran out of memory, Java crashed), this window
 REM says why, waits a few seconds and starts it again; after 5 restarts in 10 minutes it is left
-REM stopped. On when the window is someone's (double-clicked, or typed in a Command Prompt); off
-REM when its input is redirected (a script). SET BREADBOARD_KEEP_RUNNING=1 or 0 decides instead.
+REM stopped, and so is one that stopped before it ever started (a mistake in conf\local.conf, its
+REM port taken): what Java printed as errors is then in logs\start-errors.log. On when the window is
+REM someone's (double-clicked, or typed in a Command Prompt); off when its input is redirected (a
+REM script). SET BREADBOARD_KEEP_RUNNING=1 or 0 decides instead.
 REM
 REM As a service (SET BREADBOARD_SERVICE=1, as breadboard-task.xml has Task Scheduler do), nobody
 REM reads the window: it never waits for a key (PAUSE), no browser is opened, keep running is on and
@@ -80,9 +82,10 @@ IF DEFINED RUNNING (
 )
 
 REM Something already answering on the port (often Breadboard itself, started earlier): say so
-REM instead of a stack trace.
-powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %PORT%); $c.Close(); exit 0 } catch { exit 1 }" >NUL 2>&1
-IF NOT ERRORLEVEL 1 (
+REM instead of a stack trace (here, and again before the server is started again after it stopped
+REM by itself).
+CALL :porttaken
+IF DEFINED PORT_TAKEN (
   CALL :refuse say_port
   EXIT /B 1
 )
@@ -202,6 +205,10 @@ SET "JAVA_ERRORS="
 IF DEFINED SERVICE SET "JAVA_ERRORS=2>>logs\service-errors.log"
 
 :start
+REM logs\start-errors.log says that Java is starting: launcher.Main deletes it once the server listens,
+REM and when Java ends before that, it writes what Java printed as errors into it. So the file is
+REM there after Java ended only when the server never started.
+>"logs\start-errors.log" ECHO Breadboard's Java was started on %DATE% at %TIME%, and the server hasn't listened yet. Once it listens, this file is deleted. If Java ends before, what it printed as errors is written here; if nothing else is, it ended before it could: what it printed in Breadboard's window says why.
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.) MaxMetaspaceSize:
 REM the classes made for the experiments' scripts (anew at every engine reload) may take that much
 REM memory besides the heap, so that a leak of them ends in a restart (out of memory) instead of
@@ -219,9 +226,14 @@ IF "%EXIT_CODE%"=="0" EXIT /B 0
 IF "%EXIT_CODE%"=="130" EXIT /B 130
 IF "%EXIT_CODE%"=="143" EXIT /B 143
 IF NOT DEFINED KEEP_RUNNING GOTO failed
+REM The server never started (a mistake in conf\local.conf, its port taken by then, Java that can't
+REM start at all): started again, it would only fail the same way. As a service it is all the same,
+REM as below: what kept it from starting may be gone by then (a program that held the port).
+IF EXIST "logs\start-errors.log" IF NOT DEFINED SERVICE GOTO couldnotstart
 
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
 IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
+IF DEFINED SERVICE IF EXIST "logs\start-errors.log" SET "WHY=it could not start, exit code %EXIT_CODE%; logs\start-errors.log and logs\service-errors.log may say why"
 IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. SET JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
 CALL :now
 SET /A "SINCE=NOW-(R1)"
@@ -245,10 +257,24 @@ IF DEFINED RUNNING (
   EXIT /B %EXIT_CODE%
 )
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
+REM (another program may have taken the port meanwhile: the server would only fail to start. As a
+REM service it is tried all the same, until the port is free again.)
+SET "PORT_TAKEN="
+IF NOT DEFINED SERVICE CALL :porttaken
+IF DEFINED PORT_TAKEN GOTO portnowtaken
 REM (the server doesn't redo what -Dbreadboard.resetPassword asked for: see Global)
 SET /A "BREADBOARD_RESTARTED+=1"
 CALL :show "Starting Breadboard again."
 GOTO start
+
+:couldnotstart
+CALL :note "Breadboard stopped before the server started (exit code %EXIT_CODE%), so it is not started again: it would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+GOTO failed
+
+:portnowtaken
+ECHO Breadboard is not started again:
+CALL :refuse say_port
+EXIT /B %EXIT_CODE%
 
 :giveup
 CALL :note "Breadboard stopped by itself (%WHY%). It has been started again 5 times in 10 minutes, so it is left stopped: logs\application.log says what went wrong."
@@ -346,6 +372,13 @@ IF "%~1"=="" GOTO :EOF
 IF /I "%~1"=="-Dhttp.port" SET "PORT=%~2"
 SHIFT
 GOTO findport
+
+:porttaken
+REM PORT_TAKEN: 1 when something answers on the port.
+SET "PORT_TAKEN="
+powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %PORT%); $c.Close(); exit 0 } catch { exit 1 }" >NUL 2>&1
+IF NOT ERRORLEVEL 1 SET "PORT_TAKEN=1"
+GOTO :EOF
 
 :runninghere
 REM RUNNING (and RUNNING_PORT): the process RUNNING_PID names, when it is a Breadboard running from
