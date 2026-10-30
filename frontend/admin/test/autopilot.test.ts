@@ -21,7 +21,7 @@ vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: fal
 
 import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
-  participantLinks, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
+  participantLinks, pauseFailure, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
   stepsCall,
 } from '../src/pages/autopilot/autopilot'
@@ -446,6 +446,37 @@ describe('Autopilot page', () => {
     const sent = http.post.mock.calls[0][1]
     expect(sent.experimentId).toBe(12)
     expect(sent.waitingRoom).toMatchObject({ enabled: true, maxWaitSeconds: 600 })
+    w.unmount()
+  })
+
+  it('explains a pause for a mistake in a step as the Steps page does, with a link to the step at that line', async () => {
+    const tail = '. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    const loadFailed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 24: No such property: five), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(loadFailed)).toEqual({
+      step: 'InitStep',
+      line: 24,
+      message: 'No such property: five',
+      text: 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load, so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail,
+    })
+    const stalled = 'It is paused: the step "RoundStep" failed during its session "A (1)" (line 71: No signature of method: foo() is applicable for argument types: (java.lang.String)), and then the game had nothing left to do, so that session was stopped. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(stalled)).toMatchObject({ step: 'RoundStep', line: 71, message: 'No signature of method: foo() is applicable for argument types: (java.lang.String)' })
+    expect(pauseFailure('It is paused: the step "finishStep" failed during its session "S" (boom), so that session was stopped.')).toMatchObject({ step: 'finishStep', line: null, message: 'boom' })
+    expect(pauseFailure('It is paused: its session "auto 1" was stopped by b@lab.org.')).toBeNull()
+
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem: loadFailed },
+    }))
+    const w = await mountPage()
+    const box = w.find('.apst__problem')
+    // a mistake to fix, not just information
+    expect(box.classes()).not.toContain('is-info')
+    expect(box.text()).toContain('Unknown name “five”')
+    expect(box.text()).toContain('Groovy doesn\'t know this name.')
+    expect(box.find('.apst__problem-text').text()).not.toContain('No such property')
+    const link = box.find('a.apst__open-step')
+    expect(link.text()).toBe('Open InitStep at line 24')
+    expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24')
     w.unmount()
   })
 

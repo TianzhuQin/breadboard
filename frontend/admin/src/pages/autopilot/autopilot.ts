@@ -249,6 +249,37 @@ export function haltOf (state: Pick<AutopilotState, 'settings' | 'status'> | nul
   if (s.done) return 'done'
   return problemKind(state!) === 'done' ? 'done' : null
 }
+/**
+ * The step failure a pause names (status.problem: the steps of its session didn't load, or a step
+ * failed during its game): which step, on which line, and what went wrong in the server's brief
+ * words ("No such property: five"); `text` is the problem without them. Null for any other pause.
+ */
+export interface PauseFailure {
+  step: string
+  line: number | null
+  message: string
+  text: string
+}
+export function pauseFailure (problem: string | null | undefined): PauseFailure | null {
+  if (!problem) return null
+  // "the steps of its session "S" didn't load (InitStep: line 24: No such property: five), so that session was stopped …"
+  const load = /didn't load (\(([^:()]+): (?:line (\d+): )?([\s\S]*?)\))(?=, so that session was stopped)/.exec(problem)
+  // "the step "RoundStep" failed during its session "S" (line 71: No such property: x), so that session was stopped …"
+  // (or ", and then the game had nothing left to do, …")
+  const game = load ? null : /the step "([^"]+)" failed during its session "[\s\S]*?" (\((?:line (\d+): )?([\s\S]*?)\))(?=, (?:so that session was stopped|and then the game))/.exec(problem)
+  if (load) return failureOf(load[2], load[3], load[4], problem, load[1])
+  if (game) return failureOf(game[1], game[3], game[4], problem, game[2])
+  return null
+}
+function failureOf (step: string, line: string | undefined, message: string, problem: string, bracket: string): PauseFailure {
+  return {
+    step: step.trim(),
+    line: line ? Number(line) : null,
+    message: message.trim(),
+    text: problem.replace(` ${bracket}`, '').replace(bracket, ''),
+  }
+}
+
 /** The button that resumes it: "Resume" after a pause, "Open another session" once it is done. */
 export function resumeLabel (halt: 'paused' | 'done'): string {
   return halt === 'paused' ? 'Resume' : 'Open another session'

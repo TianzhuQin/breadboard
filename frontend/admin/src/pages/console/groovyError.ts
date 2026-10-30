@@ -110,7 +110,8 @@ function explain (type: string, message: string, compileMessage: string | null):
       cleaned: compileMessage,
     }
   }
-  if (type === 'MissingPropertyException') {
+  // (the server's brief words for an error leave the type out: "No such property: five")
+  if (type === 'MissingPropertyException' || (!type && /^No such property: /.test(msg))) {
     const name = /No such property: (\S+)/.exec(msg)?.[1]
     return {
       title: name ? `Unknown name “${name}”` : 'Unknown name',
@@ -118,7 +119,7 @@ function explain (type: string, message: string, compileMessage: string | null):
       cleaned: msg,
     }
   }
-  if (type === 'MissingMethodException') {
+  if (type === 'MissingMethodException' || (!type && /^No signature of method: /.test(msg))) {
     const name = /No signature of method: (?:[\w.$]+\.)?([\w$]+)\(\)/.exec(msg)?.[1]
     return {
       title: name ? `“${name}” can't be used like this` : 'No such function',

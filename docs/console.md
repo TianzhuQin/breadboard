@@ -343,8 +343,9 @@ survives a server restart.
 
 **A mistake in a step pauses it too.** When the steps of a session it opens don't load (a typo, a
 name that isn't defined), the autopilot stops that session before anyone can join, records
-`stepsFailedToLoad` in it, and pauses, saying which step and line failed. Fix the step on the Steps
-page, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
+`stepsFailedToLoad` in it, and pauses. This page then says which step and line failed and what
+went wrong, in the words the Steps page uses, with a link that opens the step at that line. Fix the
+step, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
 next session it opens uses what you save there.
 
 **A step that fails during the game.** When a step's code throws while the game runs (on a timer,

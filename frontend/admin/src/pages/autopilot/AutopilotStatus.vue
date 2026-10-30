@@ -41,11 +41,18 @@
         <p v-else class="apst__problem-text">{{ status.problem }}</p>
       </div>
     </div>
-    <div v-else-if="status.problem" class="apst__problem is-info" role="status">
+    <div v-else-if="status.problem" class="apst__problem" :class="{ 'is-info': !failure }" role="status">
       <component :is="kind === 'waiting' ? Hourglass : kind === 'paused' ? CirclePause : Info" :size="16" aria-hidden="true" />
       <div>
         <p class="apst__problem-title">{{ infoTitle }}</p>
-        <p class="apst__problem-text">{{ infoText }}</p>
+        <p class="apst__problem-text">{{ failure ? failure.text : infoText }}</p>
+        <!-- paused by a mistake in a step: what went wrong, explained as on the Steps page, and the way there -->
+        <template v-if="failure">
+          <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" />
+          <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line)">
+            Open {{ failure.step }}{{ failure.line ? ` at line ${failure.line}` : '' }} <ArrowRight :size="14" aria-hidden="true" />
+          </RouterLink>
+        </template>
       </div>
     </div>
 
@@ -118,7 +125,8 @@ import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
 import LocalOnlyNote from '../session/LocalOnlyNote.vue'
 import EngineError from '../console/EngineError.vue'
-import { describeEngineSession, haltOf, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import { describeEngineSession, haltOf, pauseFailure, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import { stepAt } from '../steps/stepsModel'
 
 const props = defineProps<{
   state: AutopilotState
@@ -152,6 +160,8 @@ const problemError = computed(() => {
 const kind = computed(() => problemKind(props.state))
 /** paused or done: it opens nothing until Resume */
 const halt = computed(() => haltOf(props.state))
+/** paused by a mistake in a step: which one, where, and what went wrong */
+const failure = computed(() => kind.value === 'paused' ? pauseFailure(status.value.problem) : null)
 
 const badge = computed<{ tone: 'success' | 'warning' | 'neutral', label: string, pulse: boolean }>(() => {
   if (halt.value === 'paused') return { tone: 'warning', label: 'Paused', pulse: false }
@@ -268,6 +278,7 @@ const noticeTime = computed(() => {
 .apst__problem-title { font-weight: 650; }
 .apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .apst__problem-err { margin-top: 6px; }
+.apst__open-step { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; font-weight: 600; color: inherit; }
 .apst__live { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-soft-text); font-size: var(--text-sm); }
 .apst__local { margin: 6px 0 8px; }
 .apst__links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 4px; }
