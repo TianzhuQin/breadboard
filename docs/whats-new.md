@@ -133,7 +133,7 @@ In the experiment's steps:
 
 ```groovy
 autopilot.waitingRoom([
-  minPlayers: 15, maxPlayers: 25,
+  minPlayers: 15, maxPlayers: 25,   // at most 25 play: the first 25 to arrive
   waitSeconds: 120,        // once minPlayers are here, wait this long for more
   maxWaitSeconds: 900,     // give up if minPlayers never arrive
   countdownSeconds: 10,
@@ -155,7 +155,12 @@ The server opens a session at startup. Participants enter through `/play/{e}/log
 `/play/{e}/prolific?...` and wait in the waiting room. Someone whose connection drops there counts
 as gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor
 gets the session given up. The game starts by itself. People who left before the start get no
-seat, and are told so if they come back (see below). With `replaceDisconnected`, someone away for
+seat, and are told so if they come back (see below). With `maxPlayers`, at most that many are
+seated, the first to arrive: once that many are here (or away for a moment, keeping their seat) the
+countdown begins, and the study's links send nobody more to the session; anyone else there as the
+game starts is taken out of the network and told the session is full, with how to join the next
+one (`player.ended = "sessionFull"`, and a `sessionFull` event). They used to be seated however many
+were there. With `replaceDisconnected`, someone away for
 less than a minute (or `afterSeconds`, if that is longer) keeps their seat, which the computer plays
 until they are back; without it nobody would play that seat, so they get none either.
 Someone who drops out mid-game is played by the computer after the grace period. A new session
@@ -400,7 +405,8 @@ restarts the running session.
   ids follow that order now; they were given out twenty at a time, in an order of the database's
   own, so such events could come out the wrong way round.
 - **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
-  `missedStart` (someone its start left out), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+  `missedStart` (someone its start left out), `sessionFull` (someone a full room left out, with
+  `clientId`), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
 - **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
   researcher), in a session that a reload of the engine carries on.
 - **Tie edits:** `edgeEdit`, which records the actor.

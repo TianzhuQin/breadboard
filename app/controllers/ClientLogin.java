@@ -364,13 +364,15 @@ public class ClientLogin extends Controller {
     // "Join as someone else" (participantSeat): a new seat, whatever this browser has already.
     boolean another = "login".equals(entry) && "1".equals(request().getQueryString("another"));
     // Coming back to a session this browser has a seat in, while the engine still runs it (its game
-    // may have started, so it is no longer open to newcomers).
+    // may have started, so it is no longer open to newcomers). Not to a seat its game left out (the
+    // room was full, or it started without them), which only says so: they are someone new for the
+    // next session.
     Http.Cookie back = request().cookie(PLAY_COOKIE + experimentId);
     if (!another && back != null && back.value() != null && back.value().contains("/")) {
       String instanceId = back.value().substring(0, back.value().indexOf('/'));
       String clientId = urlDecode(back.value().substring(back.value().indexOf('/') + 1));
       if (!clientId.isEmpty() && ScriptBoard.runsSession(experimentId, instanceId)
-          && ParticipantAuth.isClaimed(instanceId, clientId)) {
+          && ParticipantAuth.isClaimed(instanceId, clientId) && !ScriptBoard.leftOutOf(instanceId, clientId)) {
         if ("prolific".equals(entry)) {
           return redirect("/game/" + experimentId + "/" + instanceId + "/prolific" + query);
         }

@@ -1150,8 +1150,9 @@ public final class Autopilot {
 
   /**
    * The session of this experiment participants can join now: the engine's own session, while it is
-   * running and its game hasn't started; else null. (It used to be the newest running session in the
-   * database, which could be one the engine no longer ran, e.g. from before a restart.)
+   * running and its game hasn't started, unless its waiting room is full and counting down (it seats
+   * nobody more: ScriptBoard.waitingRoomFull); else null. (It used to be the newest running session in
+   * the database, which could be one the engine no longer ran, e.g. from before a restart.)
    */
   public static ExperimentInstance openInstance(Long experimentId) {
     ExperimentInstance live = liveEngineSession();
@@ -1162,7 +1163,29 @@ public final class Autopilot {
     if (live.status != ExperimentInstance.Status.RUNNING || Boolean.TRUE.equals(live.hasStarted)) {
       return null;
     }
+    if (ScriptBoard.waitingRoomFull()) {
+      return null;
+    }
     return live;
+  }
+
+  /**
+   * Whether the autopilot opens this experiment's next session by itself: it is on for it, opens the
+   * next one when one finishes (continuous), and is neither paused nor done. What participants who
+   * find no session open are told depends on it (ClientLogin.toOpenSession, ScriptBoard.sessionFullScreen).
+   */
+  public static boolean opensNextBySelf(Long experimentId) {
+    if (experimentId == null) {
+      return false;
+    }
+    try {
+      Effective e = effective();
+      return e.isOn() && experimentId.equals(e.settings.experimentId) && e.settings.continuous
+          && pausedBecause == null && doneBecause == null;
+    } catch (Exception ex) {
+      Logger.debug("Autopilot: could not read its settings: " + ex);
+      return false;
+    }
   }
 
   /** The session the engine runs right now, if it is still going (RUNNING or TESTING); else null. */

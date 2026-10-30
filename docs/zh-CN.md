@@ -69,7 +69,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场。 |
 | **Longest session** | 120 分钟 | 从游戏开始算起。游戏超过这个时间就会被结束：参与者看到这一场时间已用完（已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionTooLong` 事件，过了暂停时间再开下一场，Autopilot 页会写明是哪一场。连续 3 场都超时，自动运行就暂停。留空表示不限。新的设置默认 120 分钟；用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。 |
 | **Start the game automatically when enough people are here** | 开 | 等待室：先到的人看到等待页面。 |
-| **Minimum players** / **Maximum players** | 2 / 不限 | 到了最少人数就可以开始；到了最多人数，马上开始倒计时。 |
+| **Minimum players** / **Maximum players** | 2 / 不限 | 到了最少人数就可以开始。最多人数是真正的上限：人数一到（暂时掉线、还保留座位的人也算），马上开始倒计时，链接也不再把新来的人带进这一场；游戏开始时还多出来的人（按到达先后，晚到的）会看到这一场已满，并知道怎么参加下一场。 |
 | **Wait for more people** | 60 秒 | 最少人数到齐后，再等迟到的人多久。 |
 | **Give up after** | 不限 | 从第一个人到达算起。到时人数还不够，这一场取消，并告诉等待的人。 |
 | **Countdown** | 5 秒 | 开始前参与者看到的倒计时。 |

@@ -1679,6 +1679,93 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
+   * The autopilot's launch took this participant out of the game because its waiting room was full:
+   * maxPlayers were seated, the first to arrive, and they came after (groovy/autopilot.groovy). Their
+   * page is told so now, with how to join the next session (sessionFullScreen), and closed, the
+   * previews watching it too; their going is recorded (clientDisconnected), and so is the event
+   * sessionFull. A page of theirs that comes back gets that screen again (their session is over for
+   * them: Client.end). They used to be seated however many were there already. Someone the experiment
+   * had already given an end of their own (e.g. a completion code) keeps it.
+   */
+  public static void sessionFullAtStart(String clientId) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    if (client == null || client.leftOut || client.ended() || ownEnd(client.lastFrame)) {
+      return;
+    }
+    ExperimentInstance session = client.experimentInstance;
+    Long instanceId = session == null ? null : session.id;
+    Long experimentId = session == null || session.experiment == null ? null : session.experiment.id;
+    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId);
+    client.leftOut = true;
+    client.end(screen);
+    rememberLastScreens(Collections.singletonList(client));
+    if (eventTracker != null && eventTracker.sessionLive()) {
+      LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+      data.put("clientId", clientId);
+      eventTracker.track("sessionFull", data);
+    }
+    client.disconnect(screen);
+    recordConnection(client, false);
+  }
+
+  /**
+   * What someone gets whom a full waiting room left out at the start (sessionFullAtStart). When the
+   * autopilot opens the experiment's next session by itself, it says so: a link to the study's
+   * sign-in link, whose page waits for the next session and takes them in (ClientLogin.toOpenSession),
+   * or, for a {@code prolific} participant, to open the study again from Prolific; otherwise to
+   * contact the researcher, or to return the study.
+   */
+  static ObjectNode sessionFullScreen(boolean prolific, Long experimentId) {
+    boolean next = experimentId != null && Autopilot.opensNextBySelf(experimentId);
+    String what;
+    if (prolific) {
+      what = next ? "The next session opens as soon as this one has ended: open the study again from Prolific to join "
+          + "it (the page waits for it to open), or return the study on Prolific if you can't wait."
+          : "Please return the study on Prolific, and message the researcher there if you have any questions.";
+    } else {
+      what = next ? "The next session opens as soon as this one has ended. <a href=\"/play/" + experimentId
+          + "/login\">Join the next session</a>: the page waits for it to open and takes you in."
+          : "You can close this page. If you have any questions, please contact the researcher.";
+    }
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "sessionFull");
+    player.put("text", "<h3>This session is full</h3><p>It started with as many people as it can take, so it "
+        + "can't take you in. " + what + "</p>");
+    return frame;
+  }
+
+  /**
+   * Whether the game of this session left this participant out (leftOutAtStart, sessionFullAtStart):
+   * the study's link then treats them as someone new (ClientLogin.toOpenSession), rather than sending
+   * them back to the seat that only says so. Known while the engine runs that session's game.
+   */
+  public static boolean leftOutOf(String instanceId, String clientId) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    ExperimentInstance seat = client == null ? null : client.experimentInstance;
+    return client != null && client.leftOut && seat != null && seat.id != null && seat.id.toString().equals(instanceId);
+  }
+
+  /**
+   * Whether the engine's waiting room (groovy/autopilot.groovy) is full and counting down, so it can
+   * seat nobody more (Autopilot.openInstance then sends nobody to its session). Never waits.
+   */
+  static boolean waitingRoomFull() {
+    ScriptEngine running = engine;
+    Object autopilot = running == null ? null : running.get("autopilot");
+    if (!(autopilot instanceof GroovyObject)) {
+      return false;
+    }
+    try {
+      return Boolean.TRUE.equals(((GroovyObject) autopilot).invokeMethod("roomFull", new Object[0]));
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  /**
    * A page of someone the game started without (leftOutAtStart) connected: it is told so, and the
    * socket is closed, as nothing more comes for them. A researcher's preview of them sees the same.
    */
