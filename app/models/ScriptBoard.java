@@ -1550,6 +1550,24 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
+   * Whether an open page of the participant's own holds their seat in this session now (not a
+   * researcher's preview: a page of theirs would take the seat from it). A page of theirs that
+   * another one took the seat from asks (ClientController.getState): once the other one has gone, it
+   * takes the seat back. A socket that has fallen silent counts until it is closed (closeSilentPages).
+   */
+  public static boolean seatHeldByTheirPage(String experimentId, String instanceId, String clientId) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    ExperimentInstance seat = client == null ? null : client.experimentInstance;
+    if (seat == null || seat.id == null || !seat.id.toString().equals(instanceId)) {
+      return false;
+    }
+    if (seat.experiment != null && seat.experiment.id != null && !seat.experiment.id.toString().equals(experimentId)) {
+      return false;
+    }
+    return client.presence() == Client.Presence.HERE;
+  }
+
+  /**
    * A message from a participant's page, or from a researcher's preview of it. Every message counts
    * as hearing from that socket (see closeSilentPages), and {"action": "Ping"} is answered on it with
    * {"pong": <the server's time in ms>}. What the page that holds the seat sends acts for the player.

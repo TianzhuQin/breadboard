@@ -20,6 +20,15 @@ const ANSWER_MAX_AGE_MS = 5000
 // The heartbeat of a participant's socket: the server answers {"action":"Ping"} with {"pong": <time>}
 // (servers before 3.1 ignore it).
 const PING = JSON.stringify({ action: 'Ping' })
+// A participant's page that another page of theirs took the seat from ('elsewhere') takes it back by
+// itself once that page has gone and this one is on screen. The page that holds the seat tells the
+// participant's other pages in this browser as it goes (a BroadcastChannel per seat), and they ask
+// the server whether a page of theirs still holds it: at once (after RELEASED_CHECK_MS, by when a
+// reload of that page has taken the seat again), and every SEAT_CHECK_MS while they are on screen
+// (a page in another browser, or one that crashed, tells nobody).
+const SEAT_CHECK_MS = 20 * 1000
+const RELEASED_CHECK_MS = 2 * 1000
+const SEAT_CHECK_TIMEOUT_MS = 10 * 1000
 // A participant's page whose connection had opened, and then can't open it again this many times
 // in a row, asks the server over plain HTTP whether it is there (see checkServer)
 const BLOCKED_AFTER_DROP = 5
@@ -208,19 +217,28 @@ function withPageQuery (url: string, loadedAt: any, takeSeat: boolean): string {
   return url + (url.indexOf('?') >= 0 ? '&' : '?') + added.join('&')
 }
 
-/** Ask for this page's state (/state), with its token; given up after `timeoutMs`, if set */
-function requestState (timeoutMs?: number) {
+/**
+ * Ask for this page's state (/state), with its token; given up after `timeoutMs`, if set. With
+ * `query` 'seat=1', only whether a page of the participant's holds their seat ({seatHeld}).
+ */
+function requestState (timeoutMs?: number, query?: string) {
   const token = participantToken()
   const init: any = token ? { headers: { [TOKEN_HEADER]: token } } : {}
-  if (!timeoutMs || typeof AbortController === 'undefined') return http.get<BreadboardConfig>('state', init)
+  const url = query ? 'state?' + query : 'state'
+  if (!timeoutMs || typeof AbortController === 'undefined') return http.get<BreadboardConfig>(url, init)
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), timeoutMs)
   init.signal = abort.signal
   // (an answer is never the browser's copy of an earlier one)
   init.cache = 'no-store'
-  const answer = http.get<BreadboardConfig>('state', init)
+  const answer = http.get<BreadboardConfig>(url, init)
   answer.then(() => clearTimeout(timer), () => clearTimeout(timer))
   return answer
+}
+
+/** Whether the page is on screen (not a tab in the background, nor a minimized window) */
+function onScreen (): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
 }
 
 /** Where /state's answer sends a page whose credentials the server doesn't take; else null */
@@ -318,6 +336,20 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private checkingServer = false
   /** The participant asked for the seat on this page (useHere): the next connection takes it */
   private takingSeat = false
+  /** Where the participant's pages of this seat in this browser tell each other that one goes */
+  private seatChannel: BroadcastChannel | null = null
+  /** Asks the server, while 'elsewhere', whether the page that took the seat still holds it */
+  private seatChecks: ReturnType<typeof setInterval> | null = null
+  /** The check after another page said it was going */
+  private releasedCheck: ReturnType<typeof setTimeout> | null = null
+  /** checkSeatFree is waiting for the server */
+  private checkingSeatFree = false
+
+  constructor () {
+    super()
+    this.onPageHide = this.onPageHide.bind(this)
+    this.onSeatVisibility = this.onSeatVisibility.bind(this)
+  }
 
   /** Whether the live connection is open: what the page sends now reaches the server now */
   get isOpen (): boolean {
@@ -422,6 +454,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       // Taken and closed again without a word, time after time: ask what is going on.
       this.socket.on('refused', () => this.recheckSeat())
       this.attachParser()
+      if (config.clientId && !this.preview) this.watchSeat(config)
       this.socket.connect()
     } finally {
       release()
@@ -434,6 +467,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    */
   disconnect () {
     this.config = null
+    this.unwatchSeat()
     if (!this.socket) return
     this.socket.close()
     this.removeListeners()
@@ -454,6 +488,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   useHere () {
     if (!this.socket || this.ended || !this.replaced) return
     this.replaced = false
+    this.stopSeatChecks()
     this.takingSeat = true
     this.socket.resume()
     this.emit(CONNECTION_EVENT)
@@ -681,6 +716,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    */
   private end () {
     this.socket.stopReconnecting()
+    this.stopSeatChecks()
     forgetToken()
     if (!this.ended) {
       this.ended = true
@@ -713,6 +749,100 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       // (the server can't be reached: the socket keeps trying)
     } finally {
       this.checkingSeat = false
+    }
+  }
+
+  /**
+   * A participant's page (not a preview: the console looks after those) listens for the other pages
+   * of this seat in this browser (see SEAT_CHECK_MS), and tells them when it goes while it holds the
+   * seat. A browser without BroadcastChannel, or one that won't let the page use it, leaves only the
+   * checks every SEAT_CHECK_MS.
+   */
+  private watchSeat (config: BreadboardConfig) {
+    if (typeof window === 'undefined') return
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel(`bb-seat:${config.experimentId}:${config.experimentInstanceId}:${config.clientId}`)
+        channel.onmessage = (ev: MessageEvent) => {
+          if (ev.data && ev.data.bb === 'released') this.otherPageWent()
+        }
+        this.seatChannel = channel
+      }
+    } catch (e) {
+      this.seatChannel = null
+    }
+    window.addEventListener('pagehide', this.onPageHide)
+    document.addEventListener('visibilitychange', this.onSeatVisibility)
+  }
+
+  private unwatchSeat () {
+    this.stopSeatChecks()
+    if (this.seatChannel) {
+      try {
+        this.seatChannel.close()
+      } catch (e) {}
+      this.seatChannel = null
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('pagehide', this.onPageHide)
+      document.removeEventListener('visibilitychange', this.onSeatVisibility)
+    }
+  }
+
+  /** The page goes (closed, reloaded, left): if it held the seat, the participant's other pages hear so */
+  private onPageHide () {
+    if (this.replaced || this.ended || !this.socket || !this.socket.hasOpened || !this.seatChannel) return
+    try {
+      this.seatChannel.postMessage({ bb: 'released' })
+    } catch (e) {}
+  }
+
+  /** The participant's page that held the seat went: is the seat free now? */
+  private otherPageWent () {
+    if (!this.replaced || this.ended) return
+    if (this.releasedCheck !== null) clearTimeout(this.releasedCheck)
+    this.releasedCheck = setTimeout(() => {
+      this.releasedCheck = null
+      this.checkSeatFree()
+    }, RELEASED_CHECK_MS)
+  }
+
+  /** Coming on screen while 'elsewhere': is the seat free now? */
+  private onSeatVisibility () {
+    if (this.replaced && !this.ended && onScreen()) this.checkSeatFree()
+  }
+
+  private startSeatChecks () {
+    if (this.seatChecks === null && !this.preview && this.config && this.config.clientId) {
+      this.seatChecks = setInterval(() => this.checkSeatFree(), SEAT_CHECK_MS)
+    }
+  }
+
+  private stopSeatChecks () {
+    if (this.seatChecks !== null) clearInterval(this.seatChecks)
+    this.seatChecks = null
+    if (this.releasedCheck !== null) clearTimeout(this.releasedCheck)
+    this.releasedCheck = null
+  }
+
+  /**
+   * While 'elsewhere' and on screen: ask the server whether a page of the participant's still holds
+   * the seat, and take it back if none does (the other page was closed, or lost its connection for
+   * good). Not while the page is in the background: a page nobody looks at would keep the seat from
+   * the computer, which takes it after the usual wait; the page asks again as it comes on screen.
+   */
+  private async checkSeatFree () {
+    if (!this.replaced || this.ended || this.checkingSeatFree || !onScreen()) return
+    this.checkingSeatFree = true
+    try {
+      const res = await requestState(SEAT_CHECK_TIMEOUT_MS, 'seat=1')
+      if (res.status !== 200) return
+      const body: any = await res.json()
+      if (body && body.seatHeld === false && this.replaced && !this.ended && onScreen()) this.useHere()
+    } catch (e) {
+      // (the server can't be reached: the next check)
+    } finally {
+      this.checkingSeatFree = false
     }
   }
 
@@ -781,6 +911,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         this.socket.stopReconnecting()
         if (!this.replaced && !this.ended) {
           this.replaced = true
+          this.startSeatChecks()
           this.emit(CONNECTION_EVENT)
         }
         return

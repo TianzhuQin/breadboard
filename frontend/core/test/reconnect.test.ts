@@ -35,6 +35,20 @@ class FakeSocket {
   sentFrames () { return this.sent.map(d => JSON.parse(d)) }
 }
 
+/** BroadcastChannels of one browser: what one posts, the others of that name hear (not itself) */
+class FakeChannel {
+  static all: FakeChannel[] = []
+  onmessage: ((ev: any) => void) | null = null
+  closed = false
+  constructor (public name: string) { FakeChannel.all.push(this) }
+  postMessage (data: any) {
+    for (const c of FakeChannel.all) {
+      if (c !== this && !c.closed && c.name === this.name && c.onmessage) c.onmessage({ data })
+    }
+  }
+  close () { this.closed = true }
+}
+
 /** /state's answers, one per request (the last one repeats) */
 function stateAnswers (...answers: [number, any][]) {
   let k = 0
@@ -56,6 +70,8 @@ let current: any = null
 beforeEach(() => {
   FakeSocket.all = []
   vi.stubGlobal('WebSocket', FakeSocket)
+  FakeChannel.all = []
+  vi.stubGlobal('BroadcastChannel', FakeChannel)
   location = { pathname: PAGE, search: '', hash: '', href: 'http://lab.example' + PAGE, protocol: 'http:', host: 'lab.example' }
   vi.stubGlobal('location', location)
   vi.stubGlobal('localStorage', new MemoryStorage())
@@ -69,6 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   if (current) current.disconnect()
   current = null
+  delete (document as any).visibilityState
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -286,6 +303,103 @@ describe('a page whose study was opened in another tab or window', () => {
     page.Breadboard.useHere()
     expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
     expect(FakeSocket.all[0].url).toBe(SOCKET)
+  })
+
+  // Its state names the seat (/state gives these), and so does the channel its pages share.
+  const SEATED = { ...CONFIG, experimentId: '1', experimentInstanceId: '2' }
+  const CHANNEL = 'bb-seat:1:2:p1'
+  /** The page goes to 'elsewhere', as when the participant opens the study in another tab */
+  async function replacedPage (...seat: [number, any][]) {
+    const fetch = stateAnswers([200, SEATED], ...seat)
+    const page = await openPage(fetch)
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    expect(page.Breadboard.connection).toBe('elsewhere')
+    return { page, fetch }
+  }
+  /** The seat checks the page made (/state?seat=1) */
+  const seatChecks = (fetch: any) => fetch.mock.calls.filter((c: any[]) => c[0] === 'state?seat=1').length
+  function setVisibility (state: 'visible' | 'hidden') {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  it('takes the seat back by itself once the other tab has gone, as the other tab says it goes', async () => {
+    const { page, fetch } = await replacedPage([200, { seatHeld: false }])
+    // the newer tab, which holds the seat, is closed
+    new FakeChannel(CHANNEL).postMessage({ bb: 'released' })
+    await vi.advanceTimersByTimeAsync(1900)
+    expect(seatChecks(fetch)).toBe(0)
+    // (by then, a reload of that tab would have taken the seat again)
+    await vi.advanceTimersByTimeAsync(100)
+    await settle()
+    expect(seatChecks(fetch)).toBe(1)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
+    FakeSocket.all[1].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    // and asks no more
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    expect(seatChecks(fetch)).toBe(1)
+  })
+
+  it('stays elsewhere while a page of theirs still holds the seat, and asks again every 20 s', async () => {
+    const { page, fetch } = await replacedPage([200, { seatHeld: true }], [200, { seatHeld: true }], [200, { seatHeld: false }])
+    new FakeChannel(CHANNEL).postMessage({ bb: 'released' })
+    await vi.advanceTimersByTimeAsync(2000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(1)
+    expect(FakeSocket.all.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('elsewhere')
+    // (e.g. a page in another browser, which tells this one nothing, goes)
+    await vi.advanceTimersByTimeAsync(18000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(2)
+    expect(FakeSocket.all.length).toBe(1)
+    await vi.advanceTimersByTimeAsync(20000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(3)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
+  })
+
+  it('takes the seat back only once it is on screen', async () => {
+    const { fetch } = await replacedPage([200, { seatHeld: false }])
+    setVisibility('hidden')
+    new FakeChannel(CHANNEL).postMessage({ bb: 'released' })
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(0)
+    expect(FakeSocket.all.length).toBe(1)
+    setVisibility('visible')
+    await settle()
+    expect(seatChecks(fetch)).toBe(1)
+    expect(FakeSocket.all.length).toBe(2)
+  })
+
+  it('tells the participant\'s other pages as it goes, while it holds the seat', async () => {
+    const heard: any[] = []
+    const other = new FakeChannel(CHANNEL)
+    other.onmessage = ev => heard.push(ev.data)
+    const page = await openPage(stateAnswers([200, SEATED]))
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))
+    expect(heard).toEqual([{ bb: 'released' }])
+    // not once another page has the seat
+    FakeSocket.all[0].frame(REPLACED)
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))
+    expect(heard.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('elsewhere')
+  })
+
+  it('leaves a preview\'s seat to the console', async () => {
+    location.search = '?preview=1'
+    location.href = 'http://lab.example' + PAGE + '?preview=1'
+    const { fetch } = await replacedPage([200, { seatHeld: false }])
+    expect(FakeChannel.all.length).toBe(0)
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(0)
+    expect(FakeSocket.all.length).toBe(1)
   })
 
   it('keeps the seat it was given back while the other tab is told', async () => {

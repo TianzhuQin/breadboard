@@ -127,6 +127,13 @@ public class ClientController extends Controller
             error.put("login", routes.ClientLogin.login(experimentId, experimentInstanceId).url());
             return unauthorized(error);
         }
+        if (request().getQueryString(SEAT_QUERY) != null) {
+            // A page of the participant's that another one took the seat from asks whether that one
+            // still holds it: once it has gone, the page takes the seat back (frontend/core).
+            ObjectNode seat = Json.newObject();
+            seat.put("seatHeld", ScriptBoard.seatHeldByTheirPage(experimentId, experimentInstanceId, clientId));
+            return ok(seat);
+        }
         // Only what the page needs. This used to echo every request header back to page
         // JavaScript (including the Cookie header), plus the IP address and full request URI.
         ObjectNode result = Json.newObject();
@@ -293,6 +300,9 @@ public class ClientController extends Controller
     // the seat.
     static final String PAGE_LOADED_QUERY = "bbPage";
     static final String TAKE_SEAT_QUERY = "bbTake";
+    // What the page adds to its state's address to ask only whether a page of the participant's holds
+    // their seat now (getState).
+    static final String SEAT_QUERY = "seat";
 
     /** A whole number written as text, or 0. */
     private static long wholeNumberOrZero(String text) {

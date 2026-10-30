@@ -242,7 +242,10 @@ and notices a connection that died without closing. `<ConnectionStatus />` says 
 with **Try now** while it reconnects. When the study is opened in another tab or window, the newer
 page takes over and the older one stops, with **Use it here** to take it back. An older page whose
 connection comes back by itself doesn't take the seat from a newer one that is open: the page the
-participant opened last keeps it.
+participant opened last keeps it. Once the newer page has gone (closed, or its connection lost for
+good), the older one takes the seat back by itself as soon as it is on screen: the page that holds
+the seat tells the participant's other pages in the same browser as it goes, and a page that has
+lost the seat also asks the server every 20 seconds.
 
 **A network that blocks the live connection.** A page that has never connected after three tries
 says the network may not let it through, and suggests another network or browser. So does a page
@@ -309,9 +312,11 @@ playing, and a waiting room doesn't count them.
   had dropped meanwhile) is sent the same and closed, and the newer page keeps the seat: the page
   says when it was loaded, in the server's time, as it connects (its state's `loadedAt`, as `bbPage`
   in the socket's address). **Use it here** asks for the seat (`bbTake=1`) and gets it, from a newer
-  page too. `clientConnected` and `clientDisconnected` are recorded only when the participant comes
-  or goes, not each time a page takes over; `bb:connection` is emitted whenever a page takes the
-  seat, so scripts may hear `connected: true` for someone who is connected already.
+  page too. A page that has lost the seat asks `/state?seat=1`, which answers `{"seatHeld": true}`
+  while an open page of the participant's own holds it. `clientConnected` and `clientDisconnected`
+  are recorded only when the participant comes or goes, not each time a page takes over;
+  `bb:connection` is emitted whenever a page takes the seat, so scripts may hear `connected: true`
+  for someone who is connected already.
 - **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds
   after, and gets `{"pong": <the server's time in ms>}`. A page that has pinged and then sends
   nothing for 30 seconds is closed and counts as gone, as when its socket closes: a connection that

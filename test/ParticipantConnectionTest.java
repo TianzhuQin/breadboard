@@ -379,6 +379,35 @@ public class ParticipantConnectionTest extends BaseTest {
         assertTrue(client.holdsSeat(asked));
     }
 
+    @Test
+    public void aPageOfTheirsThatLostTheSeatCanAskWhetherAnotherOneStillHoldsIt() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        assertFalse("nobody's page yet", seatHeld("p1", token));
+        Page older = handshake("p1", token, "bbPage=1000");
+        Page newer = handshake("p1", token, "bbPage=2000");
+        assertTrue(older.closed);
+        assertTrue("the newer page holds it", seatHeld("p1", token));
+        // A researcher's preview watching changes nothing; standing in for them, it is nobody's page.
+        Page preview = connect("p1", true);
+        assertTrue(seatHeld("p1", token));
+        newer.hangUp();
+        assertEquals(1, preview.count(NOT_WATCHING));
+        assertFalse("the newer page has gone", seatHeld("p1", token));
+        // Only the participant's own token may ask.
+        Result stranger = route(fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/p1/state?seat=1"));
+        assertEquals(UNAUTHORIZED, status(stranger));
+    }
+
+    /** What /state?seat=1 answers the participant's page: whether a page of theirs holds the seat. */
+    private boolean seatHeld(String clientId, String token) {
+        Result result = route(fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/" + clientId + "/state?seat=1")
+            .withHeader(ParticipantAuth.HEADER, token));
+        assertEquals(OK, status(result));
+        JsonNode answer = Json.parse(contentAsString(result));
+        assertEquals("that, and nothing else", 1, answer.size());
+        return answer.get("seatHeld").asBoolean();
+    }
+
     private static Client.Connection socket(long pageLoadedAt, boolean preview, boolean takesSeat) {
         return new Client.Connection(null, new ThrottledWebSocketOut(new WebSocketTest.TestWebSocketOut(), 0L), preview,
             pageLoadedAt, takesSeat);
