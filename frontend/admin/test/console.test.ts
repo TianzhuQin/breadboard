@@ -277,6 +277,15 @@ describe('engine errors', () => {
     expect(e.places.map(p => p.kind)).toEqual(['own', 'library', 'other'])
   })
 
+  it('keeps a frame without a line (a closure in Breadboard\'s own code) out of the message, as the others', () => {
+    const raw = 'Caught error: MissingPropertyException: No such property: roundNoteText for class: Script53\n at Script53.groovy:76\n at step.groovy:200\n at step.groovy:-1\n at step.groovy:160'
+    const e = parseGroovyError(raw)
+    expect(e.message).toBe('No such property: roundNoteText for class: Script53')
+    expect(e.places.map(p => `${p.file}:${p.line}`)).toEqual(['Script53.groovy:76', 'step.groovy:200', 'step.groovy:160'])
+    // all of it under Full error
+    expect(e.raw).toContain('at step.groovy:-1')
+  })
+
   it('reads a syntax error with its line and column', () => {
     const e = parseGroovyError('Caught error: ScriptException: org.codehaus.groovy.control.MultipleCompilationErrorsException: startup failed:\nScript7.groovy: 2: unexpected token: ) @ line 2, column 12.\n   g.V.count())\n              ^\n\n1 error\n')
     expect(e.title).toBe('Syntax error')
