@@ -447,9 +447,11 @@ SHIFT
 GOTO findport
 
 :porttaken
-REM PORT_TAKEN: 1 when something answers on the port.
+REM PORT_TAKEN: 1 when something answers on the port, at 127.0.0.1 or at its IPv6 address, ::1 (a
+REM program there leaves the server free to start, and the browser, which tries ::1 first for
+REM localhost, would then open that program).
 SET "PORT_TAKEN="
-powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %PORT%); $c.Close(); exit 0 } catch { exit 1 }" >NUL 2>&1
+powershell -NoProfile -Command "foreach ($a in @('127.0.0.1', '::1')) { try { $ip = [Net.IPAddress]::Parse($a); $c = New-Object Net.Sockets.TcpClient($ip.AddressFamily); $c.Connect($ip, %PORT%); $c.Close(); exit 0 } catch { } }; exit 1" >NUL 2>&1
 IF NOT ERRORLEVEL 1 SET "PORT_TAKEN=1"
 GOTO :EOF
 

@@ -197,17 +197,28 @@ fi
 
 # Something already answering on the port (often Breadboard itself, started earlier): say so
 # instead of Play's stack trace (here, and again before the server is started again after it
-# stopped by itself). Sets TAKEN to what to say, and is true, when the port is taken. curl's 7 means
-# nothing listens there. (--noproxy: a proxy set for the internet, often one on this computer, would
-# answer in the port's place; curl uses it even for 127.0.0.1.)
+# stopped by itself). Sets TAKEN to what to say, and is true, when the port is taken. Also on its
+# IPv6 address, [::1]: a program there (as Node's dev servers listen for localhost) leaves the
+# server free to start, and the browser, which tries ::1 first for localhost, then opens that
+# program. curl's 7 means nothing listens there; at [::1], so do the codes a computer (or a curl)
+# without IPv6 ends with (1, 3, 4, 6, 45): nothing can listen there. (--noproxy: a proxy set for the
+# internet, often one on this computer, would answer in the port's place; curl uses it even for
+# 127.0.0.1. -g: the brackets are the address's, not a range.)
 port_taken() {
   TAKEN=""
   command -v curl >/dev/null 2>&1 || return 1
-  if ANSWER="$(curl -s --noproxy '*' --max-time 8 "http://127.0.0.1:$PORT/health" 2>/dev/null)"; then
-    CURL=0
-  else
-    CURL=$?
-  fi
+  for HOST in 127.0.0.1 '[::1]'; do
+    if ANSWER="$(curl -g -s --noproxy '*' --max-time 8 "http://$HOST:$PORT/health" 2>/dev/null)"; then
+      CURL=0
+    else
+      CURL=$?
+    fi
+    case "$HOST $CURL" in
+      *" 7") ;;
+      "[::1] 1"|"[::1] 3"|"[::1] 4"|"[::1] 6"|"[::1] 45") CURL=7 ;;
+      *) break ;;
+    esac
+  done
   [ "$CURL" -ne 7 ] || return 1
   if printf '%s' "$ANSWER" | grep -q '"database"'; then
     TAKEN="Breadboard is already running on port $PORT: open $URL"

@@ -251,6 +251,23 @@ if ($eighth.ExitCode -ne 1 -or -not $said.Contains('Line 2 of conf\local.conf ha
 Remove-Item -LiteralPath $localConf
 Pass 'curly quotes in conf\local.conf are named before Java starts'
 
+# A program on the port's IPv6 loopback address only (::1) is reported as using the port: the
+# browser, which tries ::1 first for localhost, would open it in Breadboard's place.
+$v6Port = $Port + 6
+$v6 = $null
+try { $v6 = New-Object Net.Sockets.TcpListener([Net.IPAddress]::IPv6Loopback, $v6Port); $v6.Start() } catch { $v6 = $null }
+if ($v6) {
+  $ninth = Start-Breadboard $other $v6Port 'ninth.log' 'ninth-err.log' -Wait
+  $v6.Stop()
+  $said = Get-Said 'ninth.log'
+  if ($ninth.ExitCode -ne 1 -or -not $said.Contains("Port $v6Port is in use")) {
+    Fail "a program on [::1]:$v6Port wasn't reported as using the port (exit code $($ninth.ExitCode)): $said"
+  }
+  Pass 'a program on the port''s IPv6 address, ::1, is reported as using the port'
+} else {
+  Write-Host 'skip a program on ::1 at the port: this computer has no IPv6 loopback'
+}
+
 Stop-Breadboard
 Start-Sleep -Seconds 3
 $log = Join-Path $app 'logs\application.log'
