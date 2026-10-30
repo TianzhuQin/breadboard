@@ -239,6 +239,18 @@ Stop-Process -Id $java.ProcessId -Force
 Remove-Item -LiteralPath $localConf
 Pass 'the port and memory set in conf\local.conf are the ones the server runs with'
 
+# Curly quotes in conf\local.conf (as Word or an input method types them), outside straight quotes and
+# comments, are named before Java starts.
+$curly = 'breadboard.rootUrl=' + [char]0x201C + 'https://curly.smoke.test' + [char]0x201D
+Set-Content -LiteralPath $localConf -Encoding utf8 -Value @('# the lab''s settings', $curly)
+$eighth = Start-Breadboard $other ($Port + 5) 'eighth.log' 'eighth-err.log' -Wait
+$said = Get-Said 'eighth.log'
+if ($eighth.ExitCode -ne 1 -or -not $said.Contains('Line 2 of conf\local.conf has curly quotes') -or $said.Contains('Play server process ID')) {
+  Fail "curly quotes in conf\local.conf weren't named before Java started (exit code $($eighth.ExitCode)): $said"
+}
+Remove-Item -LiteralPath $localConf
+Pass 'curly quotes in conf\local.conf are named before Java starts'
+
 Stop-Breadboard
 Start-Sleep -Seconds 3
 $log = Join-Path $app 'logs\application.log'

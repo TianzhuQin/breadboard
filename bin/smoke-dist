@@ -266,8 +266,13 @@ stop
 # proxy set for the internet, as many researchers have (here one that isn't there, on port 9): the
 # launcher's requests to this computer must not go through it. Its port and memory are the ones
 # conf/local.conf gives, which the launcher passes on to Java (no -Dhttp.port is given here).
-printf '%s\n' '# the settings this install changes' 'breadboard.wsUrl="ws://local-conf.smoke.test"' \
-  "http.port = $PORT   # the lab's port" 'breadboard.memory: "768m"' > "$APP/conf/local.conf"
+# (Curly quotes, as TextEdit's Smart Quotes types them, are fine in a comment and inside straight
+# quotes; elsewhere they are named, below.)
+LQ="$(printf '\342\200\234')"
+RQ="$(printf '\342\200\235')"
+printf '%s\n' "# the settings this install ${LQ}changes${RQ}" 'breadboard.wsUrl="ws://local-conf.smoke.test"' \
+  "http.port = $PORT   # the lab's port" 'breadboard.memory: "768m"' "smoke.note=\"the ${LQ}lab${RQ} copy\"" \
+  > "$APP/conf/local.conf"
 # (readable by anyone, as a copy brought from an earlier release may be)
 chmod 644 "$APP/conf/local.conf"
 PROXY=http://127.0.0.1:9
@@ -301,6 +306,16 @@ pass "another Breadboard on the same port, with a proxy set, is told this one ru
 PROXY=""
 stop
 rm -f "$APP/conf/local.conf"
+
+# Curly quotes in conf/local.conf, outside straight quotes and comments, are named before Java starts.
+printf '%s\n' '# the settings this install changes' "breadboard.rootUrl=${LQ}https://curly.smoke.test${RQ}" > "$APP/conf/local.conf"
+if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/curly.log" 2>&1 < /dev/null; then
+  fail "it started with curly quotes in conf/local.conf"
+fi
+rm -f "$APP/conf/local.conf"
+grep -q "Line 2 of conf/local.conf has curly quotes" "$WORK/curly.log" && ! grep -q "Play server process ID" "$WORK/curly.log" \
+  || fail "curly quotes in conf/local.conf weren't named before Java started: $(cat "$WORK/curly.log")"
+pass "curly quotes in conf/local.conf are named before Java starts"
 
 # A db/ that can't be written is reported, with how to fix it, before Java starts. (Not as root,
 # who can write anything.)

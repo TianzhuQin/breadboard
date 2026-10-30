@@ -127,10 +127,16 @@ win. Don't change `application-prod.conf` itself: each release brings its own, w
 `conf/local.conf` is yours, and you copy it into the next release when you upgrade. (A setting can
 also be given when starting, e.g. `./breadboard.sh -Dbreadboard.allowLateJoin=true`.)
 
-Text values go in double quotes, where a backslash starts an escape, as in JSON. So on Windows,
-write a path with forward slashes, `breadboard.backup.dir="D:/Breadboard backups"`, or with each
-backslash doubled, `"D:\\Breadboard backups"`. A single backslash either stops the server from
-starting or, as `\b` in `"D:\backups"` does, quietly changes the path.
+Text values go in straight double quotes (`"`). TextEdit's Smart Quotes, on unless you turned it
+off, makes them curly (`“ ”`) as you type, and so does a Chinese input method's punctuation. Turn
+Smart Quotes off (in TextEdit, Edit → Substitutions → Smart Quotes) before you type, or type those
+quotes again afterwards. With curly quotes in `conf/local.conf`, the launchers don't start the
+server, and say on which line they are.
+
+In a text value, a backslash starts an escape, as in JSON. So on Windows, write a path with forward
+slashes, `breadboard.backup.dir="D:/Breadboard backups"`, or with each backslash doubled,
+`"D:\\Breadboard backups"`. A single backslash either stops the server from starting or, as `\b` in
+`"D:\backups"` does, quietly changes the path.
 
 The account the server runs as must be able to read `conf/local.conf`. Java would take a file it
 can't read for one that isn't there, and the server would run without your settings, so the
@@ -476,6 +482,10 @@ the window. Press Esc (or Ctrl+Q in a terminal) to let the window go on.
 in `logs/service-errors.log` on Windows, `logs/launchd.log` on a Mac, `journalctl -u breadboard`
 with systemd). Fix that line (text values go in double quotes; for a path on Windows, see
 [Settings](#settings)) and start it again.
+
+**"Line … of conf/local.conf has curly quotes"**: the quotes on that line are curly (`“ ”`), as
+TextEdit's Smart Quotes types them, where the server needs straight ones (`"`). Type them again with
+Smart Quotes off (see [Settings](#settings)), and start it again.
 
 **The first start of a new install stopped halfway** (the server says the database "could not be
 brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.

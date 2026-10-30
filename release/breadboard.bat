@@ -75,15 +75,24 @@ REM JAVA_OPTS; cmd splits that option at the =), which wins: Play reads the port
 REM -Dhttp.port, so the one in conf\local.conf is passed on as one (PORT_OPT). And how much memory the
 REM server may use for its data (Java's heap, -Xmx): 1g, or breadboard.memory in conf\local.conf. Each
 REM is read from a line of its own (key=value, key: value or key = "value", with a comment after it
-REM or not), the last one if there are several; a value that isn't one ("?") is refused.
+REM or not), the last one if there are several; a value that isn't one ("?") is refused. Curly double
+REM quotes (as Word, a web page or an input method types them) make the file unreadable to the
+REM server, whose message then misleads: CURLY is the first line that has them (outside straight
+REM quotes and comments, where they are fine), which is named instead.
 SET "PORT="
 CALL :findport %JAVA_OPTS% %*
 SET "MEMORY=1g"
 SET "LOCAL_PORT="
 SET "LOCAL_MEMORY="
-IF EXIST "conf\local.conf" FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$port = $null; $memory = $null; foreach ($line in [IO.File]::ReadAllLines((Join-Path (Get-Location) 'conf\local.conf'))) { if ($line -match '\A\s*(http\.port|breadboard\.memory)\s*[=:]\s*(.*?)\s*(#.*|//.*)?\z') { $value = $Matches[2] -replace '\A\x22(.*)\x22\z', '$1'; if ($Matches[1] -eq 'http.port') { $port = $value } else { $memory = $value } } }; if ($port -ne $null) { if ($port -match '\A[1-9][0-9]{0,4}\z' -and [int]$port -le 65535) { 'http.port ' + $port } else { 'http.port ?' } }; if ($memory -ne $null) { if ($memory -match '\A[1-9][0-9]{0,4}[mMgG]\z') { 'breadboard.memory ' + $memory } else { 'breadboard.memory ?' } }" 2^>NUL') DO (
+SET "CURLY="
+IF EXIST "conf\local.conf" FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$port = $null; $memory = $null; $n = 0; foreach ($line in [IO.File]::ReadAllLines((Join-Path (Get-Location) 'conf\local.conf'))) { $n++; if (($line -replace '\x22[^\x22]*\x22', '' -replace '#.*', '' -replace '//.*', '') -match '[\u201C\u201D]') { 'curly ' + $n }; if ($line -match '\A\s*(http\.port|breadboard\.memory)\s*[=:]\s*(.*?)\s*(#.*|//.*)?\z') { $value = $Matches[2] -replace '\A\x22(.*)\x22\z', '$1'; if ($Matches[1] -eq 'http.port') { $port = $value } else { $memory = $value } } }; if ($port -ne $null) { if ($port -match '\A[1-9][0-9]{0,4}\z' -and [int]$port -le 65535) { 'http.port ' + $port } else { 'http.port ?' } }; if ($memory -ne $null) { if ($memory -match '\A[1-9][0-9]{0,4}[mMgG]\z') { 'breadboard.memory ' + $memory } else { 'breadboard.memory ?' } }" 2^>NUL') DO (
+  IF "%%A"=="curly" IF NOT DEFINED CURLY SET "CURLY=%%B"
   IF "%%A"=="http.port" SET "LOCAL_PORT=%%B"
   IF "%%A"=="breadboard.memory" SET "LOCAL_MEMORY=%%B"
+)
+IF DEFINED CURLY (
+  CALL :refuse say_curly
+  EXIT /B 1
 )
 IF "%LOCAL_PORT%"=="?" (
   CALL :refuse say_badport
@@ -356,6 +365,12 @@ GOTO :EOF
 :say_port_local
 ECHO To start another one, change the line http.port=%PORT% in conf\local.conf to another port, e.g.
 ECHO   http.port=%NEXT_PORT%
+GOTO :EOF
+
+:say_curly
+ECHO Line %CURLY% of conf\local.conf has curly quotes where Breadboard needs straight double quotes, as
+ECHO Word, a web page or an input method may type them. Type those quotes again in Notepad, with the
+ECHO keyboard in English, save the file, and start Breadboard again.
 GOTO :EOF
 
 :say_badport

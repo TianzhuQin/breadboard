@@ -118,6 +118,25 @@ for arg in $JAVA_OPTS "$@"; do
     -Dpidfile.path=*) PID_FILE="${arg#-Dpidfile.path=}" ;;
   esac
 done
+# Curly double quotes (U+201C, U+201D), which TextEdit's Smart Quotes (or an input method) types in
+# place of straight ones ("), make conf/local.conf unreadable to the server, whose message then
+# misleads ("try enclosing the value in double quotes"): name their lines instead. Inside straight
+# quotes, or in a comment, they are fine. (In UTF-8, as the server reads the file.)
+if [ -r conf/local.conf ]; then
+  CURLY="$(LC_ALL=C sed -e 's/"[^"]*"//g' -e 's/#.*//' -e 's#//.*##' conf/local.conf \
+    | LC_ALL=C grep -n "$(printf '\342\200[\234\235]')" | cut -d: -f1 | paste -s -d, - | sed 's/,/, /g')"
+  if [ -n "$CURLY" ]; then
+    case "$CURLY" in
+      *,*) WHERE="Lines $CURLY of conf/local.conf have" ;;
+      *) WHERE="Line $CURLY of conf/local.conf has" ;;
+    esac
+    echo "$WHERE curly quotes ($(printf '\342\200\234 \342\200\235')) where Breadboard needs straight ones (\")," >&2
+    echo "as TextEdit's Smart Quotes (or an input method) types them. Type those quotes again with Smart" >&2
+    echo "Quotes off (in TextEdit: Edit > Substitutions > Smart Quotes), save the file, and start" >&2
+    echo "Breadboard again." >&2
+    exit 1
+  fi
+fi
 LOCAL_PORT="$(local_setting 'http\.port')"
 if [ -n "$LOCAL_PORT" ]; then
   case "$LOCAL_PORT" in

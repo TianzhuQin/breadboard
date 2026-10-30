@@ -65,6 +65,12 @@ breadboard.rootUrl="https://breadboard.example.org"
 breadboard.allowLateJoin=true
 ```
 
+The quotes must be straight ones (`"`). TextEdit's Smart Quotes, on unless you turned it off, makes
+them curly (`“ ”`) as you type, and so does a Chinese input method's punctuation. Turn Smart Quotes
+off (in TextEdit, Edit → Substitutions → Smart Quotes) before you type, or type those quotes again
+afterwards. Breadboard won't start with curly quotes in `conf/local.conf`, and says on which line
+they are.
+
 Then restart Breadboard. `conf/application-prod.conf` lists every setting with what it does, but
 don't change it there: a new release brings its own, while `conf/local.conf` is yours to keep.
 
