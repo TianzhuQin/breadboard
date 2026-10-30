@@ -290,7 +290,7 @@ public final class Autopilot {
       if (!e.isOn()) {
         return;
       }
-      Logger.info("Autopilot: on (" + (ADMIN.equals(e.source) ? "settings saved in the console" : "application.conf")
+      Logger.info("Autopilot: on (" + (ADMIN.equals(e.source) ? "settings saved in the console" : "the settings file (conf/local.conf)")
           + "); " + (pausedBecause != null || doneBecause != null
               ? "it was " + (pausedBecause != null ? "paused" : "done") + " before the restart, so it opens no session until Resume is pressed"
               : "opening a session of experiment " + e.settings.experimentId));
