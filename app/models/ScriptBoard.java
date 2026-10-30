@@ -2037,6 +2037,9 @@ public class ScriptBoard extends UntypedActor {
           }
 
           rebuildScriptBoard(experiment, builtFor(breadboardMessage));
+          if (resumed != null) {
+            bindLaunchParameters(resumed, changeExperiment.experiment);
+          }
           loadSteps(experiment, breadboardMessage.out);
 
           //reset the instance
@@ -2044,9 +2047,6 @@ public class ScriptBoard extends UntypedActor {
             eventTracker.setExperimentInstance(resumed);
             gameListener.experimentInstance = resumed;
             reopenAfterRebuild(resumed);
-            for (Data param : resumed.data) {
-              initParam(param, changeExperiment.experiment);
-            }
           } else {
             // The engine runs no session now; events no longer go to the one it ran before.
             gameListener.experimentInstance = null;
@@ -2192,10 +2192,6 @@ public class ScriptBoard extends UntypedActor {
           }
         }
         rebuildScriptBoard(selectedExperiment, builtFor(breadboardMessage));
-        loadSteps(selectedExperiment, breadboardMessage.out);
-        if (carriesOn) {
-          reopenAfterRebuild(own);
-        }
         Breadboard.ReloadEngine reloadEngine = (Breadboard.ReloadEngine) message;
         ExperimentInstance ei = reloadEngine.user.experimentInstanceId == -1 ? null
             : ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
@@ -2203,12 +2199,17 @@ public class ScriptBoard extends UntypedActor {
         // (selecting one leaves a live session as the account's), which would get this one's events
         // and set its parameters here. Nor do events go on to the session the engine ran before.
         Long of = ei == null || ei.experiment == null ? null : ei.experiment.id;
-        if (of != null && selectedExperiment != null && of.equals(selectedExperiment.id)) {
+        boolean accountsSession = of != null && selectedExperiment != null && of.equals(selectedExperiment.id);
+        if (accountsSession) {
+          bindLaunchParameters(ei, selectedExperiment);
+        }
+        loadSteps(selectedExperiment, breadboardMessage.out);
+        if (carriesOn) {
+          reopenAfterRebuild(own);
+        }
+        if (accountsSession) {
           eventTracker.enable();
           eventTracker.setExperimentInstance(ei);
-          for (Data d : ei.data) {
-            initParam(d, selectedExperiment);
-          }
         } else {
           eventTracker.setExperimentInstance(null);
         }
@@ -2973,6 +2974,9 @@ public class ScriptBoard extends UntypedActor {
         endBeforeRebuild(previous);
       }
       rebuildScriptBoard(experiment, builtFor(selectInstance));
+      if (continuing != null) {
+        bindLaunchParameters(target, experiment);
+      }
       loadSteps(experiment, selectInstance.out);
       user.setExperimentInstanceId(target.id);
       try {
@@ -2997,11 +3001,7 @@ public class ScriptBoard extends UntypedActor {
       // Loaded again: stopping may just have saved this same session.
       ExperimentInstance instance = ExperimentInstance.findById(target.id);
       if (instance != null && instance.status != null && instance.status.isRunnable()) {
-        List<Data> parameters = instance.data;
-        for (Data param : parameters) {
-          initParam(param, experiment);
-        } // END for (Data param : parameters)
-
+        // (its launch parameters were bound before its steps loaded, above)
         eventTracker.enable();
         eventTracker.setExperimentInstance(instance);
         gameListener.experimentInstance = instance;
@@ -3165,6 +3165,20 @@ public class ScriptBoard extends UntypedActor {
 
       initParam(data, experiment);
     } // END while(it.hasNext())
+  }
+
+  /**
+   * Bind an existing session's launch parameters (its data) in the engine just built, as a launch binds
+   * a new one's (initAllParam): before its steps load, which may read them as they do (the network
+   * game's waiting room takes its size from them). Selecting a session (Resume, or the running one
+   * again), a Reload engine that carries the session on, and taking the account's running session up
+   * again as its experiment is selected bound them only after the steps had loaded, which then ran with
+   * the experiment's defaults: a session launched for 3 people waited for 2.
+   */
+  private void bindLaunchParameters(ExperimentInstance session, Experiment experiment) {
+    for (Data param : session.data) {
+      initParam(param, experiment);
+    }
   }
 
   private void initParam(Data param, Experiment experiment) {
