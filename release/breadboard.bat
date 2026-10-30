@@ -275,9 +275,9 @@ REM as below: what kept it from starting may be gone by then (a program that hel
 IF EXIST "logs\start-errors.log" IF NOT DEFINED SERVICE GOTO couldnotstart
 
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
+IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
 REM (1: the server's own stop after an error that stopped its engine, Global.exitIfActorsStop)
 IF "%EXIT_CODE%"=="1" SET "WHY=exit code 1: the server stopped itself after an error, which logs\application.log shows"
-IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
 IF DEFINED SERVICE IF EXIST "logs\start-errors.log" SET "WHY=it could not start, exit code %EXIT_CODE%; logs\start-errors.log and logs\service-errors.log may say why"
 IF "%EXIT_CODE%"=="3" CALL :morememory
 IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. A line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf gives it more than the %MEMORY% it has. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
