@@ -1203,14 +1203,17 @@ public class ParticipantConnectionTest extends BaseTest {
         Set<Object> endedPages = (Set<Object>) field("endedPages").get(null);
         Page page = connect("p1");
         engine().eval("def v = g.getVertex('p1'); v.finished = true; v.text = '<p>Thank you</p>'; null");
-        // The session finishes and the next one opens, as the autopilot does, restarting the engine.
+        // The session finishes, then the next one opens, as the autopilot does, restarting the engine.
+        // (Finished first: a launch over a session still running stops it, and a page that comes back to
+        // it then is told it was stopped, as after Stop.)
+        ExperimentInstance finished = ExperimentInstance.findById(session.id);
+        finished.finish();
+        finished.update();
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
         console.send("LaunchGame", "name", "Next", "parameters", Json.newObject());
         await("the next session", () -> ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", "Next")
             .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
         await("their page let go", () -> page.closed);
-        ExperimentInstance finished = ExperimentInstance.findById(session.id);
-        finished.finish();
-        finished.update();
         assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
 
         // Their page, still on its thank-you screen, comes back to the session that is over.
