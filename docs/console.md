@@ -115,7 +115,10 @@ round and the ties among their neighbors, and during a round everyone may cut on
 by clicking it. The size of the network, the waiting room's minimum and wait, and the number and
 length of rounds are launch parameters, so they change on the Parameters page, and everything
 participants read is on the Content page, to reword or translate. Picks, scores and cut ties are
-recorded as `ColourPick`, `RoundResult` and `TieCut` events. Open a session (or turn on the autopilot) and
+recorded as `ColourPick`, `RoundResult` and `TieCut` events. Its texts are written in English: when
+your default language is another, that language is added next to English, and participants read it
+(the `language` launch parameter), each text in English until it is translated. Open a session
+(or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
 

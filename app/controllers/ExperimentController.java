@@ -910,19 +910,30 @@ public class ExperimentController extends Controller {
       step.source = source;
       experiment.addStep(step);
     }
+    // The examples are written in English: their texts are English ones, also for an account whose
+    // default language is another (they used to be filed under that language). That language is added
+    // next to English, for its translations, and participants read it: it is the default of the
+    // "language" launch parameter, and a text not translated yet is shown in English.
+    Language english = LanguageController.english();
+    Language own = user.defaultLanguage != null ? user.defaultLanguage : english;
     String parameters = resourceText(root + "parameters.csv");
     if (parameters != null) {
-      experiment.parameters.addAll(getParameters(new StringReader(parameters)));
+      for (Parameter parameter : getParameters(new StringReader(parameters))) {
+        if ("language".equals(parameter.name) && own != null) {
+          parameter.defaultVal = own.getCode();
+        }
+        experiment.parameters.add(parameter);
+      }
     }
-    // What participants read, on the Content page (in the account's language) so it can be reworded
-    // or translated without changing the steps.
+    // What participants read, on the Content page, so it can be reworded or translated without
+    // changing the steps.
     for (JsonNode contentName : Json.parse(manifest).path("content")) {
       String html = resourceText(root + "Content/" + contentName.asText() + ".html");
       if (html == null) {
         throw new IOException("The example " + name + " has no content " + contentName.asText());
       }
       Translation translation = new Translation();
-      translation.language = user.defaultLanguage;
+      translation.language = english;
       translation.setHtml(html.trim());
       Content content = new Content();
       content.name = contentName.asText();
@@ -931,7 +942,8 @@ public class ExperimentController extends Controller {
     }
     experiment.setClientHtml(Experiment.defaultClientHTML());
     experiment.setClientGraph(Experiment.defaultClientGraph());
-    experiment.addLanguage(user.defaultLanguage);
+    experiment.addLanguage(english);
+    experiment.addLanguage(own);
     return experiment;
   }
 

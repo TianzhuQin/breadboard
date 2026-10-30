@@ -23,6 +23,10 @@ NETWORK_SIZE = paramOr("networkSize", 8) as Integer   // people on the network, 
 NEAREST = 2        // everyone starts tied to the NEAREST people on each side of a ring
 COLORS = [Blue: "#2563eb", Orange: "#ea580c"]   // the choices, and the people on the network
 
+// The language of the texts participants read (on the Content page, by its code there, e.g. "zho"):
+// the language launch parameter. A text not yet written in it is shown in English.
+c.setDefaultLanguage(paramOr("language", "eng"))
+
 // Start without a researcher: as soon as minPlayers people are here, wait waitSeconds for more (or
 // start right away with NETWORK_SIZE), then count down 5 seconds. Give up after 10 minutes.
 autopilot.waitingRoom([minPlayers: paramOr("minPlayers", 2) as Integer, maxPlayers: NETWORK_SIZE,

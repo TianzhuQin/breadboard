@@ -24,6 +24,13 @@ public class ExampleExperimentTest extends BaseTest {
 
     /** As the engine's {@code c} (ContentFetcher): the example's texts, read from its Content folder. */
     public static class ExampleTexts {
+        /** The language the steps chose (setDefaultLanguage). */
+        public String language;
+
+        public void setDefaultLanguage(String language) {
+            this.language = language;
+        }
+
         public String get(String name, Object... parameters) throws java.io.IOException {
             String html = FileUtils.readFileToString(new File(EXAMPLE, "Content/" + name + ".html")).trim();
             for (int i = 0; i < parameters.length; i++) {
@@ -59,8 +66,10 @@ public class ExampleExperimentTest extends BaseTest {
         java.util.Collections.sort(expected);
         java.util.Collections.sort(names);
         assertEquals(expected, names);
-        assertEquals(6, saved.getParameters().size());
-        // what participants read is on the Content page, in the account's language
+        assertEquals(7, saved.getParameters().size());
+        // participants read the account's language, here English
+        assertEquals("eng", parameter(saved, "language").defaultVal);
+        // what participants read is on the Content page, in English
         List<String> texts = new ArrayList<String>();
         for (Content c : saved.getContent()) texts.add(c.name);
         assertTrue(texts.toString(), texts.containsAll(java.util.Arrays.asList("RoundPrompt", "Finished", "RoundTimer")));
@@ -77,11 +86,53 @@ public class ExampleExperimentTest extends BaseTest {
         assertNull(ExperimentController.exampleExperiment(user, "../defaults"));
     }
 
+    /**
+     * An account whose default language isn't English gets the example's English texts as English (they
+     * were filed under the account's language), with its language next to English for translations,
+     * and participants read that language: each text once it is translated, English until then.
+     */
+    @Test
+    public void anAccountInAnotherLanguageGetsTheEnglishTextsAsEnglishWithItsLanguageNextToThem() throws Exception {
+        createLanguage("eng", "English");
+        Language chinese = createLanguage("zho", "Chinese");
+        User user = createUser("zh@test.org", "Zh", "password1234", chinese);
+
+        Experiment experiment = ExperimentController.exampleExperiment(user, "network-game");
+        experiment.name = "网络小游戏";
+        experiment.save();
+
+        Experiment saved = Experiment.findById(experiment.id);
+        assertEquals(15, saved.getContent().size());
+        for (Content c : saved.getContent()) {
+            assertEquals(c.name, 1, c.translations.size());
+            assertEquals(c.name, "eng", c.translations.get(0).language.getCode());
+        }
+        List<String> codes = new ArrayList<String>();
+        for (Language l : saved.languages) codes.add(l.getCode());
+        java.util.Collections.sort(codes);
+        assertEquals(java.util.Arrays.asList("eng", "zho"), codes);
+        assertEquals("zho", parameter(saved, "language").defaultVal);
+
+        // The researcher translates one text; the steps choose the language parameter's language.
+        Content prompt = null;
+        for (Content c : saved.getContent()) if (c.name.equals("RoundPrompt")) prompt = c;
+        Translation chineseText = new Translation();
+        chineseText.setLanguage(chinese);
+        chineseText.setHtml("<p>选一个颜色。</p>");
+        chineseText.setContent(prompt);
+        chineseText.save();
+        ContentFetcher c = Experiment.findById(experiment.id).contentFetcher;
+        c.setDefaultLanguage("zho");
+        assertEquals("<p>选一个颜色。</p>", c.get("RoundPrompt"));
+        assertEquals("<h2>Round 1 of 3</h2>", c.get("RoundHeading", 1, 3));
+    }
+
     @Test
     public void itsStepsPlayAWholeGameByThemselves() throws Exception {
         // the scripts a release loads (an experimental-only script missing there used to break the end)
         harness = new ScriptTestHarness(false);
-        harness.put("c", new ExampleTexts());
+        ExampleTexts texts = new ExampleTexts();
+        harness.put("c", texts);
         // launch parameters, as a session would bind them
         harness.put("networkSize", 5);
         harness.put("minPlayers", 2);
@@ -89,9 +140,11 @@ public class ExampleExperimentTest extends BaseTest {
         harness.put("rounds", 2);
         harness.put("roundSeconds", 1);
         harness.put("prolificCode", "C0DE1234");
+        harness.put("language", "zho");
         for (String name : stepNames()) {
             harness.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
         }
+        assertEquals("the steps choose the language parameter's language", "zho", texts.language);
         harness.runAsync("{ done ->\n"
             + "  ['p1', 'p2'].each { g.addPlayer(it) }\n"
             + "  recruitment.registerProlific(g.getVertex('p2'))\n"
@@ -129,6 +182,7 @@ public class ExampleExperimentTest extends BaseTest {
         assertEquals(8, ((Number) harness.eval("NETWORK_SIZE")).intValue());
         assertEquals(2, ((Number) harness.eval("autopilot.room.minPlayers")).intValue());
         assertEquals(20, ((Number) harness.eval("autopilot.room.waitSeconds")).intValue());
+        assertEquals("eng", ((ExampleTexts) harness.get("c")).language);
     }
 
     /** The score is shown from the second round on: the first one said "Your score: 0 of 0". */
@@ -192,10 +246,19 @@ public class ExampleExperimentTest extends BaseTest {
         h.put("rounds", 2);
         h.put("roundSeconds", roundSeconds);
         h.put("prolificCode", "");
+        h.put("language", "eng");
         for (String name : stepNames()) {
             h.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
         }
         return h;
+    }
+
+    private static Parameter parameter(Experiment experiment, String name) {
+        for (Parameter p : experiment.getParameters()) {
+            if (p.name.equals(name)) return p;
+        }
+        fail("no parameter " + name);
+        return null;
     }
 
     private static List<String> stepNames() throws Exception {
