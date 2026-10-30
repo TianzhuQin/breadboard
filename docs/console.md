@@ -393,7 +393,10 @@ one for Mechanical Turk.
 
 **Prolific.** **Study URL** is the address to paste into your study on Prolific (**Copy URL**). In
 Prolific, choose to record Prolific IDs with URL parameters, and leave the parts like
-`{{%PROLIFIC_PID%}}` as they are. The link leads to this experiment's open session whose game
+`{{%PROLIFIC_PID%}}` as they are. Prolific sends people from the internet, so the URL must use the
+server's public address: open the console there to copy it. The page says so when the console was
+opened at localhost or at an address of the lab's own network, and so does the Autopilot page under
+its Prolific link. The link leads to this experiment's open session whose game
 hasn't started, and the page says which one that is now, or warns that participants would see
 "No session is open right now". **Try it as a test participant** opens it with a made-up Prolific
 ID, taking a seat like a real participant.

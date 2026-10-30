@@ -87,15 +87,18 @@
     <div v-if="links && (status.on || status.instance)" class="apst__block">
       <h3 class="apst__label">Participant links</h3>
       <p class="apst__muted">They always lead to the session that is open at the moment, so the same links keep working from one session to the next.</p>
-      <LocalOnlyNote class="apst__local" />
+      <LocalOnlyNote class="apst__local" what="The sign-in link uses" />
       <div class="apst__links">
         <CopyLink label="Sign-in link" :url="links.login" hint="Participants enter an ID, then join." />
-        <CopyLink
-          v-if="links.prolific"
-          label="Prolific link"
-          :url="links.prolific"
-          hint="Paste it into Prolific as the study URL; Prolific fills in the {{%…%}} parts."
-        />
+        <div v-if="links.prolific" class="apst__link">
+          <CopyLink
+            label="Prolific link"
+            :url="links.prolific"
+            hint="Paste it into Prolific as the study URL; Prolific fills in the {{%…%}} parts."
+          />
+          <!-- Prolific's people come from the internet: no lab-network tip for this one -->
+          <LocalOnlyNote what="This link uses" internet compact />
+        </div>
       </div>
     </div>
 
@@ -281,6 +284,7 @@ const noticeTime = computed(() => {
 .apst__open-step { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; font-weight: 600; color: inherit; }
 .apst__live { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-soft-text); font-size: var(--text-sm); }
 .apst__local { margin: 6px 0 8px; }
+.apst__link { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .apst__links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 4px; }
 @media (max-width: 760px) { .apst__links { grid-template-columns: minmax(0, 1fr); } }
 .apst__activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

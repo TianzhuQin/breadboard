@@ -7,7 +7,7 @@
         </code>
         <CopyButton :text="url" variant="primary" label="Copy URL" />
       </div>
-      <LocalOnlyNote what="This URL uses" />
+      <LocalOnlyNote what="This URL uses" internet />
       <p class="rc-sub">
         In Prolific, choose to record Prolific IDs with URL parameters and keep the parts like
         <code>{{ PID_PLACEHOLDER }}</code> exactly as they are: Prolific fills them in for each participant.

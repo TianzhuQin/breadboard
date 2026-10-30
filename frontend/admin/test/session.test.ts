@@ -11,9 +11,10 @@ import {
 } from '../src/pages/session/events'
 import EventRow from '../src/pages/session/EventRow.vue'
 import {
-  classifyStartReply, cleanError, detectGameStarted, engineGameFlag, formatDuration, isLocalOrigin, isStartReply, joinLinks,
+  classifyStartReply, cleanError, detectGameStarted, engineGameFlag, formatDuration, isLocalOrigin, isPrivateOrigin, isStartReply, joinLinks,
   networkStats, safeFileName, waitingRoom,
 } from '../src/pages/session/live'
+import LocalOnlyNote from '../src/pages/session/LocalOnlyNote.vue'
 import { busy, resumeSession, startGame, stopSession } from '../src/pages/session/controls'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
@@ -377,6 +378,33 @@ describe('live session state', () => {
     expect(isLocalOrigin('http://localhost:9000')).toBe(true)
     expect(isLocalOrigin('http://127.0.0.1:9000')).toBe(true)
     expect(isLocalOrigin('https://bb.lab.org')).toBe(false)
+  })
+
+  it('says a link for Prolific needs the server\'s public address, without the tip for the lab\'s network', async () => {
+    const { admin } = await import('@/store/admin') as any
+    admin.lanAddresses = ['http://10.0.0.5:9000']
+    // (the tests' page is at localhost)
+    const host = window.location.host
+    const prolific = mount(LocalOnlyNote, { props: { what: 'This URL uses', internet: true } })
+    const text = prolific.text().replace(/\s+/g, ' ')
+    expect(text).toContain(`This URL uses ${host}, which only works on this computer.`)
+    expect(text).toContain('Prolific sends people from the internet, so they need the server’s public address')
+    expect(text).not.toContain('same network')
+    expect(prolific.find('a').attributes('href')).toMatch(/install\.md#putting-it-on-a-server$/)
+    prolific.unmount()
+    // other links keep it
+    const links = mount(LocalOnlyNote)
+    expect(links.text().replace(/\s+/g, ' ')).toContain('For people on the same network (say, the lab\'s computers), open the console at http://10.0.0.5:9000')
+    links.unmount()
+    admin.lanAddresses = []
+    // a lab network's address is no good for Prolific either
+    expect(isPrivateOrigin('http://192.168.1.23:9000')).toBe(true)
+    expect(isPrivateOrigin('http://10.254.125.201:19841')).toBe(true)
+    expect(isPrivateOrigin('http://172.20.1.2')).toBe(true)
+    expect(isPrivateOrigin('http://172.40.1.2')).toBe(false)
+    expect(isPrivateOrigin('http://lab-mac.local:9000')).toBe(true)
+    expect(isPrivateOrigin('https://bb.lab.org')).toBe(false)
+    expect(isPrivateOrigin('http://localhost:9000')).toBe(false)
   })
 
   it('tells when the game has started', () => {
