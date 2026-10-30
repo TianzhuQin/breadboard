@@ -182,7 +182,7 @@ new push cancels the run still going for the same branch or pull request.
 | Server tests | Runs `bin/sbt8 test` on Zulu Java 8, with the sbt and Ivy caches kept between runs. |
 | Release package | After both pass: builds the release from the `frontend-build` artifact (`SKIP_FRONTEND=1 bin/make-dist`) and runs `bin/smoke-dist` on it, then makes the downloads that carry their own Java (`bin/bundle-java`) and runs `bin/smoke-dist` on the Linux one. Keeps the zips and their `.sha256` files as the `breadboard-release` artifact for 7 days. |
 | macOS package | Runs `bin/smoke-dist` on the `-macos-arm64` zip, on its own Java. |
-| Windows package | Runs `bin/smoke-dist.ps1` on the `-windows-x64` zip: `breadboard.bat` on its own Java, the first account, a backup, the message when the port is taken (also by a program on `::1` only), the port and memory set in `conf\local.conf`, curly quotes in it named, a server that can't start not started again, and what Java itself says going into `logs\jvm-pid<N>.log`, not the window. |
+| Windows package | Runs `bin/smoke-dist.ps1` on the `-windows-x64` zip: `breadboard.bat` on its own Java, the first account, a backup, the message when the port is taken (also by a program on `::1` only), the port and memory set in `conf\local.conf`, curly quotes in it named, a server that can't start not started again, nor one that runs out of memory while starting (with how to give it more: the `-Xmx` in `JAVA_OPTS`), and what Java itself says going into `logs\jvm-pid<N>.log`, not the window. |
 
 ## Making a release
 
@@ -249,11 +249,12 @@ new push cancels the run still going for the same branch or pull request.
    that is full), with what Java said about it in `logs/jvm-pid<N>.log` and how to give it more:
    its `-Xmx` in `JAVA_OPTS`, which wins over `breadboard.memory` (this needs a `javac`, in
    `JAVA8_HOME`, `JAVA_HOME` or on the PATH, to build the Java agent that fills the heap; without
-   one it says that it skips this), and on macOS that the computer is kept awake while the server
-   runs. It fails if the server logs an error. With `--db` it starts on a copy of an older release's
-   database instead (and checks that it was backed up first); when that database already has
-   accounts, it only checks that the server starts and serves its pages. CI runs the Windows zip
-   through `bin/smoke-dist.ps1`.
+   one it says that it skips this), that it doesn't start again one that ran out of memory while
+   starting, and says how to give it more (the `-Xmx` given to `breadboard.sh`), and on macOS that
+   the computer is kept awake while the server runs. It fails if the server logs an error. With
+   `--db` it starts on a copy of an older release's database instead (and checks that it was backed
+   up first); when that database already has accounts, it only checks that the server starts and
+   serves its pages. CI runs the Windows zip through `bin/smoke-dist.ps1`.
 6. Commit, tag and publish (the platform zips can be taken from CI's `breadboard-release`
    artifact):
 

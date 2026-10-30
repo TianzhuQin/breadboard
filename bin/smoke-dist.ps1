@@ -5,9 +5,10 @@
 # port is in use, and as a service, in its logs\application.log too), check that as a service a
 # mistake in conf\local.conf is in logs\service-errors.log, and otherwise that a server that can't
 # start isn't started again, that the port and memory in conf\local.conf are the ones used, that
-# curly quotes in it are named, and that a program on ::1 holds the port, then stop it and look for
-# errors in its log. While it runs, a helper must keep the computer awake, and what Java itself says
-# must go into logs\jvm-pid<N>.log, not the window.
+# curly quotes in it are named, that a program on ::1 holds the port, and that a server that runs
+# out of memory while starting isn't started again, with how to give it more (the -Xmx in
+# JAVA_OPTS), then stop it and look for errors in its log. While it runs, a helper must keep the
+# computer awake, and what Java itself says must go into logs\jvm-pid<N>.log, not the window.
 #
 # It is unzipped into a folder whose path has spaces, parentheses and an "&" (as Explorer's Extract
 # All of a second download, "... (1)", or a lab's "R&D" folder has), and the other copy into one
@@ -285,6 +286,34 @@ if ($v6) {
 } else {
   Write-Host 'skip a program on ::1 at the port: this computer has no IPv6 loopback'
 }
+
+# With keep running on, a server that runs out of memory while it starts isn't started again either
+# (it would only run out again), and breadboard.bat says how to give it more: here with the -Xmx in
+# JAVA_OPTS (as 3.0's launchers suggested), which wins over breadboard.memory. (Too little room for
+# its classes, -XX:MaxMetaspaceSize, makes it run out at once, whatever its heap.) What Java itself
+# says about it goes into logs\jvm-pid<N>.log, not the window.
+$env:BREADBOARD_KEEP_RUNNING = '1'
+$env:JAVA_OPTS = '-Xmx64m -XX:MaxMetaspaceSize=16m'
+$tenth = Start-Breadboard $other ($Port + 7) 'tenth.log' 'tenth-err.log'
+# (its exit code is kept only once its handle has been asked for)
+$null = $tenth.Handle
+Remove-Item Env:BREADBOARD_KEEP_RUNNING
+Remove-Item Env:JAVA_OPTS
+if (-not $tenth.WaitForExit(120000)) {
+  Stop-Process -Id $tenth.Id -Force -ErrorAction SilentlyContinue
+  Fail "breadboard.bat kept trying to start a server that ran out of memory while starting: $(Get-Said 'tenth.log')"
+}
+$said = Get-Said 'tenth.log'
+$window = $said + (Get-Said 'tenth-err.log')
+$jvmSaid = "$(Get-ChildItem -LiteralPath (Join-Path $other 'logs') -Filter 'jvm-pid*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content -Raw)"
+Remove-Item -LiteralPath (Join-Path $other 'logs\out-of-memory.hprof') -ErrorAction SilentlyContinue
+if ($tenth.ExitCode -eq 0 -or -not $said.Contains('stopped before the server started (it ran out of memory: a script may keep too much data. -Xmx64m in JAVA_OPTS gives it 64m, and wins over breadboard.memory: raise that, e.g. to -Xmx128m,') -or $said.Contains('Starting Breadboard again')) {
+  Fail "a server that ran out of memory while starting was started again, or breadboard.bat didn't say how to give it more (exit code $($tenth.ExitCode)): $said"
+}
+if ($window.Contains('Terminating due to') -or -not $jvmSaid.Contains('Terminating due to java.lang.OutOfMemoryError')) {
+  Fail "what Java said as it ran out of memory isn't in logs\jvm-pid<N>.log, or went into the window: $window / $jvmSaid"
+}
+Pass 'a server that runs out of memory while starting isn''t started again; breadboard.bat says how to give it more (the -Xmx in JAVA_OPTS), and logs\jvm-pid<N>.log what Java said'
 
 Stop-Breadboard
 Start-Sleep -Seconds 3

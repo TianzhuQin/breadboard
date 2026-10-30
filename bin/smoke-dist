@@ -12,9 +12,10 @@
 # and that keep-running doesn't start again a server that can't start, but does start again one
 # that ran out of memory while nobody read its window (when there is a javac, for the Java agent
 # that fills the heap), with what Java said about it in logs/jvm-pid<N>.log and how to give it more
-# (the -Xmx in JAVA_OPTS, which wins over breadboard.memory). A release that carries its own Java
-# (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while the
-# server runs.
+# (the -Xmx in JAVA_OPTS, which wins over breadboard.memory), and doesn't start again one that ran
+# out of memory while starting (saying how to give it more: the -Xmx given to breadboard.sh). A
+# release that carries its own Java (bin/bundle-java) is started on that Java. On macOS, the
+# computer must be kept awake while the server runs.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -632,4 +633,34 @@ EOF
 else
   echo "skip a server that runs out of memory with nobody reading its window: no javac here to build the agent that fills the heap"
 fi
+
+# A server that runs out of memory while it starts isn't started again either (it would only run out
+# again), and the launcher says how to give it more: here with the -Xmx given to breadboard.sh, which
+# wins over breadboard.memory. (Too little room for its classes, -XX:MaxMetaspaceSize, makes it run
+# out at once, whatever its heap, with no javac needed.) What Java itself says about it goes into
+# logs/jvm-pid<N>.log, not the window.
+(cd "$APP" && BREADBOARD_KEEP_RUNNING=1 exec ./breadboard.sh -Dhttp.port="$PORT" -Xmx64m -XX:MaxMetaspaceSize=16m) \
+  > "$WORK/start-out-of-memory.log" 2>&1 < /dev/null &
+LAUNCHER=$!
+for _ in $(seq 1 120); do
+  kill -0 "$LAUNCHER" 2>/dev/null || break
+  sleep 1
+done
+if kill -0 "$LAUNCHER" 2>/dev/null; then
+  kill "$LAUNCHER" 2>/dev/null || true
+  wait "$LAUNCHER" 2>/dev/null || true
+  fail "the launcher kept trying to start a server that ran out of memory while starting: $(cat "$WORK/start-out-of-memory.log")"
+fi
+CODE=0
+wait "$LAUNCHER" || CODE=$?
+rm -f "$APP/logs/out-of-memory.hprof"
+[ "$CODE" = 3 ] \
+  && grep -qF "Breadboard stopped before the server started (it ran out of memory: a script may keep too much data. -Xmx64m, given to breadboard.sh, gives it 64m, and wins over breadboard.memory: start it with more, e.g. -Xmx128m," "$WORK/start-out-of-memory.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/start-out-of-memory.log" \
+  || fail "a server that ran out of memory while starting was started again, or the launcher didn't say how to give it more (exit code $CODE): $(cat "$WORK/start-out-of-memory.log")"
+JVM_LOG="$(ls -t "$APP"/logs/jvm-pid*.log 2>/dev/null | head -1 || true)"
+! grep -q "Terminating due to" "$WORK/start-out-of-memory.log" \
+  && grep -q "Terminating due to java.lang.OutOfMemoryError" "$JVM_LOG" \
+  || fail "what Java said as it ran out of memory isn't in logs/jvm-pid<N>.log, or went into the window: $(tail -3 "$JVM_LOG" 2>&1)"
+pass "a server that runs out of memory while starting isn't started again; the launcher says how to give it more (the -Xmx given to breadboard.sh), and logs/jvm-pid<N>.log what Java said"
 echo "The release in $(basename "$ZIP") works."
