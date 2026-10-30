@@ -384,6 +384,9 @@ restarts the running session.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
   or goes (not for every page that takes over their seat).
+- **Order:** events recorded in the same millisecond come out in the order they were recorded. Their
+  ids follow that order now; they were given out twenty at a time, in an order of the database's
+  own, so such events could come out the wrong way round.
 - **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
   `missedStart` (someone its start left out), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
 - **Tie edits:** `edgeEdit`, which records the actor.
