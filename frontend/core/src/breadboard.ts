@@ -344,6 +344,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private releasedCheck: ReturnType<typeof setTimeout> | null = null
   /** checkSeatFree is waiting for the server */
   private checkingSeatFree = false
+  /** login() was called: the page signs in on its connection (see sendLogIn) */
+  private signedIn = false
+  /** How many connections have opened, and on which of them the page last signed in (-1: none) */
+  private connections = 0
+  private loginSentOn = -1
+  /** When the page last heard from the server (Date.now()), over any connection; 0 before it has */
+  private heardAt = 0
+  /** When it last heard from the server before its connection dropped; null while it hasn't since */
+  private outOfTouchSince: number | null = null
 
   constructor () {
     super()
@@ -441,6 +450,18 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         this.serverAnswered = false
         // (the server has given it the seat)
         this.takingSeat = false
+        this.connections++
+        // Signed in on the first connection, and again on one that follows a drop, saying how long
+        // the page was out of touch (before anything it queued meanwhile).
+        if (this.signedIn && (this.loginSentOn < 0 || this.outOfTouchSince !== null)) this.sendLogIn()
+      })
+      this.socket.on('message', () => { this.heardAt = Date.now() })
+      this.socket.on('pong', () => { this.heardAt = Date.now() })
+      this.socket.on('close', () => {
+        // (not the server closing a page another took the seat from, or whose session is over)
+        if (this.heardAt > 0 && this.outOfTouchSince === null && !this.replaced && !this.ended) {
+          this.outOfTouchSince = this.heardAt
+        }
       })
       // A participant's page that had connected and can't again: the network, or the server?
       if (config.clientId) this.socket.on('unopened', (inARow: number) => this.onUnopened(inARow))
@@ -611,17 +632,32 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   }
 
   /**
-   * Login method
+   * Sign in on the live connection: now if it is open, else as it opens. From then on the page signs
+   * in again on each connection that follows a drop (see sendLogIn). Once per connection, however
+   * often it is called.
    */
   async login () {
-    const config = await this.loadConfig()
+    await this.loadConfig()
     await this.connect()
-    // Only the id: the server no longer stores the referer, user agent and other headers this
-    // used to send, which were personal data and couldn't be trusted anyway.
-    this.socket.send(JSON.stringify({
-      action: 'LogIn',
-      clientId: config.clientId
-    }))
+    this.signedIn = true
+    if (this.isOpen && this.loginSentOn !== this.connections) this.sendLogIn()
+  }
+
+  /**
+   * {"action": "LogIn", "clientId": ...}: only the id, as the server no longer stores the referer,
+   * user agent and other headers this used to send, which were personal data and couldn't be
+   * trusted anyway. On a connection that follows a drop, with `awayMs`: how long the page was out
+   * of touch, from when it last heard from the server (the server records it as connectionGap).
+   */
+  private sendLogIn () {
+    if (!this.config) return
+    const login: SimpleMap<any> = { action: 'LogIn', clientId: this.config.clientId }
+    if (this.outOfTouchSince !== null) {
+      login.awayMs = Math.max(0, Date.now() - this.outOfTouchSince)
+      this.outOfTouchSince = null
+    }
+    this.loginSentOn = this.connections
+    this.socket.send(JSON.stringify(login))
   }
 
   /**

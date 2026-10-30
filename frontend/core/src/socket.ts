@@ -42,8 +42,9 @@ type Queued = { message: any, at: number, maxAge?: number }
  * while it isn't connected. Once closed with close(), it stays closed: it never reconnects and sends
  * nothing more.
  *
- * Events: 'connect' (an attempt starts), 'open', 'message' (data, event), 'close', 'error', 'retry'
- * (the wait in ms before the next attempt), 'unopened', 'refused' and 'blocked' (below).
+ * Events: 'connect' (an attempt starts), 'open', 'message' (data, event), 'pong' (data: the server's
+ * answer to the heartbeat, which is no 'message'), 'close', 'error', 'retry' (the wait in ms before
+ * the next attempt), 'unopened', 'refused' and 'blocked' (below).
  *
  * After each attempt that didn't open, it emits 'unopened' with the number of such attempts in a row.
  * When the server takes the connection and closes it again without sending anything, several
@@ -402,6 +403,7 @@ export class Socket extends Emitter {
       // Timed from the answer: a timer set from a network event isn't slowed down to once a minute
       // in a background tab, as a long chain of timers is.
       this.schedulePing()
+      this.emit('pong', ev.data)
       return
     }
     this.emit('message', ev.data, ev)

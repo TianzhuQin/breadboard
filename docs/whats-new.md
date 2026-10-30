@@ -325,6 +325,17 @@ playing, and a waiting room doesn't count them.
   alone. A page given its last screen as it connects (its session is over, isn't the one running,
   or started without it: e.g. a thank-you page left open when the next session opens) has its pings
   answered too, and is closed once it falls silent; nobody used to answer them.
+- **Gaps in a connection.** A page that connects again after its connection dropped signs in again
+  with how long it was out of touch, from when it last heard from the server
+  (`{"action": "LogIn", "clientId": ..., "awayMs": ...}`), and the session records `connectionGap`
+  (`player`, `awayMs`) rather than another `clientLogIn`. A short outage without a word (the network
+  gone for less than the 30 seconds of silence that close a page) is recorded only that way: the
+  participant never counts as gone. When the page's old socket closes after it was out of touch (it
+  had sent nothing for 10 seconds, or what it sent meanwhile came through only just before the
+  close), they count as gone only once 30 seconds have passed since it was last heard from, unless
+  a page of theirs is back by then. That close comes through only as the network comes back, just
+  before the page's new socket or just after it, so the same outage used to be recorded as a
+  `clientDisconnected` and a `clientConnected` 2 ms apart, or not at all.
 - **`player._system.disconnectedAt`**: since when (ms) the player has been away, next to
   `_system.connected`; it goes when they are back.
 - **Previews.** A researcher's preview of a player whose own page is connected, or of a computer
@@ -410,7 +421,9 @@ restarts the running session.
   `-` or `@` as a formula, so import the file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
-  or goes (not for every page that takes over their seat).
+  or goes (not for every page that takes over their seat), and `connectionGap` (`player`, `awayMs`)
+  each time a participant's page connects again after its connection dropped, with how long it was
+  out of touch, also when that was too short to count as leaving.
 - **Order:** events recorded in the same millisecond come out in the order they were recorded. Their
   ids follow that order now; they were given out twenty at a time, in an order of the database's
   own, so such events could come out the wrong way round.

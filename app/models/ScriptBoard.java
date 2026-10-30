@@ -1588,7 +1588,14 @@ public class ScriptBoard extends UntypedActor {
       ObjectMapper mapper = new ObjectMapper();
       // TODO: is event.toString() the correct method here?
       Map<String, Object> jsonInput = mapper.readValue(event.toString(), Map.class);
-      if (action.equals("LogIn")) {
+      if (action.equals("LogIn") && event.hasNonNull("awayMs") && event.get("awayMs").canConvertToLong()) {
+        // The page signs in again on a connection that follows a drop, saying how long it was out
+        // of touch: no new sign-in, but a gap in the participant's connection, recorded the same way
+        // however short it was (from 3.1, see socketClosed).
+        if (!byResearcher && client.holdsSeat(connection)) {
+          connectionGap(clientId, Math.max(0L, event.get("awayMs").asLong()));
+        }
+      } else if (action.equals("LogIn")) {
         // The browser used to report its own IP address, user agent, referer (full URL,
         // including recruitment ids) and other headers here, which were stored with every
         // login. They were unverified and mostly personal data, so only the id is kept.
@@ -1617,6 +1624,24 @@ public class ScriptBoard extends UntypedActor {
     } catch (Exception e) {
       ScriptLoader.humanizeStackTrace(e);
       Logger.error("Error handling client message", e);
+    }
+  }
+
+  /**
+   * The event connectionGap {player, awayMs}: the participant's page came back after its connection
+   * dropped, out of touch for that long (as the page measured it, from when it last heard from the
+   * server). Not into a session that is over, nor for a computer player.
+   */
+  private static void connectionGap(String clientId, long awayMs) {
+    try {
+      if (eventTracker != null && eventTracker.sessionLive() && !Client.isComputer(clientId)) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("player", clientId);
+        data.put("awayMs", awayMs);
+        eventTracker.track("connectionGap", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not record the connection gap of " + clientId, e);
     }
   }
 
@@ -1746,6 +1771,10 @@ public class ScriptBoard extends UntypedActor {
     if (client.computer()) {
       return;
     }
+    if (tookSeat) {
+      // (a page of theirs is back before a departure socketClosed put off was due)
+      client.cancelDeparture();
+    }
     synchronized (client.recordLock()) {
       Client.Presence now = client.presence();
       Client.Presence before = client.recordPresence(now);
@@ -1778,11 +1807,27 @@ public class ScriptBoard extends UntypedActor {
    * have someone with the same id). When the participant's page goes, a researcher's preview watching
    * them takes the seat (Client.seatAWatcher) and can act for them until they are back, but they have
    * left all the same: the computer takes their seat after the usual wait, and the waiting room
-   * stops counting them, as for anyone who leaves.
+   * stops counting them, as for anyone who leaves. A page that was out of touch as its socket closed
+   * (Client.Connection.outOfTouchSince) counts as gone only when the silence would have closed it,
+   * unless a page of theirs is back by then (closeSilentPages): such a close comes through only as
+   * the network comes back, just before the page's new socket, or after it. A short outage used to
+   * be recorded as a disconnection and a connection 2 ms apart in the first case, and not at all in
+   * the second; now neither, and the page's next sign-in says how long it was out of touch
+   * (connectionGap).
    */
   static void socketClosed(Client client, Client.Connection connection) {
+    socketClosed(client, connection, clock.getAsLong());
+  }
+
+  /** socketClosed, judged at {@code now}. */
+  private static void socketClosed(Client client, Client.Connection connection, long now) {
     if (client.closed(connection) && clients.get(client.id) == client) {
       client.seatAWatcher();
+      long since = connection.outOfTouchSince(now);
+      if (since > 0 && now < since + silenceLimitMs) {
+        client.departAt(since + silenceLimitMs);
+        return;
+      }
       recordConnection(client, false);
     }
   }
@@ -1794,7 +1839,9 @@ public class ScriptBoard extends UntypedActor {
    * participant counts as gone, as when a socket closes, and the computer takes over after the
    * usual wait. A preview that watches is just closed and dropped, and so is a page that got its
    * final screen as it connected (finalScreen). Pages that never ping (from before 3.1) are left
-   * alone. {@code now}: the time to judge by.
+   * alone. Someone whose page's socket closed while it was out of touch (socketClosed), and who isn't
+   * back by the time the silence would have closed it, counts as gone now. {@code now}: the time to
+   * judge by.
    */
   static void closeSilentPages(long now) {
     for (Client client : clients.values()) {
@@ -1802,9 +1849,13 @@ public class ScriptBoard extends UntypedActor {
         if (connection.silent(now, silenceLimitMs)) {
           Logger.info("Closing a socket of " + client.id + (connection.preview ? " (a preview)" : "")
               + ": nothing heard from it for " + (now - connection.lastHeard()) / 1000 + " s");
-          socketClosed(client, connection);
+          socketClosed(client, connection, now);
           connection.close(null);
         }
+      }
+      if (client.departureDue(now) && clients.get(client.id) == client) {
+        // (their page went out of touch and isn't back: gone, as the silence would have had it)
+        recordConnection(client, false);
       }
     }
     for (Client.Connection page : endedPages) {

@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Client extends Model {
   public String id;
@@ -62,11 +63,26 @@ public class Client extends Model {
   // made after a rebuild of the engine (a Resume, a reload that carries the session on) is told so by
   // ScriptBoard, which keeps it per session (ownPageHeld()).
   private volatile boolean ownPageHeld;
+  // When they count as gone, their page's socket having closed while it was out of touch
+  // (ScriptBoard.socketClosed), unless a page of theirs is back by then; 0 when no departure waits.
+  private final AtomicLong departureDue = new AtomicLong();
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
   private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
   private static final ObjectNode WATCHING = Json.newObject().put("bbWatching", true);
   private static final ObjectNode NOT_WATCHING = Json.newObject().put("bbWatching", false);
+
+  /**
+   * A page that pings (every 5 s) and has sent nothing for this long is out of touch: its network has
+   * gone, or the page is asleep (see Connection.outOfTouchSince).
+   */
+  public static final long OUT_OF_TOUCH_MS = 10000L;
+  /**
+   * What a page sent while it was out of touch comes through in one go as its network comes back,
+   * followed by the close of the socket the page has given up meanwhile. A close this soon after such
+   * a silence ended counts as one that came while the page was out of touch.
+   */
+  static final long CAUGHT_UP_MS = 3000L;
 
   /**
    * One socket of this participant: the page that holds the seat, or a researcher's preview watching
@@ -88,6 +104,10 @@ public class Client extends Model {
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile long lastHeard = System.currentTimeMillis();
     private volatile boolean pinged;
+    // The last silence of OUT_OF_TOUCH_MS or more between two of its frames, once it has pinged: when
+    // it began (the frame before) and when it ended (the frame after); 0 before there was one.
+    private volatile long quietFrom;
+    private volatile long quietUntil;
     // The text of the full view written last; null once any other frame has been written since.
     private String lastView;
 
@@ -115,6 +135,10 @@ public class Client extends Model {
 
     /** It sent something at {@code now} (ms); {@code ping}: a {"action": "Ping"}. */
     public void heard(boolean ping, long now) {
+      if (pinged && now - lastHeard >= OUT_OF_TOUCH_MS) {
+        quietFrom = lastHeard;
+        quietUntil = now;
+      }
       lastHeard = now;
       if (ping) {
         pinged = true;
@@ -123,6 +147,25 @@ public class Client extends Model {
 
     public long lastHeard() {
       return lastHeard;
+    }
+
+    /**
+     * Since when its page was out of touch, as its socket closes at {@code now}: since it was last
+     * heard from, when that was OUT_OF_TOUCH_MS or more ago; or since a silence as long began, when
+     * that silence ended only just now (CAUGHT_UP_MS): what the page sent during it (its pings, a
+     * click) comes through as the network comes back, just before the close of the socket the page
+     * has given up. 0 when it was in touch, or never pinged (a page from before 3.1, whose silences
+     * mean nothing).
+     */
+    public long outOfTouchSince(long now) {
+      if (!pinged) {
+        return 0L;
+      }
+      if (now - lastHeard >= OUT_OF_TOUCH_MS) {
+        return lastHeard;
+      }
+      long until = quietUntil;
+      return until > 0 && now - until <= CAUGHT_UP_MS ? quietFrom : 0L;
     }
 
     /**
@@ -445,6 +488,22 @@ public class Client extends Model {
 
   Object recordLock() {
     return recordLock;
+  }
+
+  /** Their page's socket closed while it was out of touch: they count as gone at {@code at}, unless back by then. */
+  void departAt(long at) {
+    departureDue.set(at);
+  }
+
+  /** A page of theirs (or a preview) has taken the seat: no departure waits. */
+  void cancelDeparture() {
+    departureDue.set(0L);
+  }
+
+  /** Whether a departure that waited (departAt) is due by {@code now}: true once, and it no longer waits. */
+  boolean departureDue(long now) {
+    long due = departureDue.get();
+    return due > 0 && now >= due && departureDue.compareAndSet(due, 0L);
   }
 
   // What was recorded last (null before the first record); {@code now} is from now on (under recordLock).

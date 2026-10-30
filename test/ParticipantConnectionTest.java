@@ -482,6 +482,160 @@ public class ParticipantConnectionTest extends BaseTest {
         assertTrue(page.closed);
     }
 
+    // ---- gaps in a connection ----------------------------------------------------------------------
+
+    /** How many connectionGap events this participant has, and the awayMs of the last one ("" if none). */
+    private String gaps(String clientId) {
+        int n = 0;
+        String last = "";
+        for (Event e : Event.find.where().eq("experimentInstance.id", session.id).eq("name", "connectionGap").order("id").findList()) {
+            String player = null;
+            String away = null;
+            for (EventData d : e.eventData) {
+                if ("player".equals(d.name)) player = d.value;
+                if ("awayMs".equals(d.name)) away = d.value;
+            }
+            if (clientId.equals(player)) {
+                n++;
+                last = away;
+            }
+        }
+        return n + (n > 0 ? ":" + last : "");
+    }
+
+    @Test
+    public void aPageThatReconnectsAfterADropSaysHowLongItWasOutOfTouch() throws Throwable {
+        Page page = connect("p1");
+        page.send("LogIn", "clientId", "p1");
+        assertEquals(1, events("clientLogIn", "p1"));
+        // Its connection drops; its page connects again and signs in with how long it was away.
+        Page back = connect("p1");
+        back.send("LogIn", "clientId", "p1", "awayMs", 24900);
+        assertEquals("1:24900", gaps("p1"));
+        assertEquals("no new sign-in", 1, events("clientLogIn", "p1"));
+        // Not for a socket that no longer holds the seat, nor for a researcher's preview.
+        page.send("LogIn", "clientId", "p1", "awayMs", 5000);
+        Page preview = connect("p1", true);
+        preview.send("LogIn", "clientId", "p1", "awayMs", 7000);
+        assertEquals("1:24900", gaps("p1"));
+        assertEquals(1, events("clientLogIn", "p1"));
+    }
+
+    @Test
+    public void aShortSilentOutageIsRecordedTheSameWayWhicheverSocketComesFirst() throws Throwable {
+        final long[] now = {System.currentTimeMillis()};
+        field("clock").set(null, (LongSupplier) () -> now[0]);
+        Page page = connect("p1");
+        page.send("Ping");
+        Announcements announced = new Announcements();
+        bus().on("bb:connection", announced);
+        try {
+            // Away 25 s, without a word: the page noticed after 15 s and gave its socket up. As the
+            // network comes back, what it sent meanwhile (its pings) comes through, then that socket's
+            // close, and its new socket 2 ms later. That used to be recorded as a disconnection and a
+            // connection 2 ms apart.
+            now[0] += 25000;
+            page.send("Ping");
+            page.send("Ping");
+            now[0] += 1;
+            page.hangUp();
+            assertEquals(Boolean.TRUE, system("p1").get("connected"));
+            assertEquals(0, events("clientDisconnected", "p1"));
+            now[0] += 2;
+            Page back = connect("p1");
+            back.send("LogIn", "clientId", "p1", "awayMs", 25003);
+            back.send("Ping");
+            closeSilentPages(now[0] + 10000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            assertEquals(1, events("clientConnected", "p1"));
+            assertEquals("1:25003", gaps("p1"));
+            assertFalse("never announced as gone", announced.heard.contains(false));
+
+            // The same again, with the new socket first (the old one's pings and close come after):
+            // the same record. It used to be no record at all.
+            now[0] += 25000;
+            Page again = connect("p1");
+            again.send("LogIn", "clientId", "p1", "awayMs", 25000);
+            back.send("Ping");
+            back.hangUp();
+            closeSilentPages(now[0] + 10000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            assertEquals(1, events("clientConnected", "p1"));
+            assertEquals("2:25000", gaps("p1"));
+
+            // A close after a silence, with nothing before it: the same.
+            again.send("Ping");
+            now[0] += 12000;
+            again.hangUp();
+            Page third = connect("p1");
+            third.send("LogIn", "clientId", "p1", "awayMs", 12000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            assertEquals("3:12000", gaps("p1"));
+
+            // Out of touch and not back: gone once the silence would have closed the page.
+            third.send("Ping");
+            final long heard = now[0];
+            now[0] += 20000;
+            third.send("Ping");
+            third.hangUp();
+            assertEquals(Boolean.TRUE, system("p1").get("connected"));
+            closeSilentPages(heard + 29000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            closeSilentPages(heard + 31000);
+            assertEquals(1, events("clientDisconnected", "p1"));
+            assertEquals(Boolean.FALSE, system("p1").get("connected"));
+            assertEquals(Arrays.<Object>asList(false), announced.heard.subList(announced.heard.size() - 1, announced.heard.size()));
+            closeSilentPages(heard + 60000);
+            assertEquals("once", 1, events("clientDisconnected", "p1"));
+        } finally {
+            bus().off("bb:connection", announced);
+        }
+
+        // A page in touch whose socket closes (a tab closed) is gone at once, also some time after
+        // it was out of touch for a while.
+        Page tab = connect("p2");
+        tab.send("Ping");
+        now[0] += 3000;
+        tab.hangUp();
+        assertEquals(1, events("clientDisconnected", "p2"));
+        assertEquals(Boolean.FALSE, system("p2").get("connected"));
+        Page laptop = connect("p3");
+        laptop.send("Ping");
+        now[0] += 12000;
+        laptop.send("Ping");
+        for (int k = 0; k < 4; k++) {
+            now[0] += 5000;
+            laptop.send("Ping");
+        }
+        now[0] += 4000;
+        laptop.hangUp();
+        assertEquals(1, events("clientDisconnected", "p3"));
+        // and a page from before 3.1, which never pings, whatever its silence
+        Page old = connect("p4");
+        now[0] += 20000;
+        old.hangUp();
+        assertEquals(1, events("clientDisconnected", "p4"));
+    }
+
+    @Test
+    public void silencesOfAPageAreTimedFromWhatItSent() {
+        Client.Connection c = socket(0L, false, false);
+        assertEquals("never pinged: its silences mean nothing", 0L, c.outOfTouchSince(System.currentTimeMillis() + 60000));
+        c.heard(true, 1000L);
+        assertEquals(0L, c.outOfTouchSince(10999L));
+        assertEquals(1000L, c.outOfTouchSince(11000L));
+        // what it sent during a silence comes through at once: out of touch for a moment after that
+        c.heard(true, 26000L);
+        c.heard(false, 26001L);
+        assertEquals(1000L, c.outOfTouchSince(26002L));
+        assertEquals(1000L, c.outOfTouchSince(29000L));
+        assertEquals(0L, c.outOfTouchSince(29001L));
+        // pings every few seconds are no silence
+        c.heard(true, 31000L);
+        c.heard(true, 36000L);
+        assertEquals(0L, c.outOfTouchSince(36500L));
+    }
+
     // ---- the game started without them -----------------------------------------------------------
 
     // The autopilot's launch, as it leaves out someone who has been away too long.

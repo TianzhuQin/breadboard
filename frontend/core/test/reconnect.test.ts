@@ -575,6 +575,60 @@ describe('the heartbeat', () => {
   })
 })
 
+describe('signing in', () => {
+  const logIns = (k: number) => FakeSocket.all[k].sentFrames().filter((m: any) => m.action === 'LogIn')
+
+  it('signs in on its first connection, and again after a drop, saying how long it was out of touch', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    await page.Breadboard.login()
+    // (as it opens, before anything else)
+    FakeSocket.all[0].accept()
+    expect(FakeSocket.all[0].sentFrames()[0]).toEqual({ action: 'LogIn', clientId: 'p1' })
+    // the server last answers 3 s before the connection drops; it is back 0.5 s after
+    await vi.advanceTimersByTimeAsync(2000)
+    FakeSocket.all[0].frame({ pong: 1 })
+    await vi.advanceTimersByTimeAsync(3000)
+    FakeSocket.all[0].drop()
+    await vi.advanceTimersByTimeAsync(500)
+    FakeSocket.all[1].accept()
+    expect(FakeSocket.all[1].sentFrames()[0]).toEqual({ action: 'LogIn', clientId: 'p1', awayMs: 3500 })
+    // once per connection, however often the page asks (as useBreadboard does on every open)
+    await page.Breadboard.login()
+    await page.Breadboard.login()
+    expect(logIns(1).length).toBe(1)
+  })
+
+  it('says how long a connection that died without closing was out of touch', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    await page.Breadboard.login()
+    FakeSocket.all[0].accept()
+    FakeSocket.all[0].frame({ pong: 1 })
+    // nothing more comes: after 15 s the page connects again at once
+    await vi.advanceTimersByTimeAsync(15000)
+    FakeSocket.all[1].accept()
+    expect(logIns(1)).toEqual([{ action: 'LogIn', clientId: 'p1', awayMs: 15000 }])
+  })
+
+  it('signs in on no other connection: none after "Use it here", none if it never signed in', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    await page.Breadboard.login()
+    FakeSocket.all[0].accept()
+    FakeSocket.all[0].frame({ bbClosed: 'replaced' })
+    FakeSocket.all[0].drop()
+    page.Breadboard.useHere()
+    FakeSocket.all[1].accept()
+    expect(logIns(1)).toEqual([])
+    // a page that never signs in (the previous console, say) doesn't start to
+    const other = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[2].drop()
+    await vi.advanceTimersByTimeAsync(10000)
+    FakeSocket.all[3].accept()
+    expect(logIns(3)).toEqual([])
+    expect(other.Breadboard).toBeDefined()
+  })
+})
+
 describe('answers given while the connection is down', () => {
   it('are dropped once they have waited 5 s for it; the page\'s other messages still go', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
