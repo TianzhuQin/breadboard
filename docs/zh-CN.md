@@ -122,13 +122,25 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 | 下载 | 在哪里 | 内容 |
 |---|---|---|
-| **Download data** | Live session、Sessions & data | 一场的事件，文件 `<session>_<id>.csv`。每个事件的每项数据一行（没有数据的事件不出现），列是 `id`、`event`、`event_date`、`data_name`、`data_value`。 |
+| **Download data** | Live session、Sessions & data | 一场的事件，文件 `<session>_<id>.csv`。每个事件的每项数据一行（没有数据的事件也占一行，数据列空着），列是 `id`、`event`、`event_date`、`data_name`、`data_value`。 |
 | **Download all data** | Sessions & data | 列出的所有场次的事件放在一个文件 `<experiment>_data.csv` 里，每行前面是场次的 ID、名字、状态和启动参数，后面是和单场文件一样的列，可以直接合在一起分析。 |
 | **Download list** | Sessions & data | 所有场次 `<experiment>.csv`，每场一行：ID、名字、状态、创建时间和启动参数。 |
 | **Export as table** | View events 的 **By event** 视图 | 某一类事件，每个事件一行，每项数据一列。 |
 | **Download CSV** | Players | 当前列出的参与者和他们的全部属性。 |
 
-CSV 里的时间都是 UTC（北京时间是 UTC+8）。数值按原样保存。如果参与者可能输入以 `=`、`+`、`-`、`@` 开头的内容，用表格软件打开时请按文本导入，否则可能被当成公式。更多见 [console.md](console.md#data)。
+**用 Excel 或 WPS 打开**：CSV 是 UTF-8 编码的，直接双击打开时，Excel 和 WPS 常把中文显示成乱码。两种办法：
+
+- 下载前，在 **Sessions & data** 页右上角勾选 **For Excel**。这样下载的文件开头多一个 BOM（字节顺序标记），双击打开就能正确显示中文。它对这一页的下载和导出都有效，也包括 **Live session** 的 **Download data**。这个选择记在这个浏览器里。
+- 没勾选时下载的文件，在 Excel 里用 **数据 → 从文本/CSV** 导入，**文件原始格式** 选 **65001: Unicode (UTF-8)**；在 WPS 里导入时，编码也选 UTF-8。
+
+用 R、Python 或以前写好的分析脚本时不用勾选：不勾选时，下载的文件和以前的版本完全一样，开头没有 BOM。
+
+**时间**：CSV 里的时间都是 UTC（北京时间是 UTC+8），写成 `2026-10-30T13:27:26:036Z`。毫秒前面是冒号，和以前的版本一样，这样旧的分析脚本照样能用；View events 里导出的文件也这样写。读成时间：
+
+- pandas：`pd.to_datetime(df.event_date, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`
+- R：`as.POSIXct(sub(":(\\d{3})Z$", ".\\1", df$event_date), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
+
+数据值按原样写进 CSV，不做转义。如果参与者可能输入以 `=`、`+`、`-`、`@` 开头的内容，用表格软件打开时请按文本导入，否则可能被当成公式。更多见 [console.md](console.md#data)。
 
 ## 放到服务器上
 
