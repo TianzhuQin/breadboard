@@ -276,12 +276,17 @@ function noteReadOnly (list: PlayerLike[]) {
 
 function toggle (id: string, on: boolean) {
   if (!on) { remove(id); return }
+  if (add(id)) chosenByHand()
+}
+
+/** Shows one more player's page; false if it isn't added (no such player, already shown, too many). */
+function add (id: string): boolean {
   const p = players.value.find(x => x.id === id)
-  if (!p || selected.value.has(id)) return
-  if (memory.ids.length >= MAX_PREVIEWS) { tooMany(); listKey.value++; return }
+  if (!p || selected.value.has(id)) return false
+  if (memory.ids.length >= MAX_PREVIEWS) { tooMany(); listKey.value++; return false }
   noteReadOnly(shownReadOnly([p], selected.value))
   memory.ids = [...memory.ids, id]
-  chosenByHand()
+  return true
 }
 
 /** A quick pick replaces what is shown. */
@@ -415,7 +420,8 @@ async function openTab (id: string) {
 // reached. It waits until the network has come in (FIRST_LOOK_QUIET_MS): the server sends each
 // player before their properties, so a look taken at the first players seen found no test players
 // on a direct load or a reload. A session without test players gets its first look when the first
-// ones appear. Whatever the researcher chooses first (a tick, a quick pick, Clear) is the first look.
+// ones appear. Whatever the researcher chooses first (a tick, a quick pick, Clear) is the first look;
+// a player opened from the player panel isn't (the test players are shown beside them).
 let firstLookTimer: ReturnType<typeof setTimeout> | null = null
 let firstPlayersAt = 0
 function cancelFirstLook () {
@@ -431,15 +437,12 @@ function takeFirstLook () {
   firstLookTimer = null
   firstPlayersAt = 0
   if (memory.autoPicked) return
-  if (memory.ids.length) {
-    memory.autoPicked = true
-    return
-  }
   // none yet: the look waits for the first test players
   if (!testCount.value) return
   memory.autoPicked = true
-  const tests = autoPicked(players.value)
-  if (tests.length) memory.ids = tests.map(p => p.id)
+  const tests = autoPicked(players.value).filter(p => !selected.value.has(p.id))
+  if (!tests.length) return
+  memory.ids = [...memory.ids, ...tests.map(p => p.id)].slice(0, MAX_PREVIEWS)
 }
 watch(() => [inst.value?.id, graph.version.value] as const, ([id]) => {
   if (id == null) return
@@ -460,13 +463,14 @@ watch(() => [inst.value?.id, graph.version.value] as const, ([id]) => {
 }, { immediate: true })
 onBeforeUnmount(cancelFirstLook)
 
-// "Preview their screen" from the player panel links here with ?player=<id>: show that player full size.
+// "Preview their screen" from the player panel links here with ?player=<id>: show that player full
+// size (added as the page's choice, not the researcher's: the first look still shows the test players).
 watch(() => [route.query.player, players.value.length] as const, ([q]) => {
   const id = typeof q === 'string' ? q : ''
   const p = players.value.find(x => x.id === id)
   if (!id || !p) return
   router.replace({ query: { ...route.query, player: undefined } })
-  if (!selected.value.has(id)) toggle(id, true)
+  add(id)
   if (selected.value.has(id)) focusId.value = id
 }, { immediate: true })
 

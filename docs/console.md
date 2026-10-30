@@ -211,8 +211,9 @@ they return**). In the list, a green dot means the seat is connected, and **Watc
 tooltip says why: their own page, a preview (maybe another console's), or the computer.
 The first look at a session shows the test players whose seat is neither connected nor held by a
 preview, theirs or another console's (which a preview here would take it from). It is taken once
-the session's players have loaded, however the page was opened; in a session without test players,
-when the first ones appear, unless you have chosen whose pages to see by then.
+the session's players have loaded, however the page was opened: a player opened with **Preview
+their screen** is shown with them. In a session without test players, it is taken when the first
+ones appear, unless you have chosen whose pages to see by then.
 
 ## Running a session
 

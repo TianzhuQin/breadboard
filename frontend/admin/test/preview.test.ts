@@ -389,6 +389,52 @@ describe('PreviewPage', () => {
     }
   })
 
+  // The player panel's "Preview their screen" opens one player full size. That isn't the
+  // researcher's first look: the test players are shown beside them, as when the page is opened
+  // from the sidebar. (Opening that player counted as a tick, so no test players were shown.)
+  it('shows the test players beside a player opened from the player panel', async () => {
+    addPlayer('t1', { testmode: true })
+    addPlayer('t2', { testmode: true })
+    addPlayer('p2', { _system: { connected: true } })
+    await settle()
+    route.query = { player: 'p2' }
+    const w = await mountPage()
+    try {
+      await settle()
+      expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).toContain('/game/7/44/p2/connected')
+      await firstLook()
+      expect([...previewMemory.ids].sort()).toEqual(['p2', 't1', 't2'])
+      expect(w.find('.pp__count').text()).toBe('3 of 3 shown')
+      // still full size, and said once that p2's preview only watches
+      expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).toContain('/game/7/44/p2/connected')
+      expect(ui.notify.info).toHaveBeenCalledTimes(1)
+      expect(ui.notify.info).toHaveBeenCalledWith('p2 is connected right now', expect.any(String))
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('shows the test players beside a player opened from the player panel, also before the network has come in', async () => {
+    // a test player opened this way is shown once
+    route.query = { player: 't1' }
+    const w = await mountPage()
+    try {
+      addPlayer('t1')
+      addPlayer('t2')
+      addPlayer('p3')
+      await settle()
+      expect(previewMemory.ids).toEqual(['t1'])
+      store.graph.apply({ action: 'nodePropertyChanged', id: 't1', key: 'testmode', value: true })
+      store.graph.apply({ action: 'nodePropertyChanged', id: 't2', key: 'testmode', value: true })
+      await settle()
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1', 't2'])
+      expect(document.body.querySelector('.pfx iframe')!.getAttribute('src')).toContain('/game/7/44/t1/connected')
+    } finally {
+      w.unmount()
+    }
+  })
+
   it('takes the first look in a network that keeps changing, after FIRST_LOOK_MAX_MS at most', async () => {
     addPlayer('t1', { testmode: true })
     await settle()
