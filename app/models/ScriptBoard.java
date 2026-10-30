@@ -758,6 +758,7 @@ public class ScriptBoard extends UntypedActor {
         engineGeneration++;
         gameStartedIn = null;
         engineBuiltFor = builtFor;
+        EngineSteps.building(experiment);
         buildEngine(experiment);
       }
     } catch (Throwable failed) {
@@ -924,6 +925,7 @@ public class ScriptBoard extends UntypedActor {
         failed = step.name + ": " + problem;
       }
     }
+    EngineSteps.loaded(experiment);
     afterStepsLoaded(experiment);
     if (failed == null) {
       Autopilot.stepsLoaded(experiment);
@@ -1956,7 +1958,7 @@ public class ScriptBoard extends UntypedActor {
           generation = engineGeneration;
         }
         getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out, "SendStep",
-            generation, sendStep.requestId), null);
+            generation, sendStep.requestId, sendStep.id), null);
         // A re-run step may set the autopilot up itself; the console's settings apply again after it.
         getSelf().tell(new Breadboard.StepsLoaded(breadboardMessage.user, engineExperiment(), breadboardMessage.out, generation), null);
       } else {
@@ -1972,7 +1974,11 @@ public class ScriptBoard extends UntypedActor {
               "Nothing was run: the engine was reloaded (by you or someone else) before the step could run. Check what it runs now, then try again.",
               null, runStep.echo());
         } else if (runStep.request != null) {
-          processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
+          String problem = processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
+          // A saved step run without an error: the engine has that code of it now (see EngineSteps).
+          if (problem == null && EngineSteps.ran(engineExperimentId, runStep.stepId, runStep.source)) {
+            engineChanged();
+          }
         } else {
           processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE, null, true);
         }
@@ -2584,6 +2590,8 @@ public class ScriptBoard extends UntypedActor {
       json.put("experimentId", experiment.id);
       json.put("experimentName", experiment.name);
     }
+    // Steps of that experiment saved since the engine loaded them ("Reload needed"; see EngineSteps)
+    json.put("stepsChanged", EngineSteps.changed(experiment));
     if (session == null) {
       json.putNull("sessionId");
       json.putNull("sessionName");
