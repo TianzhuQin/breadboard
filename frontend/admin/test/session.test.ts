@@ -308,7 +308,9 @@ describe('event feed', () => {
 
   it('explains failures, ends and the newer events in plain words, and failures stand out', () => {
     for (const name of ['stepFailed', 'sessionStalled', 'sessionFailed']) expect(eventTone(name)).toBe('danger')
-    for (const name of ['sessionTooLong', 'serverStopping']) expect(eventTone(name)).toBe('warning')
+    for (const name of ['sessionTooLong', 'serverStopping', 'noCompletionCode', 'answerDropped', 'sessionFull']) expect(eventTone(name)).toBe('warning')
+    expect(eventTone('engineReloaded')).toBe('accent')
+    expect(eventTone('prolificComplete')).toBe('success')
     // someone left out is no milestone (it ends in "Start", as a step's own event does)
     expect(eventTone('missedStart')).toBe('warning')
     expect(describeEvent('missedStart')).toBe('The game started without someone who was away')

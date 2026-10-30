@@ -159,7 +159,9 @@ export type EventTone = 'success' | 'warning' | 'danger' | 'accent' | 'neutral'
 // Failures, and what interrupted or ended a game, stand out; arrivals and milestones too.
 const DANGER = new Set(['autopilotcancelled', 'sessioninterrupted', 'stepsfailedtoload', 'stepfailed', 'sessionstalled', 'sessionfailed'])
 // ("Disconnected" itself is a tie being cut, not someone dropping out)
-const WARNING = new Set(['clientdisconnected', 'aitakeover', 'sessionstopped', 'sessiontoolong', 'serverstopping', 'missedstart', 'sessionfull'])
+// (and what a participant lost: a code they weren't given, an answer that came too late)
+const WARNING = new Set(['clientdisconnected', 'aitakeover', 'sessionstopped', 'sessiontoolong', 'serverstopping', 'missedstart', 'sessionfull',
+  'nocompletioncode', 'answerdropped'])
 const SUCCESS = new Set(['clientconnected', 'clientlogin', 'aireturned', 'prolificentry', 'prolificcomplete'])
 const ACCENT = new Set(['finished', 'sessionresumed', 'enginereloaded'])
 
