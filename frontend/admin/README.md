@@ -82,4 +82,5 @@ to a production build.
 - Participant pages shown as a researcher (Preview) use a token from `POST /preview-token` in
   `#bbt=`, with `?preview=1`, inside a sandbox without `allow-same-origin`.
 - Steps, content, parameters, images, the participant page, experiments, data downloads,
-  autopilot settings and Mechanical Turk use plain HTTP routes; see `conf/routes`.
+  autopilot settings, every session's Prolific participants (`GET /experiment/:id/prolific`) and
+  Mechanical Turk use plain HTTP routes; see `conf/routes`.
