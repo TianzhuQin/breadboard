@@ -219,4 +219,9 @@
     opacity: 0.55;
     transition: opacity 0.2s;
   }
+  /* The message stays at the top of the screen as the page scrolls (the participant theme): the
+     panel with the timer and choices, which stays there too, would slide under it. */
+  .bb-disconnected .bb-game__panel {
+    position: static;
+  }
 </style>
