@@ -3,7 +3,7 @@ import { nextTick, reactive } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { HttpError } from '../src/lib/http'
 import {
-  canDelete, canResume, canStop, csvDataRows, csvField, describeError, eventNameCounts, eventsToCsv, eventsToWideCsv,
+  canDelete, canResume, canStop, csvDataRows, csvField, csvTime, describeError, eventNameCounts, eventsToCsv, eventsToWideCsv,
   filterEvents, formatClock, groupEvents, matchesSession, mergeEvents, normalizeEvent, parseServerTime, safeFileName,
   sortEvents, sortSessions, toCsv, waitUntil,
 } from '../src/pages/sessions/sessionData'
@@ -273,11 +273,22 @@ describe('CSV', () => {
     ]
     expect(eventsToCsv(evs)).toBe([
       '"id","event","event_date","data_name","data_value"',
-      '"1","start","2026-10-27T12:00:00.000Z","",""',
-      '"2","say ""x""","2026-10-27T12:00:01.250Z","text","a,b"',
-      '"2","say ""x""","2026-10-27T12:00:01.250Z","n","1"',
+      '"1","start","2026-10-27T12:00:00:000Z","",""',
+      '"2","say ""x""","2026-10-27T12:00:01:250Z","text","a,b"',
+      '"2","say ""x""","2026-10-27T12:00:01:250Z","n","1"',
       '',
     ].join('\n'))
+  })
+
+  it('writes times as the server\'s files do, in UTC with a colon before the milliseconds', () => {
+    // (the server's Timestamps.csv: "yyyy-MM-dd'T'HH:mm:ss:SSS'Z'"; these files wrote ".250Z", which a
+    // script reading the server's files with that format can't parse)
+    const live = normalizeEvent({ id: 3, name: 'ColourPick', datetime: '2026-10-30T13:27:26.036Z', data: { colour: 'Blue' } })
+    expect(csvTime(live)).toBe('2026-10-30T13:27:26:036Z')
+    expect(eventsToCsv([live]).split('\n')[1]).toBe('"3","ColourPick","2026-10-30T13:27:26:036Z","colour","Blue"')
+    expect(eventsToWideCsv([live]).split('\n')[1]).toBe('"3","ColourPick","2026-10-30T13:27:26:036Z","Blue"')
+    // a time it couldn't read is kept as the server sent it
+    expect(csvTime(normalizeEvent({ id: 4, name: 'x', datetime: 'soon', data: [] }))).toBe('soon')
   })
 
   it('exports one event as a table with a column per data name', () => {
@@ -287,8 +298,8 @@ describe('CSV', () => {
     ]
     expect(eventsToWideCsv(evs, ['player', 'value'])).toBe([
       '"id","event","event_date","player","value"',
-      '"1","choice","2026-10-27T12:00:00.000Z","p1","A"',
-      '"2","choice","2026-10-27T12:00:01.000Z","p2",""',
+      '"1","choice","2026-10-27T12:00:00:000Z","p1","A"',
+      '"2","choice","2026-10-27T12:00:01:000Z","p2",""',
       '',
     ].join('\n'))
     expect(eventsToWideCsv(evs).split('\n')[0]).toBe('"id","event","event_date","player","value"')

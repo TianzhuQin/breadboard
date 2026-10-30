@@ -438,7 +438,7 @@ of event with a column per data name.
 | **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. |
 | **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
-| **Export all**, **Export filtered** | A session's events | The same columns as the session's file, with times in standard ISO 8601 (`2026-10-28T13:24:23.757Z`). Events without data keep a row. |
+| **Export all**, **Export filtered** | A session's events | The same columns and times as the session's file. Events without data keep a row. |
 | **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |
 | **Download CSV** | Players | The players shown, with every property. |
 
@@ -452,9 +452,9 @@ Text/CSV** with **File origin** set to **65001: Unicode (UTF-8)**, and in WPS wh
 UTF-8. The server's addresses give the same files with `excel=true`, e.g.
 `/csv/data/<session id>?excel=true`.
 
-Timestamps in the CSV files are in UTC, written as `2026-10-28T13:24:23:757Z` (with a colon
-before the milliseconds, as earlier versions of Breadboard wrote them, so existing analysis scripts
-keep working). In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
+Timestamps in the CSV files, the console's own exports included, are in UTC, written as
+`2026-10-28T13:24:23:757Z` (with a colon before the milliseconds, as earlier versions of Breadboard
+wrote them, so existing analysis scripts keep working). In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
 reads them; in Python, `pandas.to_datetime(s, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`.
 Sort rows by `event_date`, not by `id`: ids are given out in blocks and don't follow the order
 events happened in. After a session finishes or is stopped, nothing more is recorded in it.

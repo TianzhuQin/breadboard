@@ -283,30 +283,36 @@ export function toCsv (rows: readonly (readonly unknown[])[]): string {
   return rows.map(r => r.map(csvField).join(',')).join('\n') + '\n'
 }
 
-function isoTime (e: SessionEvent): string {
-  return e.time ? e.time.toISOString() : e.raw
+/**
+ * An event's time as the server's CSV files write it (Timestamps.csv): UTC, with a colon before the
+ * milliseconds, "2026-10-28T13:24:23:757Z", so one way of reading the times reads every file. These
+ * files used to write "2026-10-28T13:24:23.757Z", which a script for the server's files can't read.
+ */
+export function csvTime (e: SessionEvent): string {
+  return e.time ? e.time.toISOString().replace(/\.(\d{3})Z$/, ':$1Z') : e.raw
 }
 
 /**
  * The same columns and values as the server's event file (GET /csv/data/:id), so analysis scripts
- * read both: one row per data item. Unlike the server's file, events without data keep a row.
+ * read both: one row per data item, and, as there, a row with empty data columns for an event
+ * without data.
  */
 export function eventsToCsv (events: readonly SessionEvent[]): string {
   const rows: unknown[][] = [['id', 'event', 'event_date', 'data_name', 'data_value']]
   for (const e of events) {
-    if (!e.data.length) rows.push([e.id ?? '', e.name, isoTime(e), '', ''])
-    for (const d of e.data) rows.push([e.id ?? '', e.name, isoTime(e), d.name, d.value])
+    if (!e.data.length) rows.push([e.id ?? '', e.name, csvTime(e), '', ''])
+    for (const d of e.data) rows.push([e.id ?? '', e.name, csvTime(e), d.name, d.value])
   }
   return toCsv(rows)
 }
 
-/** One row per event, one column per data name: handy for a single kind of event. */
+/** One row per event, one column per data name: handy for a single kind of event. Times as in eventsToCsv. */
 export function eventsToWideCsv (events: readonly SessionEvent[], keys?: readonly string[]): string {
   const cols = keys ? [...keys] : groupEvents(events).flatMap(g => g.keys).filter((k, i, all) => all.indexOf(k) === i)
   const rows: unknown[][] = [['id', 'event', 'event_date', ...cols]]
   for (const e of events) {
     const byName = new Map(e.data.map(d => [d.name, d.value]))
-    rows.push([e.id ?? '', e.name, isoTime(e), ...cols.map(c => byName.get(c) ?? '')])
+    rows.push([e.id ?? '', e.name, csvTime(e), ...cols.map(c => byName.get(c) ?? '')])
   }
   return toCsv(rows)
 }

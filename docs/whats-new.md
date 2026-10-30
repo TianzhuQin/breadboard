@@ -390,7 +390,8 @@ restarts the running session.
 
 ## Data
 
-- **Timestamps:** CSV exports are now in true UTC. The format is unchanged.
+- **Timestamps:** CSV exports are now in true UTC. The format is unchanged
+  (`2026-10-28T13:24:23:757Z`), and the files the console makes from a session's events use it too.
 - **Exact values:** every CSV, the server's and the console's downloads, keeps values exactly as
   recorded, with no byte-order mark unless you ask for one: **For Excel** on Sessions & data, or
   `excel=true` on the server's CSV addresses, adds the mark Excel and WPS need to read Chinese. A
