@@ -444,7 +444,7 @@ describe('what the engine runs', () => {
 
   it('reads it beside the user, and says when it is another experiment', () => {
     push(1, engine(2, 7))
-    expect(admin.user!.engine).toEqual({ experimentId: 2, experimentName: 'E2', sessionId: 7, sessionName: 'S7', owner: 'other@lab', gameStarted: null })
+    expect(admin.user!.engine).toEqual({ experimentId: 2, experimentName: 'E2', sessionId: 7, sessionName: 'S7', owner: 'other@lab', gameStarted: null, stepsChanged: null })
     expect(engineElsewhere.value).toMatchObject({ experimentId: 2, sessionName: 'S7' })
     push(2, engine(2, 7))
     expect(engineElsewhere.value).toBe(null)
@@ -730,6 +730,65 @@ describe('"Reload needed" is about the experiment the engine runs', () => {
     actions.markEngineStale(2)
     expect(admin.engine).toBe('stale')
     actions.markEngineCurrent()
+  })
+})
+
+describe('"Reload needed" as the server says', () => {
+  const engine = (experimentId: number, stepsChanged: boolean | undefined, sessionId: number | null = 9) =>
+    ({ experimentId, experimentName: 'E' + experimentId, sessionId, sessionName: sessionId === null ? null : 'S' + sessionId, owner: 'boss@lab', stepsChanged })
+  const push = (selected: number, eng: any) =>
+    __receive({ user: { email: 'r@lab', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(selected, selected === 1 ? 'A' : 'B'), experimentInstance: '', engine: eng })
+  const tick = () => new Promise(r => setTimeout(r, 0))
+
+  beforeEach(() => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    admin.engine = 'ready'
+  })
+
+  it('follows the server, which every console hears, rather than this console\'s own marks', async () => {
+    // a console opened (or refreshed) after the save: the server says so
+    push(1, engine(1, true))
+    await tick()
+    expect(admin.engine).toBe('stale')
+    // the push after a Run, or a save back to what the engine has: no reload needed
+    __receive({ engine: engine(1, false) })
+    await tick()
+    expect(admin.engine).toBe('ready')
+    // this console's own marks don't decide any more
+    actions.markEngineStale(1)
+    await tick()
+    expect(admin.engine).toBe('ready')
+    __receive({ engine: engine(1, true) })
+    await tick()
+    expect(admin.engine).toBe('stale')
+    actions.markEngineCurrent()
+    await tick()
+    expect(admin.engine).toBe('stale')
+    __receive({ engine: engine(1, false) })
+    await tick()
+    expect(admin.engine).toBe('ready')
+  })
+
+  it('is only about the experiment the engine runs, and keeps a reload that didn\'t finish', async () => {
+    // B selected while the engine runs A, whose steps changed: B's next build loads what is saved
+    push(2, engine(1, true))
+    await tick()
+    expect(admin.engine).toBe('ready')
+    // working on A again
+    push(1, engine(1, true))
+    await tick()
+    expect(admin.engine).toBe('stale')
+    // a reload that didn't finish stays, whatever the server says of the steps
+    __receive({ notify: { ScriptEngineReloading: 3 } })
+    __receive({ error: 'Something went wrong', request: 'ReloadEngine' })
+    expect(admin.engineProblem).not.toBe('')
+    push(1, engine(1, false))
+    await tick()
+    expect(admin.engine).toBe('stale')
+    __receive({ notify: { ScriptEngineReloading: 4 } })
+    __receive({ notify: { ScriptEngineReloaded: 5 } })
+    expect(admin.engineProblem).toBe('')
   })
 })
 

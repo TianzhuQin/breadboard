@@ -56,7 +56,7 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 | Item | |
 |---|---|
 | The session | Its status and name ("Running · Session 1"), or "No session". Click it to go to Live session. |
-| **Engine** | The script engine that runs the experiment. It reads **Reloading…** while it restarts and **Reload needed** when steps changed since it last loaded them, or a reload didn't finish. Its menu has **Reload engine**. |
+| **Engine** | The script engine that runs the experiment. It reads **Reloading…** while it restarts, and **Reload needed** when steps were saved since it last loaded them (every researcher's console says so, also after a refresh) or a reload didn't finish. With no session running, or the autopilot's own session open, it reads **Steps saved** instead: the next session loads them. Its menu has **Reload engine**. |
 | **Reconnecting…** | The console has lost its connection to the server. |
 | Output (Ctrl+J) | What the experiment's scripts print and return, and their errors. A red badge counts new errors. |
 
@@ -128,9 +128,12 @@ OnJoinStep, OnLeaveStep: they can't be renamed or deleted, and a missing one has
 saved**, **Copy the code** and **Delete step** (with **Undo** afterwards).
 
 **Save** (Ctrl+S) saves the step and **Save all** (Ctrl+Shift+S) every changed step. Saving doesn't
-change what the engine runs: the page says **The engine isn't running your latest steps** and
-offers **Reload engine**. **Run**, or **Save & run** (Ctrl+Enter), loads just this step's code
-into the live engine instead. It doesn't start the step. While the engine runs another
+change what the engine runs: while a session runs, the page says **The engine isn't running your
+latest steps** and offers **Reload engine**, in every researcher's console. **Run**, or **Save &
+run** (Ctrl+Enter), loads just this step's code into the live engine instead. It doesn't start the
+step. While the autopilot's own session is open, the page says instead that the autopilot's next
+session uses what is saved, and **Reload engine** is the lesser button there: a reload would start
+that session's game again. While the engine runs another
 experiment, **Run** is off and the page says why: saving still works, and the next session of this
 experiment uses what is saved. **Reload engine** then loads this experiment, unless the other one
 has a session running, which a reload would end.

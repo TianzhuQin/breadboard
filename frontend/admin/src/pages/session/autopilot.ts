@@ -68,3 +68,13 @@ export function autopilotStatusOf (s: any): AutopilotStatus | null {
 export function autopilotRuns (s: AutopilotStatus | null, experimentId: number | null | undefined): boolean {
   return !!s && s.on && s.experimentId != null && s.experimentId === experimentId
 }
+
+/**
+ * True when session `sessionId` is the autopilot's own, open now: it is on for this experiment, isn't
+ * paused or done, and that is the session it opened. Steps saved meanwhile go into the next session
+ * it opens, so there is nothing to reload for.
+ */
+export function autopilotRunsSession (s: AutopilotStatus | null, experimentId: number | null | undefined, sessionId: number | null | undefined): boolean {
+  if (!s || !autopilotRuns(s, experimentId) || s.halted || !s.instance || sessionId == null) return false
+  return s.instance.id === sessionId && (s.instance.status === 'RUNNING' || s.instance.status === 'TESTING')
+}

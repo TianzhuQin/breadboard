@@ -781,6 +781,42 @@ describe('StepsPage', () => {
     admin.engine = 'ready'
     w.unmount()
   })
+
+  it('says the autopilot\'s next session uses what is saved while its own session is open, with Reload as a secondary action', async () => {
+    const { w } = await open()
+    try {
+      const autopilot = { status: { on: true, experimentId: 7, instance: { id: 5, name: 'Autopilot · 1', status: 'RUNNING' } }, settings: { continuous: true, nextSessionDelaySeconds: 10 } }
+      get.mockImplementation(async (url: string) => url === '/autopilot' ? autopilot : { steps })
+      admin.instance = { id: 5, name: 'Autopilot · 1', status: 'RUNNING' }
+      admin.engine = 'stale'
+      await flushPromises()
+      const text = () => w.text().replace(/\s+/g, ' ')
+      expect(text()).toContain('Saved: the autopilot’s next session uses it. The session it has open now goes on with the steps it started with.')
+      expect(text()).not.toContain('The engine isn\'t running your latest steps')
+      expect(w.find('.steps__banner.is-stale').exists()).toBe(false)
+      // still there, as the lesser choice, and it asks first
+      const reload = w.findAll('.steps__banner.is-unattended button').find(b => b.text() === 'Reload engine')!
+      expect(reload.classes()).toContain('b-btn--ghost')
+      await reload.trigger('click')
+      await flushPromises()
+      expect(confirmState.open).toBe(true)
+      settleConfirm(false)
+      await flushPromises()
+
+      // the session open is someone's own (the autopilot is paused): the reload is asked for, as before
+      autopilot.status = { ...autopilot.status, paused: true } as any
+      admin.instance = { ...admin.instance }
+      await flushPromises()
+      expect(text()).toContain('The engine isn\'t running your latest steps')
+      expect(text()).not.toContain('Saved: the autopilot’s next session uses it')
+    } finally {
+      get.mockReset()
+      settleConfirm(false)
+      admin.instance = null
+      admin.engine = 'ready'
+      w.unmount()
+    }
+  })
 })
 
 describe('StepsPage while the engine runs another experiment', () => {

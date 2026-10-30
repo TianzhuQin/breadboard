@@ -309,6 +309,7 @@ function engineInfoOf (v: any): EngineInfo | null {
     sessionName: str(v.sessionName),
     owner: str(v.owner),
     gameStarted: typeof v.gameStarted === 'boolean' ? v.gameStarted : null,
+    stepsChanged: typeof v.stepsChanged === 'boolean' ? v.stepsChanged : null,
   }
 }
 
@@ -395,6 +396,38 @@ function applyEngineNews (v: any) {
 }
 
 conn.onMessage(handle)
+
+// ---- "Reload needed", as the server says -------------------------------------------------------
+
+/**
+ * Whether steps of the experiment the engine runs were saved since it loaded them, as the server says
+ * (engine.stepsChanged): every console hears it when a step is saved, so they all say the same, and a
+ * refresh keeps it. Undefined when the server doesn't say (an older one): then the marks this console
+ * makes as it saves are all there is (markEngineStale).
+ */
+function serverStepsChanged (): boolean | undefined {
+  const v = state.user?.engine?.stepsChanged
+  return typeof v === 'boolean' ? v : undefined
+}
+
+/**
+ * "Reload needed" (admin.engine 'stale') follows the server: on while the engine runs the selected
+ * experiment and steps of it were saved since it loaded them; off otherwise, unless a reload didn't
+ * finish (admin.engineProblem), which only a reload clears. Not while the engine rebuilds, nor while
+ * what it runs isn't known yet.
+ */
+function followSavedSteps () {
+  const changed = serverStepsChanged()
+  if (changed === undefined || state.engine === 'loading' || !state.engineInfoCurrent) return
+  const e = state.user?.engine
+  const selected = state.experiment?.id
+  if (changed && e && e.experimentId !== null && selected != null && e.experimentId === selected) {
+    if (state.engine !== 'stale') state.engine = 'stale'
+  } else if (state.engine === 'stale' && !state.engineProblem) {
+    state.engine = 'ready'
+  }
+}
+watch(() => [state.user?.engine?.stepsChanged, state.user?.engine?.experimentId, state.experiment?.id, state.engine, state.engineInfoCurrent], followSavedSteps)
 
 // ---- sign-in ----------------------------------------------------------------------------------
 
@@ -741,10 +774,11 @@ const actions = {
    * Steps of experiment `experimentId` (the selected one when left out) changed since the engine last
    * loaded them (e.g. one was deleted). Only while the engine runs that experiment (or that isn't
    * known): steps of another one are loaded by its next build, and a reload from here would end the
-   * session the engine runs, or load the selected experiment instead of catching up.
+   * session the engine runs, or load the selected experiment instead of catching up. Nothing when the
+   * server says itself whether the engine runs the saved steps (followSavedSteps).
    */
   markEngineStale (experimentId?: number) {
-    if (state.engine === 'loading') return
+    if (state.engine === 'loading' || serverStepsChanged() !== undefined) return
     const id = experimentId ?? state.experiment?.id
     const e = state.user?.engine
     if (id != null && e && e.experimentId !== null && state.engineInfoCurrent && e.experimentId !== id) return
@@ -752,9 +786,11 @@ const actions = {
   },
   /**
    * The engine runs the saved steps again (each change was loaded with Run): undo markEngineStale.
-   * A reload that did not finish (admin.engineProblem) stays: only a reload clears that.
+   * A reload that did not finish (admin.engineProblem) stays: only a reload clears that. Nothing when
+   * the server says itself whether the engine runs the saved steps (followSavedSteps).
    */
   markEngineCurrent () {
+    if (serverStepsChanged() !== undefined) return
     if (state.engine === 'stale' && !state.engineProblem) state.engine = 'ready'
   },
   note (text: string) {

@@ -27,14 +27,28 @@
       </div>
       <div v-if="!fileMode && unattended" class="steps__banner is-unattended" role="note">
         <Bot :size="17" aria-hidden="true" class="steps__banner-icon" />
-        <p class="steps__banner-text">
+        <!-- the autopilot's own session runs: what is saved goes into its next one, nothing to reload for -->
+        <p v-if="savedForAutopilot" class="steps__banner-text">
+          <strong>Saved: the autopilot’s next session uses it.</strong> The session it has open now goes on with the
+          steps it started with. Reload the engine only to use them there now: its game then starts again from the beginning.
+        </p>
+        <p v-else class="steps__banner-text">
           <strong>“{{ admin.experiment?.name }}” runs unattended.</strong> The next session the autopilot opens uses
           the steps saved here. If a step doesn't load, the autopilot stops that session before anyone joins and
           pauses until you fix the step and press Resume.
         </p>
+        <BButton
+          v-if="savedForAutopilot"
+          size="sm"
+          variant="ghost"
+          :icon="RotateCw"
+          :disabled="!!reloadBlocked"
+          :title="reloadBlocked || 'Loads the saved steps into the autopilot’s session now: its game starts again from the beginning'"
+          @click="reloadEngine"
+        >Reload engine</BButton>
         <BButton size="sm" @click="router.push('/autopilot')">Autopilot</BButton>
       </div>
-      <div v-if="!fileMode && admin.engine === 'stale' && (sessionLive || admin.engineProblem)" class="steps__banner is-stale" role="status">
+      <div v-if="!fileMode && admin.engine === 'stale' && (sessionLive || admin.engineProblem) && !savedForAutopilot" class="steps__banner is-stale" role="status">
         <RotateCw :size="16" aria-hidden="true" class="steps__banner-icon" />
         <p class="steps__banner-text">
           <strong>The engine isn't running your latest steps.</strong> Reload it to load everything that is saved,
@@ -253,7 +267,7 @@ import { actions, admin, ensureConnected, fileStepsWait, reloadBlocked, runBlock
 import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
-import { useAutopilotStatus } from '../session/autopilot'
+import { autopilotRunsSession, useAutopilotStatus } from '../session/autopilot'
 import { goToLine, viewIn } from '../console/editorView'
 import { parseGroovyError } from '../console/groovyError'
 import StepList from './StepList.vue'
@@ -276,6 +290,10 @@ const sessionLive = computed(() => {
 // The autopilot runs this experiment: what is saved here is what its next session loads.
 const autopilot = useAutopilotStatus()
 const unattended = computed(() => !!autopilot.value?.on && !!admin.experiment && autopilot.value.experimentId === admin.experiment.id)
+// The open session is the autopilot's own: saved steps go into its next session (no reload is needed),
+// so the page says that instead of asking for a reload, which would start its game again.
+const autopilotsSession = computed(() => sessionLive.value && autopilotRunsSession(autopilot.value, admin.experiment?.id, admin.instance?.id))
+const savedForAutopilot = computed(() => autopilotsSession.value && admin.engine === 'stale' && !admin.engineProblem)
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 const modKey = isMac ? 'Cmd' : 'Ctrl'
 const modSymbol = isMac ? '⌘' : 'Ctrl+'
@@ -498,7 +516,9 @@ async function saveCurrent () {
     refreshStore()
     if (d.engineBehind) actions.markEngineStale(b.experimentId)
     announce.value = `Saved ${d.name}.`
-    notify.success(`Saved “${d.name}”`, d.engineBehind && !sessionLive.value ? 'The next session you open uses it.' : undefined)
+    notify.success(`Saved “${d.name}”`, !d.engineBehind
+      ? undefined
+      : autopilotsSession.value ? 'The autopilot’s next session uses it.' : !sessionLive.value ? 'The next session you open uses it.' : undefined)
   } else {
     notify.error(`Couldn't save “${d.name}”`, d.error || undefined)
   }
@@ -596,7 +616,8 @@ async function saveAll (): Promise<boolean> {
     if (behind) actions.markEngineStale(b.experimentId)
     notify.success(`Saved ${saved} step${saved === 1 ? '' : 's'}`, !behind
       ? undefined
-      : sessionLive.value ? 'Reload the engine, or Run a step, to use the new versions in the running session.' : 'The next session you open uses them.')
+      : autopilotsSession.value ? 'The autopilot’s next session uses them.'
+        : sessionLive.value ? 'Reload the engine, or Run a step, to use the new versions in the running session.' : 'The next session you open uses them.')
   }
   if (failed.length) {
     notify.error(`Couldn't save ${failed.length} step${failed.length === 1 ? '' : 's'}`, failed.map(d => `${d.name}: ${d.error}`).join('\n'))

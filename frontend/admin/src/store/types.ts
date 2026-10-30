@@ -72,6 +72,12 @@ export interface EngineInfo {
    * start that threw. Null when the server does not say (older servers leave it out).
    */
   gameStarted?: boolean | null
+  /**
+   * Whether steps of that experiment were saved (or deleted) since the engine loaded them, so the
+   * session running there doesn't use them yet: "Reload needed". The server keeps it (EngineSteps),
+   * so every console says the same. Null when the server does not say (older servers leave it out).
+   */
+  stepsChanged?: boolean | null
 }
 
 export interface User {
