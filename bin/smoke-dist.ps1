@@ -82,9 +82,10 @@ function Start-Breadboard([string]$folder, [int]$on, [string]$out, [string]$err,
   Start-Process @opts
 }
 
-# What a start that was turned away printed (empty when nothing)
+# What a start that was turned away printed (empty when nothing: a string either way, as the
+# reads below are, since Get-Content -Raw gives no string at all for an empty file)
 function Get-Said([string]$out) {
-  return [string](Get-Content -LiteralPath (Join-Path $work $out) -Raw)
+  return "$(Get-Content -LiteralPath (Join-Path $work $out) -Raw)"
 }
 
 $server = Start-Breadboard $app $Port 'out.log' 'err.log'
@@ -160,7 +161,7 @@ $fourth = Start-Breadboard $other $Port 'fourth.log' 'fourth-err.log' -Wait
 Remove-Item Env:BREADBOARD_SERVICE
 $otherLog = Join-Path $other 'logs\application.log'
 $logged = ''
-if (Test-Path -LiteralPath $otherLog) { $logged = [string](Get-Content -LiteralPath $otherLog -Raw) }
+if (Test-Path -LiteralPath $otherLog) { $logged = "$(Get-Content -LiteralPath $otherLog -Raw)" }
 if ($fourth.ExitCode -ne 1 -or -not $logged.Contains("Port $Port is in use") -or -not $logged.Contains('from breadboard.bat in launcher')) {
   Fail "as a service, a start turned away didn't say why in logs\application.log (exit code $($fourth.ExitCode)): $logged"
 }
@@ -185,8 +186,8 @@ while (-not ($said.Contains('local.conf') -and $logged.Contains('logs\service-er
     Fail "as a service, a mistake in conf\local.conf wasn't in logs\service-errors.log, or the restart note didn't name it: $said / $logged"
   }
   Start-Sleep -Seconds 2
-  if (Test-Path -LiteralPath $errorsLog) { $said = [string](Get-Content -LiteralPath $errorsLog -Raw) }
-  if (Test-Path -LiteralPath $otherLog) { $logged = [string](Get-Content -LiteralPath $otherLog -Raw) }
+  if (Test-Path -LiteralPath $errorsLog) { $said = "$(Get-Content -LiteralPath $errorsLog -Raw)" }
+  if (Test-Path -LiteralPath $otherLog) { $logged = "$(Get-Content -LiteralPath $otherLog -Raw)" }
 }
 Stop-Process -Id $fifth.Id -Force -ErrorAction SilentlyContinue
 Pass 'as a service, a mistake in conf\local.conf is in logs\service-errors.log, which the restart note names'
