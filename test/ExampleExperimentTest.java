@@ -146,6 +146,42 @@ public class ExampleExperimentTest extends BaseTest {
             + "}");
     }
 
+    /**
+     * A participant's cut is recorded as a TieCut event (who, whom, which round), not as Breadboard's
+     * Disconnected, easy to mistake for someone's connection dropping; their page still says the tie
+     * was cut.
+     */
+    @Test
+    public void aCutTieIsRecordedAsTieCut() throws Exception {
+        harness = loadedGame(600);
+        harness.runSync("{ ->\n"
+            + "  def tracked = []\n"
+            + "  def recorder = [track: { name, data -> tracked << [name: name, data: data] }]\n"
+            + "  eventTracker = recorder\n"
+            + "  g.eventTracker = recorder\n"
+            + "  edgeEdits.eventTracker = recorder\n"
+            + "  ['p1', 'p2'].each { g.addPlayer(it) }\n"
+            + "  initStep.start()\n"
+            + "  def p1 = g.getVertex('p1')\n"
+            + "  def other = p1.both.toList()[0]\n"
+            + "  def sent = []\n"
+            + "  def listener = { id, name, args -> if (name == 'bb:edge-edit-result') sent << args[0] }\n"
+            + "  events.on('__send-event', listener)\n"
+            + "  try {\n"
+            + "    edgeEdits.handle(p1, [op: 'remove', a: g.clientIdOf(p1), b: g.clientIdOf(other)])\n"
+            + "  } finally {\n"
+            + "    events.off('__send-event', listener)\n"
+            + "  }\n"
+            + "  assert !g.hasEdge(p1, other)\n"
+            + "  assert sent.size() == 1 && sent[0].ok == true && sent[0].applied == true\n"
+            + "  def names = tracked*.name\n"
+            + "  assert names.contains('TieCut') && !names.contains('Disconnected') : names\n"
+            + "  def cut = tracked.find { it.name == 'TieCut' }.data\n"
+            + "  assert cut.player == 'p1' && cut.other == other.id && cut.round == 1\n"
+            + "  assert p1.private.edgeEdits.remainingRemoves == 0\n"
+            + "}");
+    }
+
     /** The example's steps in the engine with a session's launch parameters (rounds of {@code roundSeconds}). */
     private ScriptTestHarness loadedGame(int roundSeconds) throws Exception {
         ScriptTestHarness h = new ScriptTestHarness(false);

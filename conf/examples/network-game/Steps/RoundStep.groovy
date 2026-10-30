@@ -22,7 +22,10 @@ roundStep.run = {
             [op: "remove", a: me, b: other, available: alone == null,
              reason: alone == null ? null : c.get(alone == me ? "CutLeavesYouAlone" : "CutLeavesThemAlone")]
           }
-        }])
+        },
+        // The cut is made here, by cutTie, rather than by Breadboard, which would record it as a
+        // Disconnected event (easy to mistake for someone's connection dropping).
+        onEdit: { me, op, v1, v2 -> cutTie(me, v1 == me ? v2 : v1) }])
     }
     a.add(p,
       [name: "Blue", color: COLORS.Blue, result: { pick(p, "Blue") }],
@@ -36,6 +39,12 @@ roundText = { p, String body ->
    p.private.lastResult ? "<p>${p.private.lastResult}</p>" : "",
    body,
    round > 1 ? c.get("Score", p.score, round - 1) : ""].findAll { it }.join("\n").toString()
+}
+
+// `p` cuts their tie with `other`, recorded as a TieCut event.
+cutTie = { p, other ->
+  g.removeConnectedEdge(p, other)
+  eventTracker.track("TieCut", [player: p.id, other: other.id, round: round])
 }
 
 pick = { p, colour ->

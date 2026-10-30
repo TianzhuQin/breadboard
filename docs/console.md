@@ -114,8 +114,8 @@ when their pick matches most of their neighbors'; the network shows what each ne
 round and the ties among their neighbors, and during a round everyone may cut one of their own ties
 by clicking it. The size of the network, the waiting room's minimum and wait, and the number and
 length of rounds are launch parameters, so they change on the Parameters page, and everything
-participants read is on the Content page, to reword or translate. Picks and scores are
-recorded as `ColourPick` and `RoundResult` events. Open a session (or turn on the autopilot) and
+participants read is on the Content page, to reword or translate. Picks, scores and cut ties are
+recorded as `ColourPick`, `RoundResult` and `TieCut` events. Open a session (or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
 
