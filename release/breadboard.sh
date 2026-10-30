@@ -255,6 +255,12 @@ cannot_write() {
 if [ ! -d db ] || [ ! -d logs ] || [ "$(dirname "$PID_FILE")" = . ]; then
   [ -w . ] || cannot_write "The Breadboard folder ($HERE)" "$HERE"
 fi
+# The data (the database, its copies in backups/, the logs: participants' data, researchers' password
+# hashes) is for this account only, as conf/local.conf is: other accounts of this computer (a lab
+# Mac's) don't read it, however open the folders above it are. What this script and the server make
+# from here on can be read and written by this account only (umask 077); what is there already, from
+# an earlier start or copied from an earlier release, is made so below, when it is this account's.
+umask 077
 mkdir -p db logs 2>/dev/null || cannot_write "The Breadboard folder ($HERE)" "$HERE"
 for f in db db/*.db; do
   if [ -e "$f" ] && [ ! -w "$f" ]; then
@@ -266,6 +272,11 @@ for f in db db/*.db; do
   fi
 done
 [ -w logs ] || cannot_write "logs/" "$HERE/logs"
+for f in db backups logs db/* backups/* logs/*; do
+  if [ -e "$f" ] && [ -O "$f" ]; then
+    chmod go-rwx "$f" 2>/dev/null || true
+  fi
+done
 
 # application.secret must not be a published value. Use $APPLICATION_SECRET if set; otherwise
 # generate one on first start and keep it in conf/application.secret. The server reads it from the

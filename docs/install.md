@@ -113,6 +113,12 @@ On first start the launcher creates:
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
 
+On macOS and Linux, `db/`, `backups/` and `logs/`, and what is in them, can be read only by the
+account the server runs as: they hold participants' data and researchers' password hashes, and a
+lab computer's other accounts could otherwise read them. What the server makes is private from the
+start, and at every start the launcher makes private what is already there (copied from an earlier
+release, say), when it is that account's. Copy backups elsewhere as that account (or with `sudo`).
+
 ## Settings
 
 Put the settings you change in `conf/local.conf`, one per line, then restart Breadboard:

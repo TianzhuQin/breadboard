@@ -215,6 +215,19 @@ sign_in () {
   pass "signed in; account state, autopilot settings and accounts load"
 }
 
+# The data is the server's account's only (the launcher's umask, and its chmod at start): no access
+# for the group or others to these folders and files.
+only_mine () {
+  local f
+  for f in "$@"; do
+    [ -e "$f" ] || fail "$f isn't there"
+    case "$(ls -ld "$f")" in
+      ?rw?------*) ;;
+      *) fail "others than the server's account can use $f: $(ls -ld "$f")" ;;
+    esac
+  done
+}
+
 backups () {
   local code name
   code="$(curl -s --max-time 60 -o "$WORK/body" -w '%{http_code}' -b "$WORK/cookies" -X POST "$BASE/backups")"
@@ -246,6 +259,8 @@ if [ "$code" = "200" ]; then
   pass "first account created"
   sign_in
   backups
+  only_mine "$APP/db" "$APP/db/breadboard.h2.db" "$APP/logs" "$APP/logs/application.log" "$APP/backups" "$APP"/backups/*.zip
+  pass "the database, its backups and the logs are the server's account's only"
 elif [ -n "$OLD_DB" ] && grep -q "already exists" "$WORK/body"; then
   SIGN_IN=""
   pass "the older database has accounts: pages load, sign-in still required"
@@ -273,8 +288,10 @@ RQ="$(printf '\342\200\235')"
 printf '%s\n' "# the settings this install ${LQ}changes${RQ}" 'breadboard.wsUrl="ws://local-conf.smoke.test"' \
   "http.port = $PORT   # the lab's port" 'breadboard.memory: "768m"' "smoke.note=\"the ${LQ}lab${RQ} copy\"" \
   > "$APP/conf/local.conf"
-# (readable by anyone, as a copy brought from an earlier release may be)
-chmod 644 "$APP/conf/local.conf"
+# (readable by anyone, as a copy brought from an earlier release may be; so are a log and the backups)
+chmod 644 "$APP/conf/local.conf" "$APP/logs/application.log"
+mkdir -p "$APP/backups"
+chmod 755 "$APP/backups"
 PROXY=http://127.0.0.1:9
 PORT_IN_LOCAL_CONF=1
 start "same database again, with conf/local.conf and a proxy set"
@@ -282,11 +299,13 @@ PORT_IN_LOCAL_CONF=""
 ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qE -- "-Xmx768m .* -Dhttp\.port=$PORT launcher\.Main " \
   || fail "the port and memory in conf/local.conf weren't passed on to Java: $(ps -ww -o args= -p "$SERVER" | tr ' ' '\n' | grep -E '^-(Xmx|Dhttp)')"
 pass "the port and memory set in conf/local.conf are the ones the server runs with"
-# It may hold keys: the launcher lets only its owner read it.
+# It may hold keys: the launcher lets only its owner read it, and the data too.
 case "$(ls -l "$APP/conf/local.conf")" in
   -rw-------*) pass "the launcher lets only its owner read conf/local.conf" ;;
   *) fail "others can read conf/local.conf: $(ls -l "$APP/conf/local.conf")" ;;
 esac
+only_mine "$APP/logs/application.log" "$APP/backups"
+pass "a log and backups/ that others could read are the server's account's only again"
 pages
 if [ -n "$SIGN_IN" ]; then
   sign_in

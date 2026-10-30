@@ -109,6 +109,9 @@ Then set `breadboard.secureCookies=true` and `session.secure=true` in `conf/loca
 | `groovy/` | The engine's scripts (part of Breadboard; don't edit) |
 | `jre/` | Java, in the downloads that include it |
 
+On macOS and Linux, only the account that runs Breadboard can read `db/`, `backups/`, `logs/` and
+`conf/local.conf`.
+
 ## Backups
 
 The server copies its database into `backups/` once a day, and before a newer release changes it;
