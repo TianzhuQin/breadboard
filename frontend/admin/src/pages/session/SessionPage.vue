@@ -482,7 +482,8 @@ function clock (at: number) {
 }
 .live-stat__label { display: flex; align-items: center; gap: 7px; order: 0; font-size: var(--text-xs); font-weight: 600; color: var(--muted); }
 .live-stat__value { order: 1; margin: 6px 0 0; font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; color: var(--text); }
-.live-stat__sub { order: 2; margin: 3px 0 0; font-size: var(--text-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* (wrapped, not cut: "5 AI players · 2 taken over" lost its end on a phone) */
+.live-stat__sub { order: 2; margin: 3px 0 0; font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; }
 
 /* ---- layout ---- */
 .live-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }
