@@ -132,7 +132,7 @@
                 :role="t.missing ? null : previewRole(t)"
                 :paused="focusId === t.id ? 'focus' : tabbed.has(t.id) ? 'tab' : null"
                 :frame-key="`${globalNonce}-${nonces[t.id] || 0}`"
-                :note="t.missing && admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''"
+                :note="noteOf(t)"
                 @focus="focusId = t.id"
                 @reload="reload(t.id)"
                 @open-tab="openTab(t.id)"
@@ -171,12 +171,13 @@ import { admin, graph } from '@/store/admin'
 import { playerName } from '@/network/players'
 import { describeError } from '../experiments/experiments'
 import { canResume } from '../sessions/sessionData'
+import { autopilotNow } from '../autopilot/autopilot'
 import { useSessionActions } from '../sessions/useSessionActions'
 import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl,
+  FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, awayText, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl,
   previewMemory as memory, previewPageUrl, previewRole, quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike,
   type PreviewTarget, type QuickPick,
 } from './preview'
@@ -212,6 +213,27 @@ const tiles = computed(() => {
     return { id, data: n ? n.data : {}, missing: !n }
   }))
 })
+
+/** What a tile says under the page: they aren't in the game, or they are away and the preview stands in. */
+function noteOf (t: { id: string, data: Record<string, any>, missing: boolean }): string {
+  if (t.missing) return admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''
+  if (previewRole(t) !== 'away') return ''
+  return awayText(t, { gameStarted: inst.value?.hasStarted === true, takeoverSeconds: takeover.value?.instanceId === inst.value?.id ? takeover.value?.seconds : null })
+}
+
+// How long the computer waits before it takes the seat of someone away, said on their tile, when the
+// console knows it: in the autopilot's own session, with its takeover switched on (otherwise the
+// steps decide). Asked once per session, when the first such tile shows.
+const takeover = ref<{ instanceId: number, seconds: number | null } | null>(null)
+let takeoverAsked: number | null = null
+watch(() => [inst.value?.id, tiles.value.some(t => !t.missing && previewRole(t) === 'away')] as const, async ([id, away]) => {
+  if (id == null || !away || takeoverAsked === id) return
+  takeoverAsked = id
+  const state = await autopilotNow()
+  const s = state?.status
+  const own = !!state && !!s && s.on && s.instance?.id === id && state.settings.replaceDisconnected.enabled
+  takeover.value = { instanceId: id, seconds: own ? state!.settings.replaceDisconnected.afterSeconds : null }
+}, { immediate: true })
 
 // ---- choosing ---------------------------------------------------------------------------------
 

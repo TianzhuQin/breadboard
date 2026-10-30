@@ -5,6 +5,7 @@ import {
   DEVICES, FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
   isComputerPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth, ownPageConnected, previewMemory,
   previewPageUrl, previewRole, quickPick, seatText, seatWord, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
+  awayText,
 } from '../src/pages/preview/preview'
 import { fetchPreviewToken } from '../src/pages/preview/previewLink'
 import { HttpError } from '../src/lib/http'
@@ -103,6 +104,21 @@ describe('who a player is', () => {
     ])
     // shown here, the reason still comes first
     expect(seatText(list[3], true)).toBe('away: a preview stands in for them, shown here')
+  })
+
+  it('says what standing in for someone away means now', () => {
+    const away = P('p2', { _system: { connected: false, preview: true } })
+    expect(awayText(away, { gameStarted: false, takeoverSeconds: 30 }))
+      .toBe('Away: you are standing in, but they count as away, so a waiting room doesn’t count them.')
+    expect(awayText(away, { gameStarted: true, takeoverSeconds: 30 }))
+      .toBe('Away: you are standing in; the computer takes over their seat after 30 s away.')
+    expect(awayText(away, { gameStarted: true, takeoverSeconds: 0 }))
+      .toBe('Away: you are standing in; the computer takes over their seat at once.')
+    // (the steps decide, if they let the computer play at all)
+    expect(awayText(away, { gameStarted: true, takeoverSeconds: null }))
+      .toBe('Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.')
+    expect(awayText(P('p3', { ai: 1, _system: { connected: false, preview: true } }), { gameStarted: true, takeoverSeconds: 30 }))
+      .toBe('Away: you are standing in, and the computer plays their seat until their own page is back.')
   })
 
   it('searches by id, or by "test" and "ai"', () => {
@@ -588,6 +604,53 @@ describe('PreviewPage', () => {
       expect(w.find('.pp__legend').text()).toContain('watching only')
     } finally {
       w.unmount()
+    }
+  })
+
+  // A preview standing in for someone who left looked like their live page, with nothing on the tile
+  // to say they were away.
+  it('says on the tile of someone away that the preview stands in, and when the computer takes over', async () => {
+    addPlayer('p2', { _system: { connected: false, preview: true } })
+    addPlayer('p3', { _system: { connected: true } })
+    await settle()
+    store.admin.instance = { ...store.admin.instance, hasStarted: true }
+    // the autopilot's own session, with its takeover after 30 s
+    http.get.mockImplementation(async (url: string) => url === '/autopilot'
+      ? { settings: { enabled: true, experimentId: 7, replaceDisconnected: { enabled: true, afterSeconds: 30, returnToHuman: true } }, source: 'admin', status: { on: true, experimentId: 7, instance: { id: 44, name: 'pilot', status: 'RUNNING' } } }
+      : undefined)
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p2', 'p3']
+    const w = await mountPage()
+    try {
+      await settle()
+      const tile = (id: string) => w.findAll('.pt').find(t => t.find('.pt__id').text() === id)!
+      expect(tile('p2').find('.pt__tag.is-away').text()).toBe('Away')
+      expect(tile('p2').find('.pt__note').text()).toBe('Away: you are standing in; the computer takes over their seat after 30 s away.')
+      expect(tile('p3').find('.pt__tag.is-away').exists()).toBe(false)
+      expect(tile('p3').find('.pt__note').exists()).toBe(false)
+      expect(http.get).toHaveBeenCalledWith('/autopilot')
+    } finally {
+      w.unmount()
+      http.get.mockReset()
+    }
+  })
+
+  it('says the steps decide when the session isn\'t the autopilot\'s, and that a waiting room doesn\'t count someone away', async () => {
+    addPlayer('p2', { _system: { connected: false, preview: true } })
+    await settle()
+    http.get.mockResolvedValue({ settings: { enabled: false }, source: 'off', status: { on: false } })
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p2']
+    const w = await mountPage()
+    try {
+      await settle()
+      expect(w.find('.pt__note').text()).toBe('Away: you are standing in, but they count as away, so a waiting room doesn’t count them.')
+      store.admin.instance = { ...store.admin.instance, hasStarted: true }
+      await settle()
+      expect(w.find('.pt__note').text()).toBe('Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.')
+    } finally {
+      w.unmount()
+      http.get.mockReset()
     }
   })
 

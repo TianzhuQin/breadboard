@@ -88,6 +88,20 @@ export function seatWord (p: PlayerLike): string {
   return role === 'computer' || role === 'watching' ? 'Watching' : role === 'away' ? 'Away' : ''
 }
 
+/**
+ * What the tile of someone away says ('away' above): the preview stands in for them, answering for
+ * them, but they count as away, and what that means now. How long the computer waits before it takes
+ * their seat is said when the console knows it (`takeoverSeconds`: the autopilot's own session, with
+ * its takeover switched on); otherwise the steps decide, if they let the computer play at all.
+ */
+export function awayText (p: PlayerLike, opts: { gameStarted: boolean, takeoverSeconds?: number | null }): string {
+  if (truthyFlag(p.data?.ai)) return 'Away: you are standing in, and the computer plays their seat until their own page is back.'
+  if (!opts.gameStarted) return 'Away: you are standing in, but they count as away, so a waiting room doesn’t count them.'
+  const s = opts.takeoverSeconds
+  if (s != null && s >= 0) return `Away: you are standing in; the computer takes over their seat ${s > 0 ? `after ${s} s away` : 'at once'}.`
+  return 'Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.'
+}
+
 /** Why a preview only watches, for the roles where it does (as the participant page says it). */
 export const WATCHING_WHY: Record<'computer' | 'watching', string> = {
   computer: 'the computer plays this seat, so you see what it does but can’t answer for it',

@@ -192,10 +192,12 @@ computer took over, and the computer goes on playing all of them. A preview neve
 game: the tile of a player who isn't in the network (someone who left before a **Resume**, say, and
 hasn't joined again) says they aren't in the game, and shows their page once they are back. When a player's own page comes back, it takes over, and the preview goes on
 read-only. The tile of a player whose preview only watches (their own page is connected, or the
-computer plays the seat) is tagged **Watching**. In the list, a green dot means the seat is
-connected, and **Watching** or **Away** says when a preview of that player only watches, or stands
-in for someone away; the tooltip says why: their own page, a preview (maybe another console's), or
-the computer.
+computer plays the seat) is tagged **Watching**. The tile of someone away is tagged **Away**, and
+says what standing in for them means now: a waiting room doesn't count them, or the computer takes
+their seat after the usual wait (in the autopilot's own session, its **Take over after**), or plays
+it until they are back. In the list, a green dot means the seat is connected, and **Watching** or
+**Away** says when a preview of that player only watches, or stands in for someone away; the
+tooltip says why: their own page, a preview (maybe another console's), or the computer.
 The first look at a session shows the test players whose seat is neither connected nor held by a
 preview, theirs or another console's (which a preview here would take it from). It is taken once
 the session's players have loaded, however the page was opened; in a session without test players,

@@ -9,6 +9,9 @@
         <span v-if="watching" class="pt__tag is-text" :title="watching">
           <Eye :size="13" aria-hidden="true" /><span :class="{ 'sr-only': compact }">Watching</span>
         </span>
+        <span v-else-if="role === 'away'" class="pt__tag is-text is-away" title="Away: their own page isn’t connected. You are standing in for them, but they count as away">
+          <UserX :size="13" aria-hidden="true" /><span :class="{ 'sr-only': compact }">Away</span>
+        </span>
       </span>
       <span class="pt__acts">
         <BButton
@@ -66,7 +69,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Bot, Ellipsis, ExternalLink, Eye, FlaskConical, Maximize2, RotateCw, TriangleAlert, X } from 'lucide-vue-next'
+import { Bot, Ellipsis, ExternalLink, Eye, FlaskConical, Maximize2, RotateCw, TriangleAlert, UserX, X } from 'lucide-vue-next'
 import { BButton, BMenu, type MenuItem } from '@/ui'
 import { playerName } from '@/network/players'
 import PreviewFrame from './PreviewFrame.vue'
@@ -140,6 +143,7 @@ const menu = computed<MenuItem[]>(() => [
   font-weight: 600;
   white-space: nowrap;
 }
+.pt__tag.is-away { background: var(--warning-soft); color: var(--warning-soft-text); }
 .pt__acts { margin-left: auto; display: inline-flex; align-items: center; flex: none; }
 .pt__body { position: relative; }
 .pt__cover {
