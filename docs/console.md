@@ -290,13 +290,15 @@ end that session.
 
 The Autopilot page lets an experiment run by itself: Breadboard opens a session, lets people in
 through a fixed link, starts the game once enough have arrived, and opens the next session when one
-ends. Saved settings are kept in the database and take effect at once. While the autopilot runs an
-experiment, the waiting room and the takeover of seats, each when switched on here, replace the
-experiment's own `autopilot.waitingRoom(…)` and `autopilot.replaceDisconnected(…)` calls; callbacks
-such as `onCancel` are kept from the experiment's call. Switched off, the experiment's own calls
-apply; the page shows them, and when the steps set no waiting room it says that sessions will then
-wait for someone to press Start the game. Set up for the first time, the page suggests the
-experiment you're working on and leaves to its steps whatever they already set.
+ends. Saved settings are kept in the database and take effect at once. In the sessions the
+autopilot opens (and one of its experiment that **Resume** or a save hands it), the waiting room and
+the takeover of seats, each when switched on here, replace the experiment's own
+`autopilot.waitingRoom(…)` and `autopilot.replaceDisconnected(…)` calls; callbacks such as
+`onCancel` are kept from the experiment's call. A session you open by hand, the test session
+included, runs with the steps' own, and isn't marked **Opened by Autopilot**. Switched off, the
+experiment's own calls apply; the page shows them, and when the steps set no waiting room it says
+that sessions will then wait for someone to press Start the game. Set up for the first time, the
+page suggests the experiment you're working on and leaves to its steps whatever they already set.
 
 | Setting | Suggested | |
 |---|---|---|

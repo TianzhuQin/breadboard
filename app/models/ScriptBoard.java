@@ -949,11 +949,12 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
-  // AutopilotHooks.afterStepsLoaded; a field only so tests can watch when it runs.
+  // AutopilotHooks.afterStepsLoaded, for the session the engine runs (they apply only in the
+  // autopilot's own); a field only so tests can watch when it runs.
   static volatile java.util.function.BiConsumer<Experiment, ScriptEngine> afterStepsLoadedHook =
       new java.util.function.BiConsumer<Experiment, ScriptEngine>() {
         public void accept(Experiment experiment, ScriptEngine engine) {
-          AutopilotHooks.afterStepsLoaded(experiment, engine);
+          AutopilotHooks.afterStepsLoaded(experiment, engine, instanceIdOf(engineGameListener));
         }
       };
 
@@ -2654,7 +2655,7 @@ public class ScriptBoard extends UntypedActor {
       return text;
     }
     String owner = engineOwnerEmail();
-    if (isAutopilots(session)) {
+    if (isAutopilots(session) && Autopilot.isAutopilotsSession(session.id)) {
       return text + " (the autopilot's session \"" + session.name + "\")";
     }
     if (owner != null && user != null && owner.equalsIgnoreCase(user.email)) {
@@ -2919,11 +2920,15 @@ public class ScriptBoard extends UntypedActor {
       gameListener.experimentInstance = instance;
       gameListener.start();
 
+      // The autopilot's session from now on, before its steps load: the Autopilot page's settings
+      // apply in it (AutopilotHooks).
+      if (byAutopilot) {
+        Autopilot.launchCarriedOut(instance.id);
+      }
       // Re-run the Steps, then the autopilot settings over them: here, under the lock, so another
       // account's rebuild can't come between (queued, they used to run in whatever engine was there).
       String failed = loadSteps(experiment, launchGame.out);
       if (byAutopilot) {
-        Autopilot.launchCarriedOut(instance.id);
         if (failed != null) {
           // The steps define its waiting room and game: participants would wait for a game that
           // never starts. The session stops, and the autopilot pauses until the steps are fixed.

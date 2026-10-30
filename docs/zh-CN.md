@@ -75,6 +75,8 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | **Countdown** | 5 秒 | 开始前参与者看到的倒计时。 |
 | **Let the computer play for people who leave** | 开 | 有人中途关掉页面，过了 **Take over after**（30 秒）由电脑替他玩。勾选 **Give the seat back when they return**，他回来后可以接着玩。 |
 
+这一页的等待室和电脑接管设置，只用在自动运行自己开的场次上（还有你点 **Resume** 或保存设置时交给它的、这个实验正开着的那一场）。你在 Live session 自己开的场次（包括测试场次）用步骤里写的设置，也不会标成 **Opened by Autopilot**。
+
 页面顶部显示当前状态、开放中的那一场（**Watch it live** 可以去看），以及给参与者的 **Sign-in link** 和 **Prolific link**。这两个链接总是指向当时开放的那一场，所以一直用同一个就行。没有一场在接收参与者时（游戏正在进行、等待室已满正在倒计时，或者下一场马上要开），打开链接的人会看到一个等待页：上面说有一场正在进行，结束后就开下一场；这个页面每隔几秒自己刷新一次，下一场一开就自动进入（从 Prolific 来的人还会看到：可以一直开着这个页面，等不及的话就退回研究）。自动运行关着、暂停或已经结束时，链接仍然显示 "No session is open right now"。
 
 **暂停与继续**：如果你在控制台里结束了自动运行的那一场（停止它，或做了会重新加载引擎的事，比如新建或恢复另一场、**Reload engine**；切换实验不会），自动运行就会暂停，控制台会先提醒你。暂停时它不开新场，所以除非你自己为这个实验开了一场，链接都进不去。回到 Autopilot 页点 **Resume** 继续。如果关掉了 **Open the next session when one finishes**，一场结束后按钮会变成 **Open another session**。暂停状态在服务器重启后仍然保留。

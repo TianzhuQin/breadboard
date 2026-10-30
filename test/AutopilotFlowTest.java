@@ -27,7 +27,9 @@ import static play.test.Helpers.*;
 /**
  * How the autopilot's sessions flow for participants and researchers: a waiting room's maximum is a
  * real one (the first to arrive are seated, anyone else is told the session is full and how to join
- * the next one, and nobody more is sent to a full room).
+ * the next one, and nobody more is sent to a full room); the study's links wait for the next session
+ * while the autopilot opens it by itself; a session a researcher opens by hand is theirs, with the
+ * steps' own settings, until Resume hands it to the autopilot.
  */
 public class AutopilotFlowTest extends BaseTest {
 
@@ -50,7 +52,7 @@ public class AutopilotFlowTest extends BaseTest {
         ParticipantAuth.reset();
         Recruitment.reset();
         setAutopilot("launchRequestedAt", 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession"}) {
             setAutopilot(name, null);
         }
         setAutopilot("nextOpenAt", 0L);
@@ -235,6 +237,104 @@ public class AutopilotFlowTest extends BaseTest {
         Result link = route(fakeRequest(GET, "/play/" + experiment.id + "/login")
             .withCookies(new Http.Cookie("bb_seat_" + experiment.id, session.id + "/f-3", null, null, null, false, false)));
         assertFalse("not sent back to the seat that only says it is full", contentAsString(link).contains("already taking part"));
+    }
+
+    // ---- whose session it is -----------------------------------------------------------------------
+
+    // The steps set up a waiting room and takeover of their own, which the Autopilot page's replace.
+    private static final String OWN_SETUP = "autopilot.waitingRoom([minPlayers: 5, waitSeconds: 30])\n"
+        + "autopilot.replaceDisconnected([afterSeconds: 99])";
+
+    private AdminSocketsTest.Tab console(User user) throws Exception {
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(user.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(AdminSocketsTest.userJson()) >= 1);
+        return tab;
+    }
+
+    private static ObjectNode withTakeover(ObjectNode s, int afterSeconds) {
+        ObjectNode replace = (ObjectNode) s.get("replaceDisconnected");
+        replace.put("enabled", true);
+        replace.put("afterSeconds", afterSeconds);
+        return s;
+    }
+
+    private static Long statusInstance(User user) {
+        JsonNode instance = autopilotStatus(user).get("instance");
+        return instance == null || instance.isNull() ? null : instance.get("id").asLong();
+    }
+
+    @Test
+    public void aSessionOpenedByHandIsTheResearchersWithTheStepsOwnSettings() throws Exception {
+        final User researcher = user("byhand");
+        final Experiment experiment = experimentOf(researcher, "Opened by hand");
+        createStep(experiment, "Setup", OWN_SETUP);
+        assertEquals(OK, status(post(researcher, withTakeover(settings(experiment, 2, null, 1), 45))));
+        final ExperimentInstance auto = openSession(experiment);
+        // The autopilot's own: the console calls it so, and the Autopilot page's settings apply in it.
+        assertEquals(auto.id, statusInstance(researcher));
+        assertEquals(2, engineValue("autopilot.room.minPlayers"));
+        assertEquals(45, engineValue("autopilot.replace.afterSeconds"));
+
+        // The researcher opens a session by hand ("Stop it and create"): the autopilot pauses, and the
+        // new session is theirs.
+        final AdminSocketsTest.Tab tab = console(researcher);
+        tab.send("LaunchGame", "name", "Test players", "parameters", Json.newObject());
+        await("their session", () -> sessions(experiment).size() == 2
+            && sessions(experiment).get(1).status == ExperimentInstance.Status.RUNNING
+            && engineValue("autopilot.room") != null);
+        final ExperimentInstance byHand = sessions(experiment).get(1);
+        JsonNode st = autopilotStatus(researcher);
+        assertTrue(st.get("paused").asBoolean());
+        assertTrue("not reported as the autopilot's: " + st, st.get("instance").isNull());
+        assertEquals("the steps' own waiting room", 5, engineValue("autopilot.room.minPlayers"));
+        assertEquals("the steps' own takeover", 99, engineValue("autopilot.replace.afterSeconds"));
+        String paused = st.get("problem").asText();
+        assertTrue(paused, paused.contains("its session \"" + auto.name + "\" ended when " + researcher.email + " launched another session"));
+
+        // Stopping it leaves the reason the autopilot paused for, which is about its own session.
+        tab.send("StopGame", "id", byHand.id);
+        await("stopped", () -> ExperimentInstance.findById(byHand.id).status == ExperimentInstance.Status.STOPPED);
+        assertEquals(paused, autopilotStatus(researcher).get("problem").asText());
+        assertTrue(autopilotStatus(researcher).get("instance").isNull());
+
+        // Resume: it opens a session of its own again.
+        assertEquals(OK, status(callAction(controllers.routes.ref.AutopilotController.resume(),
+            fakeRequest(POST, "/autopilot/resume").withSession("uid", researcher.uid))));
+        await("its next session", () -> sessions(experiment).size() == 3 && Autopilot.openInstance(experiment.id) != null
+            && Integer.valueOf(2).equals(engineValue("autopilot.room.minPlayers")));
+        assertEquals(sessions(experiment).get(2).id, statusInstance(researcher));
+        assertEquals(45, engineValue("autopilot.replace.afterSeconds"));
+    }
+
+    @Test
+    public void resumeHandsItTheSessionOpenedByHandWithThePagesSettings() throws Exception {
+        final User researcher = user("handover");
+        final Experiment experiment = experimentOf(researcher, "Handed over");
+        createStep(experiment, "Setup", OWN_SETUP);
+        assertEquals(OK, status(post(researcher, withTakeover(settings(experiment, 2, null, 1), 45))));
+        openSession(experiment);
+        final AdminSocketsTest.Tab tab = console(researcher);
+        tab.send("LaunchGame", "name", "Mine", "parameters", Json.newObject());
+        await("their session", () -> sessions(experiment).size() == 2
+            && sessions(experiment).get(1).status == ExperimentInstance.Status.RUNNING
+            && Integer.valueOf(5).equals(engineValue("autopilot.room.minPlayers")));
+        final ExperimentInstance byHand = sessions(experiment).get(1);
+
+        // Resume while it runs: the autopilot keeps that one open as its own, with its page's settings.
+        assertEquals(OK, status(callAction(controllers.routes.ref.AutopilotController.resume(),
+            fakeRequest(POST, "/autopilot/resume").withSession("uid", researcher.uid))));
+        await("its settings applied", () -> Integer.valueOf(2).equals(engineValue("autopilot.room.minPlayers")));
+        assertEquals(byHand.id, statusInstance(researcher));
+        assertEquals(45, engineValue("autopilot.replace.afterSeconds"));
+        assertEquals("no other session opened", 2, sessions(experiment).size());
+
+        // Stopping it now pauses the autopilot, naming it as its session.
+        tab.send("StopGame", "id", byHand.id);
+        await("paused", () -> autopilotStatus(researcher).get("paused").asBoolean());
+        String paused = autopilotStatus(researcher).get("problem").asText();
+        assertTrue(paused, paused.contains("its session \"Mine\" was stopped by " + researcher.email));
     }
 
     // ---- the study's link while no session takes participants --------------------------------------

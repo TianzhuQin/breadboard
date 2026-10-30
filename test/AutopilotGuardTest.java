@@ -61,7 +61,7 @@ public class AutopilotGuardTest extends BaseTest {
             engine().eval("autopilot.stop(); timers.cancel(); null");
         } catch (Exception ignored) {}
         setStatic("launchRequestedAt", 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "notice", "quietSession", "endingTooLong"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession", "notice", "quietSession", "endingTooLong"}) {
             setStatic(name, null);
         }
         setStatic("nextOpenAt", 0L);

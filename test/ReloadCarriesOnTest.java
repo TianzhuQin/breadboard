@@ -57,7 +57,7 @@ public class ReloadCarriesOnTest extends BaseTest {
         Field launch = Autopilot.class.getDeclaredField("launchRequestedAt");
         launch.setAccessible(true);
         launch.set(null, 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession"}) {
             Field f = Autopilot.class.getDeclaredField(name);
             f.setAccessible(true);
             f.set(null, null);

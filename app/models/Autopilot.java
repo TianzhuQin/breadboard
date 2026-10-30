@@ -111,6 +111,12 @@ public final class Autopilot {
   // (gameFailed). Any other session of its experiment, e.g. one a researcher launched by hand to take
   // over, or its own resumed by hand later, is the researcher's until they hand it over that way.
   private static volatile Long ownSession = null;
+  // The autopilot's session, kept through a pause: the one it opened last (launchCarriedOut), or the
+  // one of its experiment Resume or a save handed it (adoptLiveSession). The console calls it the
+  // autopilot's (status.instance), and the Autopilot page's waiting room and takeover replace the
+  // steps' own in it alone (AutopilotHooks). A session a researcher opens by hand is theirs, with the
+  // steps' own settings: any session of its experiment used to count as the autopilot's.
+  private static volatile Long openedSession = null;
 
   // ---- the guards of its own session (see guardOwnSession) ----
   // After this many of its own sessions in a row were ended for running too long, it pauses instead
@@ -621,7 +627,10 @@ public final class Autopilot {
    * by itself until someone presses Resume (or saves the settings), rather than taking the engine
    * back behind the researcher's back. Nothing for a session that had finished: no researcher ended
    * it (Stop pressed on it paused the autopilot, which also called off the next session it was about
-   * to open). {@code how} says what happened, with %s for who did it.
+   * to open). {@code how} says what happened, with %s for who did it. A session of its experiment that
+   * isn't the autopilot's (isAutopilotsSession: a researcher opened it by hand) is called what it is;
+   * while the autopilot is paused or done already, its ending leaves the reason as it was: it said
+   * "its session" of the researcher's own, in place of how the autopilot's had ended.
    */
   static void sessionStopped(ExperimentInstance instance, User by, String how) {
     if (instance == null || instance.experiment == null || instance.id == null) {
@@ -629,8 +638,9 @@ public final class Autopilot {
     }
     // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
     Long experimentId = instance.experiment.id;
+    Long id = instance.id;
     String name = instance.name;
-    ExperimentInstance now = ExperimentInstance.findById(instance.id);
+    ExperimentInstance now = ExperimentInstance.findById(id);
     if (now != null && now.status == ExperimentInstance.Status.FINISHED) {
       return;
     }
@@ -643,8 +653,13 @@ public final class Autopilot {
       return;
     }
     if (e.isOn() && e.settings.experimentId.equals(experimentId)) {
+      boolean its = isAutopilotsSession(id);
+      if (!its && (pausedBecause != null || doneBecause != null)) {
+        return;
+      }
       String what = String.format(how, who);
-      setHalt(experimentId, "its session \"" + name + "\" " + what, doneBecause);
+      setHalt(experimentId, (its ? "its session \"" + name + "\" " : "the session \"" + name + "\" of its experiment ") + what,
+          doneBecause);
       Logger.info("Autopilot: session " + name + " " + what + "; pausing");
     }
   }
@@ -770,17 +785,26 @@ public final class Autopilot {
     adoptLiveSession();
     scheduler.execute(new Runnable() {
       public void run() {
-        try {
-          Experiment running = ScriptBoard.engineExperiment();
-          if (running != null && running.id.equals(saved.experimentId)) {
-            ScriptBoard.afterStepsLoaded(running);
-          }
-        } catch (Exception e) {
-          Logger.error("Autopilot: could not apply the new settings to the running session", e);
-        }
+        applyToItsSession(saved.experimentId);
         openWhenDue(takeOver ? "its settings were saved, taking over the engine" : "its settings were saved", !takeOver, false);
       }
     });
+  }
+
+  /**
+   * The Autopilot page's waiting room and takeover, applied to the session the engine runs now if it
+   * is the autopilot's (a save changed them, or Resume handed it a session of its experiment); a
+   * session a researcher runs by hand keeps the steps' own (ScriptBoard.afterStepsLoaded decides).
+   */
+  private static void applyToItsSession(Long experimentId) {
+    try {
+      Experiment running = ScriptBoard.engineExperiment();
+      if (running != null && experimentId != null && running.id.equals(experimentId)) {
+        ScriptBoard.afterStepsLoaded(running);
+      }
+    } catch (Exception e) {
+      Logger.error("Autopilot: could not apply its settings to the running session", e);
+    }
   }
 
   /**
@@ -798,6 +822,12 @@ public final class Autopilot {
     Logger.info("Autopilot: " + why);
     scheduler.execute(new Runnable() {
       public void run() {
+        // (a session of its experiment it was handed now runs with its waiting room and takeover)
+        try {
+          applyToItsSession(effective().settings.experimentId);
+        } catch (Exception e) {
+          Logger.error("Autopilot: could not read its settings", e);
+        }
         openWhenDue(why, true, false);
       }
     });
@@ -820,8 +850,9 @@ public final class Autopilot {
    * beside it ("open already"), and from now on keeps that one open as its own. Its links lead there,
    * its waiting room starts the game, and nobody need be watching, so it counts as a session it opened
    * (ownSession): a step that fails during its game ends it and pauses the autopilot, rather than
-   * leaving its participants waiting for good. Only on Resume or a save, the researcher handing it
-   * over: the periodic check leaves a session run by hand to whoever runs it.
+   * leaving its participants waiting for good. It is the autopilot's session for the console too, and
+   * runs with the Autopilot page's waiting room and takeover (openedSession). Only on Resume or a save,
+   * the researcher handing it over: the periodic check leaves a session run by hand to whoever runs it.
    */
   private static void adoptLiveSession() {
     Effective e;
@@ -835,7 +866,11 @@ public final class Autopilot {
     }
     // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
     if (!e.isOn() || live == null || live.isTestInstance() || live.experiment == null
-        || !e.settings.experimentId.equals(live.experiment.id) || live.id.equals(ownSession)) {
+        || !e.settings.experimentId.equals(live.experiment.id)) {
+      return;
+    }
+    openedSession = live.id;
+    if (live.id.equals(ownSession)) {
       return;
     }
     ownSession = live.id;
@@ -1052,6 +1087,15 @@ public final class Autopilot {
   static void launchCarriedOut(Long sessionId) {
     launchRequestedAt = 0L;
     ownSession = sessionId;
+    openedSession = sessionId;
+  }
+
+  /**
+   * Whether this is the autopilot's session (openedSession): the one it opened last, or was handed on
+   * Resume or a save, whether or not it is paused now. Not a session a researcher opened by hand.
+   */
+  static boolean isAutopilotsSession(Long sessionId) {
+    return sessionId != null && sessionId.equals(openedSession);
   }
 
   /** Whether the last launch asked for hasn't been carried out yet (see launchRequestedAt). */
@@ -1251,7 +1295,12 @@ public final class Autopilot {
     } else {
       status.put("experimentId", experiment.id);
       status.put("experimentName", experiment.name);
+      // The engine's session of its experiment when it is the autopilot's (openedSession), whatever
+      // its state; not one a researcher opened by hand, which the console called "Opened by Autopilot".
       ExperimentInstance session = engineSessionOf(experiment.id);
+      if (session != null && !isAutopilotsSession(session.id)) {
+        session = null;
+      }
       if (session == null) {
         status.putNull("instance");
       } else {

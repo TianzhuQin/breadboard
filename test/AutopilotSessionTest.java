@@ -53,7 +53,7 @@ public class AutopilotSessionTest extends BaseTest {
         Field launch = Autopilot.class.getDeclaredField("launchRequestedAt");
         launch.setAccessible(true);
         launch.set(null, 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession"}) {
             Field f2 = Autopilot.class.getDeclaredField(name);
             f2.setAccessible(true);
             f2.set(null, null);
