@@ -240,9 +240,11 @@ Remove-Item -LiteralPath $localConf
 Pass 'the port and memory set in conf\local.conf are the ones the server runs with'
 
 # Curly quotes in conf\local.conf (as Word or an input method types them), outside straight quotes and
-# comments, are named before Java starts.
+# comments, are named before Java starts: one (here the closing one of a URL whose opening one was
+# typed again), or both of a value's. The first line that has them is named.
+$halfCurly = 'breadboard.wsUrl="wss://half-curly.smoke.test' + [char]0x201D
 $curly = 'breadboard.rootUrl=' + [char]0x201C + 'https://curly.smoke.test' + [char]0x201D
-Set-Content -LiteralPath $localConf -Encoding utf8 -Value @('# the lab''s settings', $curly)
+Set-Content -LiteralPath $localConf -Encoding utf8 -Value @('# the lab''s settings', $halfCurly, $curly)
 $eighth = Start-Breadboard $other ($Port + 5) 'eighth.log' 'eighth-err.log' -Wait
 $said = Get-Said 'eighth.log'
 if ($eighth.ExitCode -ne 1 -or -not $said.Contains('Line 2 of conf\local.conf has curly quotes') -or $said.Contains('Play server process ID')) {

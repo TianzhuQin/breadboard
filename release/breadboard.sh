@@ -156,9 +156,11 @@ done
 # Curly double quotes (U+201C, U+201D), which TextEdit's Smart Quotes (or an input method) types in
 # place of straight ones ("), make conf/local.conf unreadable to the server, whose message then
 # misleads ("try enclosing the value in double quotes"): name their lines instead. Inside straight
-# quotes, or in a comment, they are fine. (In UTF-8, as the server reads the file.)
+# quotes, or in a comment, they are fine. A comment (# or //) starts outside straight quotes: after
+# one left open, as in "https://...” (one quote typed again, the other not), it is all the value.
+# (In UTF-8, as the server reads the file.)
 if [ -r conf/local.conf ]; then
-  CURLY="$(LC_ALL=C sed -e 's/"[^"]*"//g' -e 's/#.*//' -e 's#//.*##' conf/local.conf \
+  CURLY="$(LC_ALL=C sed -e 's/"[^"]*"//g' -e 's@//@#@g' -e 's/^\([^"#]*\)#.*/\1/' conf/local.conf \
     | LC_ALL=C grep -n "$(printf '\342\200[\234\235]')" | cut -d: -f1 | paste -s -d, - | sed 's/,/, /g')"
   if [ -n "$CURLY" ]; then
     case "$CURLY" in

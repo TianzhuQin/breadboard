@@ -366,13 +366,15 @@ else
   echo "skip a program on [::1] at the port: this computer has no IPv6 loopback"
 fi
 
-# Curly quotes in conf/local.conf, outside straight quotes and comments, are named before Java starts.
-printf '%s\n' '# the settings this install changes' "breadboard.rootUrl=${LQ}https://curly.smoke.test${RQ}" > "$APP/conf/local.conf"
+# Curly quotes in conf/local.conf, outside straight quotes and comments, are named before Java starts:
+# both of a value's, or one (here the closing one of a URL whose opening one was typed again).
+printf '%s\n' '# the settings this install changes' "breadboard.rootUrl=${LQ}https://curly.smoke.test${RQ}" \
+  "breadboard.wsUrl=\"wss://half-curly.smoke.test${RQ}" > "$APP/conf/local.conf"
 if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/curly.log" 2>&1 < /dev/null; then
   fail "it started with curly quotes in conf/local.conf"
 fi
 rm -f "$APP/conf/local.conf"
-grep -q "Line 2 of conf/local.conf has curly quotes" "$WORK/curly.log" && ! grep -q "Play server process ID" "$WORK/curly.log" \
+grep -q "Lines 2, 3 of conf/local.conf have curly quotes" "$WORK/curly.log" && ! grep -q "Play server process ID" "$WORK/curly.log" \
   || fail "curly quotes in conf/local.conf weren't named before Java started: $(cat "$WORK/curly.log")"
 pass "curly quotes in conf/local.conf are named before Java starts"
 

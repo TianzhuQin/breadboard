@@ -91,14 +91,16 @@ REM is read from a line of its own (key=value, key: value or key = "value", with
 REM or not), the last one if there are several; a value that isn't one ("?") is refused. Curly double
 REM quotes (as Word, a web page or an input method types them) make the file unreadable to the
 REM server, whose message then misleads: CURLY is the first line that has them (outside straight
-REM quotes and comments, where they are fine), which is named instead.
+REM quotes and comments, where they are fine), which is named instead. A comment (# or //) starts
+REM outside straight quotes: after one left open, as in a "https://... whose closing quote is curly,
+REM it is all the value.
 SET "PORT="
 CALL :findport %JAVA_OPTS% %*
 SET "MEMORY=1g"
 SET "LOCAL_PORT="
 SET "LOCAL_MEMORY="
 SET "CURLY="
-IF EXIST "conf\local.conf" FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$port = $null; $memory = $null; $n = 0; foreach ($line in [IO.File]::ReadAllLines((Join-Path (Get-Location) 'conf\local.conf'))) { $n++; if (($line -replace '\x22[^\x22]*\x22', '' -replace '#.*', '' -replace '//.*', '') -match '[\u201C\u201D]') { 'curly ' + $n }; if ($line -match '\A\s*(http\.port|breadboard\.memory)\s*[=:]\s*(.*?)\s*(#.*|//.*)?\z') { $value = $Matches[2] -replace '\A\x22(.*)\x22\z', '$1'; if ($Matches[1] -eq 'http.port') { $port = $value } else { $memory = $value } } }; if ($port -ne $null) { if ($port -match '\A[1-9][0-9]{0,4}\z' -and [int]$port -le 65535) { 'http.port ' + $port } else { 'http.port ?' } }; if ($memory -ne $null) { if ($memory -match '\A[1-9][0-9]{0,4}[mMgG]\z') { 'breadboard.memory ' + $memory } else { 'breadboard.memory ?' } }" 2^>NUL') DO (
+IF EXIST "conf\local.conf" FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$port = $null; $memory = $null; $n = 0; foreach ($line in [IO.File]::ReadAllLines((Join-Path (Get-Location) 'conf\local.conf'))) { $n++; if (($line -replace '\x22[^\x22]*\x22', '' -replace '//', '#' -replace '\A([^\x22#]*)#.*', '$1') -match '[\u201C\u201D]') { 'curly ' + $n }; if ($line -match '\A\s*(http\.port|breadboard\.memory)\s*[=:]\s*(.*?)\s*(#.*|//.*)?\z') { $value = $Matches[2] -replace '\A\x22(.*)\x22\z', '$1'; if ($Matches[1] -eq 'http.port') { $port = $value } else { $memory = $value } } }; if ($port -ne $null) { if ($port -match '\A[1-9][0-9]{0,4}\z' -and [int]$port -le 65535) { 'http.port ' + $port } else { 'http.port ?' } }; if ($memory -ne $null) { if ($memory -match '\A[1-9][0-9]{0,4}[mMgG]\z') { 'breadboard.memory ' + $memory } else { 'breadboard.memory ?' } }" 2^>NUL') DO (
   IF "%%A"=="curly" IF NOT DEFINED CURLY SET "CURLY=%%B"
   IF "%%A"=="http.port" SET "LOCAL_PORT=%%B"
   IF "%%A"=="breadboard.memory" SET "LOCAL_MEMORY=%%B"
