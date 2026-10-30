@@ -223,6 +223,7 @@ public class Global extends GlobalSettings {
       Logger.warn("Could not add the index on event data names (looking up returning Prolific participants is slower without it): " + e.getMessage());
     }
     addLongestSession();
+    uncacheSessionIds();
 
     markInterruptedSessions();
 
@@ -301,6 +302,38 @@ public class Global extends GlobalSettings {
       }
     } catch (Exception e) {
       Logger.warn("Could not add the autopilot's longest session to its settings (its sessions then have no time limit): " + e.getMessage());
+    }
+  }
+
+  /**
+   * Session ids follow on after a crash. H2 hands out a sequence's numbers 32 at a time (its cache)
+   * and writes down only where each batch ends, so after a server was killed (a crash, a power cut,
+   * kill -9) the next session's id jumped by up to 32: sessions 21 to 51 seemed to be missing from
+   * Sessions & data. The sequence of session ids keeps no numbers in memory (a cache of 1: each is
+   * written as it is handed out), going on from the last one handed out, or from the highest id when
+   * that is higher. H2 1.3 can't change a sequence's cache (its ALTER SEQUENCE has no CACHE), so the
+   * sequence is made again: once, nothing where its cache is 1 already. One found missing, as after a
+   * stop between the two steps, is made. Only on H2 (every configuration Breadboard has).
+   */
+  static void uncacheSessionIds() {
+    try {
+      if (!Play.application().configuration().getString("db.default.driver", "").contains("h2")) {
+        return;
+      }
+      SqlRow sequence = Ebean.createSqlQuery("select current_value as current_value, cache as cache_size "
+          + "from information_schema.sequences where lower(sequence_name) = 'experiment_instances_seq'").findUnique();
+      if (sequence != null && Long.valueOf(1L).equals(sequence.getLong("cache_size"))) {
+        return;
+      }
+      Long current = sequence == null ? null : sequence.getLong("current_value");
+      Long highest = Ebean.createSqlQuery("select max(id) as max_id from experiment_instances").findUnique().getLong("max_id");
+      long next = Math.max(current == null ? 0L : current, highest == null ? 0L : highest) + 1;
+      if (sequence != null) {
+        Ebean.createSqlUpdate("drop sequence experiment_instances_seq").execute();
+      }
+      Ebean.createSqlUpdate("create sequence experiment_instances_seq start with " + next + " cache 1").execute();
+    } catch (Exception e) {
+      Logger.warn("Could not make session ids follow on after a crash (a crash may then skip some): " + e.getMessage());
     }
   }
 
