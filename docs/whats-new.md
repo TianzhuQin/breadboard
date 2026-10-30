@@ -240,7 +240,9 @@ completion code, or else a "This session has ended" notice.
 The page reconnects by itself, at once when the network or the participant comes back to the tab,
 and notices a connection that died without closing. `<ConnectionStatus />` says what is going on,
 with **Try now** while it reconnects. When the study is opened in another tab or window, the newer
-page takes over and the older one stops, with **Use it here** to take it back.
+page takes over and the older one stops, with **Use it here** to take it back. An older page whose
+connection comes back by itself doesn't take the seat from a newer one that is open: the page the
+participant opened last keeps it.
 
 **A network that blocks the live connection.** A page that has never connected after three tries
 says the network may not let it through, and suggests another network or browser. So does a page
@@ -303,7 +305,11 @@ playing, and a waiting room doesn't count them.
 
 - **One page holds the seat.** A participant's newer page (another tab, a reload) takes the seat.
   The older one is sent `{"bbClosed": "replaced"}` and closed, so it doesn't reconnect and take the
-  seat back. `clientConnected` and `clientDisconnected` are recorded only when the participant comes
+  seat back. An older page that reconnects by itself while a newer one holds the seat (its connection
+  had dropped meanwhile) is sent the same and closed, and the newer page keeps the seat: the page
+  says when it was loaded, in the server's time, as it connects (its state's `loadedAt`, as `bbPage`
+  in the socket's address). **Use it here** asks for the seat (`bbTake=1`) and gets it, from a newer
+  page too. `clientConnected` and `clientDisconnected` are recorded only when the participant comes
   or goes, not each time a page takes over; `bb:connection` is emitted whenever a page takes the
   seat, so scripts may hear `connected: true` for someone who is connected already.
 - **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds

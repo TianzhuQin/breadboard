@@ -263,6 +263,31 @@ describe('a page whose study was opened in another tab or window', () => {
     expect(FakeSocket.all.length).toBe(3)
   })
 
+  it('tells the server when it was loaded as it connects, and asks for the seat only after "Use it here"', async () => {
+    // (so that an older tab reconnecting by itself doesn't take the seat from the newer one)
+    const page = await openPage(stateAnswers([200, { ...CONFIG, connectSocket: SOCKET + '?bbt=tok', loadedAt: 1761800000000 }]))
+    expect(FakeSocket.all[0].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000')
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    page.Breadboard.useHere()
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000&bbTake=1')
+    // the participant's choice holds until a connection opens, and no longer
+    FakeSocket.all[1].fail()
+    expect((await nextAttempt()).url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000&bbTake=1')
+    FakeSocket.all[2].accept()
+    await reconnect(3)
+    expect(FakeSocket.all[3].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000')
+  })
+
+  it('leaves the socket\'s address as it is when its state doesn\'t say when it was loaded', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    page.Breadboard.useHere()
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
+    expect(FakeSocket.all[0].url).toBe(SOCKET)
+  })
+
   it('keeps the seat it was given back while the other tab is told', async () => {
     const page = await openPage(stateAnswers([200, CONFIG]))
     FakeSocket.all[0].frame(REPLACED)

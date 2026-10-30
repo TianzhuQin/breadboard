@@ -147,6 +147,9 @@ public class ClientController extends Controller
             }
         }
         result.put("connectSocket", socketUrl);
+        // When this page was loaded, in the server's time: its socket says so as it connects, so that
+        // of two pages of the participant's, the one opened last keeps the seat (Client.connect).
+        result.put("loadedAt", System.currentTimeMillis());
         return ok(result);
     }
 
@@ -285,6 +288,24 @@ public class ClientController extends Controller
         return experiment.getClientHtml();
     }
 
+    // What a participant's page adds to its socket's address (frontend/core, breadboard.ts): when it
+    // was loaded (its /state's loadedAt), and, when the participant chose "Use it here", that it takes
+    // the seat.
+    static final String PAGE_LOADED_QUERY = "bbPage";
+    static final String TAKE_SEAT_QUERY = "bbTake";
+
+    /** A whole number written as text, or 0. */
+    private static long wholeNumberOrZero(String text) {
+        if (text == null) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(text.trim()));
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
     /**
     * Handle the client websocket.
     */
@@ -296,6 +317,10 @@ public class ClientController extends Controller
         // A researcher looking through the player's eyes, not the participant: the data says so.
         final boolean byResearcher = authorized && !ParticipantAuth.verify(experimentInstanceId, clientId,
             ParticipantAuth.presentedToken(request(), experimentInstanceId));
+        // When the page was loaded (its /state's loadedAt), and whether the participant asked for the
+        // seat there ("Use it here"): see Client.Connection.
+        final long pageLoadedAt = wholeNumberOrZero(request().getQueryString(PAGE_LOADED_QUERY));
+        final boolean takesSeat = "1".equals(request().getQueryString(TAKE_SEAT_QUERY));
         return new WebSocket<JsonNode>() 
         {
             // Called when the Websocket Handshake is done.
@@ -308,7 +333,8 @@ public class ClientController extends Controller
                 }
                 try
                 {
-                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE), byResearcher);
+                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE), byResearcher,
+                        pageLoadedAt, takesSeat);
                 }
                 catch (Exception ex)
                 {

@@ -96,10 +96,11 @@ public class ParticipantConnectionTest extends BaseTest {
         final WebSocket.In<JsonNode> in = new WebSocket.In<JsonNode>();
         final List<JsonNode> frames = new CopyOnWriteArrayList<>();
         volatile boolean closed;
-        final ThrottledWebSocketOut out = new ThrottledWebSocketOut(new WebSocket.Out<JsonNode>() {
+        final WebSocket.Out<JsonNode> socketOut = new WebSocket.Out<JsonNode>() {
             public void write(JsonNode frame) { frames.add(frame); }
             public void close() { closed = true; }
-        }, 0L);
+        };
+        final ThrottledWebSocketOut out = new ThrottledWebSocketOut(socketOut, 0L);
 
         void send(String action, Object... pairs) {
             ObjectNode m = Json.newObject();
@@ -135,6 +136,26 @@ public class ParticipantConnectionTest extends BaseTest {
     private Page connect(String clientId, boolean preview) throws Exception {
         Page page = new Page();
         ScriptBoard.addClient(experiment.id.toString(), session.id.toString(), clientId, page.in, page.out, preview);
+        return page;
+    }
+
+    /**
+     * A participant's page opening its socket with its seat token, as a page does: through the
+     * handshake (ClientController.connectClient), with what else the page adds to the address
+     * ({@code query}, e.g. "bbPage=1000").
+     */
+    private Page handshake(String clientId, String token, String query) throws Exception {
+        String e = experiment.id.toString();
+        String i = session.id.toString();
+        play.test.FakeRequest request = fakeRequest(GET, "/game/" + e + "/" + i + "/" + clientId + "/connect?"
+            + ParticipantAuth.QUERY_PARAM + "=" + token + (query.isEmpty() ? "" : "&" + query));
+        Http.Context.current.set(play.core.j.JavaHelpers$.MODULE$.createJavaContext(request.getWrappedRequest()));
+        Page page = new Page();
+        try {
+            controllers.ClientController.connectClient(e, i, clientId).onReady(page.in, page.socketOut);
+        } finally {
+            Http.Context.current.remove();
+        }
         return page;
     }
 
@@ -274,6 +295,93 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(Boolean.TRUE, system("p1").get("connected"));
         assertNull("only while they are away", system("p1").get("disconnectedAt"));
         assertSame(back.out, client("p1").out);
+    }
+
+    // ---- the page opened last keeps the seat ------------------------------------------------------
+
+    @Test
+    public void anOlderPageReconnectingByItselfLeavesTheSeatToThePageOpenedSince() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        Page older = handshake("p1", token, "bbPage=1000");
+        assertTrue(older.count(VIEW) >= 1);
+        // They open the study again in a new tab, while the older one's connection is down.
+        Page newer = handshake("p1", token, "bbPage=2000");
+        assertEquals(1, older.count(REPLACED));
+
+        // The older tab's network comes back, and it reconnects by itself: the newer page keeps the
+        // seat, and the older one is told it has been taken.
+        Page again = handshake("p1", token, "bbPage=1000");
+        assertTrue(again.closed);
+        assertEquals(again.frames.toString(), 1, again.frames.size());
+        assertTrue(REPLACED.matches(again.frames.get(0)));
+        assertFalse(newer.closed);
+        assertEquals(0, newer.count(REPLACED));
+        client("p1").send("still-here");
+        assertTrue(newer.last().has("eventName"));
+        assertEquals(1, again.frames.size());
+        // What the refused socket sends, and its going, change nothing; nothing is recorded.
+        again.send("MakeChoice", "choiceUID", "no-such-choice");
+        again.hangUp();
+        assertEquals(0, again.count(ANSWER));
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(1, events("clientConnected", "p1"));
+        assertEquals(0, events("clientDisconnected", "p1"));
+
+        // "Use it here" on the older page takes the seat, from the newer one.
+        Page here = handshake("p1", token, "bbPage=1000&bbTake=1");
+        assertFalse(here.closed);
+        assertEquals(1, newer.count(REPLACED));
+        assertTrue(newer.closed);
+        assertTrue(here.count(VIEW) >= 1);
+        // A page that doesn't say when it was loaded (from an older server) takes it as before.
+        Page unknown = handshake("p1", token, "");
+        assertEquals(1, here.count(REPLACED));
+        assertFalse(unknown.closed);
+        assertEquals(1, events("clientConnected", "p1"));
+        assertEquals(0, events("clientDisconnected", "p1"));
+    }
+
+    @Test
+    public void anOlderPageIsSeatedOnceThePageOpenedSinceHasGone() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        handshake("p1", token, "bbPage=1000");
+        Page newer = handshake("p1", token, "bbPage=2000");
+        newer.hangUp();
+        Page older = handshake("p1", token, "bbPage=1000");
+        assertFalse(older.closed);
+        assertEquals(0, older.count(REPLACED));
+        assertTrue(older.count(VIEW) >= 1);
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(2, events("clientConnected", "p1"));
+        assertEquals(1, events("clientDisconnected", "p1"));
+    }
+
+    @Test
+    public void ofTwoPagesOfTheParticipantsTheOneLoadedLastHoldsTheSeat() {
+        Client client = new Client("p1", session);
+        assertEquals(Client.Arrival.SEATED, client.connect(socket(1000L, false, false)));
+        Client.Connection newer = socket(2000L, false, false);
+        assertEquals(Client.Arrival.TOOK_OVER, client.connect(newer));
+        Client.Connection older = socket(1000L, false, false);
+        assertEquals(Client.Arrival.REFUSED, client.connect(older));
+        assertFalse(older.isOpen());
+        assertTrue(client.holdsSeat(newer));
+        // the same page connecting again, or one loaded at the same moment, takes it
+        Client.Connection samePage = socket(2000L, false, false);
+        assertEquals(Client.Arrival.TOOK_OVER, client.connect(samePage));
+        // a researcher's preview is none of this: it watches their page, whenever it was loaded
+        assertEquals(Client.Arrival.WATCHING, client.connect(socket(9000L, true, true)));
+        assertEquals(Client.Arrival.WATCHING, client.connect(socket(1L, true, false)));
+        assertTrue(client.holdsSeat(samePage));
+        // the participant asks for it on the older page
+        Client.Connection asked = socket(1000L, false, true);
+        assertEquals(Client.Arrival.TOOK_OVER, client.connect(asked));
+        assertTrue(client.holdsSeat(asked));
+    }
+
+    private static Client.Connection socket(long pageLoadedAt, boolean preview, boolean takesSeat) {
+        return new Client.Connection(null, new ThrottledWebSocketOut(new WebSocketTest.TestWebSocketOut(), 0L), preview,
+            pageLoadedAt, takesSeat);
     }
 
     // ---- the heartbeat -----------------------------------------------------------------------------

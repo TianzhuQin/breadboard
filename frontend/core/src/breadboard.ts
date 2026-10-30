@@ -192,6 +192,22 @@ function showPreviewEnded () {
   app.appendChild(page)
 }
 
+// What a participant's page adds to its socket's address (controllers.ClientController): when the
+// page was loaded, in the server's time (its state's loadedAt), and, when the participant asked for
+// the seat on this page ("Use it here"), that it takes it. Of two pages of a participant's, the one
+// they opened last keeps the seat: an older one that reconnects by itself is turned away.
+const PAGE_LOADED_QUERY = 'bbPage'
+const TAKE_SEAT_QUERY = 'bbTake'
+
+/** The socket's address with these added (see PAGE_LOADED_QUERY) */
+function withPageQuery (url: string, loadedAt: any, takeSeat: boolean): string {
+  const added: string[] = []
+  if (typeof loadedAt === 'number' && loadedAt > 0) added.push(PAGE_LOADED_QUERY + '=' + loadedAt)
+  if (takeSeat) added.push(TAKE_SEAT_QUERY + '=1')
+  if (!added.length) return url
+  return url + (url.indexOf('?') >= 0 ? '&' : '?') + added.join('&')
+}
+
 /** Ask for this page's state (/state), with its token; given up after `timeoutMs`, if set */
 function requestState (timeoutMs?: number) {
   const token = participantToken()
@@ -300,6 +316,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private serverAnswered = false
   /** checkServer is waiting for the server */
   private checkingServer = false
+  /** The participant asked for the seat on this page (useHere): the next connection takes it */
+  private takingSeat = false
 
   /** Whether the live connection is open: what the page sends now reaches the server now */
   get isOpen (): boolean {
@@ -378,13 +396,19 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       const config = await this.loadConfig()
       // A participant's socket has a heartbeat; the console's (the previous console uses this class
       // too) would answer the ping with an error.
-      this.socket = new Socket(socketUrl(config.connectSocket), undefined, config.clientId ? { ping: PING, isPong } : {})
+      const url = socketUrl(config.connectSocket)
+      this.socket = new Socket(
+        config.clientId ? () => withPageQuery(url, config.loadedAt, this.takingSeat) : url,
+        undefined,
+        config.clientId ? { ping: PING, isPong } : {})
       this.socket.on('close', () => { this.dropped = true })
       // (before CONNECTION_EVENT below: a new connection is the player's own until the server says)
       this.socket.on('connect', () => { this.watchingNow = false })
       this.socket.on('open', () => {
         this.liveBlocked = false
         this.serverAnswered = false
+        // (the server has given it the seat)
+        this.takingSeat = false
       })
       // A participant's page that had connected and can't again: the network, or the server?
       if (config.clientId) this.socket.on('unopened', (inARow: number) => this.onUnopened(inARow))
@@ -424,11 +448,13 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /**
    * Take the seat back after another page took it (connection 'elsewhere'): connect again, once
-   * (the other page is then told so), and go on as before.
+   * (the other page is then told so), and go on as before. The connection asks for the seat, so
+   * the server gives it even when the other page was opened after this one.
    */
   useHere () {
     if (!this.socket || this.ended || !this.replaced) return
     this.replaced = false
+    this.takingSeat = true
     this.socket.resume()
     this.emit(CONNECTION_EVENT)
   }
@@ -749,7 +775,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       const data = JSON.parse(d)
       if (data && data.bbClosed === 'replaced') {
         // Another page took the seat: the participant's own, in another tab or window, or another
-        // preview of the researcher's. Taking it back by reconnecting would have that page take it
+        // preview of the researcher's; or this page reconnected by itself while one the participant
+        // opened after it holds the seat. Taking it back by reconnecting would have that page take it
         // back in turn, for ever: only useHere().
         this.socket.stopReconnecting()
         if (!this.replaced && !this.ended) {

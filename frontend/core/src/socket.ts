@@ -93,7 +93,11 @@ export class Socket extends Emitter {
   /** Listening for the network or the page coming back */
   private watchingPage = false
 
-  constructor (private url: string, private protocols?: string | string[], private options: SocketOptions = {}) {
+  /**
+   * @param url where to connect, or what says so for each attempt (e.g. with what the page asks of
+   * the server this time)
+   */
+  constructor (private url: string | (() => string), private protocols?: string | string[], private options: SocketOptions = {}) {
     super()
     this.connect = this.connect.bind(this)
     this.wake = this.wake.bind(this)
@@ -121,7 +125,8 @@ export class Socket extends Emitter {
     this.state = SocketState.PENDING
     this.attemptAt = Date.now()
     this.emit('connect')
-    const ws = this.protocols ? new WebSocket(this.url, this.protocols) : new WebSocket(this.url)
+    const url = typeof this.url === 'function' ? this.url() : this.url
+    const ws = this.protocols ? new WebSocket(url, this.protocols) : new WebSocket(url)
     this.socket = ws
     // Only the current connection counts: once given up (abandon), whatever it does is ignored.
     let attached = true

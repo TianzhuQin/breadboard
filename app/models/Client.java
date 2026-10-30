@@ -79,6 +79,12 @@ public class Client extends Model {
     // A researcher's preview (ClientController: a signed-in researcher, or a preview token), not the
     // participant's own page.
     public final boolean preview;
+    // When the page it belongs to was loaded, in the server's time (its /state said so, and it sends
+    // that back as it connects); 0 when unknown (a page loaded from an older version of the server).
+    // Of two pages of the participant's, the one loaded later is the one they opened last (see connect).
+    public final long pageLoadedAt;
+    // Its page asks for the seat (the participant chose "Use it here"), even from a page loaded later.
+    public final boolean takesSeat;
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile long lastHeard = System.currentTimeMillis();
     private volatile boolean pinged;
@@ -86,9 +92,21 @@ public class Client extends Model {
     private String lastView;
 
     public Connection(WebSocket.In<JsonNode> in, ThrottledWebSocketOut out, boolean preview) {
+      this(in, out, preview, 0L, false);
+    }
+
+    public Connection(WebSocket.In<JsonNode> in, ThrottledWebSocketOut out, boolean preview, long pageLoadedAt,
+                      boolean takesSeat) {
       this.in = in;
       this.out = out;
       this.preview = preview;
+      this.pageLoadedAt = pageLoadedAt;
+      this.takesSeat = takesSeat;
+    }
+
+    /** Whether its page was loaded before that one's (both known). */
+    boolean loadedBefore(Connection other) {
+      return pageLoadedAt > 0 && other.pageLoadedAt > 0 && pageLoadedAt < other.pageLoadedAt;
     }
 
     public boolean isOpen() {
@@ -181,7 +199,12 @@ public class Client extends Model {
     /** It holds the seat: the participant is back, and the preview that held it watches from now on. */
     PREVIEW_WATCHES,
     /** A researcher's preview of a player whose own page holds the seat, or of a computer player: it only watches. */
-    WATCHING
+    WATCHING,
+    /**
+     * Turned away: a page of the participant's that was loaded before the one that holds the seat,
+     * reconnecting by itself. It was told so ({"bbClosed": "replaced"}) and closed.
+     */
+    REFUSED
   }
 
   /** Who is in the seat, as the session counts it (see ScriptBoard.recordConnection). */
@@ -275,9 +298,13 @@ public class Client extends Model {
    * page of the participant, or a preview replaced by a preview, it is told ({"bbClosed": "replaced"})
    * and closed, so it doesn't reconnect and take the seat back, as two tabs used to, for ever; a
    * preview that held it for a participant who comes back watches from now on ({"bbWatching": true});
-   * a socket that had closed already is just left. Any socket of a computer player only watches
-   * what the computer does. A preview that takes the seat of someone whose own page has held it only
-   * stands in for them (see presence).
+   * a socket that had closed already is just left. Nor does a page of the participant's take the
+   * seat from one of theirs that was loaded after it, unless they asked for it there ("Use it here"):
+   * it is an older tab reconnecting by itself (its connection had dropped), and the newer page they
+   * opened meanwhile, which they are looking at, keeps the seat. The older page is told so and
+   * closed instead (Arrival.REFUSED). Any socket of a computer player only watches what the computer
+   * does. A preview that takes the seat of someone whose own page has held it only stands in for
+   * them (see presence).
    */
   public Arrival connect(Connection incoming) {
     synchronized (seatLock) {
@@ -291,6 +318,10 @@ public class Client extends Model {
       }
       if (incoming.preview && !previous.preview) {
         return watch(incoming);
+      }
+      if (!incoming.preview && !previous.preview && !incoming.takesSeat && incoming.loadedBefore(previous)) {
+        incoming.close(REPLACED);
+        return Arrival.REFUSED;
       }
       take(incoming);
       if (previous.preview && !incoming.preview) {

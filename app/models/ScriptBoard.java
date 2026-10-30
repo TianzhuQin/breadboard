@@ -1342,6 +1342,16 @@ public class ScriptBoard extends UntypedActor {
 
   /** @param byResearcher a researcher's preview of this player (its sign-in is recorded as such) */
   public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId, final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out, final boolean byResearcher) throws Exception {
+    addClient(experimentIdString, experimentInstanceIdString, clientId, in, out, byResearcher, 0L, false);
+  }
+
+  /**
+   * @param pageLoadedAt when the socket's page was loaded, in the server's time (0: unknown), and
+   * @param takesSeat whether it asks for the seat: see Client.Connection
+   */
+  public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId,
+                               final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out, final boolean byResearcher,
+                               long pageLoadedAt, boolean takesSeat) throws Exception {
     try {
       Long experimentId = Long.parseLong(experimentIdString);
       Long experimentInstanceId = Long.parseLong(experimentInstanceIdString);
@@ -1437,7 +1447,7 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
 
-      final Client.Connection connection = new Client.Connection(in, out, byResearcher);
+      final Client.Connection connection = new Client.Connection(in, out, byResearcher, pageLoadedAt, takesSeat);
       // Someone this session has seen: their page reconnecting, another tab, or a preview of them.
       boolean returning = client != null;
       if (client == null) {
@@ -1457,6 +1467,12 @@ public class ScriptBoard extends UntypedActor {
       // preview. Client.connect says what becomes of this socket, and of the one before, which can
       // no longer act for this participant.
       Client.Arrival arrival = client.connect(connection);
+      if (arrival == Client.Arrival.REFUSED) {
+        // An older tab of theirs reconnecting by itself, while the page they opened since holds the
+        // seat: it was told so, and changes nothing.
+        Logger.debug("addClient: " + clientId + "'s older page was refused: a page they loaded later holds the seat");
+        return;
+      }
       if (!byResearcher && arrival != Client.Arrival.WATCHING) {
         ownPageHolds(experimentInstance, clientId);
       }
