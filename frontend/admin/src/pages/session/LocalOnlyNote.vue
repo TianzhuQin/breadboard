@@ -7,9 +7,8 @@
     <TriangleAlert :size="15" aria-hidden="true" class="local-note__icon" />
     <span v-if="internet">
       {{ what }} <b>{{ host }}</b>, {{ local ? 'which only works on this computer' : 'an address that only works on this network' }}.
-      Prolific sends people from the internet, so they need the server’s public address: put Breadboard
-      on a server (<a :href="DOCS" target="_blank" rel="noopener noreferrer">putting Breadboard on a server</a>),
-      open the console at its address, and copy the URL there.
+      Prolific sends people from the internet, so it needs the server’s public address: open the console at
+      that address and copy it there (see <a :href="DOCS" target="_blank" rel="noopener noreferrer">putting Breadboard on a server</a>).
     </span>
     <span v-else>
       {{ what }} <b>{{ host }}</b>, which only works on this computer.

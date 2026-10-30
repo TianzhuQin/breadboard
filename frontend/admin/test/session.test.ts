@@ -426,7 +426,7 @@ describe('live session state', () => {
     const prolific = mount(LocalOnlyNote, { props: { what: 'This URL uses', internet: true } })
     const text = prolific.text().replace(/\s+/g, ' ')
     expect(text).toContain(`This URL uses ${host}, which only works on this computer.`)
-    expect(text).toContain('Prolific sends people from the internet, so they need the server’s public address')
+    expect(text).toContain('Prolific sends people from the internet, so it needs the server’s public address: open the console at that address and copy it there (see putting Breadboard on a server).')
     expect(text).not.toContain('same network')
     expect(prolific.find('a').attributes('href')).toMatch(/install\.md#putting-it-on-a-server$/)
     prolific.unmount()
