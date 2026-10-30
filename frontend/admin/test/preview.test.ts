@@ -230,11 +230,17 @@ describe('PreviewPage', () => {
 
   it('offers to join as a newcomer when nobody is there yet', async () => {
     const w = await mountPage()
-    expect(w.text()).toContain('Nobody is in the network yet')
-    const join = w.findAll('a').find(a => a.text().includes('Join as a new participant'))!
-    expect(join.attributes('href')).toBe(`${window.location.origin}/game/7/44/login`)
-    expect(join.attributes('target')).toBe('_blank')
-    w.unmount()
+    try {
+      expect(w.text()).toContain('Nobody is in the network yet')
+      const join = w.findAll('a').find(a => a.text().includes('Join as a new participant'))!
+      expect(join.attributes('href')).toBe(`${window.location.origin}/game/7/44/login`)
+      expect(join.attributes('target')).toBe('_blank')
+      // the header's button says what a newcomer types there
+      const header = w.findAll('a').find(a => a.text().includes('Join as a new participant') && a.attributes('title'))!
+      expect(header.attributes('title')).toBe('Opens the sign-in page in a new tab, as a newcomer sees it: type an ID there (any name or number; one seat per ID)')
+    } finally {
+      w.unmount()
+    }
   })
 
   // (not those whose seat is connected: their own page, or another console's preview, which a

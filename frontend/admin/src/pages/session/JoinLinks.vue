@@ -39,6 +39,11 @@
         </div>
         <p :id="`${base}-${row.key}-hint`" class="live-link__hint">{{ row.hint }}</p>
       </div>
+      <!-- the sign-in page asks for an ID, and a newcomer can't guess what to type -->
+      <p class="live-links__ids">
+        <IdCard :size="15" aria-hidden="true" />
+        <span>With the first two links, participants type an ID to join: any name or number you give them, one seat per ID. People from Prolific don't type one.</span>
+      </p>
       <p class="sr-only" role="status" aria-live="polite">{{ status }}</p>
     </div>
   </BPanel>
@@ -46,7 +51,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, type Component } from 'vue'
-import { Copy, Check, ExternalLink, LogIn, Repeat, Users } from 'lucide-vue-next'
+import { Copy, Check, ExternalLink, IdCard, LogIn, Repeat, Users } from 'lucide-vue-next'
 import { BButton, BInput, BPanel, notify } from '@/ui'
 import { uid } from '@/ui/uid'
 import { joinLinks } from './live'
@@ -147,4 +152,6 @@ async function copy (key: string, url: string) {
 .live-link__box { display: flex; gap: 6px; min-width: 0; }
 .live-link__box .b-input { flex: 1; min-width: 0; }
 .live-link__hint { font-size: var(--text-xs); color: var(--muted); line-height: 1.45; }
+.live-links__ids { display: flex; align-items: flex-start; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); font-size: var(--text-sm); color: var(--text-soft); line-height: 1.45; }
+.live-links__ids svg { flex: none; margin-top: 2px; color: var(--muted); }
 </style>

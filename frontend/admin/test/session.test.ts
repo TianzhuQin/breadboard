@@ -380,6 +380,13 @@ describe('live session state', () => {
     expect(isLocalOrigin('https://bb.lab.org')).toBe(false)
   })
 
+  it('says under the links that participants type an ID to join', async () => {
+    const JoinLinks = (await import('../src/pages/session/JoinLinks.vue')).default
+    const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })
+    expect(w.find('.live-links__ids').text()).toBe('With the first two links, participants type an ID to join: any name or number you give them, one seat per ID. People from Prolific don\'t type one.')
+    w.unmount()
+  })
+
   it('says a link for Prolific needs the server\'s public address, without the tip for the lab\'s network', async () => {
     const { admin } = await import('@/store/admin') as any
     admin.lanAddresses = ['http://10.0.0.5:9000']

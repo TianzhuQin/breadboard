@@ -4,7 +4,7 @@
     intro="See the participant page exactly as each player sees it, live. Choose whose pages to show, then click one to open it full size."
   >
     <template v-if="isRunning" #actions>
-      <BButton :icon="UserPlus" :href="joinLink" target="_blank" rel="noopener" title="Opens the sign-up page in a new tab, as a newcomer sees it">
+      <BButton :icon="UserPlus" :href="joinLink" target="_blank" rel="noopener" title="Opens the sign-in page in a new tab, as a newcomer sees it: type an ID there (any name or number; one seat per ID)">
         Join as a new participant
       </BButton>
     </template>

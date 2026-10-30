@@ -51,7 +51,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 "一场"（session）就是实验的一次运行。
 
 1. 在 **Live session** 页点 **New session**，填 **Session name**，检查 **Launch parameters**（已填好默认值），点 **Create session**。这一场马上开放，参与者可以用链接加入。
-2. 把 **Links for participants** 里的链接发给参与者。**This session** 只在这一场运行时有效。**Whichever session is open** 总是指向这个实验当前开放、还没开始的那一场，可以一直用同一个。**Prolific study URL** 给 Prolific 用。参与者打开链接，在 **Your ID** 里输入一个 ID，点 **Continue**。
+2. 把 **Links for participants** 里的链接发给参与者。**This session** 只在这一场运行时有效。**Whichever session is open** 总是指向这个实验当前开放、还没开始的那一场，可以一直用同一个。**Prolific study URL** 给 Prolific 用。参与者打开链接，在 **Your ID** 里输入一个 ID，点 **Continue**。ID 可以是你给他们的任何名字或编号（最多 64 个字符，不能以 `_` 开头），一个 ID 只占一个位置。
 3. 链接用的是你打开控制台时的网址。用 localhost 打开时，链接只在你自己的电脑上能用。放到服务器上以后，要用服务器的公开网址打开控制台，再复制链接。
 4. 人到齐后点 **Start the game**。等待的人一起进入，实验开始。之后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面"设置写在哪里"）。
 5. 在 **Network** 页实时看网络。选 **Tie**（快捷键 C），先点一个人再点另一个人，就加了一条连接；选 **Cut**（X）再点一条连接，就把它切断。成功后会出现 **Undo**，Ctrl+Z 也能撤销。每次修改都记成一条 `edgeEdit` 事件，操作者是 `admin`。

@@ -224,7 +224,8 @@ that line); **Full error** has the rest, Breadboard's own code included.
 
 Under **Links for participants**, **This session** works while this session runs. **Whichever
 session is open** leads to this experiment's open session whose game hasn't started, so it can be
-shared once and reused. **Prolific study URL** goes into Prolific. The links use the address you
+shared once and reused. With these two, participants type an ID to join: any name or number you give
+them (up to 64 characters, not starting with `_`), one seat per ID. **Prolific study URL** goes into Prolific. The links use the address you
 opened the console at, so open it at the server's public address before copying them.
 
 ### Network
