@@ -410,7 +410,9 @@ Everything researchers create (experiments, sessions, their events, accounts) is
 `db/breadboard.h2.db`. The server copies it while it runs (nothing has to stop) into `backups/`:
 once a day, and before a newer release changes it (`...-upgrade.zip`). The newest 14 are kept. The
 console's **Settings → Backups** lists them, makes one when you ask (before a big change, say), and
-downloads them. The settings above change how often, how many and where.
+downloads them. Each one's name says when it was made (in UTC, e.g.
+`breadboard-2026-10-30-133336.zip`), and the console shows that time, also for backups copied from
+an earlier release. The settings above change how often, how many and where.
 
 The copies are on the same disk as the database, so copy them somewhere else now and then (or set
 `breadboard.backup.dir` to a folder on another disk or a synced drive).

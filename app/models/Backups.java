@@ -10,6 +10,7 @@ import play.libs.Json;
 import java.io.File;
 import java.sql.Connection;
 import java.sql.Statement;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,7 +28,8 @@ import java.util.regex.Pattern;
  * locked). One every breadboard.backup.everyHours hours (24), and before a newer release changes
  * the database; the newest breadboard.backup.keep (14) are kept, in breadboard.backup.dir
  * ("backups", in the server's folder). Each is a zip holding breadboard.h2.db: to go back to one,
- * stop the server, unzip it into db/ (replacing the file there), and start the server again.
+ * stop the server, unzip it into db/ (replacing the file there), and start the server again. When a
+ * backup was made is in its name (in UTC), which a copy of it keeps, unlike its file's time.
  *
  * Only for a database in a file (H2): an in-memory one (the tests) or another database is skipped.
  * No backup is made while the disk is short of room for one (see {@link #roomProblem}): a full disk
@@ -37,6 +39,9 @@ public final class Backups {
 
   /** breadboard-2026-10-28-153012.zip, or with a reason: breadboard-2026-10-28-153012-manual.zip */
   public static final Pattern NAME = Pattern.compile("breadboard-\\d{4}-\\d{2}-\\d{2}-\\d{6}(-[a-z0-9]+)?\\.zip");
+
+  /** The time in a backup's name, in UTC: breadboard-<this>.zip */
+  private static final String STAMP_FORMAT = "yyyy-MM-dd-HHmmss";
 
   /** Room left free beside a copy of the database (see {@link #roomProblem}). */
   static final long SPARE_BYTES = 100L * 1024 * 1024;
@@ -181,7 +186,7 @@ public final class Backups {
     if (all.isEmpty()) {
       return true;
     }
-    long newest = all.get(0).lastModified();
+    long newest = madeAt(all.get(0));
     // (a backup made by hand counts too)
     return System.currentTimeMillis() - newest >= TimeUnit.HOURS.toMillis(everyHours());
   }
@@ -213,8 +218,7 @@ public final class Backups {
     if (!folder.isDirectory() && !folder.mkdirs()) {
       throw new IllegalStateException("Couldn't make the folder " + folder.getAbsolutePath() + ".");
     }
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd-HHmmss");
-    format.setTimeZone(TimeZone.getTimeZone("UTC"));
+    SimpleDateFormat format = stampFormat();
     String name = "breadboard-" + format.format(new Date()) + (why == null ? "" : "-" + why) + ".zip";
     File target = new File(folder, name);
     // two in the same second: the second waits for a name of its own
@@ -277,6 +281,25 @@ public final class Backups {
     return backup.getName().substring(0, "breadboard-0000-00-00-000000".length());
   }
 
+  /**
+   * When a backup (one of {@link #list}) was made: the time in its name, which a copy keeps (an upgrade
+   * copies backups/ into the new release's folder), or, if that can't be read, its file's time.
+   */
+  public static long madeAt(File backup) {
+    try {
+      return stampFormat().parse(stamp(backup).substring("breadboard-".length())).getTime();
+    } catch (ParseException | RuntimeException e) {
+      return backup.lastModified();
+    }
+  }
+
+  private static SimpleDateFormat stampFormat() {
+    SimpleDateFormat format = new SimpleDateFormat(STAMP_FORMAT);
+    format.setTimeZone(TimeZone.getTimeZone("UTC"));
+    format.setLenient(false);
+    return format;
+  }
+
   /** The backup with this name, or null (for any other name, so nothing else can be fetched). */
   public static File find(String name) {
     return find(folder(), name);
@@ -306,12 +329,18 @@ public final class Backups {
     ArrayNode backups = json.putArray("backups");
     if (on) {
       for (File file : list()) {
-        ObjectNode row = backups.addObject();
-        row.put("name", file.getName());
-        row.put("size", file.length());
-        row.put("createdAt", Timestamps.iso(new Date(file.lastModified())));
+        backups.add(row(file));
       }
     }
     return json;
+  }
+
+  /** {name, size, createdAt} of a backup, for the console: createdAt is when it was made ({@link #madeAt}). */
+  public static ObjectNode row(File backup) {
+    ObjectNode row = Json.newObject();
+    row.put("name", backup.getName());
+    row.put("size", backup.length());
+    row.put("createdAt", Timestamps.iso(new Date(madeAt(backup))));
+    return row;
   }
 }

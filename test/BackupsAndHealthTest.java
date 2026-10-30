@@ -144,6 +144,37 @@ public class BackupsAndHealthTest extends BaseTest {
         assertNull(Backups.find(folder, "breadboard-2026-10-28-120000.zip"));
     }
 
+    /** An empty file named as a backup, made at {@code stamp} (yyyy-MM-dd-HHmmss) for {@code why}. */
+    private static File backupFile(File folder, String stamp, String why) throws Exception {
+        File file = new File(folder, "breadboard-" + stamp + (why == null ? "" : "-" + why) + ".zip");
+        assertTrue(file.createNewFile());
+        return file;
+    }
+
+    /**
+     * A backup's time is the one in its name, also for a copy whose file time is the copy's (an
+     * upgrade copies backups/ into the new release's folder); a name whose time can't be read gives
+     * the file's time.
+     */
+    @Test
+    public void aBackupWasMadeWhenItsNameSays() throws Exception {
+        File folder = Files.createTempDirectory("bb-backups").toFile();
+        File copied = backupFile(folder, "2026-10-30-133336", "upgrade");
+        File daily = backupFile(folder, "2026-10-30-133858", null);
+        long copiedAt = System.currentTimeMillis() / 1000 * 1000;
+        assertTrue(copied.setLastModified(copiedAt));
+        assertTrue(daily.setLastModified(copiedAt));
+
+        assertEquals("2026-10-30T13:33:36.000Z", Backups.row(copied).get("createdAt").asText());
+        assertEquals("2026-10-30T13:38:58.000Z", Backups.row(daily).get("createdAt").asText());
+        assertEquals(copied.getName(), Backups.row(copied).get("name").asText());
+        assertEquals("newest first, by the time in their names", daily, Backups.list(folder).get(0));
+
+        File unreadable = backupFile(folder, "2026-13-45-996199", "manual");
+        assertTrue(unreadable.setLastModified(copiedAt));
+        assertEquals(copiedAt, Backups.madeAt(unreadable));
+    }
+
     @Test
     public void sessionsRunningWhenTheServerStoppedAreMarkedStoppedWithAReason() {
         Experiment experiment = createExperiment("Restarted");
