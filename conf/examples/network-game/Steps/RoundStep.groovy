@@ -30,12 +30,12 @@ roundStep.run = {
   }
 }
 
-// The round's heading, last round's result, the score, then `body`.
+// The round's heading, last round's result, `body`, then the score (from the second round on).
 roundText = { p, String body ->
   [c.get("RoundHeading", round, rounds),
    p.private.lastResult ? "<p>${p.private.lastResult}</p>" : "",
    body,
-   c.get("Score", p.score, round - 1)].findAll { it }.join("\n").toString()
+   round > 1 ? c.get("Score", p.score, round - 1) : ""].findAll { it }.join("\n").toString()
 }
 
 pick = { p, colour ->

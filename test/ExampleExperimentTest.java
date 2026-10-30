@@ -131,6 +131,37 @@ public class ExampleExperimentTest extends BaseTest {
         assertEquals(20, ((Number) harness.eval("autopilot.room.waitSeconds")).intValue());
     }
 
+    /** The score is shown from the second round on: the first one said "Your score: 0 of 0". */
+    @Test
+    public void theFirstRoundShowsNoScoreYet() throws Exception {
+        harness = loadedGame(600);
+        harness.runSync("{ ->\n"
+            + "  ['p1', 'p2'].each { g.addPlayer(it) }\n"
+            + "  initStep.start()\n"
+            + "  def p1 = g.getVertex('p1')\n"
+            + "  assert round == 1\n"
+            + "  assert p1.text.contains('Round 1 of 2') && !p1.text.contains('Your score')\n"
+            + "  round = 2\n"
+            + "  assert roundText(p1, 'body').contains('Your score: 0 of 1')\n"
+            + "}");
+    }
+
+    /** The example's steps in the engine with a session's launch parameters (rounds of {@code roundSeconds}). */
+    private ScriptTestHarness loadedGame(int roundSeconds) throws Exception {
+        ScriptTestHarness h = new ScriptTestHarness(false);
+        h.put("c", new ExampleTexts());
+        h.put("networkSize", 5);
+        h.put("minPlayers", 2);
+        h.put("waitSeconds", 20);
+        h.put("rounds", 2);
+        h.put("roundSeconds", roundSeconds);
+        h.put("prolificCode", "");
+        for (String name : stepNames()) {
+            h.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
+        }
+        return h;
+    }
+
     private static List<String> stepNames() throws Exception {
         JsonNode manifest = Json.parse(FileUtils.readFileToString(new File(EXAMPLE, "example.json")));
         List<String> names = new ArrayList<String>();
