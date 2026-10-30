@@ -213,6 +213,35 @@ public class SessionEndTest extends BaseTest {
         assertEquals("stopped", ended(connect("p1").frames.get(0)));
     }
 
+    // ---- a researcher's Stop ----------------------------------------------------------------------
+
+    @Test
+    public void aResearchersStopLeavesACompletionCodeOnTheScreen() throws Throwable {
+        Page playing = connect("p1");
+        Page coded = connect("p2");
+        Page watcher = connect("p2", true);
+        assertTrue(watcher.frames.get(0).path("bbWatching").asBoolean());
+        // The experiment gave p2 a code a moment ago: a change inside _system alone isn't sent by itself.
+        engine().eval("def v = g.getVertex('p2'); recruitment.registerProlific(v); "
+            + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
+        console.send("StopGame", "id", session.id);
+        await("both told", () -> playing.closed && coded.closed && watcher.closed);
+        assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(session.id).status);
+        assertEquals(playing.frames.toString(), "stopped", ended(playing.last()));
+        // Their screen with the code, then the end, which their page shows only without an end of its own.
+        for (Page page : new Page[]{coded, watcher}) {
+            JsonNode screen = page.lastPlayer();
+            assertEquals(page.frames.toString(), "C0DE42",
+                screen.path("player").path("_system").path("recruitment").path("completionCode").asText());
+            assertEquals("", ended(screen));
+            assertEquals(page.frames.toString(), "stopped", ended(page.last().path("sessionOver")));
+        }
+        // and a page of theirs that comes back gets that screen with the code, not the stopped one
+        JsonNode back = connect("p2").frames.get(0);
+        assertEquals(back.toString(), "C0DE42", back.path("player").path("_system").path("recruitment").path("completionCode").asText());
+        assertEquals("stopped", ended(connect("p1").frames.get(0)));
+    }
+
     // ---- a session a rebuild of the engine ends, ends as Stop ends it -----------------------------
 
     /**
