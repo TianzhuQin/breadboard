@@ -1,4 +1,5 @@
 import com.fasterxml.jackson.databind.type.TypeFactory;
+import groovy.lang.Closure;
 import groovy.lang.GroovyClassLoader;
 import groovy.lang.GroovySystem;
 import groovy.lang.MetaClass;
@@ -10,6 +11,7 @@ import org.junit.Test;
 
 import javax.script.ScriptEngine;
 import java.lang.ref.Reference;
+import java.lang.ref.SoftReference;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -48,6 +50,38 @@ public class EngineCleanupTest {
         } finally {
             next.close();
         }
+    }
+
+    @Test
+    public void aReplacedEnginesClassesAreUnloadedWithoutAShortageOfMemory() throws Exception {
+        // Groovy's caches (and Java's of bean properties) held each engine's classes through soft
+        // references, which only a shortage of memory clears: the class space filled up, one engine's
+        // classes per session. A soft reference that outlives the collections below shows there was none.
+        JsonSetup.install();
+        replaced(played(new ScriptTestHarness(false)));
+        WeakReference<ClassLoader> classes = classesOfAReplacedEngine();
+        ScriptTestHarness next = played(new ScriptTestHarness(false));
+        try {
+            SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
+            assertTrue("the replaced engine's classes are still loaded", collected(classes, 20000));
+            assertNotNull("memory ran short: soft references were cleared", noShortage.get());
+        } finally {
+            next.close();
+        }
+    }
+
+    @Test
+    public void aReplacedEnginesClassesStillWorkWhenTheirCodeRunsAgain() throws Exception {
+        // A task of the old engine under way when its timers were cancelled can go on after the release:
+        // its classes, gone from Groovy's caches, still make objects (Groovy looks them up anew).
+        ScriptTestHarness engine = played(new ScriptTestHarness(false));
+        Closure<?> laterTask = (Closure<?>) engine.eval("{ -> new Note().text }");
+        replaced(engine);
+        for (int i = 0; i < 3; i++) {
+            System.gc(); // (what Groovy holds weakly goes)
+            Thread.sleep(50);
+        }
+        assertEquals("an object of an experiment's own class", laterTask.call());
     }
 
     @Test
@@ -134,6 +168,14 @@ public class EngineCleanupTest {
         engine.close();
         EngineCleanup.release(engine.engine);
         return engine.engine;
+    }
+
+    /** The class loader of an engine played, then replaced (nothing else of it is kept here). */
+    private static WeakReference<ClassLoader> classesOfAReplacedEngine() throws Exception {
+        ScriptTestHarness engine = played(new ScriptTestHarness(false));
+        WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
+        replaced(engine);
+        return classes;
     }
 
     /** Collects garbage until {@code ref} is cleared, for at most {@code timeoutMs}. */

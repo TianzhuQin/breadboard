@@ -3,6 +3,7 @@ import org.junit.After;
 import org.junit.Test;
 
 import javax.script.ScriptEngine;
+import java.lang.ref.SoftReference;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -15,6 +16,7 @@ import static org.junit.Assert.*;
 /**
  * The engine ScriptBoard replaces (here by a reload; every launch does the same) can be garbage
  * collected: it used to stay in memory for good, one per session, until the server ran out of memory.
+ * So can its classes: they stayed loaded until the class space was full.
  */
 public class EngineReplacementTest extends BaseTest {
 
@@ -45,10 +47,19 @@ public class EngineReplacementTest extends BaseTest {
         reload(t);
         play(t);
         WeakReference<ScriptEngine> replaced = new WeakReference<ScriptEngine>(engine());
+        WeakReference<ClassLoader> itsClasses = new WeakReference<ClassLoader>(EngineCleanup.scriptLoader(engine()));
+        assertNotNull(itsClasses.get());
         int keptMetaClasses = EngineCleanupTest.keptMetaClassesOfScripts();
         reload(t);
         play(t);
+        // Its classes go too, and not only once memory runs short: Groovy's caches held them through
+        // soft references, so they stayed loaded until the class space was full. A soft reference
+        // that outlives the collections shows that memory didn't run short.
+        SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
         assertTrue("the engine the reload replaced is still in memory", EngineCleanupTest.collected(replaced, 20000));
+        assertTrue("the classes of the engine the reload replaced are still loaded",
+            EngineCleanupTest.collected(itsClasses, 20000));
+        assertNotNull("memory ran short: soft references were cleared", noShortage.get());
         assertEquals("Groovy keeps the changed metaclasses of one engine's classes, not two",
             keptMetaClasses, EngineCleanupTest.keptMetaClassesOfScripts());
     }

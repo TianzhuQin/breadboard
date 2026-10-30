@@ -5,21 +5,34 @@ import com.tinkerpop.gremlin.groovy.jsr223.GremlinGroovyScriptEngine;
 import groovy.lang.GroovyClassLoader;
 import groovy.lang.GroovySystem;
 import groovy.lang.MetaClass;
+import groovy.lang.MetaClassImpl;
 import groovy.lang.MetaClassRegistry;
+import org.codehaus.groovy.ast.ClassHelper;
 import org.codehaus.groovy.reflection.ClassInfo;
+import org.codehaus.groovy.runtime.metaclass.MetaMethodIndex;
+import org.codehaus.groovy.util.AbstractConcurrentMap;
+import org.codehaus.groovy.util.AbstractConcurrentMapBase;
+import org.codehaus.groovy.util.ManagedReference;
 import play.Logger;
 
 import javax.script.ScriptEngine;
+import java.beans.Introspector;
+import java.lang.ref.Reference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Lets go of what kept every replaced script engine in memory. Each session runs in an engine of its
  * own (every launch rebuilds it), and each old engine used to stay for good with its graph, its
  * scripts' classes and everything they held: about 3.6 MB of heap and 2 MB of class space per
- * session, until the server did little but collect garbage.
+ * session, until the server did little but collect garbage. Its classes (each engine compiles the
+ * scripts and steps again, about 300 classes) then stayed loaded until the class space (metaspace)
+ * was full, as Groovy and Java kept them in caches that only a shortage of memory empties; now they
+ * are unloaded at the next full collection.
  */
 public final class EngineCleanup {
 
@@ -59,28 +72,65 @@ public final class EngineCleanup {
    * (Breadboard's and Java's, e.g. Vertex.metaClass.on) keep theirs, which the next engine's scripts
    * set again.
    *
+   * <p>The classes themselves go too (about 300 per engine). Caches keep them through soft
+   * references, which a full collection clears only once memory runs short, so each engine's classes
+   * stayed loaded until the class space was full: Groovy's global set of what it knows about each
+   * class (ClassInfo), its compiler's descriptions of the classes scripts use (ClassHelper), Java's
+   * descriptions of each class's bean properties (Introspector, which Groovy asks), and the method
+   * choices the metaclasses of the classes that outlive the engine remember. The engine's classes
+   * leave the first three last, as looking up a class's metaclass adds its entry back.
+   *
    * @param scripts the loader the dropped engine compiled with: only classes loaded under it are
    *     touched, never those of another engine (the next one isn't built yet; a test may hold one).
    */
   static void forgetClasses(GroovyClassLoader scripts) {
+    List<Object> known = entries(groovyCache(ClassInfo.class.getName(), "globalClassSet"));
+    AbstractConcurrentMap<?, ?> classNodes = groovyCache(ClassHelper.class.getName() + "$ClassHelperCache", "classCache");
+    Set<Class<?>> classes = new LinkedHashSet<Class<?>>();
+    // The ones with a changed metaclass, and those Groovy's caches know: getLoadedClasses no longer
+    // lists a class a re-run step has redefined, nor a class Groovy made at run time (a proxy made
+    // by "as").
     MetaClassRegistry registry = GroovySystem.getMetaClassRegistry();
-    // The changed ones first: getLoadedClasses no longer lists a class a re-run step has redefined.
-    List<Class<?>> changed = new ArrayList<Class<?>>();
     for (Iterator<?> it = registry.iterator(); it.hasNext(); ) {
       Object metaClass = it.next();
       if (metaClass instanceof MetaClass) {
         Class<?> c = ((MetaClass) metaClass).getTheClass();
         if (c != null && loadedUnder(c, scripts)) {
-          changed.add(c);
+          classes.add(c);
         }
       }
     }
-    for (Class<?> c : changed) {
-      forgetMetaClass(c);
-    }
     for (Class<?> c : scripts.getLoadedClasses()) {
+      classes.add(c);
+    }
+    for (Object entry : known) {
+      Class<?> c = keyOf(entry);
+      if (c != null && loadedUnder(c, scripts)) {
+        classes.add(c);
+      } else if (c != null && entry instanceof ClassInfo) {
+        forgetChoices(((ClassInfo) entry).getStrongMetaClass());
+        forgetChoices(((ClassInfo) entry).getWeakMetaClass());
+      }
+    }
+    for (Object entry : entries(classNodes)) {
+      Class<?> c = keyOf(entry);
+      if (c != null && loadedUnder(c, scripts)) {
+        classes.add(c);
+      }
+    }
+    for (Class<?> c : classes) {
       forgetMetaClass(c);
-      forgetCallSites(c);
+      forgetStaticCaches(c);
+    }
+    for (Class<?> c : classes) {
+      ClassInfo.getClassInfo(c).finalizeRef();
+      if (classNodes != null) {
+        // The compiler's description of a class a later script used (one of an earlier script's),
+        // kept softly with the class under a weak key.
+        ((AbstractConcurrentMap<Object, ?>) classNodes).remove(c);
+      }
+      // (Java keeps one such cache per thread group; the server's threads are all in one.)
+      Introspector.flushFromCaches(c);
     }
   }
 
@@ -112,21 +162,131 @@ public final class EngineCleanup {
   }
 
   /**
-   * Empties a compiled Groovy class's call-site cache, the static field Groovy adds to it. Should
-   * the class run again (a task of the old engine finishing), Groovy builds a new one. Java
-   * initializes a class the engine never used before the field is written, so the static
-   * initializer of such a class runs here (those of Breadboard's scripts only set up empty maps).
+   * Empties what a compiled Groovy class keeps in static fields of its own: its call-site cache, and
+   * the ClassInfo its constructors look up its metaclass in, which no longer holds the class once
+   * its entry has left Groovy's set. Should the class run again (a task of the old engine finishing),
+   * Groovy makes both anew. The call-site cache is a soft reference, cleared rather than dropped:
+   * the class's code reads the field twice, and would fail between the two. Java initializes a class
+   * the engine never used before the field is read, so the static initializer of such a class runs
+   * here (those of Breadboard's scripts only set up empty maps).
    */
-  private static void forgetCallSites(Class<?> c) {
-    try {
-      Field callSites = c.getDeclaredField("$callSiteArray");
-      callSites.setAccessible(true);
-      callSites.set(null, null);
-    } catch (NoSuchFieldException none) {
-      // (a class without call sites)
-    } catch (Exception | LinkageError e) {
-      Logger.debug("Could not empty the call-site cache of " + c.getName() + ": " + e);
+  private static void forgetStaticCaches(Class<?> c) {
+    Object callSites = staticField(c, "$callSiteArray");
+    if (callSites instanceof Reference) {
+      ((Reference<?>) callSites).clear();
     }
+    if (staticField(c, "$staticClassInfo") != null) {
+      setStaticField(c, "$staticClassInfo", null);
+    }
+  }
+
+  /** The value of a static field of {@code c}, or null when it has none of that name. */
+  private static Object staticField(Class<?> c, String name) {
+    try {
+      Field field = c.getDeclaredField(name);
+      field.setAccessible(true);
+      return field.get(null);
+    } catch (NoSuchFieldException none) {
+      return null; // (not a compiled Groovy class, or one without call sites)
+    } catch (Exception | LinkageError e) {
+      Logger.debug("Could not read " + name + " of " + c.getName() + ": " + e);
+      return null;
+    }
+  }
+
+  private static void setStaticField(Class<?> c, String name, Object value) {
+    try {
+      Field field = c.getDeclaredField(name);
+      field.setAccessible(true);
+      field.set(null, value);
+    } catch (Exception | LinkageError e) {
+      Logger.debug("Could not empty " + name + " of " + c.getName() + ": " + e);
+    }
+  }
+
+  /**
+   * The metaclass of a class that outlives the engine remembers, for each of its methods, the one it
+   * last chose for a call by the types of the call's arguments: closures and objects of the engine
+   * among them (graph.groovy's g.empty() hands Gremlin's lists of edges a closure of its own, for
+   * one). It chooses again at the next call.
+   */
+  private static void forgetChoices(MetaClass metaClass) {
+    if (metaClass instanceof MetaClassImpl && METHOD_INDEX != null) {
+      try {
+        ((MetaMethodIndex) METHOD_INDEX.get(metaClass)).clearCaches();
+      } catch (Exception e) {
+        Logger.debug("Could not empty the method choices of " + metaClass + ": " + e);
+      }
+    }
+  }
+
+  private static final Field METHOD_INDEX = accessible(MetaClassImpl.class, "metaMethodIndex");
+
+  private static Field accessible(Class<?> c, String name) {
+    try {
+      Field field = c.getDeclaredField(name);
+      field.setAccessible(true);
+      return field;
+    } catch (Exception e) {
+      Logger.warn("Could not find " + c.getName() + "." + name
+          + "; some classes of replaced engines stay loaded until memory runs short: " + e);
+      return null;
+    }
+  }
+
+  /**
+   * One of Groovy's global maps keyed by class: ClassInfo's set of what Groovy knows about each class,
+   * or ClassHelper's cache of the compiler's descriptions of classes. Neither can list its keys, nor
+   * be reached from outside. Null, with a warning, should another Groovy keep them elsewhere: then
+   * some of a replaced engine's classes stay loaded until memory runs short.
+   */
+  private static AbstractConcurrentMap<?, ?> groovyCache(String className, String field) {
+    try {
+      Field cache = Class.forName(className).getDeclaredField(field);
+      cache.setAccessible(true);
+      return (AbstractConcurrentMap<?, ?>) cache.get(null);
+    } catch (Exception | LinkageError e) {
+      Logger.warn("Could not find Groovy's cache " + className + "." + field
+          + "; some classes of replaced engines stay loaded until memory runs short: " + e);
+      return null;
+    }
+  }
+
+  /** The entries of {@code cache} (see {@link #groovyCache}); none when it is null. */
+  private static List<Object> entries(AbstractConcurrentMapBase cache) {
+    List<Object> found = new ArrayList<Object>();
+    if (cache == null) {
+      return found;
+    }
+    try {
+      Field segments = AbstractConcurrentMapBase.class.getDeclaredField("segments");
+      segments.setAccessible(true);
+      Field table = AbstractConcurrentMapBase.Segment.class.getDeclaredField("table");
+      table.setAccessible(true);
+      for (Object segment : (Object[]) segments.get(cache)) {
+        // A slot holds one entry, or an array of those whose hashes share it.
+        for (Object slot : (Object[]) table.get(segment)) {
+          if (slot instanceof Object[]) {
+            for (Object entry : (Object[]) slot) {
+              if (entry != null) {
+                found.add(entry);
+              }
+            }
+          } else if (slot != null) {
+            found.add(slot);
+          }
+        }
+      }
+    } catch (Exception | LinkageError e) {
+      Logger.warn("Could not read Groovy's cache of classes; some classes of replaced engines stay loaded until memory runs short: " + e);
+    }
+    return found;
+  }
+
+  /** The class an entry of one of Groovy's caches is for, or null (when it has been collected). */
+  private static Class<?> keyOf(Object entry) {
+    Object key = entry instanceof ManagedReference ? ((ManagedReference<?>) entry).get() : null;
+    return key instanceof Class ? (Class<?>) key : null;
   }
 
   /**
@@ -134,7 +294,7 @@ public final class EngineCleanup {
    * engine. Every class its scripts define is loaded by a child of it (Groovy's InnerLoader, one per
    * script). The library keeps it in a protected field and has no getter.
    */
-  static GroovyClassLoader scriptLoader(ScriptEngine engine) {
+  public static GroovyClassLoader scriptLoader(ScriptEngine engine) {
     if (!(engine instanceof GremlinGroovyScriptEngine)) {
       return null;
     }
