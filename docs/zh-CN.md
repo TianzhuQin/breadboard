@@ -142,7 +142,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 **用 Excel 或 WPS 打开**：CSV 是 UTF-8 编码的，直接双击打开时，Excel 和 WPS 常把中文显示成乱码。两种办法：
 
-- 下载前，在 **Sessions & data** 页右上角勾选 **For Excel**。这样下载的文件开头多一个 BOM（字节顺序标记），双击打开就能正确显示中文。它对这一页的下载和导出都有效，也包括 **Live session** 的 **Download data**。这个选择记在这个浏览器里。
+- 下载前，在 **Sessions & data** 页右上角勾选 **For Excel**。这样下载的文件开头多一个 BOM（字节顺序标记），双击打开就能正确显示中文。它对这一页的下载和导出都有效，也包括 **Live session** 的 **Download data** 和 **Players** 页的 **Download CSV**。这个选择记在这个浏览器里。
 - 没勾选时下载的文件，在 Excel 里用 **数据 → 从文本/CSV** 导入，**文件原始格式** 选 **65001: Unicode (UTF-8)**；在 WPS 里导入时，编码也选 UTF-8。
 
 用 R、Python 或以前写好的分析脚本时不用勾选：不勾选时，下载的文件和以前的版本完全一样，开头没有 BOM。

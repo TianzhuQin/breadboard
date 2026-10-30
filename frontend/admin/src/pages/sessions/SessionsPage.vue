@@ -209,10 +209,10 @@ const router = useRouter()
 const route = useRoute()
 const sessionActions = useSessionActions()
 
-/** The CSV files of this page (and Live session's data) for Excel: see lib/csvFiles. */
+/** The CSV files of this page (and Live session's data, and the Players page's) for Excel: see lib/csvFiles. */
 const EXCEL_TITLE = 'Download the CSV files with a byte-order mark, so that Excel and WPS show Chinese and other ' +
-  'non-English text correctly. Leave it off for R, Python and analysis scripts, which read the files as they are. ' +
-  'Remembered in this browser.'
+  'non-English text correctly: those of this page, Live session\'s data and the Players page\'s. Leave it off for R, ' +
+  'Python and analysis scripts, which read the files as they are. Remembered in this browser.'
 
 const PAGE = 100
 const exp = computed(() => admin.experiment)

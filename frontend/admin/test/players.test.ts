@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { h } from 'vue'
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { actions, connection, graph, __receive } from '../src/store/admin'
+import { csvForExcel } from '../src/lib/csvFiles'
 import { toasts } from '../src/ui/toast'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { pendingEdits, editHistory } from '../src/network/tieEdits'
@@ -103,6 +106,87 @@ describe('players table', () => {
     expect(rows[1]).toBe('p1,Connected,0,0,"{""q1"":""yes""}",1,,3,2,prolific,PID1,S,X')
     expect(rows[2]).toBe('p2,Disconnected,0,0,,,"[""a"",""b""]",,,,,,')
     expect(csvKeys([node('p1', { score: 1 })])).toEqual(['score'])
+  })
+})
+
+// ---- Download CSV -------------------------------------------------------------------------------
+
+describe('Download CSV', () => {
+  /** What the page saved: the file's name and its bytes. */
+  let saved: { name: string, bytes: Promise<number[]> }[]
+  let lastBlob: Blob | null
+  const realCreate = URL.createObjectURL
+  const realRevoke = URL.revokeObjectURL
+
+  function blobBytes (blob: Blob): Promise<number[]> {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve([...new Uint8Array(r.result as ArrayBuffer)])
+      r.onerror = () => reject(r.error)
+      r.readAsArrayBuffer(blob)
+    })
+  }
+
+  async function downloadFromPage () {
+    const PlayersPage = (await import('../src/pages/players/PlayersPage.vue')).default
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/players', component: PlayersPage }] })
+    router.push('/players')
+    await router.isReady()
+    const w = mount({ render: () => h(RouterView) }, { global: { plugins: [router] }, attachTo: document.body })
+    await tick()
+    await flushPromises()
+    const button = w.findAll('button').find(b => b.text() === 'Download CSV')!
+    const title = button.attributes('title')
+    await button.trigger('click')
+    w.unmount()
+    return { title, file: saved[saved.length - 1] }
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    session()
+    seed()
+    __receive({ action: 'nodePropertyChanged', id: 'p2', key: 'name', value: '张伟' })
+    toasts.splice(0, toasts.length)
+    saved = []
+    lastBlob = null
+    // jsdom saves no files: keep what the page hands the browser
+    URL.createObjectURL = vi.fn((b: Blob) => { lastBlob = b; return 'blob:players' }) as any
+    URL.revokeObjectURL = vi.fn() as any
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push({ name: this.download, bytes: blobBytes(lastBlob!) })
+    })
+  })
+  afterEach(() => {
+    csvForExcel.value = false
+    // (the page lets go of the file's address a moment later: jsdom has nothing there to call)
+    URL.createObjectURL = realCreate ?? (() => '')
+    URL.revokeObjectURL = realRevoke ?? (() => {})
+    vi.restoreAllMocks()
+  })
+
+  it('saves the players as they always were, without a byte-order mark, while For Excel is off', async () => {
+    const { title, file } = await downloadFromPage()
+    expect(file.name).toBe('players-E-s.csv')
+    const bytes = await file.bytes
+    expect(new TextDecoder().decode(new Uint8Array(bytes)).split('\r\n')[0]).toMatch(/^id,status,ties,choices waiting,/)
+    expect(bytes.slice(0, 3)).not.toEqual([0xEF, 0xBB, 0xBF])
+    expect(title).toBe('The players shown, with every property')
+    expect(toasts[toasts.length - 1].detail).toBe('4 rows, with every property the experiment set as a column.')
+  })
+
+  it('starts the file with the byte-order mark Excel and WPS need when For Excel is chosen on Sessions & data', async () => {
+    csvForExcel.value = true
+    const { title, file } = await downloadFromPage()
+    expect(file.name).toBe('players-E-s.csv')
+    const bytes = await file.bytes
+    expect(bytes.slice(0, 3)).toEqual([0xEF, 0xBB, 0xBF])
+    const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(new Uint8Array(bytes))
+    expect(text.startsWith('\uFEFFid,status,ties,choices waiting,')).toBe(true)
+    // the values are the same as without it
+    expect(text).toContain('张伟')
+    expect(title).toBe('The players shown, with every property, for Excel (as chosen on Sessions & data)')
+    expect(toasts[toasts.length - 1].detail).toBe('4 rows, with every property the experiment set as a column; for Excel, as chosen on Sessions & data.')
   })
 })
 
