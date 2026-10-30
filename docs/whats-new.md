@@ -235,7 +235,9 @@ A page that reconnects after its session has ended (for example after the autopi
 is not let into the session the server runs now. It gets back the last screen it had, such as its
 completion code. A participant who was away when a reload of the engine carried the session on gets
 the end the others were given (that it was stopped, say), not the screen from before the reload.
-Anyone else gets a "This session has ended" notice.
+Anyone else gets a "This session has ended" notice. Once a stopped session is resumed, the screens
+its earlier end left no longer count, except a participant's own end (a completion code, the
+experiment's last screen): someone who isn't back when it ends again is told how it ended this time.
 
 ## The participant page's connection
 

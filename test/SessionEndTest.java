@@ -550,4 +550,127 @@ public class SessionEndTest extends BaseTest {
         assertFalse(back.closed);
         assertNotNull(engine().eval("g.getVertex('p1')"));
     }
+
+    // ---- a resumed session: how it ended before no longer stands ----------------------------------
+
+    /** The autopilot's launch, as it leaves out someone who has been away too long (as in ParticipantConnectionTest). */
+    private void leftOutAtStart(String clientId) throws Exception {
+        engine().eval("g.removePlayer('" + clientId + "'); null");
+        ScriptBoard.leftOutAtStart(clientId);
+        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+    }
+
+    /** The console resumes the stopped session: until it runs again in the new engine. */
+    private void resume() throws Throwable {
+        afterTheEngineChange();
+        final ScriptEngine before = engine();
+        console.send("SelectInstance", "id", session.id);
+        await("resumed", () -> engine() != before
+            && ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.RUNNING);
+        afterTheEngineChange();
+    }
+
+    /**
+     * bob (p1) and carl (p2) wait, and a Stop tells them the session was stopped. It is resumed, and
+     * bob's page comes back to the new run and waits again; carl's doesn't. Then bob closes his tab,
+     * and a Reload engine carries the session on.
+     */
+    private void stoppedResumedThenAwayAtAReload() throws Throwable {
+        Page bob = connect("p1");
+        Page carl = connect("p2");
+        engine().eval("g.V.each { it.text = '<p>Waiting for the others</p>' }; null");
+        console.send("StopGame", "id", session.id);
+        await("both told", () -> bob.closed && carl.closed);
+        assertEquals("stopped", ended(bob.last()));
+        assertEquals("stopped", ended(carl.last()));
+        resume();
+        Page bobAgain = connect("p1");
+        assertFalse(bobAgain.closed);
+        engine().eval("g.V.each { it.text = '<p>Waiting again</p>' }; null");
+        assertEquals("Waiting again", text(bobAgain.lastPlayer()).replaceAll("<[^>]*>", ""));
+        bobAgain.hangUp();
+        final ScriptEngine beforeReload = engine();
+        console.send("ReloadEngine");
+        await("reloaded", () -> engine() != beforeReload);
+        afterTheEngineChange();
+        assertEquals("it carried on", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+    }
+
+    @Test
+    public void whoeverIsAwayWhenAResumedSessionEndsWithTheServerGetsTheServersStopScreenNotTheEarlierStop() throws Throwable {
+        stoppedResumedThenAwayAtAReload();
+        assertEquals(session.id, ServerStop.endLiveSession());
+        // Both used to be given the screen of the Stop before the Resume: "The researcher stopped this
+        // session. If they start it again, open the link you were given once more."
+        for (String away : new String[]{"p1", "p2"}) {
+            JsonNode back = connect(away).frames.get(0);
+            assertEquals(back.toString(), "serverStopped", ended(back));
+            assertTrue(text(back), text(back).contains("server was stopped"));
+        }
+    }
+
+    @Test
+    public void whoeverIsAwayWhenAResumedSessionFinishesByItselfIsToldItEnded() throws Throwable {
+        stoppedResumedThenAwayAtAReload();
+        engine().eval("stepFactory.createStep('Last').finish(); null");
+        await("finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        // (the Stop's screen from before the Resume, too, which said the researcher had stopped it)
+        for (String away : new String[]{"p1", "p2"}) {
+            JsonNode back = connect(away).frames.get(0);
+            assertEquals(back.toString(), "", ended(back));
+            assertTrue(text(back), text(back).contains("This session has ended"));
+        }
+    }
+
+    @Test
+    public void whoeverIsntBackWhenAResumedSessionEndsIsToldHowItEndedThisTime() throws Throwable {
+        // bob (p1) and carl (p2) wait, the experiment has given erin (p4) a completion code, and dana
+        // (p3) was away too long as the game started, which went ahead without her.
+        Page bob = connect("p1");
+        Page carl = connect("p2");
+        Page dana = connect("p3");
+        Page erin = connect("p4");
+        engine().eval("def v = g.getVertex('p4'); recruitment.registerProlific(v); "
+            + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
+        dana.hangUp();
+        leftOutAtStart("p3");
+        console.send("StopGame", "id", session.id);
+        await("told", () -> bob.closed && carl.closed && erin.closed);
+        afterTheEngineChange();
+        assertEquals("stopped", ended(connect("p2").frames.get(0)));
+        assertEquals("missedStart", ended(connect("p3").frames.get(0)));
+        resume();
+        // Only bob comes back to the new run, and the server's stop ends it.
+        Page bobAgain = connect("p1");
+        assertFalse(bobAgain.closed);
+        assertEquals(session.id, ServerStop.endLiveSession());
+        assertEquals("serverStopped", ended(bobAgain.last()));
+        // carl's page used to be given the Stop's screen from before the Resume, and dana's that the
+        // session started without her, though it started again from the beginning.
+        for (String away : new String[]{"p2", "p3"}) {
+            JsonNode back = connect(away).frames.get(0);
+            assertEquals(back.toString(), "serverStopped", ended(back));
+        }
+        // Her own end stays hers: the code.
+        assertEquals("C0DE42", code(connect("p4").frames.get(0)));
+    }
+
+    @Test
+    public void theRunningSessionSelectedAgainKeepsTheScreenOfSomeoneTheGameStartedWithout() throws Throwable {
+        // Not a Resume: the session never ended, and the screen that tells dana (p3) the game went ahead
+        // without her is hers, kept by the rebuild (keptAtRebuild) and by the session's end.
+        Page bob = connect("p1");
+        Page dana = connect("p3");
+        dana.hangUp();
+        leftOutAtStart("p3");
+        console.send("SelectInstance", "id", session.id);
+        await("rebuilt", () -> bob.closed && client("p1") == null);
+        afterTheEngineChange();
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        console.send("StopGame", "id", session.id);
+        await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        afterTheEngineChange();
+        JsonNode back = connect("p3").frames.get(0);
+        assertEquals(back.toString(), "missedStart", ended(back));
+    }
 }

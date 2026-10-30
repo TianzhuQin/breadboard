@@ -70,7 +70,8 @@ public class ScriptBoard extends UntypedActor {
       new java.util.concurrent.ConcurrentHashMap<>();
   // Final screens of the participants of the last few sessions, by instance id and client id, for
   // pages that reconnect after their session has ended (see addClient). A rebuild of the engine that
-  // carries a session on keeps only ends there (see keptAtRebuild).
+  // carries a session on keeps only ends there (see keptAtRebuild), and a Resume only the
+  // participants' own ends (see sessionRunsAgain).
   private static final int ENDED_SESSIONS_KEPT = 10;
   private static final Map<Long, Map<String, ObjectNode>> endedSessionScreens = Collections.synchronizedMap(
       new LinkedHashMap<Long, Map<String, ObjectNode>>() {
@@ -353,12 +354,29 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
-   * The session runs again (Resume): how it ended before no longer stands for those who don't come
-   * back. (Their own ends remembered meanwhile, a completion code, still do.)
+   * The session runs again (Resume): how it ended before no longer stands. Someone who isn't in its
+   * game when it ends again (they never came back, or came back and were away when a rebuild of the
+   * engine carried it on, which remembers no game views) gets how it ended this time: the end its
+   * participants are given (sessionEnds), the server-stopped screen, or the plain end of a game that
+   * finished by itself. The screen the earlier end left them with, which endedSessionScreen gives
+   * first, is forgotten: the end the server gave them (stopped, out of time, ...), or that the game
+   * started without them (it starts again from the beginning). Only their own ends stand (ownEnd: a
+   * completion code, the experiment's own last screen). Only for a Resume: the running session
+   * selected again never ended, and what the rebuild that carries it on keeps (keptAtRebuild) is all
+   * from its run.
    */
   static void sessionRunsAgain(Long instanceId) {
-    if (instanceId != null) {
-      sessionEnds.remove(instanceId);
+    if (instanceId == null) {
+      return;
+    }
+    sessionEnds.remove(instanceId);
+    Map<String, ObjectNode> screens = endedSessionScreens.get(instanceId);
+    if (screens != null) {
+      for (Iterator<ObjectNode> it = screens.values().iterator(); it.hasNext(); ) {
+        if (!ownEnd(it.next())) {
+          it.remove();
+        }
+      }
     }
   }
 
@@ -2956,11 +2974,14 @@ public class ScriptBoard extends UntypedActor {
     if (user.selectedExperiment == null || !experiment.id.equals(user.selectedExperiment.id)) {
       user.setSelectedExperiment(experiment);
     }
-    boolean resuming = target.status == ExperimentInstance.Status.STOPPED;
 
     // The other accounts working on its experiment, which follow it once it is live again.
     List<String> following = Collections.emptyList();
     synchronized (REBUILD_LOCK) {
+      // Resumed: it is stopped as the engine is taken. (Read again here: someone may have stopped it
+      // since this console showed it running, and then it starts again all the same.)
+      ExperimentInstance current = ExperimentInstance.findById(target.id);
+      boolean resuming = current != null && current.status == ExperimentInstance.Status.STOPPED;
       // The engine's current session ends (the account that started it may be another one), and so
       // does this actor's own; the selected one carries on (restarted) if it still can.
       GameListener previous = engineGameListener;
@@ -3006,8 +3027,11 @@ public class ScriptBoard extends UntypedActor {
         eventTracker.setExperimentInstance(instance);
         gameListener.experimentInstance = instance;
         gameListener.start();
-        sessionRunsAgain(instance.id);
-        // (After start(): a stopped session being resumed counts as running only from there.)
+        // (After start(): a stopped session being resumed counts as running only from there. Until
+        // then a page that comes back is given the end it had.)
+        if (resuming) {
+          sessionRunsAgain(instance.id);
+        }
         reopenAfterRebuild(instance);
         if (resuming) {
           // Its game starts again from the beginning: the data says where, so the runs can be told apart.
