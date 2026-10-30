@@ -66,7 +66,7 @@
                 :icon="Play"
                 :loading="busy.start"
                 :disabled="!!startBlocked"
-                :title="startBlocked || 'Runs initStep.start()'"
+                :title="startBlocked || 'Lets everyone who is waiting in, and the experiment begins'"
                 @click="onStart"
               >Start the game</BButton>
               <span v-else class="live-hero__started">

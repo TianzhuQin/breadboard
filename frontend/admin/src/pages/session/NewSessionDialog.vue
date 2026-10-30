@@ -110,7 +110,7 @@
     </form>
 
     <template #footer>
-      <p class="nsd-foot-note">Starts right away.</p>
+      <p class="nsd-foot-note">Opens right away. Its game starts when you, or its waiting room, start it.</p>
       <BButton variant="ghost" :disabled="busy || checking" @click="close">Cancel</BButton>
       <BButton type="submit" :form="formId" :variant="replacing ? 'danger' : 'primary'" :loading="busy || checking">
         {{ busy ? 'Creating…' : replacing ? 'Stop it and create' : 'Create session' }}

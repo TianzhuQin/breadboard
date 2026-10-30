@@ -205,7 +205,8 @@ preview, theirs or another console's (which a preview here would take it from).
 
 A session is one run of the experiment. **New session** asks for a **Session name** and the
 **Launch parameters**, filled in with their defaults. **Create session** opens it at once, and
-people can join with its links. If a session is running, the button reads **Stop it and create**.
+people can join with its links; its game starts when you press **Start the game**, or when its
+waiting room starts it. If a session is running, the button reads **Stop it and create**.
 
 | Button | Shown when | What it does |
 |---|---|---|

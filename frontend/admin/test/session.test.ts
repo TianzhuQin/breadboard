@@ -620,6 +620,17 @@ describe('session controls', () => {
     expect(toasts.some(t => /No answer/.test(t.title))).toBe(false)
   })
 
+  it('says in plain words what starting the game does, without the code it runs', async () => {
+    const done = startGame(ctx)
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.req!.title).toBe('Start the game?')
+    expect(confirmState.req!.message).toContain('Everyone who is waiting is let in and the experiment begins. People who arrive after this are turned away.')
+    expect(confirmState.req!.message).not.toContain('initStep')
+    settleConfirm(false)
+    await done
+    expect(store.startGame).not.toHaveBeenCalled()
+  })
+
   it('takes the server\'s tagged answer to the start', async () => {
     store.nextMessage.mockImplementationOnce(async (match: any) => {
       const m = { request: 'RunGame', error: '', output: 'initStep.start()\n\n==>null' }
@@ -979,6 +990,11 @@ describe('NewSessionDialog', () => {
     await nextTick()
     return wrapper
   }
+
+  it('says the session opens right away, and that its game starts when you or its waiting room start it', async () => {
+    await open()
+    expect(page().find('.nsd-foot-note').text()).toBe('Opens right away. Its game starts when you, or its waiting room, start it.')
+  })
 
   it('pre-fills the name and defaults, and flags a default that cannot be used', async () => {
     await open()

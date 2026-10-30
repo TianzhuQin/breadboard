@@ -47,7 +47,7 @@ export async function startGame (ctx: { connected: number, people: number, waiti
     title: 'Start the game?',
     message: [
       who,
-      'Everyone who is waiting is let in and the experiment begins (it runs initStep.start()). People who arrive after this are turned away.',
+      'Everyone who is waiting is let in and the experiment begins. People who arrive after this are turned away.',
       ctx.waitingRoom ? 'This skips the rest of the waiting room.' : '',
       ctx.again
         ? 'The game started earlier, but the engine was reloaded since then, so this starts it again from the beginning.'
