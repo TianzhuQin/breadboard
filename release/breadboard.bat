@@ -196,10 +196,12 @@ IF /I "%BREADBOARD_KEEP_RUNNING%"=="no" SET "KEEP_RUNNING="
 IF /I "%BREADBOARD_KEEP_RUNNING%"=="off" SET "KEEP_RUNNING="
 
 REM Where it is reached: here, and from the other computers on this network (a lab's), at this
-REM computer's private IPv4 address on the network it reaches the internet through.
+REM computer's IPv4 addresses: first those of the network it reaches the internet through (its
+REM default route), then those of every other connected adapter (a second network; a lab's network
+REM may hand out public addresses). Only loopback (127.x) and link-local (169.254.x) ones are left out.
 ECHO Starting Breadboard. Once it says "Listening for HTTP", it is ready at:
 ECHO   On this computer: http://localhost:%PORT%
-FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue; if ($route) { Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match '\A(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]+\.[0-9]+\z' } | Select-Object -ExpandProperty IPAddress -Unique }" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
+FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$default = @(Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue | Sort-Object RouteMetric | ForEach-Object { $_.InterfaceIndex }); $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { $_.ifIndex }); Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '\A(127|169\.254)\.' -and ($default -contains $_.InterfaceIndex -or $up -contains $_.InterfaceIndex) } | Sort-Object { if ($default -contains $_.InterfaceIndex) { 0 } else { 1 } } | Select-Object -ExpandProperty IPAddress -Unique" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
 IF DEFINED KEEP_RUNNING ECHO If it stops by itself, it is started again. Close this window to stop it.
 
 REM Open the console once the server answers (for up to 3 minutes), from a helper in the background.

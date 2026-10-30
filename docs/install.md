@@ -43,7 +43,8 @@ Then start it:
 
 The launcher says where Breadboard is reached: `On this computer: http://localhost:9000`, and
 `On this network: http://192.168.…:9000`, this computer's address on its network (a lab's), for the
-other computers there. The console opens in your browser once the server is up. On a new install
+other computers there: a line for each network it is on (Wi-Fi and an Ethernet adapter, say), the
+one it reaches the internet through first. The console opens in your browser once the server is up. On a new install
 it asks you to create the first researcher account. Opened from another computer (a server you
 reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
 it in its window and in `logs/application.log`, so only whoever runs the server can create that

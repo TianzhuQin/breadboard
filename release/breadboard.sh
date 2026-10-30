@@ -330,15 +330,39 @@ case "${BREADBOARD_KEEP_RUNNING:-}" in
   *) KEEP_RUNNING=1 ;;
 esac
 
-# This computer's private IPv4 addresses (10.x, 172.16-31.x, 192.168.x), where the other computers
-# on its network (a lab's) reach it, one per line.
+# This computer's IPv4 addresses, where the other computers on its network (a lab's) reach it, one
+# per line: first those of the interface its default route goes through, then those of every other
+# active interface (an Ethernet adapter, a second network; a lab's network may hand out public
+# addresses). Only loopback (127.x) and link-local (169.254.x) addresses are left out.
 lan_addresses() {
   if [ "$(uname)" = Darwin ]; then
-    ipconfig getifaddr en0 2>/dev/null || true
-    ipconfig getifaddr en1 2>/dev/null || true
+    DEFAULT_IF="$(route -n get default 2>/dev/null | awk '/interface:/ { print $2 }')"
+  elif command -v ip >/dev/null 2>&1; then
+    DEFAULT_IF="$(ip -4 route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
   else
-    hostname -I 2>/dev/null | tr ' ' '\n' || true
-  fi | grep -E '^(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]+\.[0-9]+$' | awk '!seen[$0]++'
+    DEFAULT_IF=""
+  fi
+  interface_addresses \
+    | awk -v d="$DEFAULT_IF" '$1 == d { print $2; next } { rest[++n] = $2 } END { for (i = 1; i <= n; i++) print rest[i] }' \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -vE '^(127|169\.254)\.' | awk '!seen[$0]++'
+}
+# "interface address", one per line, for the interfaces that are up and connected (macOS: not
+# "status: inactive"; Linux: LOWER_UP)
+interface_addresses() {
+  if [ "$(uname)" = Darwin ]; then
+    ifconfig 2>/dev/null | awk '
+      function flush() { if (up && !inactive) for (i = 0; i < n; i++) print name, addr[i]; n = 0 }
+      /^[^ \t]/ { flush(); name = $1; sub(/:$/, "", name); up = /[<,]UP[,>]/ && /[<,]RUNNING[,>]/; inactive = 0; next }
+      /^[ \t]+inet / { addr[n++] = $2 }
+      /^[ \t]+status: inactive/ { inactive = 1 }
+      END { flush() }'
+  elif command -v ip >/dev/null 2>&1; then
+    ip -o link show up 2>/dev/null | awk -F': ' '/LOWER_UP/ { sub(/@.*/, "", $2); print $2 }' | while read -r NAME; do
+      ip -4 -o addr show dev "$NAME" 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $2, $4 }'
+    done
+  else
+    hostname -I 2>/dev/null | tr ' ' '\n' | sed 's/^/- /'
+  fi
 }
 
 echo "Starting Breadboard. Once it says \"Listening for HTTP\", it is ready at:"
