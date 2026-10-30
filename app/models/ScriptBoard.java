@@ -577,21 +577,7 @@ public class ScriptBoard extends UntypedActor {
     } catch (Exception e) {
       // (the database may still say)
     }
-    if (instanceId == null) {
-      return false;
-    }
-    try {
-      SqlRow entries = Ebean.createSqlQuery("select count(*) as n from events e join event_data d on d.event_id = e.id"
-          + " where e.experiment_instance_id = :session and e.name = 'prolificEntry' and d.name = 'clientId' and d.value = :client")
-          .setParameter("session", instanceId)
-          .setParameter("client", client.id)
-          .findUnique();
-      Integer n = entries == null ? null : entries.getInteger("n");
-      return n != null && n > 0;
-    } catch (RuntimeException e) {
-      Logger.warn("Could not tell whether " + client.id + " came from Prolific: " + e);
-      return false;
-    }
+    return enteredFromProlific(instanceId, client.id);
   }
 
   private static void cancelEngineTimers() {
@@ -4467,20 +4453,74 @@ public class ScriptBoard extends UntypedActor {
    * once the server is back, the study's link leads to the session open then, which takes someone cut
    * short. A {@code prolific} participant opens the study again from Prolific, or returns it.
    */
-  static ObjectNode serverStoppedScreen(boolean prolific) {
+  public static ObjectNode serverStoppedScreen(boolean prolific) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "serverStopped");
-    player.put("text", "<h3>This session has ended</h3><p>It ended because the study's server was stopped or restarted. "
+    player.put("text", "<h3>" + SERVER_STOPPED_TITLE + "</h3><p>" + serverStoppedText(prolific) + "</p>");
+    return frame;
+  }
+
+  /** The heading of serverStoppedScreen (and of the page a reload shows, ClientLogin.notRunning). */
+  public static final String SERVER_STOPPED_TITLE = "This session has ended";
+
+  /** The words of serverStoppedScreen, as text (also on the page a reload shows). */
+  public static String serverStoppedText(boolean prolific) {
+    return "It ended because the study's server was stopped or restarted. "
         + (prolific
             ? "You can open the study again from Prolific in a few minutes to join the session that is open then. "
                 + "If no session is open, please return the study on Prolific, and message the researcher there if you have any questions."
             : "If you were given a link to the study, you can open it again in a few minutes to join the session that is "
-                + "open then; otherwise, thank you for taking part, and please contact the researcher if you have any questions.")
-        + "</p>");
-    return frame;
+                + "open then; otherwise, thank you for taking part, and please contact the researcher if you have any questions.");
+  }
+
+  /**
+   * Whether a restart of the server cut this session short, and nothing has run it since: its data's
+   * last interruption (sessionInterrupted, which Global.markInterruptedSessions records as it marks the
+   * session stopped) comes after its last resumption (sessionResumed), and it is stopped. Its pages
+   * that come back are told the server stopped (serverStoppedScreen), as those open during a normal stop
+   * were: after a crash (kill -9, a power cut) nothing told them, and once the server was back they were
+   * given the general "This session isn't running right now". False when it can't be told.
+   */
+  public static boolean interruptedByRestart(String instanceId) {
+    try {
+      ExperimentInstance session = ExperimentInstance.findById(Long.valueOf(instanceId));
+      if (session == null || session.status != ExperimentInstance.Status.STOPPED) {
+        return false;
+      }
+      SqlRow last = Ebean.createSqlQuery("select name as name from events where experiment_instance_id = :session"
+          + " and name in ('sessionInterrupted', 'sessionResumed') order by id desc limit 1")
+          .setParameter("session", session.id)
+          .findUnique();
+      return last != null && "sessionInterrupted".equals(last.getString("name"));
+    } catch (RuntimeException e) {
+      Logger.warn("Could not tell whether session " + instanceId + " was cut short by a restart: " + e);
+      return false;
+    }
+  }
+
+  /**
+   * Whether the session's data records that this participant entered it from Prolific (prolificEntry);
+   * false when it can't be told. For a page of theirs once the game that knew them is gone.
+   */
+  public static boolean enteredFromProlific(Long instanceId, String clientId) {
+    if (instanceId == null || clientId == null) {
+      return false;
+    }
+    try {
+      SqlRow entries = Ebean.createSqlQuery("select count(*) as n from events e join event_data d on d.event_id = e.id"
+          + " where e.experiment_instance_id = :session and e.name = 'prolificEntry' and d.name = 'clientId' and d.value = :client")
+          .setParameter("session", instanceId)
+          .setParameter("client", clientId)
+          .findUnique();
+      Integer n = entries == null ? null : entries.getInteger("n");
+      return n != null && n > 0;
+    } catch (RuntimeException e) {
+      Logger.warn("Could not tell whether " + clientId + " came from Prolific: " + e);
+      return false;
+    }
   }
 
   /**

@@ -88,7 +88,24 @@ public class ClientLogin extends Controller {
 
   /** notRunning(), or, for a session that doesn't exist at all (a mistyped or cut-off link), invalidLink(). */
   static play.api.templates.Html notRunning(String experimentId, String experimentInstanceId) {
-    return sessionExists(experimentId, experimentInstanceId) ? notRunning() : invalidLink();
+    return notRunning(experimentId, experimentInstanceId, null);
+  }
+
+  /**
+   * As notRunning(experimentId, experimentInstanceId), but for a session a restart of the server cut
+   * short (ScriptBoard.interruptedByRestart), the page that says the server stopped, as its pages are
+   * told when they come back (ClientController.notRunningScreen): in the words for Prolific when
+   * {@code clientId} entered it from there (null: someone not known, as on the sign-in page).
+   */
+  static play.api.templates.Html notRunning(String experimentId, String experimentInstanceId, String clientId) {
+    if (!sessionExists(experimentId, experimentInstanceId)) {
+      return invalidLink();
+    }
+    if (ScriptBoard.interruptedByRestart(experimentInstanceId)) {
+      boolean prolific = clientId != null && ScriptBoard.enteredFromProlific(Long.valueOf(experimentInstanceId), clientId);
+      return participantMessage.render(ScriptBoard.SERVER_STOPPED_TITLE, ScriptBoard.serverStoppedText(prolific));
+    }
+    return notRunning();
   }
 
   /** invalidLink(), for Global's not-found handler. */
