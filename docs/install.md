@@ -167,7 +167,7 @@ The ones to look at before participants join:
 | `breadboard.clientUpdateRate` | `500` | How often participants' pages are updated, in milliseconds. |
 | `amt.accessKey`, `amt.secretKey` | from `AMT_ACCESS_KEY`, `AMT_SECRET_KEY` | Your AWS keys, for Mechanical Turk. |
 | `breadboard.backup.everyHours` | `24` | How often the database is copied into `backups/`. |
-| `breadboard.backup.keep` | `14` | How many copies are kept. |
+| `breadboard.backup.keep` | `14` | How many copies of each kind are kept (the daily ones, those made by hand, those made before an upgrade). |
 | `breadboard.backup.dir` | `backups` | Where they go (relative to the Breadboard folder, or a full path, e.g. on another disk). |
 | `breadboard.backup.enabled` | `true` | `false` stops the copies. |
 
@@ -408,11 +408,13 @@ autopilot on, that link leads to the session it opens after the restart. Restart
 
 Everything researchers create (experiments, sessions, their events, accounts) is in
 `db/breadboard.h2.db`. The server copies it while it runs (nothing has to stop) into `backups/`:
-once a day, and before a newer release changes it (`...-upgrade.zip`). The newest 14 are kept. The
-console's **Settings → Backups** lists them, makes one when you ask (before a big change, say), and
-downloads them. Each one's name says when it was made (in UTC, e.g.
-`breadboard-2026-10-30-133336.zip`), and the console shows that time, also for backups copied from
-an earlier release. The settings above change how often, how many and where.
+once a day, and before a newer release changes it (`...-upgrade.zip`). The console's
+**Settings → Backups** lists them, makes one when you ask (before a big change, say;
+`...-manual.zip`), and downloads them. The newest 14 of each kind are kept: the daily ones, those
+made by hand, and those made before an upgrade, so making many by hand never pushes out the daily
+ones. Each one's name says when it was made (in UTC, e.g. `breadboard-2026-10-30-133336.zip`), and
+the console shows that time, also for backups copied from an earlier release. The settings above
+change how often, how many and where.
 
 The copies are on the same disk as the database, so copy them somewhere else now and then (or set
 `breadboard.backup.dir` to a folder on another disk or a synced drive).

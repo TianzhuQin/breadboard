@@ -102,7 +102,7 @@ Then set `breadboard.secureCookies=true` and `session.secure=true` in `conf/loca
 | Path | What |
 |---|---|
 | `db/breadboard.h2.db` | The database: experiments, sessions, accounts and data. |
-| `backups/` | Copies of the database, made every day and before an upgrade; the newest 14 are kept. Settings → Backups lists them. |
+| `backups/` | Copies of the database, made every day and before an upgrade; the newest 14 of each kind are kept. Settings → Backups lists them. |
 | `conf/local.conf` | Your settings (see above) |
 | `conf/application-prod.conf` | Every setting, with what it does (don't change it here) |
 | `conf/application.secret` | Generated at first start; signs sign-ins and invitation links. Keep it private. |
@@ -115,10 +115,11 @@ On macOS and Linux, only the account that runs Breadboard can read `db/`, `backu
 
 ## Backups
 
-The server copies its database into `backups/` once a day, and before a newer release changes it;
-the newest 14 copies are kept. The console's Settings → Backups shows them, makes one when you ask,
-and downloads them. Copy them to another disk now and then. To go back to one: stop Breadboard,
-unzip the copy into `db/` (replacing `breadboard.h2.db`), and start Breadboard again.
+The server copies its database into `backups/` once a day, and before a newer release changes it.
+The console's Settings → Backups shows them, makes one when you ask, and downloads them. The newest
+14 of each kind (daily, made by hand, before an upgrade) are kept. Copy them to another disk now and
+then. To go back to one: stop Breadboard, unzip the copy into `db/` (replacing `breadboard.h2.db`),
+and start Breadboard again.
 
 ## Upgrading from an earlier release
 

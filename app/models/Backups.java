@@ -16,7 +16,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -26,10 +28,11 @@ import java.util.regex.Pattern;
 /**
  * Copies of the database, made while the server runs (H2's BACKUP TO: consistent, nothing is
  * locked). One every breadboard.backup.everyHours hours (24), and before a newer release changes
- * the database; the newest breadboard.backup.keep (14) are kept, in breadboard.backup.dir
- * ("backups", in the server's folder). Each is a zip holding breadboard.h2.db: to go back to one,
- * stop the server, unzip it into db/ (replacing the file there), and start the server again. When a
- * backup was made is in its name (in UTC), which a copy of it keeps, unlike its file's time.
+ * the database; the newest breadboard.backup.keep (14) of each kind (the regular ones, those made
+ * by hand, those made before an upgrade) are kept, in breadboard.backup.dir ("backups", in the
+ * server's folder). Each is a zip holding breadboard.h2.db: to go back to one, stop the server,
+ * unzip it into db/ (replacing the file there), and start the server again. When a backup was made
+ * is in its name (in UTC), which a copy of it keeps, unlike its file's time.
  *
  * Only for a database in a file (H2): an in-memory one (the tests) or another database is skipped.
  * No backup is made while the disk is short of room for one (see {@link #roomProblem}): a full disk
@@ -242,12 +245,17 @@ public final class Backups {
     return target;
   }
 
-  /** Delete all but the newest {@code keep} backups in {@code folder}, and pieces of failed ones. */
+  /**
+   * Delete all but the newest {@code keep} backups of each kind in {@code folder} (see {@link #kind}),
+   * so that backing up by hand, however often, never deletes the regular ones, nor the one made before
+   * an upgrade; and pieces of failed ones.
+   */
   static void prune(File folder, int keep) {
-    List<File> all = list(folder);
-    for (int i = keep; i < all.size(); i++) {
-      if (!all.get(i).delete()) {
-        Logger.warn("Backups: couldn't delete the old backup " + all.get(i));
+    Map<String, Integer> kept = new HashMap<>();
+    // (newest first)
+    for (File backup : list(folder)) {
+      if (kept.merge(kind(backup), 1, Integer::sum) > keep && !backup.delete()) {
+        Logger.warn("Backups: couldn't delete the old backup " + backup);
       }
     }
     File[] partials = folder.listFiles((dir, name) -> name.endsWith(".zip.part"));
@@ -279,6 +287,16 @@ public final class Backups {
 
   private static String stamp(File backup) {
     return backup.getName().substring(0, "breadboard-0000-00-00-000000".length());
+  }
+
+  /**
+   * What a backup (one of {@link #list}) was made for, from its name: "" for the regular ones, else
+   * the reason in its name ("manual": by hand; "upgrade": before a newer release changed the database).
+   */
+  static String kind(File backup) {
+    String name = backup.getName();
+    int reason = "breadboard-0000-00-00-000000-".length();
+    return name.length() > reason + ".zip".length() ? name.substring(reason, name.length() - ".zip".length()) : "";
   }
 
   /**

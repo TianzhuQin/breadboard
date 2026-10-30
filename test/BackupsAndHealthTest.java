@@ -128,12 +128,9 @@ public class BackupsAndHealthTest extends BaseTest {
             try (ZipFile zip = new ZipFile(first)) {
                 assertNotNull("the zip holds the database file", zip.getEntry("breadboard.h2.db"));
             }
-            // made by hand, and once more: only the newest two stay (the same second: by the file's time)
-            File second = Backups.backUpTo(db, folder, "manual", 2);
-            long now = System.currentTimeMillis();
-            first.setLastModified(now - 20000);
-            second.setLastModified(now - 10000);
-            File third = Backups.backUpTo(db, folder, "upgrade", 2);
+            // twice more (each in a second of its own, for a name of its own): only the newest two stay
+            Backups.backUpTo(db, folder, null, 2);
+            File third = Backups.backUpTo(db, folder, null, 2);
             List<File> kept = Backups.list(folder);
             assertEquals(2, kept.size());
             assertEquals("newest first", third, kept.get(0));
@@ -149,6 +146,40 @@ public class BackupsAndHealthTest extends BaseTest {
         File file = new File(folder, "breadboard-" + stamp + (why == null ? "" : "-" + why) + ".zip");
         assertTrue(file.createNewFile());
         return file;
+    }
+
+    /**
+     * Backing up by hand, however often, leaves the regular (daily) backups and the one made before an
+     * upgrade alone: each kind keeps its own newest ones.
+     */
+    @Test
+    public void backupsMadeByHandPushOutOnlyOlderOnesMadeByHand() throws Exception {
+        File dir = Files.createTempDirectory("bb-backups").toFile();
+        File folder = new File(dir, "backups");
+        assertTrue(folder.mkdirs());
+        File upgrade = backupFile(folder, "2026-10-19-120000", "upgrade");
+        File daily1 = backupFile(folder, "2026-10-20-120000", null);
+        File daily2 = backupFile(folder, "2026-10-21-120000", null);
+        File manual1 = backupFile(folder, "2026-10-22-120000", "manual");
+        File manual2 = backupFile(folder, "2026-10-23-120000", "manual");
+        File manual3 = backupFile(folder, "2026-10-24-120000", "manual");
+        try (Connection db = DriverManager.getConnection("jdbc:h2:" + new File(dir, "breadboard").getAbsolutePath() + ";MODE=MYSQL", "", "")) {
+            File manual4 = Backups.backUpTo(db, folder, "manual", 2);
+            assertTrue(manual4.getName(), manual4.getName().endsWith("-manual.zip"));
+            assertTrue(manual4.exists());
+            assertTrue(manual3.exists());
+            assertFalse("older ones made by hand go", manual2.exists());
+            assertFalse(manual1.exists());
+            assertTrue("the daily ones stay", daily1.exists() && daily2.exists());
+            assertTrue("the one made before an upgrade stays", upgrade.exists());
+
+            // a regular one pushes out the oldest regular one, and nothing else
+            File daily3 = Backups.backUpTo(db, folder, null, 2);
+            assertTrue(daily3.exists() && daily2.exists());
+            assertFalse(daily1.exists());
+            assertTrue(manual4.exists() && manual3.exists() && upgrade.exists());
+        }
+        assertEquals(5, Backups.list(folder).size());
     }
 
     /**
