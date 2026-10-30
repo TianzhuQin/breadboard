@@ -20,6 +20,7 @@ GET         /game/:experimentId/:experimentInstanceId/:clientId/state           
 # A researcher's preview runs in an opaque origin and sends its token in a header: the CORS preflight
 OPTIONS     /game/:experimentId/:experimentInstanceId/:clientId/state            controllers.ClientController.stateOptions(experimentId: String, experimentInstanceId: String, clientId: String)
 GET         /game/:experimentId/:experimentInstanceId/:clientId/connect          controllers.ClientController.connectClient(experimentId: String, experimentInstanceId: String, clientId: String)
+POST        /game/:experimentId/:experimentInstanceId/:clientId/comment          controllers.ClientLogin.comment(experimentId: String, experimentInstanceId: String, clientId: String)
 # A token for the console to show a participant's page as that player (security.PreviewTokens)
 POST        /preview-token                                                       controllers.ClientController.previewToken()
 

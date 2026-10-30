@@ -462,6 +462,60 @@ public class ClientLogin extends Controller {
 
   private static final String PLAY_COOKIE = "bb_seat_";
 
+  /** The longest comment kept (characters); a longer one is cut there. */
+  static final int COMMENT_LIMIT = 10000;
+
+  /**
+   * A participant's comment for the researcher, from the Prolific finish screen's "Comments for the
+   * researcher": {@code POST /game/{experimentId}/{instanceId}/{clientId}/comment} with
+   * {@code {"text": "..."}} as JSON (no form: a page of another site can't send this) and the seat's
+   * token (its cookie, or the X-Breadboard-Token header). Recorded in that participant's own session
+   * as participantComment (player, text), whatever the engine runs now: the screen comes once their
+   * game is over, and the autopilot may have opened the next session since. It used to go to the
+   * engine as a message nothing listened to, and was lost. Only the seat's own token counts, not a
+   * researcher's preview. Answers 204 (also for an empty comment, which records nothing), 403 without
+   * the seat's token, 400 without a text, 404 for a session that isn't this experiment's.
+   */
+  public static Result comment(String experimentId, String experimentInstanceId, String clientId) {
+    if (!ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
+      return forbidden(commentRefused("This page can't send comments for this participant."));
+    }
+    JsonNode body = request().body().asJson();
+    JsonNode text = body == null ? null : body.get("text");
+    if (text == null || !text.isTextual()) {
+      return badRequest(commentRefused("Send {\"text\": \"...\"} as JSON."));
+    }
+    ExperimentInstance instance = null;
+    if (sessionExists(experimentId, experimentInstanceId)) {
+      instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+    }
+    if (instance == null) {
+      return notFound(commentRefused("There is no such session."));
+    }
+    String comment = text.textValue().trim();
+    if (comment.isEmpty()) {
+      return noContent();
+    }
+    if (comment.length() > COMMENT_LIMIT) {
+      // (not between the two halves of a character outside the BMP, such as an emoji)
+      int end = Character.isHighSurrogate(comment.charAt(COMMENT_LIMIT - 1)) ? COMMENT_LIMIT - 1 : COMMENT_LIMIT;
+      comment = comment.substring(0, end);
+    }
+    java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
+    data.put("player", clientId);
+    data.put("text", comment);
+    if (EventTracker.record(instance, "participantComment", data) == null) {
+      return internalServerError(commentRefused("The comment could not be saved."));
+    }
+    return noContent();
+  }
+
+  private static com.fasterxml.jackson.databind.node.ObjectNode commentRefused(String why) {
+    com.fasterxml.jackson.databind.node.ObjectNode error = play.libs.Json.newObject();
+    error.put("error", why);
+    return error;
+  }
+
   /**
    * The page for a Prolific participant who already took part in this experiment (see
    * Recruitment.prolificCompletion): their completion code, if one was recorded, and the way back to

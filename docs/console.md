@@ -409,7 +409,11 @@ recorded in a `prolificEntry` event. **When a participant finishes** builds the 
 step from your completion code, `recruitment.completeProlific(player, [completionCode: "…"])`:
 participants then see the code and a **Finish** button that takes them back to Prolific. **From
 Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
+Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event. What a participant
+writes under **Comments for the researcher** on that screen (it isn't shown with
+`noFeedback: true`) is kept in their session's data as a `participantComment` event, with `player`
+and `text`, also once their game has ended and the next session has opened: find it with **View
+events** in **Sessions & data**, or in the data you download.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game

@@ -419,4 +419,6 @@ restarts the running session.
 - **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
   researcher), in a session that a reload of the engine carries on.
 - **Tie edits:** `edgeEdit`, which records the actor.
-- **Prolific entry:** `prolificEntry`.
+- **Prolific:** `prolificEntry`, `prolificComplete`, and `participantComment` (`player`, `text`):
+  what a participant wrote under "Comments for the researcher" on the finish screen, kept in their
+  session's data even after its game has ended. It used to be sent to the game, which ignored it.

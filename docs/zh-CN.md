@@ -97,7 +97,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 recruitment.completeProlific(player, [completionCode: "C1A2B3C4"])
 ```
 
-参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
+参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 
 ## 导出数据
 
