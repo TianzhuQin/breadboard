@@ -212,7 +212,7 @@ $said = Get-Said 'sixth.log'
 $startErrors = Join-Path $other 'logs\start-errors.log'
 $kept = ''
 if (Test-Path -LiteralPath $startErrors) { $kept = "$(Get-Content -LiteralPath $startErrors -Raw)" }
-if ($sixth.ExitCode -eq 0 -or -not $said.Contains('so it is not started again') -or $said.Contains('Starting Breadboard again') -or -not $kept.Contains('local.conf')) {
+if ($sixth.ExitCode -eq 0 -or -not $said.Contains('(it could not start, exit code -1), so it is not started again') -or $said.Contains('Starting Breadboard again') -or -not $kept.Contains('local.conf')) {
   Fail "a server that couldn't start was started again, or that wasn't said, or logs\start-errors.log doesn't say why (exit code $($sixth.ExitCode)): $said / $kept"
 }
 Remove-Item -LiteralPath $localConf

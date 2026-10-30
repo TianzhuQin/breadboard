@@ -521,8 +521,11 @@ note() {
   say "$1"
 }
 
-# Why Java stopped, from its exit code. A signal N ends it with 128 + N (Java's own signals are 1 to
-# 31); Java's own exit codes go up to 255, which is -1 (Play's, for a server that couldn't start).
+# Why Java stopped, from its exit code ($1); $2 is "start" when it stopped before the server started.
+# A signal N ends it with 128 + N (Java's own signals are 1 to 31); Java's own exit codes go up to
+# 255, which is -1 (Play's, for a server that couldn't start). 1 is the server's own stop after an
+# error that stopped its engine (Global.exitIfActorsStop), or Java that couldn't start at all; 3,
+# running out of memory (-XX:+ExitOnOutOfMemoryError).
 signalled() {
   [ "$1" -gt 128 ] && [ "$1" -lt 160 ]
 }
@@ -545,6 +548,10 @@ stop_reason() {
     *)
       if signalled "$1"; then
         echo "it was ended with signal $(($1 - 128))"
+      elif [ "${2:-}" = start ]; then
+        if [ "$1" -eq 255 ]; then echo "it could not start, exit code 255"; else echo "exit code $1"; fi
+      elif [ "$1" -eq 1 ]; then
+        echo "exit code 1: the server stopped itself after an error, which logs/application.log shows"
       else
         echo "exit code $1; logs/application.log may say why"
       fi
@@ -625,12 +632,7 @@ while :; do
   # The server never started (a mistake in conf/local.conf, its port taken by then, Java that can't
   # start at all): started again, it would only fail the same way.
   if [ -f logs/start-errors.log ]; then
-    if signalled "$CODE"; then
-      WHY="it was ended with signal $((CODE - 128))"
-    else
-      WHY="exit code $CODE"
-    fi
-    note "Breadboard stopped before the server started ($WHY), so it is not started again: it would only fail the same way. The lines above say why, and logs/start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+    note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs/start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
     exit "$CODE"
   fi
 

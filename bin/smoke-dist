@@ -469,8 +469,9 @@ if wait "$LAUNCHER"; then
   fail "a launcher whose server couldn't start ended as if all went well"
 fi
 rm -f "$APP/conf/local.conf"
-grep -q "so it is not started again" "$WORK/start-failure.log" && ! grep -q "Starting Breadboard again" "$WORK/start-failure.log" \
-  || fail "a server that couldn't start was started again, or the launcher didn't say it isn't: $(cat "$WORK/start-failure.log")"
+grep -q "before the server started (it could not start, exit code 255), so it is not started again" "$WORK/start-failure.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/start-failure.log" \
+  || fail "a server that couldn't start was started again, or the launcher didn't say it isn't, and why: $(cat "$WORK/start-failure.log")"
 grep -q "conf/local.conf: 1" "$APP/logs/start-errors.log" 2>/dev/null \
   || fail "logs/start-errors.log doesn't say why the server couldn't start: $(cat "$APP/logs/start-errors.log" 2>&1)"
 pass "a server that can't start isn't started again, and logs/start-errors.log says why"

@@ -273,6 +273,8 @@ REM as below: what kept it from starting may be gone by then (a program that hel
 IF EXIST "logs\start-errors.log" IF NOT DEFINED SERVICE GOTO couldnotstart
 
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
+REM (1: the server's own stop after an error that stopped its engine, Global.exitIfActorsStop)
+IF "%EXIT_CODE%"=="1" SET "WHY=exit code 1: the server stopped itself after an error, which logs\application.log shows"
 IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
 IF DEFINED SERVICE IF EXIST "logs\start-errors.log" SET "WHY=it could not start, exit code %EXIT_CODE%; logs\start-errors.log and logs\service-errors.log may say why"
 IF "%EXIT_CODE%"=="3" CALL :morememory
@@ -310,7 +312,12 @@ CALL :show "Starting Breadboard again."
 GOTO start
 
 :couldnotstart
-CALL :note "Breadboard stopped before the server started (exit code %EXIT_CODE%), so it is not started again: it would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+REM (-1: Play's, for a server that couldn't start; 3: out of memory)
+SET "WHY=exit code %EXIT_CODE%"
+IF "%EXIT_CODE%"=="-1" SET "WHY=it could not start, exit code -1"
+IF "%EXIT_CODE%"=="3" CALL :morememory
+IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf gives it more than the %MEMORY% it has"
+CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
 GOTO failed
 
 :portnowtaken
