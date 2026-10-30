@@ -10,8 +10,10 @@ Shortcuts are written with Ctrl; on a Mac, use Cmd.
 ## Signing in
 
 On a new install the console asks for the first researcher account (**Welcome to Breadboard**):
-an **Email**, a **Password** of at least 8 characters (typed twice), and the **Default language**
-new content is written in. Opened from another computer than the server's own, it also asks for the
+an **Email**, a **Password** of at least 8 characters (typed twice), and the **Default language**:
+the language you write participants' texts in on the Content page, which new experiments get (the
+console itself stays in English; Settings can change it later). Opened from another computer than
+the server's own, it also asks for the
 **Setup code** the server prints in its window and in `logs/application.log`. **Create account** creates it and signs you in. The form only appears
 while the server has no account. From then on the console opens with **Sign in to Breadboard**.
 

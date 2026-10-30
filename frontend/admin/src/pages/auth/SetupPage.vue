@@ -29,7 +29,7 @@
           <BInput :id="id" v-model="confirmPw" type="password" autocomplete="new-password" />
         </template>
       </BField>
-      <BField label="Default language" hint="The language new content is written in.">
+      <BField label="Default language" :hint="LANGUAGE_HINT">
         <template #default="{ id }">
           <BSelect :id="id" v-model="languageId" :options="languageOptions" placeholder="Loading languages…" />
         </template>
@@ -45,6 +45,11 @@ import { BButton, BField, BInput, BSelect } from '@/ui'
 import { admin, boot, createFirstUser } from '@/store/admin'
 import { HttpError, http } from '@/lib/http'
 import AuthCard from './AuthCard.vue'
+
+// What the setting does, which the form didn't say: researchers in China chose Chinese and couldn't
+// tell whether it changed the console or what participants see.
+const LANGUAGE_HINT = 'The language you write participants’ texts in, on the Content page: new experiments are set up ' +
+  'for it. The console itself stays in English. You can change it later in Settings.'
 
 // A server that has just started may still be setting up (it says so with a 503), or not answer
 // yet: the page says so and tries again by itself, for a minute or so, instead of failing.
