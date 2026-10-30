@@ -253,7 +253,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
   Bot,
   ArrowLeft, CircleAlert, CircleCheck, Copy, CopyPlus, Ellipsis, FolderOpen, Hourglass, Info, ListOrdered, Lock,
@@ -273,7 +273,7 @@ import { parseGroovyError } from '../console/groovyError'
 import StepList from './StepList.vue'
 import UnsavedDialog from './UnsavedDialog.vue'
 import {
-  TEMPLATES, builtinOf, isDirty, isNew, newDraft, renameDraft, sortDrafts, validateName,
+  TEMPLATES, builtinOf, isDirty, isNew, newDraft, renameDraft, sortDrafts, stepNamed, validateName,
   type Builtin, type LeaveChoice, type StepDraft, type TemplateKind,
 } from './stepsModel'
 import {
@@ -421,6 +421,42 @@ function goto (line: number, column?: number) {
   const v = editorView()
   if (v) goToLine(v, line, column)
 }
+
+// ---- opened at a step's line (/steps?step=RoundStep&line=71) ------------------------------------
+// An engine error elsewhere ("Line 71 of RoundStep" on Live session, a pause on the Autopilot page)
+// links here, to that step with that line selected.
+
+const route = useRoute()
+
+async function openAt (name: string, line: number | null) {
+  const b = bucket.value
+  const d = b ? stepNamed(b.drafts, name) : null
+  if (!d) {
+    notify.info(`There is no step “${name}”`, 'It may have been renamed or deleted since. Choose a step on the left.')
+    return
+  }
+  if (editingName.value) finishNameEdit()
+  select(d.uid)
+  if (line == null) return
+  // its editor comes with the next render (and the code editor's own code, the first time)
+  for (let i = 0; i < 60; i++) {
+    await nextTick()
+    const v = current.value === d ? editorView() : null
+    if (v && v.state.doc.toString() === d.source) {
+      goToLine(v, line)
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
+watch(() => [route.query.step, bucket.value?.loaded] as const, ([step, loaded]) => {
+  if (typeof step !== 'string' || !step || !loaded) return
+  const n = Number(route.query.line)
+  // (once: coming back to the page, or a refresh, doesn't jump there again)
+  void router.replace({ query: {} })
+  void openAt(step, Number.isInteger(n) && n > 0 ? n : null)
+}, { immediate: true })
 
 // ---- naming (new steps get an inline name, and their template follows it, DL-5) ---------------
 

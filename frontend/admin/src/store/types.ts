@@ -97,6 +97,8 @@ export interface OutputEntry {
   source?: string
   /** The id of the request it answers, when the request carried one and the server echoed it (SendScript, SendStep). */
   requestId?: string
+  /** The step an engine error happened in (e.g. RoundStep), when the server knows it. */
+  step?: string
   at: number
 }
 

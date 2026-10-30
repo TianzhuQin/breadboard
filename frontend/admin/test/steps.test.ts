@@ -819,6 +819,44 @@ describe('StepsPage', () => {
   })
 })
 
+describe('opening a step at a line', () => {
+  it('finds a step by its name or by the variable its code defines', async () => {
+    const { stepNamed, stepAt } = await import('../src/pages/steps/stepsModel')
+    const drafts = [{ name: 'RoundStep', savedName: 'RoundStep' }, { name: 'FinishStep', savedName: 'FinishStep' }, { name: 'Draft', savedName: null }]
+    expect(stepNamed(drafts, 'RoundStep')).toBe(drafts[0])
+    expect(stepNamed(drafts, 'finishStep')).toBe(drafts[1])
+    expect(stepNamed(drafts, 'roundstep')).toBe(drafts[0])
+    expect(stepNamed(drafts, 'draft')).toBe(drafts[2])
+    expect(stepNamed(drafts, 'Missing')).toBe(null)
+    expect(stepNamed(drafts, '')).toBe(null)
+    expect(stepAt('RoundStep', 71)).toEqual({ path: '/steps', query: { step: 'RoundStep', line: '71' } })
+    expect(stepAt('RoundStep', null)).toEqual({ path: '/steps', query: { step: 'RoundStep' } })
+  })
+
+  it('opens the step an error names, and says so when there is none', async () => {
+    const steps = [{ id: 1, name: 'InitStep', source: 'initStep = 1' }, { id: 4, name: 'Apple', source: 'apple = 1' }]
+    admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps }
+    get.mockResolvedValue({ steps })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }] })
+    router.push('/steps?step=apple&line=1')
+    await router.isReady()
+    const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs: { BCodeEditor: { template: '<textarea class="code-stub" />' } } } })
+    try {
+      await flushPromises()
+      expect(w.find('.steps__title').text()).toBe('Apple')
+      // once: the address no longer asks for it
+      expect(router.currentRoute.value.query).toEqual({})
+      toasts.splice(0, toasts.length)
+      await router.push('/steps?step=Missing&line=3')
+      await flushPromises()
+      expect(toasts.some(t => t.title === 'There is no step “Missing”')).toBe(true)
+      expect(w.find('.steps__title').text()).toBe('Apple')
+    } finally {
+      w.unmount()
+    }
+  })
+})
+
 describe('StepsPage while the engine runs another experiment', () => {
   const CodeStub = defineComponent({
     name: 'BCodeEditor',

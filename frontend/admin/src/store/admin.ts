@@ -72,10 +72,11 @@ const EVENTS_CAP = 1000
 export const NOT_CONNECTED = 'Not connected to the server'
 let outputSeq = 0
 
-function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string) {
+function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string, step?: string) {
   if (!text) return
   const entry: OutputEntry = { id: ++outputSeq, kind, text, source, at: Date.now() }
   if (requestId) entry.requestId = requestId
+  if (step) entry.step = step
   state.output.push(entry)
   if (state.output.length > OUTPUT_CAP) state.output.splice(0, state.output.length - OUTPUT_CAP)
   // (not for code the researcher ran from the Script console or a step's Run: those pages show it)
@@ -152,7 +153,9 @@ function handle (m: any) {
   // the id of the script request it answers, echoed by newer servers
   const requestId = typeof m.requestId === 'string' && m.requestId ? m.requestId : undefined
   if (typeof m.error === 'string' && m.error.trim()) {
-    pushOutput('error', m.error.trim(), source, requestId)
+    // the step an engine error happened in, when the server knows it ("Line 71 of RoundStep")
+    const step = typeof m.step === 'string' && m.step.trim() ? m.step.trim() : undefined
+    pushOutput('error', m.error.trim(), source, requestId, step)
     if (typeof m.request === 'string') state.requestError = { request: m.request, text: m.error.trim(), at: Date.now() }
     // a rebuild that threw: the server answers only the console that asked, and never says Reloaded
     if (state.engine === 'loading' && REBUILDS.has(m.request)) engineDidNotFinish(ENGINE_FAILED)

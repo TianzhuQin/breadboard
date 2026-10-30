@@ -61,10 +61,11 @@ vi.mock('../src/pages/session/autopilot', async (orig) => {
   const { ref } = await import('vue')
   return { ...(await orig<any>()), useAutopilotStatus: () => ref(autopilotHint.status) }
 })
+const routerPush = vi.hoisted(() => vi.fn())
 vi.mock('vue-router', async (orig) => ({
   ...(await orig<any>()),
   useRoute: () => ({ query: {} }),
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn(), push: routerPush }),
 }))
 
 function param (p: Partial<Parameter> & { name: string, type: any }): Parameter {
@@ -744,6 +745,26 @@ describe('SessionPage', () => {
     return mount(SessionPage, { global: { stubs } })
   }
   const startButton = (w: VueWrapper) => w.findAll('button').find(b => b.text().includes('Start the game'))
+
+  it('names the step an engine error happened in, links to its line, and keeps Breadboard\'s own code under Full error', async () => {
+    const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: roundNoteText for class: Script306\n' +
+      '  at Script306.groovy:71\n  at step.groovy:200\n  at step.groovy:160\n  at actions.groovy:327'
+    store2.admin.output = [{ id: 5, kind: 'error', text, source: 'roundStep', step: 'RoundStep', at: Date.now() }]
+    routerPush.mockClear()
+    const w = await mountPage()
+    const card = w.find('.live-err')
+    expect(card.text()).toContain('Unknown name “roundNoteText”')
+    expect(card.findAll('.eng-err__places li').map(li => li.text())).toEqual(['Line 71 of RoundStep'])
+    expect(card.find('.eng-err__raw').text()).toContain('at step.groovy:200')
+    await card.find('button.eng-err__place').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith({ path: '/steps', query: { step: 'RoundStep', line: '71' } })
+    // a server that doesn't name the step: "a step", without a link
+    store2.admin.output = [{ id: 6, kind: 'error', text, source: 'roundStep', at: Date.now() }]
+    await nextTick()
+    expect(w.find('.eng-err__place.is-own').text()).toBe('Line 71 of a step')
+    expect(w.find('button.eng-err__place').exists()).toBe(false)
+    w.unmount()
+  })
 
   it('offers "start anyway" when only the session\'s log shows the start', async () => {
     // the autopilot's start (or one that threw after logging its start) seen in the feed

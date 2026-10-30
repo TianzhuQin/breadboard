@@ -36,6 +36,12 @@ describe('admin store', () => {
     expect(admin.requestError).toMatchObject({ request: 'RunGame', text: 'The game has started already.' })
   })
 
+  it('keeps the step an engine error happened in, when the server names it', () => {
+    __receive({ error: 'Caught error: boom\n', source: 'roundStep', step: 'RoundStep' })
+    __receive({ error: 'Caught error: boom\n', source: 'OnJoinStep' })
+    expect(admin.output.map(o => o.step)).toEqual(['RoundStep', undefined])
+  })
+
   it('keeps every output and error, and counts errors not yet seen', () => {
     __receive({ error: '', output: 'x\n\n==>1' })
     __receive({ error: 'Caught error: boom\n' })

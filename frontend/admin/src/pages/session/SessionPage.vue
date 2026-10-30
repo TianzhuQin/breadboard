@@ -21,7 +21,14 @@
           The experiment's scripts reported an error
           <span class="live-err__time">at {{ clock(latestError.at) }}</span>
         </p>
-        <EngineError class="live-err__text" :error="latestError.text" own-name="a step" />
+        <!-- "Line 71 of RoundStep", which opens that step at that line, when the server names the step -->
+        <EngineError
+          class="live-err__text"
+          :error="latestError.text"
+          :own-name="latestError.step || 'a step'"
+          :from-line="latestError.step ? 1 : null"
+          @goto="(line: number) => latestError?.step && router.push(stepAt(latestError.step, line))"
+        />
       </div>
       <div class="live-err__actions">
         <BButton size="sm" :icon="PanelBottom" @click="openOutput = true">Open output</BButton>
@@ -189,6 +196,7 @@ import {
 } from './live'
 import { busy, dismissedErrorId, downloadData, resumeSession, startGame, stopSession } from './controls'
 import { autopilotRuns, useAutopilotStatus } from './autopilot'
+import { stepAt } from '../steps/stepsModel'
 
 const route = useRoute()
 const router = useRouter()

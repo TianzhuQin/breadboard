@@ -218,7 +218,9 @@ Start, stop and resume ask before they act. Below them, **In the network**, **Co
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
 how many people are here and the countdown. **Events** lists what the session records, newest
 first, as it happens, with what the well-known ones mean (a researcher's preview signing in says
-so); click one to see its data.
+so); click one to see its data. When the experiment's scripts report an error, a card at the top
+says what went wrong in plain words and on which line of which step (click it to open the step at
+that line); **Full error** has the rest, Breadboard's own code included.
 
 Under **Links for participants**, **This session** works while this session runs. **Whichever
 session is open** leads to this experiment's open session whose game hasn't started, so it can be
