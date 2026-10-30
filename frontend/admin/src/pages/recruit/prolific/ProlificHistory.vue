@@ -17,8 +17,8 @@
       <template v-else>
         <div class="pl-hist__top">
           <p class="pl-players__sum" aria-live="polite">
-            <strong>{{ records.length }}</strong> joined · <strong>{{ finished }}</strong> finished ·
-            in <strong>{{ groups.length }}</strong> {{ groups.length === 1 ? 'session' : 'sessions' }}
+            <strong>{{ records.length }}</strong> joined · <strong>{{ finished }}</strong> finished<template v-if="noCode">
+              ({{ noCode }} without a code)</template> · in <strong>{{ groups.length }}</strong> {{ groups.length === 1 ? 'session' : 'sessions' }}
           </p>
           <div v-if="bonusLines" class="pl-players__bonus">
             <CopyButton :text="bonusLines" size="sm" label="Copy bonus list" />
@@ -130,6 +130,7 @@ onBeforeUnmount(() => clearTimeout(soon))
 
 const groups = computed(() => groupBySession(records.value))
 const finished = computed(() => records.value.filter(r => r.completed || r.finishedWithoutCode).length)
+const noCode = computed(() => records.value.filter(r => r.finishedWithoutCode && !r.completed).length)
 const bonusLines = computed(() => prolificBonusLines(records.value))
 // Prolific pays in the study's currency, so no currency sign here
 const money = (n: number) => formatMoney(n).replace(/^\$/, '')

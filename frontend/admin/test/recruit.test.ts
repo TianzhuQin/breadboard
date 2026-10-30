@@ -617,7 +617,7 @@ describe('Prolific participants of every session', () => {
     const w = mount(ProlificHistory, { props: { experimentId: 3 } })
     await flushPromises()
     const text = () => w.text().replace(/\s+/g, ' ')
-    expect(text()).toContain('5 joined · 3 finished · in 2 sessions')
+    expect(text()).toContain('5 joined · 3 finished (1 without a code) · in 2 sessions')
     expect(w.findAll('.pl-hist__session').map(r => r.text().replace(/\s+/g, ' '))).toEqual([
       'Autopilot 2 Running 2 joined · 1 finished',
       'Autopilot 1 Finished 3 joined · 2 finished',
