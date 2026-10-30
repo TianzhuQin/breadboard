@@ -66,7 +66,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | 设置 | 默认 | 作用 |
 |---|---|---|
 | **Run this experiment unattended** | 关 | 总开关。在 **Experiment** 里选要运行的实验。 |
-| **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场。 |
+| **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场；重启实验脚本还要再花几秒。 |
 | **Longest session** | 120 分钟 | 从游戏开始算起。游戏超过这个时间就会被结束：参与者看到这一场时间已用完（已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionTooLong` 事件，过了暂停时间再开下一场，Autopilot 页会写明是哪一场。连续 3 场都超时，自动运行就暂停。留空表示不限。新的设置默认 120 分钟；用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。 |
 | **Start the game automatically when enough people are here** | 开 | 等待室：先到的人看到等待页面。 |
 | **Minimum players** / **Maximum players** | 2 / 不限 | 到了最少人数就可以开始；到了最多人数，马上开始倒计时。 |

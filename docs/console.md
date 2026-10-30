@@ -308,7 +308,7 @@ experiment you're working on and leaves to its steps whatever they already set.
 |---|---|---|
 | **Run this experiment unattended** | off | Keeps a session of the chosen **Experiment** open: right after saving, when the server starts, and after each session ends. Turned off, it opens no new session; an open one keeps running. |
 | **Open the next session when one finishes** | on | Also after a session is called off. |
-| **Pause before the next session** | 10 seconds | 0 opens it at once. |
+| **Pause before the next session** | 10 seconds | Restarting the experiment's scripts for it adds a few seconds; with 0, the next session opens a few seconds after one finishes. |
 | **Longest session** | 120 minutes | Counted from the start of the game. A game that runs longer is ended (see below). Empty: no limit. New settings start at 120 minutes; settings saved with an older release keep no limit until you set one. |
 | **Use the waiting room set here** | on (off when the steps set one) | The waiting room: people who arrive early see a waiting page, and the game starts by itself. |
 | **Minimum players** | 2 | The game can start once this many people are here. |

@@ -347,7 +347,7 @@ export function validateAutopilot (f: AutopilotForm): AutopilotErrors {
   const e: AutopilotErrors = {}
   if (f.enabled && f.experimentId == null) e.experimentId = 'Choose the experiment to run.'
   if (f.continuous) {
-    whole(f.nextSessionDelaySeconds, 'nextSessionDelaySeconds', e, { min: 0, max: MAX_SECONDS, required: true, what: 'a number of seconds (0 opens it at once)' })
+    whole(f.nextSessionDelaySeconds, 'nextSessionDelaySeconds', e, { min: 0, max: MAX_SECONDS, required: true, what: 'a number of seconds (0 for no pause)' })
   }
   // (empty: no limit)
   whole(f.maxSessionMinutes, 'maxSessionMinutes', e, { min: 1, max: MAX_SESSION_MINUTES, required: false, what: '' })
