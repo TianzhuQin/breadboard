@@ -392,8 +392,10 @@ restarts the running session.
 
 - **Timestamps:** CSV exports are now in true UTC. The format is unchanged.
 - **Exact values:** every CSV, the server's and the console's downloads, keeps values exactly as
-  recorded, with no byte-order mark. A spreadsheet may read a value that starts with `=`, `+`,
-  `-` or `@` as a formula, so import the file as text when participants could type such values.
+  recorded, with no byte-order mark unless you ask for one: **For Excel** on Sessions & data, or
+  `excel=true` on the server's CSV addresses, adds the mark Excel and WPS need to read Chinese. A
+  spreadsheet may read a value that starts with `=`, `+`, `-` or `@` as a formula, so import the
+  file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
   or goes (not for every page that takes over their seat).

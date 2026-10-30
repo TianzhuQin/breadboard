@@ -442,6 +442,16 @@ of event with a column per data name.
 | **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |
 | **Download CSV** | Players | The players shown, with every property. |
 
+**For Excel**, next to the download buttons, makes the CSV files of this page (and Live session's
+**Download data**) start with the UTF-8 byte-order mark. Without it, Excel and WPS read a file in the
+computer's own encoding (on a Chinese Windows, GBK), and Chinese and other non-Latin text turns into
+garbage; with it, they open it correctly with a double-click. The choice is kept in this browser.
+Leave it off for R, Python and existing analysis scripts: the files are then exactly as earlier
+versions wrote them. A file downloaded without it opens correctly in Excel through **Data → From
+Text/CSV** with **File origin** set to **65001: Unicode (UTF-8)**, and in WPS when you import it as
+UTF-8. The server's addresses give the same files with `excel=true`, e.g.
+`/csv/data/<session id>?excel=true`.
+
 Timestamps in the CSV files are in UTC, written as `2026-10-28T13:24:23:757Z` (with a colon
 before the milliseconds, as earlier versions of Breadboard wrote them, so existing analysis scripts
 keep working). In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`

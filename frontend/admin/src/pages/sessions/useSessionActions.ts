@@ -1,7 +1,7 @@
 import { computed, reactive } from 'vue'
 import { admin, actions, connectionState } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse } from '@/store/engineGuard'
-import { http, saveText } from '@/lib/http'
+import { downloadCsv } from '@/lib/csvFiles'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Experiment, Instance } from '@/store/types'
@@ -162,13 +162,12 @@ export function useSessionActions () {
     })
   }
 
-  /** The session's events as the server's CSV (one row per data item). */
+  /** The session's events as the server's CSV (one row per data item), for Excel when that is chosen. */
   async function downloadData (s: Pick<Instance, 'id' | 'name'>): Promise<boolean> {
     return !!await run('data', s.id, async () => {
       try {
-        const text = await http.get<string>(`/csv/data/${s.id}`, { raw: true })
         const file = `${safeFileName(s.name)}_${s.id}.csv`
-        saveText(file, text)
+        const text = await downloadCsv(`/csv/data/${s.id}`, file)
         const rows = csvDataRows(text)
         if (rows) notify.success(`Downloaded ${file}`, `${rows.toLocaleString()} data ${rows === 1 ? 'row' : 'rows'}.`)
         else notify.info(`Downloaded ${file}`, 'No events with data have been recorded in this session yet, so the file has only the header row.')
@@ -184,9 +183,8 @@ export function useSessionActions () {
   async function downloadList (exp: Pick<Experiment, 'id' | 'name'>): Promise<boolean> {
     return !!await run('list', exp.id, async () => {
       try {
-        const text = await http.get<string>(`/csv/instances/${exp.id}`, { raw: true })
         const file = `${safeFileName(exp.name, 'sessions')}.csv`
-        saveText(file, text)
+        await downloadCsv(`/csv/instances/${exp.id}`, file)
         notify.success(`Downloaded ${file}`, 'One row per session, with its status, start time (UTC) and launch parameters.')
         return true
       } catch (e) {
@@ -203,9 +201,8 @@ export function useSessionActions () {
   async function downloadAllData (exp: Pick<Experiment, 'id' | 'name'>, sessionIds: number[]): Promise<boolean> {
     return !!await run('all', exp.id, async () => {
       try {
-        const text = await http.get<string>(`/csv/experiment/${exp.id}/data?ids=${sessionIds.join(',')}`, { raw: true })
         const file = `${safeFileName(exp.name, 'experiment')}_data.csv`
-        saveText(file, text)
+        const text = await downloadCsv(`/csv/experiment/${exp.id}/data?ids=${sessionIds.join(',')}`, file)
         const rows = csvDataRows(text)
         notify.success(`Downloaded ${file}`, `${sessionIds.length.toLocaleString()} ${sessionIds.length === 1 ? 'session' : 'sessions'}, ${(rows || 0).toLocaleString()} data ${rows === 1 ? 'row' : 'rows'}.`)
         return true

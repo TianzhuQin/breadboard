@@ -13,7 +13,8 @@ import {
   classifyStartReply, cleanError, detectGameStarted, engineGameFlag, formatDuration, isLocalOrigin, isStartReply, joinLinks,
   networkStats, safeFileName, waitingRoom,
 } from '../src/pages/session/live'
-import { busy, resumeSession, startGame, stopSession } from '../src/pages/session/controls'
+import { busy, downloadData, resumeSession, startGame, stopSession } from '../src/pages/session/controls'
+import { csvForExcel } from '../src/lib/csvFiles'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
 import type { Parameter } from '../src/store/types'
@@ -52,6 +53,9 @@ vi.mock('@/store/engineGuard', () => ({
   engineUse: store.engineUse,
   REBUILD_PAUSES_AUTOPILOT: 'This also pauses the autopilot.',
 }))
+// the download itself (the address and the file's bytes are tested in sessions.test.ts)
+const csvFiles = vi.hoisted(() => ({ downloadCsv: vi.fn(async (_path: string, _file: string) => '') }))
+vi.mock('@/lib/csvFiles', async (orig) => ({ ...(await orig<any>()), downloadCsv: csvFiles.downloadCsv }))
 // what GET /autopilot says, for the stop's question (the rest of the module as it is)
 vi.mock('../src/pages/autopilot/autopilot', async (orig) => ({ ...(await orig<any>()), autopilotNow: store.autopilotNow }))
 // what GET /autopilot says, read when a page mounts (null: no autopilot, or an older server)
@@ -517,6 +521,21 @@ describe('session controls', () => {
     for (const f of Object.values(store) as any[]) f.mockClear()
     toasts.splice(0, toasts.length)
     if (confirmState.open) settleConfirm(false)
+  })
+
+  it('downloads the session\'s data as on Sessions & data, and says when it is for Excel, which is chosen there', async () => {
+    await downloadData(inst)
+    expect(csvFiles.downloadCsv).toHaveBeenLastCalledWith('/csv/data/5', 'Pilot_5.csv')
+    expect(toasts.some(t => t.title === 'Downloaded the session\'s data' && t.detail === 'Pilot_5.csv')).toBe(true)
+    toasts.splice(0, toasts.length)
+    csvForExcel.value = true
+    try {
+      await downloadData(inst)
+      expect(csvFiles.downloadCsv).toHaveBeenLastCalledWith('/csv/data/5', 'Pilot_5.csv')
+      expect(toasts.some(t => t.detail === 'Pilot_5.csv, for Excel (as chosen on Sessions & data)')).toBe(true)
+    } finally {
+      csvForExcel.value = false
+    }
   })
 
   it('does not ask or send while offline, and says so at once when the connection drops meanwhile', async () => {

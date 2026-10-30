@@ -1,6 +1,7 @@
 <template>
   <BPage v-if="exp" intro="Every session of this experiment. Resume or stop one, see what happened in it, and download its data.">
     <template #actions>
+      <BCheckbox v-model="csvForExcel" class="ss__excel" :title="EXCEL_TITLE">For Excel</BCheckbox>
       <BButton
         :icon="FileSpreadsheet"
         :loading="sessionActions.isBusy('list', exp.id)"
@@ -191,7 +192,8 @@ import {
   ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, Database, Download, FileSpreadsheet, Play, Plus, ScrollText, Search,
   SearchX, Square, X,
 } from 'lucide-vue-next'
-import { BBadge, BButton, BEmpty, BInput, BPage, BPanel, BTabs, type TabItem } from '@/ui'
+import { BBadge, BButton, BCheckbox, BEmpty, BInput, BPage, BPanel, BTabs, type TabItem } from '@/ui'
+import { csvForExcel } from '@/lib/csvFiles'
 import { admin, instances } from '@/store/admin'
 import type { Instance } from '@/store/types'
 import {
@@ -206,6 +208,11 @@ import SessionEventsDrawer from './SessionEventsDrawer.vue'
 const router = useRouter()
 const route = useRoute()
 const sessionActions = useSessionActions()
+
+/** The CSV files of this page (and Live session's data) for Excel: see lib/csvFiles. */
+const EXCEL_TITLE = 'Download the CSV files with a byte-order mark, so that Excel and WPS show Chinese and other ' +
+  'non-English text correctly. Leave it off for R, Python and analysis scripts, which read the files as they are. ' +
+  'Remembered in this browser.'
 
 const PAGE = 100
 const exp = computed(() => admin.experiment)
@@ -361,6 +368,7 @@ watch(eventsOpen, (open) => {
 
 <style>
 .ss { overflow: hidden; }
+.ss__excel { margin-right: 4px; font-size: var(--text-sm); }
 .ss__empty { padding: 24px 0; }
 .ss__bar {
   display: flex;
