@@ -371,10 +371,10 @@ autopilot's own session, a **Start the game** that didn't get going ends the ses
 autopilot, as its waiting room's start does: once Start is pressed, its waiting room no longer
 starts the game.
 
-**Games that never end.** The autopilot's own session is also ended when its game runs longer than
-**Longest session**, whatever keeps it going: its participants are told the session ran out of time
-(those who came from Prolific are asked to message you there about their submission; someone who was
-given a completion code keeps it on screen), the session is finished with a
+**Games that never end.** The autopilot's own session is also ended when its game has run for
+**Longest session**, at that moment, whatever keeps it going: its participants are told the session
+ran out of time (those who came from Prolific are asked to message you there about their submission;
+someone who was given a completion code keeps it on screen), the session is finished with a
 `sessionTooLong` event (`minutes`, `limit`), and the next one opens after the pause. This page says
 which session it was until you save or press **Resume**. After three such sessions in a row the
 autopilot pauses instead; a game that comes to its end starts the count again. And once a step has

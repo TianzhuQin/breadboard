@@ -413,7 +413,8 @@ public final class Autopilot {
    * The guards of its own session (isOwnSession: one it opened, or was handed on Resume or a save; a
    * session a researcher runs by hand is left to them), which nothing else ends when its game never
    * does (a script waiting for something that never comes): the engine can't tell such a game from a
-   * long one. Its game may run maxSessionMinutes at most, counted from its start (endTooLong). And once
+   * long one. Its game may run maxSessionMinutes at most, counted from its start (endTooLong), and is
+   * ended when it reaches that, not at the next periodic check (checkAgainAt). And once
    * a step failure has been recorded in it, a game that has had nothing to wait for during stallMs is
    * ended as a failure that stalls it is (watchForStall): the step-failure rule (ScriptBoard.gameFailed)
    * can't see every way a failure leaves a game with nothing to do. Never waits long.
@@ -448,11 +449,69 @@ public final class Autopilot {
     }
     long now = clock.getAsLong();
     Integer limit = e.settings.maxSessionMinutes;
-    if (limit != null && now - started > limit * 60000L) {
-      endTooLong(live, e.settings, (now - started) / 60000L, limit);
-      return;
+    if (limit != null) {
+      long due = started + limit * 60000L;
+      if (now >= due) {
+        endTooLong(live, e.settings, (now - started) / 60000L, limit);
+        return;
+      }
+      checkAgainAt(due);
     }
     watchForStall(live, of, now);
+  }
+
+  // When the check that ends its own session at the longest session allowed is due (checkAgainAt); 0: none is.
+  private static volatile long limitCheckAt = 0L;
+
+  /**
+   * Runs {@code task} at {@code at} (ms, the autopilot's clock) on the autopilot's thread. A field so
+   * tests can run it when they choose: in tests nothing is scheduled otherwise (their clock is moved,
+   * not waited for, and a task left over would fire in another test), as the periodic check isn't.
+   */
+  static volatile java.util.function.BiConsumer<Long, Runnable> runAt = new java.util.function.BiConsumer<Long, Runnable>() {
+    public void accept(Long at, final Runnable task) {
+      if (stopped || Play.isTest()) {
+        return;
+      }
+      try {
+        scheduler.schedule(new Runnable() {
+          public void run() {
+            try {
+              task.run();
+            } catch (Throwable t) {
+              Logger.error("Autopilot: a check of its session failed", t);
+            }
+          }
+        }, Math.max(0L, at - clock.getAsLong()), TimeUnit.MILLISECONDS);
+      } catch (java.util.concurrent.RejectedExecutionException stopping) {
+        Logger.debug("Autopilot: the application is stopping; no check was scheduled");
+      }
+    }
+  };
+
+  /**
+   * Its own session's game reaches the longest session allowed at {@code due}: when that comes before
+   * the periodic check after next (they can come a little more than WATCHDOG_SECONDS apart), the
+   * guards look again then, so the game is ended at the limit. The periodic check alone ended it up to
+   * WATCHDOG_SECONDS late (a game set to 1 minute ran 78 to 85 s), while the notice and the event said
+   * it was ended after the limit. One such check at a time; a check that comes too early (the game
+   * started again since, the limit was raised) ends nothing.
+   */
+  private static void checkAgainAt(final long due) {
+    if (due - clock.getAsLong() > 2 * WATCHDOG_SECONDS * 1000L || limitCheckAt == due) {
+      return;
+    }
+    limitCheckAt = due;
+    runAt.accept(due, new Runnable() {
+      public void run() {
+        if (limitCheckAt == due) {
+          limitCheckAt = 0L;
+        }
+        if (!stopped) {
+          guardOwnSession();
+        }
+      }
+    });
   }
 
   /**
@@ -478,7 +537,7 @@ public final class Autopilot {
         // have been raised, or the game started again, since)
         Integer allowed = effective().settings.maxSessionMinutes;
         long started = ScriptBoard.gameStartedAt(id);
-        if (stopped || !isOwnSession(id) || allowed == null || started <= 0L || clock.getAsLong() - started <= allowed * 60000L) {
+        if (stopped || !isOwnSession(id) || allowed == null || started <= 0L || clock.getAsLong() - started < allowed * 60000L) {
           return false;
         }
         inARow[0] = tooLongInARow + 1;

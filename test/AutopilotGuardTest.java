@@ -40,11 +40,14 @@ public class AutopilotGuardTest extends BaseTest {
     private final List<AdminSocketsTest.Tab> tabs = new ArrayList<>();
     // how far the autopilot's clock is ahead of the real one
     private volatile long ahead = 0L;
+    // what schedules the check at the longest session (Autopilot.runAt), put back after each test
+    private Object runAt;
 
     @Before
     public void guardsOnTheirTestClock() throws Exception {
         setStatic("clock", (LongSupplier) () -> System.currentTimeMillis() + ahead);
         setStatic("stallMs", 300L);
+        runAt = getStatic("runAt");
     }
 
     @After
@@ -70,6 +73,8 @@ public class AutopilotGuardTest extends BaseTest {
         setStatic("stallMs", 60000L);
         setStatic("guardWaitMs", 5000L);
         setStatic("clock", (LongSupplier) System::currentTimeMillis);
+        setStatic("runAt", runAt);
+        setStatic("limitCheckAt", 0L);
     }
 
     private static void setStatic(String name, Object value) throws Exception {
@@ -411,6 +416,54 @@ public class AutopilotGuardTest extends BaseTest {
         s.put("maxSessionMinutes", 90);
         assertEquals(OK, status(post(researcher, s)));
         assertTrue(autopilotStatus(researcher).get("notice").isNull());
+    }
+
+    private static long gameStartedAt(ExperimentInstance session) throws Exception {
+        java.lang.reflect.Method m = ScriptBoard.class.getDeclaredMethod("gameStartedAt", Long.class);
+        m.setAccessible(true);
+        return (Long) m.invoke(null, session.id);
+    }
+
+    @Test
+    public void theGameIsEndedWhenItReachesTheLongestSessionNotAtTheNextCheck() throws Throwable {
+        // (the checks the autopilot would schedule, run here when the test says)
+        final List<Long> due = new CopyOnWriteArrayList<>();
+        final List<Runnable> checks = new CopyOnWriteArrayList<>();
+        setStatic("runAt", (java.util.function.BiConsumer<Long, Runnable>) (at, task) -> {
+            due.add(at);
+            checks.add(task);
+        });
+        final User researcher = user("onthedot");
+        final Experiment experiment = createExperiment("Ends on the dot");
+        createStep(experiment, "InitStep", WAITS_FOR_A_CHOICE);
+        own(researcher, experiment);
+        assertEquals(OK, status(post(researcher, settings(experiment, 2, 2, 1))));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        joins(experiment, session, "dot-1");
+        joins(experiment, session, "dot-2");
+        await("the start", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted)
+            && gameStartedAt(session) > 0L);
+        final long started = gameStartedAt(session);
+
+        // 45 s in: nothing to end yet, but the limit comes before the next periodic check, 30 s on.
+        ahead = started + 45000L - System.currentTimeMillis();
+        watchdog();
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertEquals("a check at the limit", 1, due.size());
+        assertEquals(started + 60000L, (long) due.get(0));
+        watchdog();
+        assertEquals("one at a time", 1, due.size());
+
+        // The check runs at the limit: the game is ended then, after the minute it may run.
+        ahead = started + 60000L - System.currentTimeMillis();
+        checks.get(0).run();
+        await("the session to be finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        List<Event> tooLong = events(session, "sessionTooLong");
+        assertEquals(1, tooLong.size());
+        assertEquals("1", value(tooLong.get(0), "minutes"));
+        assertEquals("1", value(tooLong.get(0), "limit"));
+        assertEquals("Session \"" + session.name + "\" was ended after 1 minute, the longest a session may run. "
+            + "Its participants were told that the session ran out of time.", autopilotStatus(researcher).get("notice").asText());
     }
 
     @Test
