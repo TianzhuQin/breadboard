@@ -19,6 +19,9 @@ import { busy, resumeSession, startGame, stopSession } from '../src/pages/sessio
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
 import type { Parameter } from '../src/store/types'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const store = vi.hoisted(() => ({
   launch: vi.fn(),
@@ -822,6 +825,15 @@ describe('SessionPage', () => {
     return mount(SessionPage, { global: { stubs } })
   }
   const startButton = (w: VueWrapper) => w.findAll('button').find(b => b.text().includes('Start the game'))
+
+  it('leaves the error card\'s explained error its full height, so its message and Full error aren\'t squeezed', () => {
+    // (EngineError is a flex column: a height cap on it shrank its message and "Full error" to a few
+    // pixels. jsdom lays nothing out, so this reads the rule itself.)
+    const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'pages', 'session', 'SessionPage.vue'), 'utf8')
+    const rule = /\.live-err__text\s*\{([^}]*)\}/.exec(page)
+    expect(rule).not.toBeNull()
+    expect(rule![1]).not.toMatch(/max-height\s*:|(^|[\s;])overflow(-y)?\s*:/)
+  })
 
   it('names the step an engine error happened in, links to its line, and keeps Breadboard\'s own code under Full error', async () => {
     const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: roundNoteText for class: Script306\n' +
