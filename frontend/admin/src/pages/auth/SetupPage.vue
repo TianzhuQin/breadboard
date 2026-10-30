@@ -2,6 +2,7 @@
   <AuthCard title="Welcome to Breadboard" subtitle="Create the first researcher account for this server.">
     <form novalidate @submit.prevent="submit">
       <p v-if="error" class="auth__error" role="alert">{{ error }}</p>
+      <p v-else-if="settingUp" class="auth__note" role="status">{{ SETTING_UP }}</p>
       <template v-if="admin.setupCodeRequired">
         <p class="auth__note">
           You opened this new server from another computer. To show it's you, enter the setup code the server
@@ -39,11 +40,32 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { BButton, BField, BInput, BSelect } from '@/ui'
 import { admin, boot, createFirstUser } from '@/store/admin'
-import { http } from '@/lib/http'
+import { HttpError, http } from '@/lib/http'
 import AuthCard from './AuthCard.vue'
+
+// A server that has just started may still be setting up (it says so with a 503), or not answer
+// yet: the page says so and tries again by itself, for a minute or so, instead of failing.
+const SETTING_UP = 'Setting up the server, one moment…'
+const RETRY_MS = 2000
+const RETRIES = 30
+const settingUp = ref(false)
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let gone = false
+onBeforeUnmount(() => {
+  gone = true
+  if (retryTimer) clearTimeout(retryTimer)
+})
+/** Whether the server isn't ready yet: still setting up, or not answering (a network error). */
+function notReady (e: any): boolean {
+  return e instanceof HttpError ? e.status === 503 : e instanceof TypeError
+}
+/** Wait a moment before trying again (false when the page has gone meanwhile). */
+function aMoment (): Promise<boolean> {
+  return new Promise(resolve => { retryTimer = setTimeout(() => resolve(!gone), RETRY_MS) })
+}
 
 const email = ref('')
 const password = ref('')
@@ -57,13 +79,24 @@ const setupCode = ref('')
 const languageOptions = computed(() => languages.value.map(l => ({ value: l.id, label: `${l.name} (${l.code})` })))
 
 onMounted(async () => {
-  try {
-    const res = await http.get<{ languages: { id: number, code: string, name: string }[] }>('/languages', { quiet401: true })
-    languages.value = [...res.languages].sort((a, b) => a.name.localeCompare(b.name))
-    const english = languages.value.find(l => l.code === 'eng')
-    languageId.value = (english || languages.value[0])?.id ?? null
-  } catch (e) {
-    error.value = 'Could not load the list of languages.'
+  for (let tries = 0; ; tries++) {
+    try {
+      const res = await http.get<{ languages: { id: number, code: string, name: string }[] }>('/languages', { quiet401: true })
+      languages.value = [...res.languages].sort((a, b) => a.name.localeCompare(b.name))
+      const english = languages.value.find(l => l.code === 'eng')
+      languageId.value = (english || languages.value[0])?.id ?? null
+      settingUp.value = false
+      return
+    } catch (e) {
+      if (tries < RETRIES && notReady(e)) {
+        settingUp.value = true
+        if (await aMoment()) continue
+        return
+      }
+      settingUp.value = false
+      error.value = 'Could not load the list of languages.'
+      return
+    }
   }
 })
 
@@ -78,7 +111,19 @@ async function submit () {
   if (admin.setupCodeRequired && !setupCode.value.trim()) return void (error.value = 'Enter the setup code the server printed.')
   busy.value = true
   try {
-    await createFirstUser(email.value.trim(), password.value, languageId.value, admin.setupCodeRequired ? setupCode.value.trim() : undefined)
+    for (let tries = 0; ; tries++) {
+      try {
+        await createFirstUser(email.value.trim(), password.value, languageId.value, admin.setupCodeRequired ? setupCode.value.trim() : undefined)
+        return
+      } catch (e: any) {
+        if (tries < RETRIES && e instanceof HttpError && e.status === 503) {
+          settingUp.value = true
+          if (await aMoment()) continue
+          return
+        }
+        throw e
+      }
+    }
   } catch (e: any) {
     if (/already exists/.test(e?.message || '')) {
       // created meanwhile (another tab): show the sign-in page
@@ -87,6 +132,7 @@ async function submit () {
     }
     error.value = e?.message || 'Could not create the account.'
   } finally {
+    settingUp.value = false
     busy.value = false
   }
 }

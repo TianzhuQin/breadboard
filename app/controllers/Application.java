@@ -37,9 +37,13 @@ public class Application extends Controller {
 
     Language defaultLanguage = Language.findById(defaultLanguageId);
     if (defaultLanguage == null && email != null && password != null) {
-      // (A language list read while the server was still adding its languages: English will do,
-      // and it can be changed in Settings.)
-      defaultLanguage = Language.findByIso3("eng");
+      // (None named, or one from a list read before the server had its languages: English will do,
+      // and it can be changed in Settings. Added now if the server has none yet.)
+      try {
+        defaultLanguage = LanguageController.english();
+      } catch (RuntimeException e) {
+        Logger.warn("Could not add the list of languages for the first account: " + e);
+      }
       if (defaultLanguage == null) {
         return status(SERVICE_UNAVAILABLE, "The server is still setting up. Try again in a moment.");
       }

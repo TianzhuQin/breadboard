@@ -1,3 +1,4 @@
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import models.*;
 import org.junit.Test;
@@ -75,6 +76,40 @@ public class AccountsAndNamesTest extends BaseTest {
         Result again = route(fakeRequest(POST, "/createFirstUser").withJsonBody(body));
         assertEquals(BAD_REQUEST, status(again));
         assertTrue(contentAsString(again).contains("Sign in instead"));
+    }
+
+    /**
+     * A new server's first account, asked for before anything asked for the list of languages (a
+     * script, or the console's page loaded early): it used to be told the server was still setting up,
+     * for as long as no page had asked for the list, which is what added the languages. Now the
+     * server's start adds them (Global.onStart), and the request itself does when there are none.
+     */
+    @Test
+    public void theFirstAccountOfANewServerNeedsNoLanguageListFirst() {
+        assertEquals("a new database", 0, Language.findAll().size());
+        ObjectNode body = Json.newObject();
+        body.put("email", "first@test.org");
+        body.put("password", "password123");
+        Result made = route(fakeRequest(POST, "/createFirstUser").withJsonBody(body));
+        assertEquals(contentAsString(made), OK, status(made));
+        User first = User.findByEmail("first@test.org");
+        assertEquals("eng", Language.findById(first.defaultLanguage.id).code);
+        int added = Language.findAll().size();
+        assertTrue(String.valueOf(added), added > 10);
+        // added once, all of them: the list the console asks for next is the same
+        JsonNode list = Json.parse(contentAsString(route(fakeRequest(GET, "/languages")))).get("languages");
+        assertEquals(added, list.size());
+        assertEquals(added, Language.findAll().size());
+    }
+
+    @Test
+    public void theLanguagesAreAddedWhenThereAreNoneAndOnlyThen() {
+        assertEquals(0, Language.findAll().size());
+        int added = controllers.LanguageController.languages().size();
+        assertTrue(added > 10);
+        assertNotNull(Language.findByIso3("eng"));
+        assertEquals("not again when there are some", added, controllers.LanguageController.languages().size());
+        assertEquals(added, Language.findAll().size());
     }
 
     @Test

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }))
 vi.mock('@/lib/http', async (orig) => {
@@ -15,6 +15,7 @@ vi.mock('@/store/admin', async () => {
 import { flushPromises, mount } from '@vue/test-utils'
 import SetupPage from '../src/pages/auth/SetupPage.vue'
 import { admin } from '@/store/admin'
+import { HttpError } from '../src/lib/http'
 
 async function fill (w: any, code?: string) {
   const inputs = w.findAll('input.b-input__el')
@@ -31,8 +32,52 @@ async function fill (w: any, code?: string) {
 
 describe('the first account', () => {
   beforeEach(() => {
-    createFirstUser.mockClear()
+    createFirstUser.mockReset()
+    createFirstUser.mockImplementation(async () => {})
+    http.get.mockReset()
     http.get.mockResolvedValue({ languages: [{ id: 1, code: 'eng', name: 'English' }] })
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  // A server that has just started may still be setting up: the page says so and tries again by
+  // itself, instead of failing.
+  it('says the server is setting up and tries again by itself, for the list of languages', async () => {
+    vi.useFakeTimers()
+    ;(admin as any).setupCodeRequired = false
+    http.get.mockRejectedValueOnce(new HttpError(503, 'The server is still setting up. Try again in a moment.'))
+    http.get.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const w = mount(SetupPage)
+    await flushPromises()
+    expect(w.find('[role="status"]').text()).toBe('Setting up the server, one moment…')
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(w.find('[role="status"]').text()).toBe('Setting up the server, one moment…')
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(http.get).toHaveBeenCalledTimes(3)
+    expect(w.find('[role="status"]').exists()).toBe(false)
+    expect(w.text()).toContain('English (eng)')
+    w.unmount()
+  })
+
+  it('says the server is setting up and tries again by itself, for the account', async () => {
+    ;(admin as any).setupCodeRequired = false
+    const w = mount(SetupPage)
+    await flushPromises()
+    vi.useFakeTimers()
+    createFirstUser.mockRejectedValueOnce(new HttpError(503, 'The server is still setting up. Try again in a moment.'))
+    await fill(w)
+    await w.find('form').trigger('submit')
+    await flushPromises()
+    expect(w.find('[role="status"]').text()).toBe('Setting up the server, one moment…')
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(createFirstUser).toHaveBeenCalledTimes(2)
+    expect(createFirstUser).toHaveBeenLastCalledWith('first@lab.org', 'long-enough-1', 1, undefined)
+    expect(w.find('[role="status"]').exists()).toBe(false)
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    w.unmount()
   })
 
   it('asks for no setup code on the server\'s own computer', async () => {
