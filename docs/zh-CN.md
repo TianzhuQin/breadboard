@@ -28,7 +28,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 服务器运行期间，Mac 和 Windows 电脑不会自己进入睡眠。在 Linux 上，如果是在图形桌面里启动的（不是通过 SSH 或作为服务），启动脚本会请求 systemd（在 GNOME 桌面上也会请求桌面环境）不让电脑睡眠；如果电脑仍然会自动睡眠（有些桌面会这样，比如 Linux Mint 的 Cinnamon），请在电源设置里关掉"自动挂起"。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里"显示器关闭时防止自动进入睡眠"那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
 
-如果提示端口被占用（"Port 9000 is in use" 或 "Breadboard is already running"），通常是 Breadboard 已经在运行，直接打开那个网址就行；要再开一个，用 `./breadboard.sh -Dhttp.port=9001`。
+启动时如果提示 "Breadboard is already running from this folder"，说明这个文件夹里的 Breadboard 已经在运行；从终端或双击启动时，它会直接在浏览器里打开正在运行的那个控制台。如果提示 "Breadboard is already running on port 9000"，是另一份 Breadboard 在用这个端口，打开提示里的网址就能用它。如果提示 "Another program is using port 9000"（Windows 上是 "Port 9000 is in use"），是别的程序占了这个端口：关掉那个程序，或者换一个端口。在 `conf/local.conf` 里加一行 `http.port=9001`，以后每次启动都用这个端口；只想这一次换，就像上面那样在终端里启动，在拖进去的 `breadboard.sh` 后面加上 ` -Dhttp.port=9001` 再按回车（在 Breadboard 的文件夹里，就是 `sh breadboard.sh -Dhttp.port=9001`；Windows 上用提示里给出的命令）。同一个文件夹同时只能运行一个 Breadboard，因为它们共用一个数据库；要同时运行第二个，请把 zip 另外解压一份，在那一份里用另一个端口启动。
 
 更多见 [install.md](install.md)。
 
@@ -123,7 +123,7 @@ breadboard.example.org {
 
 ## 常见问题
 
-**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次：参与者的页面会说明这一场因为研究服务器停止或重启而结束，并告诉他们几分钟后可以重新打开研究链接，加入那时开着的一场（从 Prolific 来的人：从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码）。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
+**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次：参与者的页面会说明这一场因为研究服务器停止或重启而结束，并告诉他们几分钟后可以重新打开研究链接，加入那时开着的一场（从 Prolific 来的人：从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码）。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用：服务器正常时返回状态码 200 和 `{"status":"ok", "database":"ok", "diskFreeMb": …, "version": …, "uptimeSeconds": …}`，出问题时返回 503、`"status":"failing"` 和原因 `"reason"`；用 GET 或 HEAD 请求都可以。
 
 **启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`，用找到的第一个 Java 8。`JAVA8_HOME` 可以是 JDK 的文件夹、它的 `bin` 文件夹，或者 Mac 的 Finder 里看到的 JDK 文件夹（比如 `zulu-8.jdk`）；如果那里没有 Java 8，启动脚本会提示 "JAVA8_HOME is …, which has no Java 8; ignoring it"，然后接着找别的。
 
