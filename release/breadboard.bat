@@ -205,11 +205,13 @@ IF DEFINED SERVICE SET "JAVA_ERRORS=2>>logs\service-errors.log"
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.) MaxMetaspaceSize:
 REM the classes made for the experiments' scripts (anew at every engine reload) may take that much
 REM memory besides the heap, so that a leak of them ends in a restart (out of memory) instead of
-REM taking all the computer's memory. ERRORLEVEL is 1 until Java sets it: if cmd can't open
+REM taking all the computer's memory. launcher.Main is Play's start with an output that never waits
+REM for this window: one that doesn't take it (a click into it starts selecting text, which pauses
+REM it) can't hold the server up. ERRORLEVEL is 1 until Java sets it: if cmd can't open
 REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
 REM purpose (0).
 CMD /D /C EXIT 1
-"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\." %JAVA_ERRORS%
+"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* launcher.Main "%CD%\." %JAVA_ERRORS%
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
@@ -229,7 +231,7 @@ SET "RECENT=0"
 FOR %%R IN (%R1% %R2% %R3% %R4% %R5%) DO CALL :countrecent %%R
 SET /A "DELAY=5<<RECENT"
 IF %DELAY% GTR 60 SET "DELAY=60"
-CALL :note "Breadboard stopped by itself (%WHY%). Starting it again in %DELAY% seconds; %TO_STOP%."
+CALL :note_going_on "Breadboard stopped by itself (%WHY%). Starting it again in %DELAY% seconds; %TO_STOP%."
 SET /A "PINGS=DELAY+1"
 ping -n %PINGS% 127.0.0.1 >NUL
 SET "R1=%R2%"
@@ -245,7 +247,7 @@ IF DEFINED RUNNING (
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
 REM (the server doesn't redo what -Dbreadboard.resetPassword asked for: see Global)
 SET /A "BREADBOARD_RESTARTED+=1"
-ECHO Starting Breadboard again.
+CALL :show "Starting Breadboard again."
 GOTO start
 
 :giveup
@@ -351,7 +353,7 @@ REM this folder. A crash leaves the file behind, naming a process that is gone o
 SET "RUNNING="
 SET "RUNNING_PORT="
 IF NOT EXIST RUNNING_PID GOTO :EOF
-FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$p = [int]((Get-Content -LiteralPath 'RUNNING_PID' -TotalCount 1) -replace '\D', ''); $j = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p) -ErrorAction SilentlyContinue; if ($j -and $j.CommandLine -and $j.CommandLine.Contains('NettyServer') -and $j.CommandLine.Contains((Get-Location).Path + '\.')) { $port = '9000'; if ($j.CommandLine -match '-Dhttp\.port=(\d+)') { $port = $Matches[1] }; Write-Output ([string]$p + ' ' + $port) }" 2^>NUL') DO (
+FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$p = [int]((Get-Content -LiteralPath 'RUNNING_PID' -TotalCount 1) -replace '\D', ''); $j = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p) -ErrorAction SilentlyContinue; if ($j -and $j.CommandLine -and ($j.CommandLine.Contains('launcher.Main') -or $j.CommandLine.Contains('NettyServer')) -and $j.CommandLine.Contains((Get-Location).Path + '\.')) { $port = '9000'; if ($j.CommandLine -match '-Dhttp\.port=(\d+)') { $port = $Matches[1] }; Write-Output ([string]$p + ' ' + $port) }" 2^>NUL') DO (
   SET "RUNNING=%%A"
   SET "RUNNING_PORT=%%B"
 )
@@ -374,4 +376,20 @@ ECHO %~1
 >>"logs\application.log" ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
 >>"logs\application.log" ECHO %~1
 >>"logs\application.log" ECHO.
+GOTO :EOF
+
+:note_going_on
+REM As :note, for a message after which this script goes on to start the server again: it is shown
+REM by :show, so that a window that doesn't take output can't hold that up.
+>>"logs\application.log" ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
+>>"logs\application.log" ECHO %~1
+>>"logs\application.log" ECHO.
+CALL :show %1
+GOTO :EOF
+
+:show
+REM Shows %1 (given in quotes) in this window from a helper in the background, without waiting for
+REM the window: one that doesn't take output (a click into it starts selecting text, which pauses it
+REM until Esc) holds up only the helper.
+START "" /B CMD /D /C ECHO(%~1
 GOTO :EOF

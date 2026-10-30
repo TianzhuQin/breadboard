@@ -454,13 +454,12 @@ a Breadboard started earlier, holds the port. If it is Breadboard, open its addr
 start on another port with `-Dhttp.port=9001`. (A proxy set for the internet, such as
 `http_proxy`, doesn't matter: the launchers check the port directly.)
 
-**The server's window shows nothing new**: the window is probably paused, and a paused window can
-hold the server up. A click into a Windows console window starts selecting text, which pauses it,
-and Ctrl+S pauses a terminal. What the server logs doesn't wait at first, and its routine lines are
-left out (`logs/application.log` has them all); but what experiment scripts print (`println`, chat
-messages) waits for the window at once, and warnings and errors do once about 500 are waiting.
-Whatever waits holds up what printed or logged it (a step of the game, a participant's choice, a
-sign-in). Press Esc (or Ctrl+Q in a terminal) to let it go on, and don't leave it paused.
+**The server's window shows nothing new**: the window is probably paused. A click into a Windows
+console window starts selecting text, which pauses it, and Ctrl+S pauses a terminal. The server
+doesn't wait for it: what it prints waits for the window, and once about a megabyte is waiting, the
+rest is left out of the window, with a line that says how many lines were. `logs/application.log`
+has everything the server logs; what experiment scripts print (`println`, chat messages) is only in
+the window. Press Esc (or Ctrl+Q in a terminal) to let the window go on.
 
 **A setting in `conf/local.conf` has a typo**: the server doesn't start, and says which line of
 `conf/local.conf` it couldn't read (as a service: in `logs/service-errors.log` on Windows,

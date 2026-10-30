@@ -113,7 +113,7 @@ running_here() {
   RUNNING="$(tr -cd '0-9' < "$PID_FILE" 2>/dev/null)"
   [ -n "$RUNNING" ] || return 1
   case "$(ps -ww -p "$RUNNING" -o args= 2>/dev/null | sed 's/[[:space:]]*$//')" in
-    *"NettyServer $HERE") return 0 ;;
+    *" launcher.Main $HERE"|*"NettyServer $HERE") return 0 ;;
   esac
   return 1
 }
@@ -320,14 +320,16 @@ fi
 # The server's command line, in "$@" (the settings given to this script go before the main class).
 # MaxMetaspaceSize: the classes made for the experiments' scripts (anew at every engine reload) may
 # take that much memory besides the heap, so that a leak of them ends in a restart (out of memory)
-# instead of taking all the computer's memory.
+# instead of taking all the computer's memory. launcher.Main is Play's start with an output that
+# never waits for this window: one that doesn't take it (paused, or a pipe nobody reads) can't hold
+# the server up.
 # shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options
 set -- "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
   -Duser.timezone=UTC \
   -Dconfig.file=conf/application-prod.conf -Dlogger.file=conf/logger.xml \
   -cp "$CP" \
   "$@" \
-  play.core.server.NettyServer "$HERE"
+  launcher.Main "$HERE"
 
 if [ -z "$KEEP_RUNNING" ]; then
   exec "$@"
@@ -339,11 +341,28 @@ fi
 # itself), and this script ends once Java has stopped: it never leaves Java running on its own.
 set +e
 
-# What happened, on the console and in logs/application.log (in the server's own format, in UTC)
+# Says $1 (one message, of one or more lines) in this window without waiting for it: a helper in the
+# background writes it, so that a window that doesn't take output (paused, or a pipe nobody reads)
+# can't hold up what comes next, such as starting the server again. SAID is the last helper, which
+# the end of this script lets finish (for up to 2 seconds), so that its message comes before the
+# shell's next prompt.
+SAID=""
+say() {
+  printf '%s\n' "$1" >&2 &
+  SAID=$!
+}
+let_said_out() {
+  [ -n "$SAID" ] || return 0
+  (sleep 2; kill "$SAID" 2>/dev/null) &
+  SAY_LIMIT=$!
+  wait "$SAID" 2>/dev/null
+  kill "$SAY_LIMIT" 2>/dev/null
+}
+# What happened, in this window and in logs/application.log (in the server's own format, in UTC)
 note() {
-  echo "$1" >&2
   printf '%s - [ERROR] - from breadboard.sh in launcher \n%s\n\n' "$(date -u '+%Y-%m-%d %H:%M:%S,000')" "$1" \
     >> logs/application.log 2>/dev/null
+  say "$1"
 }
 
 # Why Java stopped, from its exit code
@@ -374,8 +393,8 @@ KILLER=""
 stop_java() {
   [ -n "$JAVA_PID" ] && [ "$TOLD" != "$JAVA_PID" ] || return 0
   TOLD="$JAVA_PID"
-  echo "Stopping Breadboard..." >&2
   kill -TERM "$JAVA_PID" 2>/dev/null
+  say "Stopping Breadboard..."
   (
     i=0
     while [ $i -lt 40 ]; do
@@ -400,7 +419,7 @@ stop_server() {
 trap 'stop_server 130' INT
 trap 'stop_server 143' TERM
 trap 'stop_server 129' HUP
-trap '[ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null' EXIT
+trap '[ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null; let_said_out' EXIT
 
 RESTARTS=""   # when the server was started again (in seconds), within the last 10 minutes
 CODE=""       # how the last Java ended (none yet)
@@ -409,7 +428,7 @@ while :; do
   if [ -n "$STOPPING" ]; then
     exit "${CODE:-$STOP_CODE}"
   fi
-  [ -z "$CODE" ] || echo "Starting Breadboard again."
+  [ -z "$CODE" ] || say "Starting Breadboard again."
   "$@" &
   JAVA_PID=$!
   # (asked to stop just as it started, before stop_server could know its process id)
@@ -459,7 +478,7 @@ while :; do
     exit "$CODE"
   fi
   if running_here; then
-    echo "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one." >&2
+    say "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one."
     exit "$CODE"
   fi
   remove_pid_file
