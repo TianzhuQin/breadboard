@@ -190,6 +190,8 @@ public class ScriptBoard extends UntypedActor {
   private static final class ScriptRun {
     String step;
     Throwable stepFailure;
+    // the steps whose code that step is (StepScripts.stepsOfCode): its own lines are in their code
+    Set<String> stepCode;
     boolean startTakenBack;
   }
   private static final ThreadLocal<ScriptRun> SCRIPT_RUN = new ThreadLocal<ScriptRun>();
@@ -201,9 +203,10 @@ public class ScriptBoard extends UntypedActor {
     // the step whose code threw, when the script failed with that; else null
     final String step;
     // what went wrong there (in that step, else in the script): in one line (briefError), and in
-    // full, with the lines it ran through (describeError)
+    // full, with the lines it ran through (describeError), and those lines named by step (locate)
     final String brief;
     final String details;
+    final ScriptBoardSupport.Located at;
     // The game's start was taken back as it failed (startFailed): the game stalls, since nothing
     // starts it again by itself (the waiting room's start is spent once a start is made, and the
     // init step that threw stays as it is). E.g. an OnJoinStep that starts the game once enough
@@ -212,11 +215,13 @@ public class ScriptBoard extends UntypedActor {
     // The engine it ran in had been replaced by the time it ended: not the running game's failure.
     final boolean replaced;
 
-    ScriptFailure(String answer, String step, String brief, String details, boolean stalled, boolean replaced) {
+    ScriptFailure(String answer, String step, String brief, String details, ScriptBoardSupport.Located at, boolean stalled,
+                  boolean replaced) {
       this.answer = answer;
       this.step = step;
       this.brief = brief;
       this.details = details;
+      this.at = at;
       this.stalled = stalled;
       this.replaced = replaced;
     }
@@ -2445,7 +2450,7 @@ public class ScriptBoard extends UntypedActor {
           generation = engineGeneration;
         }
         getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out, "SendStep",
-            generation, sendStep.requestId, sendStep.id), null);
+            generation, sendStep.requestId, sendStep.id, sendStep.name), null);
         // A re-run step may set the autopilot up itself; the console's settings apply again after it.
         getSelf().tell(new Breadboard.StepsLoaded(breadboardMessage.user, engineExperiment(), breadboardMessage.out, generation), null);
       } else {
@@ -2461,13 +2466,14 @@ public class ScriptBoard extends UntypedActor {
               "Nothing was run: the engine was reloaded (by you or someone else) before the step could run. Check what it runs now, then try again.",
               null, runStep.echo());
         } else if (runStep.request != null) {
-          String problem = processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
+          String problem = processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true,
+              runStep.stepName);
           // A saved step run without an error: the engine has that code of it now (see EngineSteps).
           if (problem == null && EngineSteps.ran(engineExperimentId, runStep.stepId, runStep.source)) {
             engineChanged();
           }
         } else {
-          processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE, null, true);
+          processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE, null, true, runStep.stepName);
         }
       }
     } else if (message instanceof Breadboard.StepsLoaded) {
@@ -4029,10 +4035,29 @@ public class ScriptBoard extends UntypedActor {
    * the script ran. A step that throws while the script runs is reported here, as the script's error
    * (stepFailed leaves it to this method), and FAILED_RUN names it. The error sent to {@code out}
    * names the failing step in "step" when that is known (failedStep), so a console can say "line 71
-   * of RoundStep" rather than "of a step".
+   * of RoundStep" rather than "of a step", and its lines named by step in "frames" (putFrames). Step
+   * code named by {@code scriptName} ("RoundStep", "RoundStep.groovy") is that step's code.
    */
   static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
                               String requestId, boolean stepCode) {
+    return processScript(script, out, scriptName, tag, tagValue, requestId, stepCode, stepCode ? stepNamed(scriptName) : null);
+  }
+
+  /** "RoundStep" of a script named "RoundStep" or "RoundStep.groovy" (a step file of file mode); null for none. */
+  private static String stepNamed(String scriptName) {
+    if (scriptName == null || UNNAMED_SCRIPT.equals(scriptName) || scriptName.trim().isEmpty()) {
+      return null;
+    }
+    return scriptName.endsWith(".groovy") ? scriptName.substring(0, scriptName.length() - ".groovy".length()) : scriptName;
+  }
+
+  /**
+   * As above, for step code that is the code of the step {@code step} (its name on the Steps page), which
+   * the lines of its errors are named after (StepScripts): it compiles the code first, which tells the
+   * class Groovy gives it. A step run again from the Steps page has no name as a script.
+   */
+  static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
+                              String requestId, boolean stepCode, String step) {
     if (scriptName == null) scriptName = UNNAMED_SCRIPT;
     // (FAILED_RUN is about this run from here on)
     FAILED_RUN.remove();
@@ -4129,9 +4154,17 @@ public class ScriptBoard extends UntypedActor {
     String failure = null;
     String details = null;
     Throwable thrown = null;
+    // (what the log says of it)
+    String failedHow = null;
+    // its lines named by step (locate)
+    ScriptBoardSupport.Located at = null;
     // (for a start that fails: whether a step got going meanwhile, see startCommandFailed)
     long goingBefore = stepsStarted();
     try {
+      if (stepCode && step != null) {
+        // (which class Groovy makes of the step's code, so the lines of its errors are named after it)
+        StepScripts.compiled(running, script, step);
+      }
       Object outputObject = running.eval(script);
       // Clear out error
       jsonOutput.put("error", "");
@@ -4156,23 +4189,13 @@ public class ScriptBoard extends UntypedActor {
         gameStartNotice("GameStarted");
       }
     } catch (CompilationFailedException cfe) {
-      // Translate Groovy's opaque "Script<N>.groovy" names back to real file names in both the
-      // logged stack trace and the error sent to the browser (see ScriptLoader.humanize*).
-      ScriptLoader.humanizeStackTrace(cfe);
-      Logger.error("Unable to compile the script. " + scriptName, cfe);
-      details = ScriptBoardSupport.describeError(cfe);
-      jsonOutput.put("error", "Caught error: " + details + "\n");
-      failure = ScriptBoardSupport.briefError(cfe);
+      failedHow = "Unable to compile the script. ";
       thrown = cfe;
       if (initStep) {
         startCommandFailed(running, closedBy, startedBefore, goingBefore);
       }
     } catch (ScriptException se) {
-      ScriptLoader.humanizeStackTrace(se);
-      Logger.error("Script Error. " + scriptName, se);
-      details = ScriptBoardSupport.describeError(se);
-      jsonOutput.put("error", "Caught error: " + details + "\n");
-      failure = ScriptBoardSupport.briefError(se);
+      failedHow = "Script Error. ";
       thrown = se;
       if (initStep) {
         startCommandFailed(running, closedBy, startedBefore, goingBefore);
@@ -4180,11 +4203,7 @@ public class ScriptBoard extends UntypedActor {
     } catch (Throwable e) {
       // (Throwable: the engine passes an Error, e.g. a failed assert in a step, on as it is, and a
       // step that throws one leaves it to this method like any other)
-      ScriptLoader.humanizeStackTrace(e);
-      Logger.error("Failed to process the script. " + scriptName, e);
-      details = ScriptBoardSupport.describeError(e);
-      jsonOutput.put("error", "Caught error: " + details + "\n");
-      failure = ScriptBoardSupport.briefError(e);
+      failedHow = "Failed to process the script. ";
       thrown = e;
       if (initStep) {
         startCommandFailed(running, closedBy, startedBefore, goingBefore);
@@ -4199,6 +4218,21 @@ public class ScriptBoard extends UntypedActor {
         SCRIPT_RUN.set(outerScript);
       } else {
         SCRIPT_RUN.remove();
+      }
+      if (thrown != null) {
+        // Translate Groovy's opaque "Script<N>.groovy" names back to real file names in both the
+        // logged stack trace and the error sent to the browser (see ScriptLoader.humanize*).
+        ScriptLoader.humanizeStackTrace(thrown);
+        // Where it went wrong, by step: in the code of the step that threw, when that is what the
+        // script failed with; else in step code that failed as it loaded, that step's.
+        boolean stepThrew = thisScript.stepFailure != null && causedBy(thrown, thisScript.stepFailure);
+        at = locate(running, thrown, stepThrew ? thisScript.stepCode
+            : (stepCode && step != null ? Collections.singleton(step) : null), stepThrew || !stepCode ? null : step);
+        details = ScriptBoardSupport.describeError(thrown);
+        failure = ScriptBoardSupport.briefError(thrown, at);
+        Logger.error(failedHow + scriptName + " (" + failure + ")", thrown);
+        jsonOutput.put("error", "Caught error: " + details + "\n");
+        putFrames(jsonOutput, at);
       }
       if (out != null) {
         String failedStep = failure == null ? null : failedStep(thisScript, thrown, stepCode, scriptName);
@@ -4215,9 +4249,9 @@ public class ScriptBoard extends UntypedActor {
       // (also while it is being replaced: a rebuild began meanwhile)
       boolean replaced = !inService(running);
       FAILED_RUN.set(inStep != null && causedBy(thrown, inStep)
-          ? new ScriptFailure(failure, thisScript.step, ScriptBoardSupport.briefError(inStep),
-              ScriptBoardSupport.describeError(inStep), thisScript.startTakenBack, replaced)
-          : new ScriptFailure(failure, null, failure, details, thisScript.startTakenBack, replaced));
+          ? new ScriptFailure(failure, thisScript.step, ScriptBoardSupport.briefError(inStep, at),
+              ScriptBoardSupport.describeError(inStep), at, thisScript.startTakenBack, replaced)
+          : new ScriptFailure(failure, null, failure, details, at, thisScript.startTakenBack, replaced));
     } else {
       // (nor one this script ran, which failed)
       FAILED_RUN.remove();
@@ -4240,6 +4274,61 @@ public class ScriptBoard extends UntypedActor {
       return null;
     }
     return scriptName.endsWith(".groovy") ? scriptName.substring(0, scriptName.length() - ".groovy".length()) : scriptName;
+  }
+
+  /**
+   * Where {@code failure} happened in the experiment's code, its lines named by the step whose code each
+   * is (StepScripts, as {@code engine} compiled them): the failing step's own line, the innermost in the
+   * code of {@code ownSteps}, and the function of another step it called when it went wrong there (see
+   * ScriptBoardSupport.locate). {@code compiling}: the step whose code failed as it was compiled, else
+   * null. Null when it can't be told. Never throws.
+   */
+  static ScriptBoardSupport.Located locate(final ScriptEngine engine, Throwable failure, Collection<String> ownSteps,
+                                           String compiling) {
+    try {
+      return ScriptBoardSupport.locate(failure,
+          file -> StepScripts.stepOf(engine, file),
+          ownSteps, compiling,
+          (type, method) -> StepScripts.functionName(engine, type, method));
+    } catch (Exception | LinkageError e) {
+      Logger.warn("Could not tell which steps' code the lines of an error are in: " + e);
+      return null;
+    }
+  }
+
+  // The most lines of an error the consoles are sent by name (putFrames): each console shows a few.
+  private static final int MOST_FRAMES = 30;
+
+  /**
+   * The lines of an error named by step, for the consoles, as "frames" on its frame: each line of a
+   * script the engine compiled, innermost first, {"file": "Script649.groovy", "line": 14, "step":
+   * "RoundStep"} ("step" left out when it is no step's code), the failing step's own line with "own":
+   * true, and the line it went wrong at in another step's code with "name": the function it called
+   * there, when known (e.g. "isHuman"). Nothing when there are no such lines.
+   */
+  static void putFrames(ObjectNode frame, ScriptBoardSupport.Located at) {
+    if (frame == null || at == null || at.frames.isEmpty()) {
+      return;
+    }
+    com.fasterxml.jackson.databind.node.ArrayNode lines = frame.putArray("frames");
+    for (ScriptBoardSupport.Frame f : at.frames) {
+      // (the failing step's own line always)
+      if (lines.size() >= MOST_FRAMES && f != at.own) {
+        continue;
+      }
+      ObjectNode line = lines.addObject();
+      line.put("file", f.file);
+      line.put("line", f.line);
+      if (f.step != null) {
+        line.put("step", f.step);
+      }
+      if (f == at.own) {
+        line.put("own", true);
+      }
+      if (f == at.in && at.inName != null) {
+        line.put("name", at.inName);
+      }
+    }
   }
 
   /** Whether {@code cause} is {@code thrown} or one of its causes. */
@@ -4473,24 +4562,29 @@ public class ScriptBoard extends UntypedActor {
    */
   static boolean stepFailed(GameListener listener, Object step, Throwable failure, Long going) {
     String name = stepName(listener, step);
+    ScriptEngine in = listener == null ? null : listener.engine;
     ScriptRun run = SCRIPT_RUN.get();
     if (run != null) {
       // (the innermost step, when a step's done starts the next one)
       if (run.stepFailure == null) {
         run.step = name;
         run.stepFailure = failure;
+        run.stepCode = StepScripts.stepsOfCode(in, step);
       }
       return false;
     }
     try {
       ScriptLoader.humanizeStackTrace(failure);
+      // its own line, in its own code, also when another step's code it called went wrong
+      ScriptBoardSupport.Located at = locate(in, failure, StepScripts.stepsOfCode(in, step), null);
+      String brief = ScriptBoardSupport.briefError(failure, at);
       if (!ofRunningEngine(step)) {
-        Logger.warn("The step " + name + " failed in an engine that is being or has been replaced; "
+        Logger.warn("The step " + name + " failed (" + brief + ") in an engine that is being or has been replaced; "
             + "the game running now goes on", failure);
         return true;
       }
-      Logger.error("The step " + name + " failed", failure);
-      gameFailed(listener, name, ScriptBoardSupport.briefError(failure), ScriptBoardSupport.describeError(failure),
+      Logger.error("The step " + name + " failed: " + brief, failure);
+      gameFailed(listener, name, brief, ScriptBoardSupport.describeError(failure), at,
           false, going == null || !gotGoingSince(going));
     } catch (Throwable e) {
       Logger.error("Could not report the failure of the step " + name, e);
@@ -4549,6 +4643,7 @@ public class ScriptBoard extends UntypedActor {
       String step = known && failed.step != null ? failed.step : "initStep";
       String brief = known ? failed.brief : error;
       String details = known ? failed.details : error;
+      ScriptBoardSupport.Located at = known ? failed.at : null;
       if (known && failed.replaced) {
         Logger.warn("The autopilot could not start the game of an engine that has since been replaced: the step " + step
             + " failed (" + brief + ")");
@@ -4560,7 +4655,7 @@ public class ScriptBoard extends UntypedActor {
         Logger.warn("The step " + step + " failed as the autopilot started the game (" + brief
             + "); the game got going, so it goes on");
       }
-      gameFailed(listener, step, brief, details, false, stalls);
+      gameFailed(listener, step, brief, details, at, false, stalls);
     } catch (Throwable e) {
       Logger.error("Could not report that the game failed to start", e);
     }
@@ -4595,7 +4690,7 @@ public class ScriptBoard extends UntypedActor {
       String step = failed.step != null ? failed.step : "initStep";
       Logger.warn("The console's start of the autopilot's session failed: the step " + step + " failed (" + failed.brief + ")"
           + (failed.stalled ? "" : "; the game got going, so it goes on"));
-      gameFailed(listener, step, failed.brief, failed.details, true, failed.stalled);
+      gameFailed(listener, step, failed.brief, failed.details, failed.at, true, failed.stalled);
     } catch (Throwable e) {
       Logger.error("Could not deal with the failed start of the autopilot's session", e);
     }
@@ -4631,7 +4726,7 @@ public class ScriptBoard extends UntypedActor {
       boolean inStep = failure != null && failure.step != null;
       boolean stalls = (failure != null && failure.stalled)
           || (Experiment.ON_JOIN_STEP_NAME.equals(name) && nothingElseStartsTheGame());
-      gameFailed(listener, inStep ? failure.step : name, failure != null ? failure.brief : failed, null, true, stalls);
+      gameFailed(listener, inStep ? failure.step : name, failure != null ? failure.brief : failed, null, null, true, stalls);
     } catch (Throwable e) {
       Logger.error("Could not report the failure of the " + name, e);
     }
@@ -4661,8 +4756,8 @@ public class ScriptBoard extends UntypedActor {
    * A step of the engine's game failed where no one would see it (stepFailed, gameStartFailed,
    * joinOrLeaveStep). It is recorded (the event "stepFailed": step, error), every open console is
    * told as processScript tells of an error ({"error": "Caught error: ...", "source" and "step": the
-   * step}), so
-   * the Live session page shows it (unless processScript has told them: {@code consolesTold}), and,
+   * step, "frames": its lines named by step, from {@code at}, see putFrames), so the Live session
+   * page shows it (unless processScript has told them: {@code consolesTold}), and,
    * when the failure stalls the game ({@code stalls}: it kept the next step from getting going; the
    * rule is above STEPS_STARTED), the autopilot's own session ends (endAutopilotSession). A session a
    * researcher runs goes on: they see the error and decide. Nothing for a step of an engine that is
@@ -4671,7 +4766,7 @@ public class ScriptBoard extends UntypedActor {
    * failureRecorded no longer counts).
    */
   private static void gameFailed(GameListener listener, String step, String brief, String details,
-                                 boolean consolesTold, boolean stalls) {
+                                 ScriptBoardSupport.Located at, boolean consolesTold, boolean stalls) {
     ScriptEngine failedIn = listener == null ? null : listener.engine;
     Serving now = serving;
     if (failedIn == null || now == null || failedIn != now.engine) {
@@ -4692,6 +4787,7 @@ public class ScriptBoard extends UntypedActor {
       frame.put("source", step);
       frame.put("step", step);
       frame.put("error", "Caught error: " + details + "\n");
+      putFrames(frame, at);
       toAllAdmins(frame);
     }
     if (stalls) {
@@ -4753,14 +4849,18 @@ public class ScriptBoard extends UntypedActor {
     });
   }
 
-  // What briefError says of a failure at a line of the experiment's code: "line 71: what went wrong".
-  private static final java.util.regex.Pattern AT_LINE = java.util.regex.Pattern.compile("^line (\\d+): (.*)$",
-      java.util.regex.Pattern.DOTALL);
+  // What briefError says of a failure at a line of the failing step's own code: "line 71: what went
+  // wrong", or "line 14, in isHuman (InitStep line 30): what went wrong" when it went wrong in another
+  // step's code that line called. ("line 30 of InitStep: …" names no line of the failing step's.)
+  private static final java.util.regex.Pattern AT_LINE = java.util.regex.Pattern.compile(
+      "^line (\\d+)(?:, (in [^:\\n]*))?: (.*)$", java.util.regex.Pattern.DOTALL);
 
   /**
    * The data of sessionFailed, the event the autopilot's session ends with when a step failure stalls
    * its game (endAutopilotSession): {@code step}, {@code line} (left out when the error names none) and
-   * {@code error}, what went wrong there; {@code brief} is briefError's "line N: what went wrong".
+   * {@code error}, what went wrong there; {@code brief} is briefError's "line N: what went wrong". When
+   * it went wrong in another step's code that the line called, the error says where first: "in isHuman
+   * (InitStep line 30): what went wrong".
    */
   static LinkedHashMap<Object, Object> sessionFailedData(String step, String brief) {
     LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
@@ -4768,7 +4868,7 @@ public class ScriptBoard extends UntypedActor {
     java.util.regex.Matcher at = brief == null ? null : AT_LINE.matcher(brief);
     if (at != null && at.matches()) {
       data.put("line", at.group(1));
-      data.put("error", at.group(2));
+      data.put("error", at.group(2) == null ? at.group(3) : at.group(2) + ": " + at.group(3));
     } else {
       data.put("error", brief);
     }
