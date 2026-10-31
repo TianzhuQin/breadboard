@@ -66,6 +66,10 @@ public class Client extends Model {
   // When they count as gone, their page's socket having closed while it was out of touch
   // (ScriptBoard.socketClosed), unless a page of theirs is back by then; 0 when no departure waits.
   private final AtomicLong departureDue = new AtomicLong();
+  // Since when their own page that held the seat last had been out of touch with the server, as the
+  // server reckoned it when that page's socket closed or another page of theirs took the seat from it
+  // (see ownPageWent); 0 while a page of theirs holds the seat, and before one went (under seatLock).
+  private long ownPageAwaySince;
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
   private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
@@ -123,6 +127,10 @@ public class Client extends Model {
     // it began (the frame before) and when it ended (the frame after); 0 before there was one.
     private volatile long quietFrom;
     private volatile long quietUntil;
+    // For a page of the participant's own: since when their pages had been out of touch with the
+    // server before it took the seat (Client.ownPageWent), until it says how long it was away; 0 when
+    // unknown, or once said.
+    private volatile long awayFrom;
     // The text of the full view written last; null once any other frame has been written since.
     private String lastView;
     // Why it only watches, as it was told last (BY_PAGE, BY_PREVIEW or BY_COMPUTER); null while it
@@ -191,6 +199,19 @@ public class Client extends Model {
 
     public long lastHeard() {
       return lastHeard;
+    }
+
+    /**
+     * How long, by {@code now}, the participant's own pages had been out of touch with the server
+     * before this one took the seat: from when the server last heard from the one that held it (see
+     * outOfTouchSince), or from when its socket closed, if it was in touch until then. 0 when unknown
+     * (it took the seat from nobody's, or the engine has been rebuilt since). Once: the page says how
+     * long it was away as it signs in on a connection that follows a drop (ScriptBoard.connectionGap).
+     */
+    public long awayBefore(long now) {
+      long from = awayFrom;
+      awayFrom = 0L;
+      return from > 0 ? Math.max(0L, now - from) : 0L;
     }
 
     /**
@@ -397,6 +418,8 @@ public class Client extends Model {
     holder.watchingBy = null;
     if (!holder.preview) {
       ownPageHeld = true;
+      holder.awayFrom = ownPageAwaySince;
+      ownPageAwaySince = 0L;
       if (holder.takesSeat) {
         // the participant chose this page: it is the newest claim to the seat from now on
         holder.claimSeat(System.currentTimeMillis());
@@ -423,6 +446,11 @@ public class Client extends Model {
    * watchedBy).
    */
   public Arrival connect(Connection incoming) {
+    return connect(incoming, System.currentTimeMillis());
+  }
+
+  /** connect, at {@code now} (the server's time: see ownPageWent). */
+  public Arrival connect(Connection incoming, long now) {
     synchronized (seatLock) {
       if (computer) {
         return watch(incoming);
@@ -439,6 +467,11 @@ public class Client extends Model {
       if (!incoming.preview && !previous.preview && !incoming.takesSeat && incoming.loadedBefore(previous)) {
         incoming.close(REPLACED);
         return Arrival.REFUSED;
+      }
+      if (!previous.preview && !incoming.preview) {
+        // (their page that held the seat goes: maybe the same page, back on a new socket before the old
+        // one's close came through)
+        ownPageWent(previous, now);
       }
       take(incoming);
       if (previous.preview && !incoming.preview) {
@@ -496,13 +529,37 @@ public class Client extends Model {
    * replaced socket, or reported twice) changes nothing.
    */
   public boolean closed(Connection connection) {
+    return closed(connection, System.currentTimeMillis());
+  }
+
+  /** closed, at {@code now} (the server's time: see ownPageWent). */
+  public boolean closed(Connection connection, long now) {
     synchronized (seatLock) {
       if (!connection.markClosed()) {
         return false;
       }
       watchers.remove(connection);
-      return seat == connection;
+      if (seat != connection) {
+        return false;
+      }
+      if (!connection.preview) {
+        ownPageWent(connection, now);
+      }
+      return true;
     }
+  }
+
+  /**
+   * (under seatLock) Their own page that held the seat goes at {@code now}: its socket closed, or
+   * another page of theirs took the seat from it. Since when it had been out of touch with the server
+   * is kept for the next page of theirs that takes the seat (Connection.awayBefore): from when the
+   * server last heard from it, when it was out of touch (Connection.outOfTouchSince), else from now. A
+   * page whose JavaScript was paused (a laptop or phone suspending the tab) takes what the server sent
+   * meanwhile as just heard, and said it had been away a fraction of a second after 40 s.
+   */
+  private void ownPageWent(Connection page, long now) {
+    long since = page.outOfTouchSince(now);
+    ownPageAwaySince = since > 0 ? since : now;
   }
 
   /**

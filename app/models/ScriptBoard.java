@@ -1683,7 +1683,7 @@ public class ScriptBoard extends UntypedActor {
       // The controller has checked that this request holds the seat's token, or is a researcher's
       // preview. Client.connect says what becomes of this socket, and of the one before, which can
       // no longer act for this participant.
-      Client.Arrival arrival = client.connect(connection);
+      Client.Arrival arrival = client.connect(connection, clock.getAsLong());
       if (arrival == Client.Arrival.REFUSED) {
         // An older tab of theirs reconnecting by itself, while the page they opened since holds the
         // seat: it was told so, and changes nothing.
@@ -1820,9 +1820,12 @@ public class ScriptBoard extends UntypedActor {
       if (action.equals("LogIn") && event.hasNonNull("awayMs") && event.get("awayMs").canConvertToLong()) {
         // The page signs in again on a connection that follows a drop, saying how long it was out
         // of touch: no new sign-in, but a gap in the participant's connection, recorded the same way
-        // however short it was (from 3.1, see socketClosed).
+        // however short it was (from 3.1, see socketClosed). For as long as either side was: a page
+        // whose JavaScript was paused for 40 s, while its connection stayed up, took what the server
+        // had sent meanwhile as just heard, and said 239 ms (Client.Connection.awayBefore).
         if (!byResearcher && client.holdsSeat(connection)) {
-          connectionGap(clientId, Math.max(0L, event.get("awayMs").asLong()));
+          long pageSays = Math.max(0L, event.get("awayMs").asLong());
+          connectionGap(clientId, Math.max(pageSays, connection.awayBefore(clock.getAsLong())));
         }
       } else if (action.equals("LogIn")) {
         // The browser used to report its own IP address, user agent, referer (full URL,
@@ -1864,8 +1867,9 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * The event connectionGap {player, awayMs}: the participant's page came back after its connection
-   * dropped, out of touch for that long (as the page measured it, from when it last heard from the
-   * server). Not into a session that is over, nor for a computer player.
+   * dropped, out of touch for that long: from when it last heard from the server, as the page measured
+   * it, or from when the server last heard from it, whichever was earlier. Not into a session that is
+   * over, nor for a computer player.
    */
   private static void connectionGap(String clientId, long awayMs) {
     try {
@@ -2225,7 +2229,7 @@ public class ScriptBoard extends UntypedActor {
 
   /** socketClosed, judged at {@code now}. */
   private static void socketClosed(Client client, Client.Connection connection, long now) {
-    if (client.closed(connection) && clients.get(client.id) == client) {
+    if (client.closed(connection, now) && clients.get(client.id) == client) {
       client.seatAWatcher();
       long since = connection.outOfTouchSince(now);
       if (since > 0 && now < since + silenceLimitMs) {

@@ -457,16 +457,20 @@ theirs stands in for them) or `computer`; it changes as the seat changes hands, 
 - **Gaps in a connection.** A page that connects again after its connection dropped signs in again
   with how long it was out of touch, from when it last heard from the server
   (`{"action": "LogIn", "clientId": ..., "awayMs": ...}`), and the session records `connectionGap`
-  (`player`, `awayMs`) rather than another `clientLogIn`. An outage without a word is recorded this
-  way once the page has noticed it: after 15 to 20 seconds without a word from the server, it gives
-  the connection up and makes a new one. When the page is back before the 30 seconds of silence that
-  close a page, the `connectionGap` is all that is recorded: the participant never counts as gone. An
-  outage too short for the page to notice, which the connection lives through, leaves no record.
-  When the page's old socket closes after it was out of touch (it had sent nothing for 10 seconds,
-  or what it sent meanwhile came through only just before the close), they count as gone only once
-  30 seconds have passed since it was last heard from, unless a page of theirs is back by then. That
-  close comes through only as the network comes back, just before the page's new socket or just
-  after it, so the same outage used to be recorded as a `clientDisconnected` and a
+  (`player`, `awayMs`) rather than another `clientLogIn`. Its `awayMs` is the longer of what the page
+  says and the server's own reckoning, from when it last heard from the participant's page (or from
+  when that page's socket closed, if it was in touch until then): a page whose JavaScript was paused
+  while its connection stayed up (a laptop or phone suspending the tab) takes what the server sent
+  meanwhile as just heard, and would say it was away a moment. An outage without a word is recorded
+  this way once the page has noticed it: after 15 to 20 seconds without a word from the server, it
+  gives the connection up and makes a new one. When the page is back before the 30 seconds of
+  silence that close a page, the `connectionGap` is all that is recorded: the participant never
+  counts as gone. An outage too short for the page to notice, which the connection lives through,
+  leaves no record. When the page's old socket closes after it was out of touch (it had sent nothing
+  for 10 seconds, or what it sent meanwhile came through only just before the close), they count as
+  gone only once 30 seconds have passed since it was last heard from, unless a page of theirs is back
+  by then. That close comes through only as the network comes back, just before the page's new
+  socket or just after it, so the same outage used to be recorded as a `clientDisconnected` and a
   `clientConnected` 2 ms apart, or not at all.
 - **Answers that come too late.** A choice or tie change says when it was given, in the server's
   time as the page reckons it from the pongs (`bbSentAt`, in `MakeChoice` and in the `CustomEvent`s

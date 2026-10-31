@@ -720,6 +720,61 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(1, events("clientDisconnected", "p4"));
     }
 
+    // A page whose JavaScript was paused for 40 s (a laptop or phone suspending the tab), while its
+    // connection stayed up: the server closed its socket after 30 s without a word. As the page ran
+    // again, it took what the server had sent meanwhile as just heard, then saw its socket closed, and
+    // was back 0.3 s later saying it had been away 239 ms, which was recorded.
+    @Test
+    public void aGapIsAsLongAsTheServerWentWithoutAWordFromThePageWhenThatWasLonger() throws Throwable {
+        final long[] now = {System.currentTimeMillis()};
+        field("clock").set(null, (LongSupplier) () -> now[0]);
+        Page page = connect("p1");
+        page.send("LogIn", "clientId", "p1");
+        page.send("Ping");
+        now[0] += 34800;
+        closeSilentPages(now[0]);
+        assertTrue(page.closed);
+        assertEquals(1, events("clientDisconnected", "p1"));
+        now[0] += 5480;
+        Page back = connect("p1");
+        back.send("LogIn", "clientId", "p1", "awayMs", 239);
+        assertEquals("1:40280", gaps("p1"));
+        // once: a sign-in again on the same socket says what the page says
+        back.send("LogIn", "clientId", "p1", "awayMs", 30);
+        assertEquals("2:30", gaps("p1"));
+
+        // The same with a preview that stood in meanwhile: it watched, took the seat as the page's
+        // socket closed, and watches again once the page is back.
+        back.send("Ping");
+        final long heard = now[0];
+        Page preview = connect("p1", true);
+        now[0] += 31000;
+        closeSilentPages(now[0]);
+        assertEquals(1, preview.count(NOT_WATCHING));
+        now[0] += 9000;
+        Page again = connect("p1");
+        again.send("LogIn", "clientId", "p1", "awayMs", 120);
+        assertEquals("3:" + (now[0] - heard), gaps("p1"));
+        assertEquals(2, preview.count(WATCHING));
+
+        // And with the page's new socket first, the old one silent for 25 s and not closed yet.
+        again.send("Ping");
+        now[0] += 25000;
+        Page third = connect("p1");
+        third.send("LogIn", "clientId", "p1", "awayMs", 400);
+        assertEquals("4:25000", gaps("p1"));
+
+        // What the page says stands when it is the longer: here its socket's close came through at
+        // once, and the server had heard from it until then.
+        third.send("Ping");
+        now[0] += 2000;
+        third.hangUp();
+        now[0] += 1000;
+        Page fourth = connect("p1");
+        fourth.send("LogIn", "clientId", "p1", "awayMs", 6000);
+        assertEquals("5:6000", gaps("p1"));
+    }
+
     @Test
     public void silencesOfAPageAreTimedFromWhatItSent() {
         Client.Connection c = socket(0L, false, false);
