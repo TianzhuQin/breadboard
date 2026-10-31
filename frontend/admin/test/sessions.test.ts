@@ -763,6 +763,46 @@ describe('SessionEventsDrawer', () => {
   }
   const rows = () => [...document.body.querySelectorAll('.sev tbody tr')].map(r => r.textContent || '')
 
+  // Where a researcher reads a past, unattended session: it showed failures like any other event, and
+  // left out what their data says ("for a moment" for a 2 s drop, no step or line for a failure).
+  it('shows failures in red and warnings in amber, with what their data says, as Live session\'s list does', async () => {
+    const at = (s: number) => `2026-10-31 19:41:${String(s).padStart(2, '0')},0`
+    store.actions.instanceEvents.mockResolvedValueOnce({ name: 'Autopilot · 10', events: [
+      { id: 1, name: 'stepFailed', datetime: at(1), data: [{ name: 'step', value: 'RoundStep' }, { name: 'error', value: 'line 81: No such property: roundNoteText' }] },
+      { id: 2, name: 'connectionGap', datetime: at(2), data: [{ name: 'player', value: 'p1' }, { name: 'awayMs', value: '2140' }] },
+      { id: 3, name: 'engineReloaded', datetime: at(3), data: [{ name: 'by', value: 'r@lab.org' }, { name: 'restarted', value: 'true' }] },
+      { id: 4, name: 'sessionStalled', datetime: at(4), data: [{ name: 'step', value: 'RoundStep' }, { name: 'line', value: '86' }] },
+      { id: 5, name: 'clientDisconnected', datetime: at(5), data: [{ name: 'clientId', value: 'p2' }] },
+      { id: 6, name: 'ColourPick', datetime: at(6), data: [{ name: 'choice', value: 'Blue' }] },
+    ] })
+    const w = await mountDrawer(session(10, 'Autopilot · 10', 'STOPPED'))
+    const plain = [...document.body.querySelectorAll('.sev tbody tr')].map(r => r.querySelector('.sev__plain')?.textContent || '')
+    expect(plain).toEqual([
+      'A step failed (RoundStep, line 81): its code threw an error',
+      'A participant’s connection dropped for 2 s, then came back',
+      'A researcher reloaded the engine: the game started again from the beginning',
+      'After a step failed (RoundStep, line 86), the game had nothing left to do, so it was ended',
+      'A participant lost connection',
+      '',
+    ])
+    const tones = [...document.body.querySelectorAll('.sev tbody .sev__name')].map(b => [b.textContent!.trim(), b.className])
+    expect(tones).toEqual([
+      ['stepFailed', 'sev__name is-danger'],
+      ['connectionGap', 'sev__name'],
+      ['engineReloaded', 'sev__name'],
+      ['sessionStalled', 'sev__name is-danger'],
+      ['clientDisconnected', 'sev__name is-warning'],
+      ['ColourPick', 'sev__name'],
+    ])
+    // and by event
+    const byEvent = [...document.body.querySelectorAll<HTMLButtonElement>('.sev [role="tab"]')].find(t => t.textContent?.includes('By event'))!
+    byEvent.click()
+    await flushPromises()
+    expect([...document.body.querySelectorAll('.sev__gname.is-danger')].map(n => n.textContent).sort()).toEqual(['sessionStalled', 'stepFailed'])
+    expect([...document.body.querySelectorAll('.sev__gname.is-warning')].map(n => n.textContent)).toEqual(['clientDisconnected'])
+    w.unmount()
+  })
+
   it('leaves out live events another session recorded', async () => {
     store.actions.instanceEvents.mockResolvedValueOnce({ name: 'main', events: [] })
     const w = await mountDrawer(store.admin.instance)

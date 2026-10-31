@@ -590,7 +590,9 @@ or parameter, and sort. Each row has buttons to stop or resume the session, view
 download its data. Click a row for its launch parameters, its participant link while it runs, and
 **Delete…**: only stopped or finished sessions can be deleted, with their data, for good.
 
-**View events** lists a session's events as a **Timeline** or **By event**, to search and filter.
+**View events** lists a session's events as a **Timeline** or **By event**, to search and filter,
+with what the well-known ones mean (as on Live session: the step and line of a failure, say) and
+failures in red and warnings in amber.
 **Export all** (or **Export filtered**) saves the events listed; **Export as table** saves one kind
 of event with a column per data name.
 
