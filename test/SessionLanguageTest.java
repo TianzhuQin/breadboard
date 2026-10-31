@@ -29,7 +29,7 @@ import static org.junit.Assert.*;
  * with c.setDefaultLanguage (the network game example: its language launch parameter) is recorded with
  * the session as they load (experiment_instances.content_language, SessionLanguage), and again when
  * they choose another while it runs, and its participants' pages are told. Breadboard's own words to
- * them follow it, such as the end the server gives them.
+ * them follow it: the engine's waiting room, and the end the server gives them.
  */
 public class SessionLanguageTest extends BaseTest {
 
@@ -176,9 +176,11 @@ public class SessionLanguageTest extends BaseTest {
         SessionLanguage.reset();
         assertEquals("also once the server has forgotten it", "zho", SessionLanguage.of(chinese.id));
 
-        // A page that connects is told.
+        // A page that connects is told, and the engine's waiting room speaks Chinese.
         final Page p1 = connect(chinese, "p1");
         assertTrue(p1.frames.toString(), p1.got(f -> "zho".equals(f.path("bbLanguage").asText())));
+        await("the waiting room", () -> p1.lastText() != null && p1.lastText().contains("正在等待其他参与者"));
+        assertEquals("<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。人数达到 3 人后，实验就会开始。</p><p>请保持这个页面打开。</p>", p1.lastText());
 
         // The researcher stops it: they are told in Chinese.
         console.send("StopGame", "id", chinese.id);
@@ -191,6 +193,9 @@ public class SessionLanguageTest extends BaseTest {
         assertEquals("the earlier session keeps its own", "zho", SessionLanguage.of(chinese.id));
         final Page p2 = connect(english, "p2");
         assertTrue(p2.frames.toString(), p2.got(f -> "eng".equals(f.path("bbLanguage").asText())));
+        await("the waiting room", () -> p2.lastText() != null && p2.lastText().contains("Waiting for other participants"));
+        assertEquals("<h3>Waiting for other participants</h3><p>1 joined so far. The session starts when 3 people are here.</p>"
+            + "<p>Please keep this page open.</p>", p2.lastText());
         console.send("StopGame", "id", english.id);
         await("told it stopped", () -> p2.lastText() != null && p2.lastText().contains("This session has been stopped"));
     }

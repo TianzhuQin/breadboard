@@ -84,11 +84,35 @@ def randomSubset (List vals, int n) {
 }
 
 
+// Breadboard's own words to participants (conf/i18n, models.SystemTexts), in the language of the
+// session's texts, which the steps choose with c.setDefaultLanguage: Chinese for zho, English for any
+// other (or none). The engine's waiting room, its refusals of tie changes and its built-in timers and
+// forms say what they say with these, so a study written in Chinese isn't shown English around it.
+//   bbText("waiting.countdown", [n: 5])
+bbLanguage = { ->
+  try {
+    return c?.languageCode()
+  } catch (MissingPropertyException noContent) {
+    // (an engine without an experiment's texts: English)
+    return null
+  } catch (MissingMethodException notTheExperimentsTexts) {
+    // (something else bound as c, e.g. by a test)
+    return null
+  }
+}
+bbText = { String key, Map params = [:] -> models.SystemTexts.text(bbLanguage(), key, params) }
+// Sentences one after the other, as the language writes them (a space between them in English).
+bbSentences = { String... parts -> models.SystemTexts.sentences(bbLanguage(), parts) }
+
 // Extend this for simple access to the content and action interfaces
 public class BreadboardBase {}
 
 BreadboardBase.metaClass.fetchContent = { Map opts ->
   // TODO: Handle locale property
+  if ("systemText" in opts) {
+    // One of Breadboard's own texts (conf/i18n), in the session's language: the defaults of ready.groovy.
+    return bbText(opts.systemText)
+  }
   if (!("content" in opts || "contentKey" in opts)) {
     throw new Exception("Must supply either the 'content' or 'contentKey' property")
   }

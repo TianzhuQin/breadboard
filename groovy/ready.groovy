@@ -7,21 +7,13 @@ public class ReadyUpSequence extends FormBase {
   def key = "ready-up"
   def time = 30
   def mut = new ReentrantLock()
-  def pendingContent = [
-    content: "The game will begin shortly. When a “Ready” button appears, press it to begin the task."
-  ]
-  def readyContent = [
-    content: "Press the \"Ready\" button before the timer expires to begin this task."
-  ]
-  def readyButtonContent = [
-    content: "Ready"
-  ]
-  def timerContent = [
-    content: "Game begins in "
-  ]
-  def waitingContent = [
-    content: "The game will begin shortly. Please wait for other players."
-  ]
+  // Breadboard's own words unless the experiment gives its own (conf/i18n, in the language of the
+  // session's texts: see fetchContent in util.groovy)
+  def pendingContent = [systemText: "ready.pending"]
+  def readyContent = [systemText: "ready.prompt"]
+  def readyButtonContent = [systemText: "ready.button"]
+  def timerContent = [systemText: "ready.timer"]
+  def waitingContent = [systemText: "ready.waiting"]
   def players = []
   def doneCbs = []
 
