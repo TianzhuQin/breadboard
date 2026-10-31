@@ -776,6 +776,47 @@ describe('Autopilot page', () => {
     w.unmount()
   })
 
+  it('shows a session of its experiment opened by hand as the open session, and that it waits for it to end', async () => {
+    // (GET /autopilot's status.handSession: the autopilot opens none of its own beside it; its links lead to it)
+    const hand = { id: 21, name: 'By hand review', status: 'RUNNING', gameStarted: false, openToNewcomers: true, owner: 'b@lab.org' }
+    const problem = '"By hand review", a session of this experiment that b@lab.org opened by hand, is open, and the participant links lead to it. The autopilot opens its own session once that one has ended; saving these settings hands it to the autopilot.'
+    const on = { settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null, engineSession: null } }
+    http.get.mockResolvedValue(stateJson({ ...on, status: { ...on.status, handSession: hand, problemKind: 'waiting', problem } }))
+    const w = await mountPage()
+    const box = w.find('.apst__problem')
+    expect(box.classes()).toContain('is-info')
+    expect(box.find('.apst__problem-title').text()).toBe('Waiting for the session opened by hand to end')
+    expect(box.find('.apst__problem-text').text()).toBe(problem)
+    const block = w.findAll('.apst__block')[0]
+    expect(block.find('.apst__label').text()).toBe('Open session')
+    expect(block.find('.apst__session-name').text()).toBe('By hand review')
+    expect(block.find('.b-badge').text()).toBe('Taking participants')
+    expect(block.text()).toContain('Opened by hand by b@lab.org, not by the autopilot: the participant links lead to it.')
+    expect(block.text()).not.toMatch(/No session is open right now/)
+    // not the console's session: nothing to watch from here
+    expect(block.find('.apst__watch').exists()).toBe(false)
+    w.unmount()
+
+    // its game under way, and it is the console's session; paused, it is shown all the same
+    ;(mockedAdmin as any).instance = { id: 21, name: 'By hand review', status: 'RUNNING' }
+    try {
+      http.get.mockResolvedValue(stateJson({
+        ...on,
+        status: { ...on.status, paused: true, problemKind: 'paused', handSession: { ...hand, gameStarted: true, openToNewcomers: false, owner: null }, problem: 'It is paused: its session "auto 1" was stopped. Meanwhile "By hand review", a session of this experiment that a researcher opened by hand, is running. Resume hands it to the autopilot.' },
+      }))
+      const w2 = await mountPage()
+      const block2 = w2.findAll('.apst__block')[0]
+      expect(block2.find('.b-badge').text()).toBe('Game under way')
+      expect(block2.text()).toContain('Opened by hand by a researcher, not by the autopilot.')
+      expect(block2.text()).not.toMatch(/participant links lead to it|No session is open/)
+      expect(block2.find('.apst__watch').text()).toContain('Watch it live')
+      expect(w2.find('.apst__problem-title').text()).toBe('Paused until you resume it')
+      w2.unmount()
+    } finally {
+      ;(mockedAdmin as any).instance = null
+    }
+  })
+
   it('says a paused autopilot opens nothing, even once another session ends', async () => {
     const pilot = { id: 9, name: 'Trust pilot', experimentId: 13, experimentName: 'Trust', owner: 'b@lab.org' }
     http.get.mockResolvedValue(stateJson({

@@ -75,6 +75,15 @@
         <BBadge :tone="sessionTone" :dot="sessionTone === 'success'">{{ sessionLabel }}</BBadge>
         <RouterLink v-if="isCurrent" to="/session" class="apst__watch">Watch it live <ArrowRight :size="14" aria-hidden="true" /></RouterLink>
       </div>
+      <!-- a session of its experiment that a researcher opened by hand: open, though not the autopilot's -->
+      <template v-else-if="hand">
+        <div class="apst__session apst__hand">
+          <span class="apst__session-name" :title="`Session #${hand.id}`">{{ hand.name || `Session #${hand.id}` }}</span>
+          <BBadge tone="success" dot>{{ handLabel }}</BBadge>
+          <RouterLink v-if="handIsCurrent" to="/session" class="apst__watch">Watch it live <ArrowRight :size="14" aria-hidden="true" /></RouterLink>
+        </div>
+        <p class="apst__muted">{{ handLine }}</p>
+      </template>
       <p v-else class="apst__muted">
         No session is open right now. {{ status.on && !status.problem && !nextOpen ? 'The autopilot opens one shortly.' : '' }}
       </p>
@@ -179,11 +188,33 @@ const badge = computed<{ tone: 'success' | 'warning' | 'neutral', label: string,
   return stalled.value ? { tone: 'warning', label: 'Not running', pulse: false } : { tone: 'neutral', label: 'Off', pulse: false }
 })
 
+/** A session of its experiment that a researcher opened by hand (not the autopilot's own, which comes first). */
+const hand = computed(() => (status.value.instance ? null : status.value.handSession))
+/** It is the console's own session, which Live session shows. */
+const handIsCurrent = computed(() => !!hand.value && admin.instance?.id === hand.value.id)
+const handLabel = computed(() => {
+  const h = hand.value
+  if (!h) return ''
+  if (h.openToNewcomers) return 'Taking participants'
+  if (h.gameStarted) return 'Game under way'
+  if (h.status === 'TESTING') return 'Testing'
+  // (it runs, its game hasn't started, and it takes nobody more: its full waiting room counts down)
+  return 'Room full'
+})
+const handLine = computed(() => {
+  const h = hand.value
+  if (!h) return ''
+  const by = `Opened by hand by ${h.owner || 'a researcher'}, not by the autopilot`
+  return h.openToNewcomers ? `${by}: the participant links lead to it.` : `${by}.`
+})
+
 const infoTitle = computed(() => {
   if (kind.value === 'waiting') {
-    // without a live session to wait for, another researcher has their experiment loaded in the
-    // engine; the server's message says who and what
-    return status.value.engineSession ? 'Waiting for another session to end' : 'Waiting for the script engine'
+    // what it waits for: another experiment's session, a session of its own experiment that a
+    // researcher opened by hand, or else the engine, which another researcher has their experiment
+    // loaded in (the server's message says who and what)
+    if (status.value.engineSession) return 'Waiting for another session to end'
+    return status.value.handSession ? 'Waiting for the session opened by hand to end' : 'Waiting for the script engine'
   }
   return ({
     paused: 'Paused until you resume it',

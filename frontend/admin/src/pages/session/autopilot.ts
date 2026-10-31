@@ -88,7 +88,7 @@ export function autopilotStatusOf (s: any): AutopilotStatus | null {
   // open (status.handSession) only says that the autopilot opens its own once that one has ended: it
   // keeps nothing from opening it then, so the study's links still wait for it during that session's
   // game (the server leaves it out of Autopilot.nextSessionHeldUp). Paused or done, the reason stays.
-  const handNote = !!s.status.handSession && problemKind(state) === 'waiting'
+  const handNote = !!state.status.handSession && problemKind(state) === 'waiting'
   return {
     on: !!s.status.on,
     experimentId: s.status.experimentId ?? null,

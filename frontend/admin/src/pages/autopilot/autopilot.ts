@@ -36,11 +36,30 @@ export interface EngineSession {
   /** the email of the account that runs it, when the server knows */
   owner: string | null
 }
+/**
+ * A live session of the autopilot's experiment that a researcher opened by hand (GET /autopilot's
+ * status.handSession): not the autopilot's, which opens none of its own until it has ended.
+ */
+export interface HandSession {
+  id: number
+  name: string
+  /** RUNNING or TESTING */
+  status: string
+  /** its game has started */
+  gameStarted: boolean
+  /** the study's links lead into it now: its game hasn't started and its room isn't full */
+  openToNewcomers: boolean
+  /** the email of the account that opened it, when the server knows */
+  owner: string | null
+}
 export interface AutopilotStatus {
   on: boolean
   experimentId: number | null
   experimentName: string | null
+  /** the autopilot's own session (the one it opened, or was handed on Resume or a save), whatever its state */
   instance: { id: number, name: string, status: string } | null
+  /** a live session of its experiment that a researcher opened by hand (newer servers); see HandSession */
+  handSession: HandSession | null
   links: { login: string, prolific: string } | null
   /**
    * Why the autopilot, switched on, opens no session (the server's words); null when all is well.
@@ -159,6 +178,18 @@ function normalizeEngineSession (raw: any): EngineSession | null {
   }
 }
 
+function normalizeHandSession (raw: any): HandSession | null {
+  if (!raw || typeof raw !== 'object' || idOrNull(raw.id) == null) return null
+  return {
+    id: Number(raw.id),
+    name: String(raw.name ?? ''),
+    status: String(raw.status ?? ''),
+    gameStarted: raw.gameStarted === true,
+    openToNewcomers: raw.openToNewcomers === true,
+    owner: text(raw.owner),
+  }
+}
+
 export function normalizeState (raw: any): AutopilotState {
   const r = raw && typeof raw === 'object' ? raw : {}
   const s = r.status && typeof r.status === 'object' ? r.status : {}
@@ -174,6 +205,7 @@ export function normalizeState (raw: any): AutopilotState {
       experimentId: s.experimentId == null ? null : Number(s.experimentId),
       experimentName: typeof s.experimentName === 'string' ? s.experimentName : null,
       instance: inst ? { id: Number(inst.id), name: String(inst.name ?? ''), status: String(inst.status ?? '') } : null,
+      handSession: normalizeHandSession(s.handSession),
       links: links ? { login: String(links.login || ''), prolific: String(links.prolific || '') } : null,
       problem: text(s.problem),
       paused: s.paused === true,
