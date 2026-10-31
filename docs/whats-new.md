@@ -115,7 +115,7 @@ is in the language the steps chose for the session's texts: in Chinese for `zho`
 any other language, or none, as before. That is the sign-in page and its errors, "You're already taking
 part", the participant page's loading and idle notes, `BBWaiting` and the waiting room's own text, the
 countdown and "Not enough participants joined", `BBGame`'s network heading and counts, `BBNetwork`'s
-hints, confirmations, list of changes, answers and stand-in names ("参与者 A" for "Person A", "你" for
+hints, confirmations, list of changes, answers and stand-in names ("参与者A" for "Person A", "你" for
 "You"), `ConnectionStatus`'s and the choices' notes and buttons, `FinishProlific`, the built-in form's
 and tutorial's buttons and checks, the engine's refusals of tie changes, its idle drop timer and the
 ready-up sequence's default words, every end screen and notice the server sends, and the pages before
@@ -273,7 +273,7 @@ New experiments start with a redesigned page (`conf/defaults/default-client-html
   - Every possible change is also listed under the picture, for keyboards, screen readers and
     crowded networks. The list is folded away until opened, and opens by itself when people are
     drawn too small to tap.
-  - Neighbors without a name are called "Person A", "Person B", ... ("参与者 A" in a session in
+  - Neighbors without a name are called "Person A", "Person B", ... ("参与者A" in a session in
     Chinese), so every change can be put in words.
   - Options, passed through `BBGame`'s `network-props`:
 
