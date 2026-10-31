@@ -237,7 +237,9 @@ public class ParticipantPagesLanguageTest extends BaseTest {
             holding.setAccessible(true);
             String waiting = contentAsString((Result) holding.invoke(null, experiment.id, true));
             assertTrue(waiting, waiting.contains("<html lang=\"zh-CN\">"));
-            assertTrue(waiting, waiting.contains("下一场实验马上开始") || waiting.contains("有一场实验正在进行"));
+            // (the next session "opens", 开放, as the guide says it, not "starts")
+            assertTrue(waiting, waiting.contains("<h1>下一场实验马上开放</h1>") && waiting.contains("下一场开放后，这个页面会自动带你进入")
+                || waiting.contains("<h1>有一场实验正在进行</h1>") && waiting.contains("这一场结束后，下一场就会开放，这个页面会自动带你进入"));
             assertTrue(waiting, waiting.contains("如果等不及，请在 Prolific 上退回这项研究。"));
             assertTrue(waiting, waiting.contains("每隔几秒检查一次…"));
         } finally {

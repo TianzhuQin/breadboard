@@ -60,7 +60,7 @@ public class SystemTextsTest {
         assertEquals("&lt;b&gt;p1&lt;/b&gt; isn't in this session's game right now, so there is nothing to show. A preview adds "
             + "nobody to the game: participants join from their own page. Reload this preview once they have joined.",
             SystemTexts.html("eng", "end.notInGame", "id", "<b>p1</b>"));
-        assertEquals("这一场结束后，下一场就会开始。<a href=\"/play/1/login\">加入下一场</a>：那个页面会等下一场开放，然后带你进入。",
+        assertEquals("这一场结束后，下一场就会开放。点击<a href=\"/play/1/login\">加入下一场</a>，页面会等它开放后带你进入。",
             SystemTexts.html("zho", "end.fullNext", "link", new SystemTexts.Html("<a href=\"/play/1/login\">加入下一场</a>")));
     }
 

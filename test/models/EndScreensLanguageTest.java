@@ -40,9 +40,9 @@ public class EndScreensLanguageTest {
         assertTrue(text(ScriptBoard.sessionFullScreen(true, null, "zho")).contains("请在 Prolific 上退回这项研究"));
         assertEquals("<h3>不在游戏里</h3><p>&lt;p1&gt; 现在不在本场的游戏里，所以没有可以显示的内容。预览不会把人加进游戏：参与者要从自己的页面加入。"
             + "等他加入后，请重新加载这个预览。</p>", text(ScriptBoard.notInGameScreen("<p1>", "zho")));
-        assertEquals("<h3>这场实验没有在进行</h3><p>它可能已经结束，或者还没有开始。如果你收到过这项研究的链接，请重新打开它；否则可以关闭这个页面。</p>",
+        assertEquals("<h3>这场实验没有在进行</h3><p>这场实验可能已经结束，或者还没有开放。如果你收到过这项研究的链接，请重新打开它；否则可以关闭这个页面。</p>",
             text(ScriptBoard.sessionNotRunningScreen("zho")));
-        assertEquals("<h3>实验已经开始了</h3><p>它在你到达之前就开始了，不能再加入新的参与者。请联系研究者。</p>",
+        assertEquals("<h3>实验已经开始了</h3><p>这场实验在你到达之前就开始了，不能再加入新的参与者。请联系研究者。</p>",
             text(ScriptBoard.sessionStartedScreen("zho")));
         // what marks them stays the same
         assertEquals("stopped", ScriptBoard.stoppedScreen("zho").get("player").get("ended").asText());
