@@ -475,11 +475,11 @@ of event with a column per data name.
 Without it, Excel and WPS read a file in the computer's own encoding (on a Chinese Windows, GBK),
 and Chinese and other non-Latin text turns into garbage; with it, they open it correctly with a
 double-click. The choice is kept in this browser. Leave it off for R, Python and existing analysis
-scripts: the server's files (**Download data**, **Download all data** and **Download list**) are
-then exactly as earlier versions wrote them. A file downloaded without it opens correctly in Excel
-through **Data → From Text/CSV** with **File origin** set to **65001: Unicode (UTF-8)**, and in WPS
-when you import it as UTF-8. The server's addresses give the same files with `excel=true`, e.g.
-`/csv/data/<session id>?excel=true`.
+scripts: the server's files then have no byte-order mark. **Download data** and **Download list**
+are exactly as 3.0 wrote them, and **Download all data** (new in 3.1) is written the same way. A
+file downloaded without it opens correctly in Excel through **Data → From Text/CSV** with **File
+origin** set to **65001: Unicode (UTF-8)**, and in WPS when you import it as UTF-8. The server's
+addresses give the same files with `excel=true`, e.g. `/csv/data/<session id>?excel=true`.
 
 Timestamps in the CSV files, the console's own exports included, are in UTC, written as
 `2026-10-28T13:24:23:757Z` (with a colon before the milliseconds, as earlier versions of Breadboard
