@@ -986,12 +986,14 @@ public class AutopilotSessionTest extends BaseTest {
         await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
         assertEquals("their choices are still on screen", 2, ((Number) engineValue("a.actions.size()")).intValue());
 
-        // One leaves (the takeover is due), and a script makes the other a computer player: neither
-        // picks, so the stopped game isn't played on to its finish.
+        // One leaves, and a script makes the other a computer player: neither picks, so the stopped game
+        // isn't played on to its finish. (Nothing happens in a session once it has ended: the seat of
+        // the one who left isn't even handed to the computer, groovy/autopilot.groovy's sessionOver.)
         engine().eval("def v = g.getVertex('noai-1'); v._system.connected = false; autopilot.onConnection('noai-1', false); null");
         engine().eval("a.ai.add(g.getVertex('noai-2'), picksAtOnce); null");
         Thread.sleep(1500);
-        assertEquals(Integer.valueOf(1), engineValue("g.getVertex('noai-1').ai"));
+        assertNull("no takeover in a session that is over", engineValue("g.getVertex('noai-1').ai"));
+        assertEquals(Integer.valueOf(1), engineValue("g.getVertex('noai-2').ai"));
         assertEquals(0, engineValue("finishes"));
         assertEquals(2, ((Number) engineValue("a.actions.size()")).intValue());
         assertEquals("still stopped, so it can be resumed", ExperimentInstance.Status.STOPPED,

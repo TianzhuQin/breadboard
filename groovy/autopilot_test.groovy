@@ -566,6 +566,63 @@ test.async("a player who leaves mid-game is replaced by the computer, and gets t
   }
 }
 
+// Once the session is over (its game finished, or it was stopped), nothing more happens in it: a page
+// closed after the end used to hand its seat to the computer 30 s later, recorded as aiTakeover in
+// the finished session.
+test.async("a page closed once the session is over hands no seat to the computer", 5000) { done ->
+  def hooks = [:]
+  def tracked = []
+  def ap = pilot('ap-over-', hooks)
+  ap.eventTracker = [track: { name, data -> tracked << name }]
+  ap.waitingRoom([minPlayers: 1, maxPlayers: 1, countdownSeconds: 0])
+  ap.replaceDisconnected([afterSeconds: 0.3])
+  def v = arrive(ap, 'ap-over-1')
+  assert hooks.started == 1
+  ap.gameListener.experimentInstance.status = "FINISHED"
+  leave(ap, 'ap-over-1')
+  def scheduled = ap.takeoverTimers.containsKey('ap-over-1')
+  timers.newTimer().runAfter(800) {
+    def tookOver = v.getProperty("ai") == 1
+    a.ai.remove(v)
+    done {
+      try {
+        assert !scheduled : "a takeover was set up in a session that is over"
+        assert !tookOver : "the computer took the seat in a session that is over"
+        assert !tracked.contains("aiTakeover")
+      } finally {
+        ap.stop()
+      }
+    }
+  }
+}
+
+test.async("nor does a player who left before the session ended, once it has", 5000) { done ->
+  def hooks = [:]
+  def tracked = []
+  def ap = pilot('ap-ended-', hooks)
+  ap.eventTracker = [track: { name, data -> tracked << name }]
+  ap.waitingRoom([minPlayers: 1, maxPlayers: 1, countdownSeconds: 0])
+  ap.replaceDisconnected([afterSeconds: 0.3])
+  def v = arrive(ap, 'ap-ended-1')
+  leave(ap, 'ap-ended-1')
+  assert ap.takeoverTimers.containsKey('ap-ended-1') : "the computer takes over while the game goes on"
+  // the session is stopped before the takeover is due
+  ap.gameListener.experimentInstance.status = "STOPPED"
+  timers.newTimer().runAfter(800) {
+    def tookOver = v.getProperty("ai") == 1
+    a.ai.remove(v)
+    done {
+      try {
+        assert !tookOver : "the computer took the seat in a session that is over"
+        assert !tracked.contains("aiTakeover")
+        assert tracked.contains("autopilotStart")
+      } finally {
+        ap.stop()
+      }
+    }
+  }
+}
+
 test("a computer player's page coming and going leaves its seat to the computer") {
   def hooks = [:]
   def ap = pilot('ap-cpu-', hooks)

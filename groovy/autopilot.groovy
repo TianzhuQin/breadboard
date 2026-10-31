@@ -465,9 +465,15 @@ class Autopilot {
   }
 
   // During the game: hand a departed player's seat to the computer after a grace period. Not a
-  // computer player's (isParticipant), which the computer plays already.
+  // computer player's (isParticipant), which the computer plays already. Nothing once the session is
+  // over (sessionOver): a page closed after the game had finished used to hand its seat to the
+  // computer 30 s later, recorded as aiTakeover in the finished session.
   def handleDeparture(String clientId, boolean connected) {
     if (replace == null) return
+    if (sessionOver()) {
+      takeoverTimers.remove(clientId)?.cancel()
+      return
+    }
     def v = g.getVertex(clientId)
     if (v == null || !isParticipant(v)) return
     if (connected) {
@@ -482,6 +488,8 @@ class Autopilot {
     takeoverTimers[clientId] = schedule(replace.afterSeconds) {
       synchronized (this) {
         takeoverTimers.remove(clientId)
+        // (the session may have ended meanwhile)
+        if (sessionOver()) return
         def player = g.getVertex(clientId)
         if (player != null && player.getProperty("_system")?.connected != true) {
           if (replace.behavior != null) {
@@ -591,6 +599,13 @@ class Autopilot {
 
   private void track(String name, List data) {
     if (eventTracker != null) eventTracker.track(name, data)
+  }
+
+  // Whether the game's session is over (finished, stopped, archived): nothing more happens in it, as
+  // nothing more is recorded in it. Not without a session (a test's, or no session opened yet).
+  boolean sessionOver() {
+    def status = gameListener?.experimentInstance?.status
+    return status != null && !(status.toString() in ["RUNNING", "TESTING"])
   }
 }
 
