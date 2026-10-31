@@ -45,6 +45,18 @@ that carries a running session on opens it to them before it closes their pages,
 those who held a seat get back in by themselves as they reconnect (they used to be told the game
 began before they arrived), and records `engineReloaded` in it.
 
+From the moment a rebuild of the engine begins (a reload, a new session, a Resume, selecting an
+experiment or a session), the engine being replaced does nothing more in the game: a choice, a tie
+edit or any other message a participant's page sends finds nothing to act on (a choice or tie edit
+from the console waits for the new engine), code of its game that still runs (a task of its timers
+under way) starts no game, finishes no session and reports no failure (one is only logged, not
+recorded as `stepFailed`), its waiting room leaves nobody out, its network reaches no page or
+console, and its `eventTracker` records nothing more: each engine has its own, which records into
+the session until the engine is replaced. So nothing of the old game comes after `engineReloaded`.
+When a researcher stops the session, the engine's `eventTracker` stops before `sessionStopped` is
+recorded, and the stopped game, should a choice made as it stopped play it on, doesn't finish the
+session.
+
 ## What participants receive about others
 
 Set from experiment scripts:
@@ -516,7 +528,8 @@ restarts the running session.
   `sessionStalled` (its game had nothing left to do after a step failed: `step`, `error`) and
   `sessionTooLong` (`minutes`, `limit`).
 - **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
-  researcher), in a session that a reload of the engine carries on.
+  researcher), in a session that a reload of the engine carries on. Everything of the game before it
+  is recorded before it, and nothing after.
 - **Tie edits:** `edgeEdit`, which records the actor.
 - **Prolific:** `prolificEntry`, `prolificComplete`, and `participantComment` (`player`, `text`):
   what a participant wrote under "Comments for the researcher" on the finish screen, kept in their

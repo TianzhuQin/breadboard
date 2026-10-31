@@ -246,7 +246,7 @@ starts it. If a session is running, the button reads **Stop it and create**.
 | Button | Shown when | What it does |
 |---|---|---|
 | **Start the game** | The session runs and its game hasn't started | Runs `initStep.start()`: everyone waiting is let in and the experiment begins. Later arrivals are turned away, and a waiting room is cut short. Once started, it does nothing more until the engine is reloaded. |
-| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (someone who was given a completion code keeps it on screen), and nothing more is recorded in it. Stopping the autopilot's session pauses the autopilot. |
+| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (someone who was given a completion code keeps it on screen), and nothing more is recorded in it, not even a choice made as it stops. Its game can't finish it afterwards, so it can be resumed. Stopping the autopilot's session pauses the autopilot. |
 | **Resume session** | The session is stopped | Restarts the experiment's scripts with the session's launch parameters: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
 | **Download data** | The session has finished | Its events as CSV. A finished session can't be resumed; start a new one. |
 
@@ -326,7 +326,12 @@ settings: it runs as your account, and goes on running it), and a game under way
 from the beginning: its game counts as not started, so **Start the game** (or its waiting room) runs
 InitStep again. The pages of those who held a seat get back in by themselves as they reconnect, and
 it takes newcomers as before its game. Its data records an `engineReloaded` event, with `restarted`
-(whether a game was under way) and `by`, as a Resume records `sessionResumed`. Before such a reload,
+(whether a game was under way) and `by`, as a Resume records `sessionResumed`. Everything the game
+before it did is recorded before that event, and nothing of it after: while the engine restarts
+(about half a second), a choice or tie change a participant makes doesn't count (their page shows
+the restarted game once it is back), and one you make from the console waits for the restart and
+is answered by the restarted game, where the choice is usually no longer on offer. A step of the
+old game that fails as it is replaced isn't reported as the restarted game's. Before such a reload,
 the console asks while that session's game is in progress or anyone is connected to it, and says
 that the game starts again from the beginning and that the people in it rejoin by themselves.
 Creating a session and resuming one restart the engine too, and so does switching experiments while

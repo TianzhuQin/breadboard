@@ -31,26 +31,85 @@ public class EventTracker {
   private ExperimentInstance experimentInstance;
   private boolean enabled = true;
 
+  // An engine's own tracker (forEngine) records into the server's tracker, this, until it is retired;
+  // null for the server's tracker (and one a test makes), which records itself.
+  private final EventTracker server;
+  // An engine's own tracker: held shared while it records, and exclusively by retire().
+  private final java.util.concurrent.locks.ReadWriteLock recording;
+  private volatile boolean retired = false;
+
+  public EventTracker() {
+    this(null);
+  }
+
+  private EventTracker(EventTracker server) {
+    this.server = server;
+    this.recording = server == null ? null : new java.util.concurrent.locks.ReentrantReadWriteLock();
+  }
+
+  /**
+   * A tracker for one script engine's scripts (bound as their "eventTracker"): what they track is
+   * recorded as this tracker would record it, into the session it records into, until the engine is
+   * replaced or its game ends (retire). Every engine used to be given the server's tracker itself, so
+   * a replaced engine whose code ran on (a participant's choice made while the engine was rebuilt)
+   * recorded its game into the session the new engine runs.
+   */
+  public EventTracker forEngine() {
+    return new EventTracker(server == null ? this : server);
+  }
+
+  /**
+   * Nothing this engine's tracker is given is recorded from now on: its engine is being replaced, or
+   * its game has ended. Waits for a recording of it that is under way, so none lands after what the
+   * caller records next (engineReloaded, sessionStopped). Nothing for the server's own tracker.
+   */
+  public void retire() {
+    if (recording == null) {
+      return;
+    }
+    recording.writeLock().lock();
+    try {
+      retired = true;
+    } finally {
+      recording.writeLock().unlock();
+    }
+  }
+
   public ExperimentInstance getExperimentInstance() {
-    return experimentInstance;
+    return server != null ? server.getExperimentInstance() : experimentInstance;
   }
 
   public void enable() {
+    if (server != null) {
+      server.enable();
+      return;
+    }
     enabled = true;
   }
 
   public void disable() {
+    if (server != null) {
+      server.disable();
+      return;
+    }
     enabled = false;
   }
 
   /** Whether events go to a session that is still going (not finished, stopped or archived). */
   public boolean sessionLive() {
+    if (server != null) {
+      return !retired && server.sessionLive();
+    }
     ExperimentInstance i = experimentInstance;
     return enabled && i != null && (i.status == null || i.status == ExperimentInstance.Status.RUNNING
         || i.status == ExperimentInstance.Status.TESTING);
   }
 
   public void setExperimentInstance(ExperimentInstance experimentInstance) {
+    if (server != null) {
+      server.setExperimentInstance(experimentInstance);
+      return;
+    }
     this.experimentInstance = experimentInstance;
   }
 
@@ -97,6 +156,17 @@ public class EventTracker {
    * kept with that value cut short and marked (see {@link #cut}).
    */
   public void track(String name, List<Map<String, String>> nameValues) {
+    if (server != null) {
+      recording.readLock().lock();
+      try {
+        if (!retired) {
+          server.track(name, nameValues);
+        }
+      } finally {
+        recording.readLock().unlock();
+      }
+      return;
+    }
     if (!enabled) {
       return;
     }

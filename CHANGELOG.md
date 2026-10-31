@@ -91,8 +91,11 @@ see [docs/install.md](docs/install.md#upgrading).
   settings, and asks first when a game is in progress or anyone is connected: its game starts again
   from the beginning, the pages of those who held a seat get back in by themselves, newcomers are
   taken as before the game, the autopilot goes on running the session, and the data records
-  `engineReloaded` (`restarted`, `by`). From an account the autopilot doesn't run as, the console
-  says that a reload would end that session and pause the autopilot.
+  `engineReloaded` (`restarted`, `by`). Everything the game before it did comes before that event,
+  and nothing of it after: a choice or tie change made while the engine restarts (about half a
+  second) doesn't count, and errors of the old game aren't reported as the restarted game's.
+  From an account the autopilot doesn't run as, the console says that a reload would end that
+  session and pause the autopilot.
 - A session a researcher opens by hand is theirs: it runs with the steps' own waiting room and
   takeover, isn't marked "Opened by Autopilot", and ending it doesn't pause the autopilot, which
   then opens its next session as usual (nor does the server tell a researcher on another experiment
@@ -101,9 +104,10 @@ see [docs/install.md](docs/install.md#upgrading).
   autopilot opens its own once it has ended (paused or done, Resume hands it over). The Autopilot
   page's settings apply to the sessions the autopilot opens, and to one that Resume or a save hands
   it; ending one of those still pauses it.
-- A stopped session stays stopped: computer players no longer play it on to its end, so it can be
-  resumed. Nothing happens in a session once it has ended: a page closed after its game finished no
-  longer hands that seat to the computer (an `aiTakeover` recorded in the finished session).
+- A stopped session stays stopped: neither computer players nor a choice made as it stops play it
+  on to its end, so it can be resumed, and nothing of its game is recorded after `sessionStopped`.
+  Nothing happens in a session once it has ended: a page closed after its game finished no longer
+  hands that seat to the computer (an `aiTakeover` recorded in the finished session).
 - Sessions that were running when the server stopped are marked Stopped when it starts again, with a
   `sessionInterrupted` event, and the autopilot opens the next one; participants' pages stop
   reconnecting and say the session ended because the server stopped or restarted, also after a crash
