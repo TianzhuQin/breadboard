@@ -1684,6 +1684,73 @@ public class AutopilotSessionTest extends BaseTest {
         await("its scripts run again", () -> Integer.valueOf(1).equals(engineValue("watched")));
     }
 
+    /** What the server tells this account when it refuses a reload, and another engine action. */
+    private static String[] refusals(User user) throws Exception {
+        User fresh = User.findByEmail(user.email);
+        java.lang.reflect.Method reload = ScriptBoard.class.getDeclaredMethod("reloadRefusal", User.class);
+        reload.setAccessible(true);
+        java.lang.reflect.Method other = ScriptBoard.class.getDeclaredMethod("engineRefusal", User.class);
+        other.setAccessible(true);
+        return new String[]{(String) reload.invoke(null, fresh), (String) other.invoke(null, fresh)};
+    }
+
+    /**
+     * A researcher working on another experiment is refused engine actions while a session of the
+     * autopilot's experiment runs, and told to end it first. Only of the autopilot's own session do they
+     * read that ending it pauses the autopilot: not of one a researcher opened by hand, which ending
+     * leaves the autopilot running (it said so of both).
+     */
+    @Test
+    public void onlyOfTheAutopilotsOwnSessionDoesTheRefusalSayThatEndingItPausesTheAutopilot() throws Exception {
+        final User operator = user("hand");
+        final User colleague = user("colleague");
+        final Experiment auto = createExperiment("Autopilot's experiment");
+        final Experiment other = createExperiment("Another experiment");
+        createStep(other, "Setup", "otherLoaded = true");
+        operator.ownedExperiments.add(auto);
+        operator.saveManyToManyAssociations("ownedExperiments");
+        colleague.ownedExperiments.add(other);
+        colleague.saveManyToManyAssociations("ownedExperiments");
+        colleague.setSelectedExperiment(other);
+        colleague.update();
+
+        ObjectNode s = settings(auto, 2);
+        s.put("nextSessionDelaySeconds", 600);
+        assertEquals(OK, status(post(operator, s)));
+        await("the autopilot's session", () -> sessions(auto).size() == 1 && running(auto) == 1);
+        final ExperimentInstance own = sessions(auto).get(0);
+        for (String refusal : refusals(colleague)) {
+            assertTrue(refusal, refusal.contains("(the autopilot's session \"" + own.name + "\")"));
+            assertTrue(refusal, refusal.contains("To run \"Another experiment\", end that session first (that pauses the autopilot), or open"));
+        }
+
+        // Its game finishes, and the operator opens a session of its experiment by hand meanwhile.
+        engine().eval("gameListener.finish(); null");
+        await("its session finished", () -> ExperimentInstance.findById(own.id).status == ExperimentInstance.Status.FINISHED);
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(operator.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", auto.id);
+        await("the selection", () -> selected(operator, auto));
+        tab.send("LaunchGame", "name", "By hand", "parameters", Json.newObject());
+        await("the session opened by hand", () -> named(auto, "By hand") != null && running(auto) == 1);
+        final ExperimentInstance byHand = named(auto, "By hand");
+        for (String refusal : refusals(colleague)) {
+            assertTrue(refusal, refusal.contains("(session \"By hand\" of " + operator.email + ")"));
+            assertTrue(refusal, refusal.contains("To run \"Another experiment\", end that session first, or open a new session of \"Another experiment\", which ends it."));
+            assertFalse(refusal, refusal.contains("pauses the autopilot"));
+        }
+
+        // As it says: ending it leaves the autopilot running.
+        tab.send("StopGame", "id", byHand.id);
+        await("stopped", () -> ExperimentInstance.findById(byHand.id).status == ExperimentInstance.Status.STOPPED);
+        Thread.sleep(300);
+        JsonNode status = state(operator).get("status");
+        assertTrue(status.toString(), status.get("on").asBoolean());
+        assertFalse(status.toString(), status.get("paused").asBoolean());
+    }
+
     @Test
     public void stopPressedOnItsSessionAfterItFinishedLeavesTheAutopilotAlone() throws Exception {
         final User operator = user("finisher");

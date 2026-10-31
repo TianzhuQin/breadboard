@@ -2866,20 +2866,35 @@ public class ScriptBoard extends UntypedActor {
     return text + " (session \"" + session.name + "\"" + (owner == null ? "" : " of " + owner) + ")";
   }
 
-  /** What to do to run the selected experiment while {@code session} holds the engine. */
+  /**
+   * What to do to run the selected experiment while {@code session} holds the engine. Ending it pauses
+   * the autopilot only when it is the autopilot's own session and the autopilot runs it now
+   * (pausesTheAutopilot): not one a researcher opened by hand, even of its experiment, nor one of an
+   * autopilot that is paused or done already. It said so of any session of its experiment.
+   */
   private static String toRunYours(String yours, ExperimentInstance session) {
     if (yours == null) {
       return " Select an experiment first.";
     }
-    return " To run \"" + yours + "\", end that session first" + (isAutopilots(session) ? " (that pauses the autopilot)" : "")
+    return " To run \"" + yours + "\", end that session first" + (pausesTheAutopilot(session) ? " (that pauses the autopilot)" : "")
         + ", or open a new session of \"" + yours + "\", which ends it.";
   }
 
-  /** Whether a session is of the experiment the autopilot runs (ending it pauses the autopilot). */
+  /** Whether a session is of the experiment the autopilot runs (it may be the autopilot's: see describeEngine). */
   private static boolean isAutopilots(ExperimentInstance session) {
     Experiment autopilot = Autopilot.experiment();
     Long of = session == null || session.experiment == null ? null : session.experiment.id;
     return autopilot != null && of != null && of.equals(autopilot.id);
+  }
+
+  /**
+   * Whether ending this session pauses the autopilot (Autopilot.sessionStopped): it is the session the
+   * autopilot opened or was handed, and the autopilot, on for its experiment, runs it now, neither
+   * paused nor done (Autopilot.isOwnSession). Ending a session a researcher opened by hand leaves it
+   * running.
+   */
+  private static boolean pausesTheAutopilot(ExperimentInstance session) {
+    return session != null && isAutopilots(session) && Autopilot.isOwnSession(session.id);
   }
 
   /** The account whose actor built the running engine (it runs the session in it), or null. */
