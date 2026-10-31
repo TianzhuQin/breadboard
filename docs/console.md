@@ -361,8 +361,9 @@ the console asks while that session's game is in progress or anyone is connected
 that the game starts again from the beginning and that the people in it rejoin by themselves.
 Creating a session and resuming one restart the engine too, and so does switching experiments while
 no session is running. While anyone is using it, the console says who before doing any of these, and
-whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
-it would end that session.
+whether it pauses the autopilot. While another experiment's session is running, a reload is refused,
+and a message says why: it would end that session. With no experiment chosen, **Reload engine** says
+to choose one first.
 
 ## Running sessions with nobody at the console
 

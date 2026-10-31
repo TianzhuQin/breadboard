@@ -2,7 +2,7 @@ import { computed, reactive, watch } from 'vue'
 import { AdminConnection } from '@/lib/connection'
 import { http, HttpError, onUnauthorized } from '@/lib/http'
 import { LiveGraph } from '@/lib/graph'
-import { notify } from '@/ui/toast'
+import { notify, toast } from '@/ui/toast'
 import { settleConfirm } from '@/ui/confirm'
 import type {
   AuthState, EngineInfo, EngineState, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
@@ -152,7 +152,16 @@ function handle (m: any) {
   const source = typeof m.source === 'string' ? m.source : typeof m.request === 'string' ? m.request : undefined
   // the id of the script request it answers, echoed by newer servers
   const requestId = typeof m.requestId === 'string' && m.requestId ? m.requestId : undefined
-  if (typeof m.error === 'string' && m.error.trim()) {
+  if (typeof m.error === 'string' && m.error.trim() && isReloadRefusal(m)) {
+    // The server refused a Reload engine (another experiment's session holds the engine, say): nothing
+    // was rebuilt, and it is no error of the experiment's scripts, which Live session's error card and
+    // the Output button's count are for. It answers the researcher who asked, where they are.
+    const text = m.error.trim()
+    pushOutput('info', text, source, requestId)
+    state.requestError = { request: m.request, text, at: Date.now() }
+    toast('warning', 'The engine wasn’t reloaded', text, { timeout: 9000 })
+    if (engineInfoPhase === 'rebuilding') askEngineInfo()
+  } else if (typeof m.error === 'string' && m.error.trim()) {
     // the step an engine error happened in, when the server knows it ("Line 71 of RoundStep")
     const step = typeof m.step === 'string' && m.step.trim() ? m.step.trim() : undefined
     pushOutput('error', m.error.trim(), source, requestId, step)
@@ -208,6 +217,14 @@ function isSelectedSessionEvent (ev: any): boolean {
  * rebuilds it only when no session is live there: its answer says engineKept otherwise.)
  */
 const REBUILDS = new Set(['ReloadEngine', 'SelectExperiment', 'SelectInstance', 'LaunchGame'])
+/**
+ * The server's refusal of a Reload engine ("Nothing was reloaded: …", ScriptBoard.reloadRefusal), which
+ * comes before any rebuild begins; an error after the rebuild has begun (the engine is loading) is its
+ * failure, which may be the experiment's own.
+ */
+function isReloadRefusal (m: any): boolean {
+  return m.request === 'ReloadEngine' && (/^Nothing was reloaded\b/.test(m.error.trim()) || state.engine !== 'loading')
+}
 const ENGINE_FAILED = 'The engine did not finish reloading. The output panel says why. Fix the problem, then reload it.'
 const ENGINE_FAILED_ELSEWHERE = 'The engine did not finish reloading. Reload it to try again.'
 const ENGINE_MISSED = 'The connection dropped while the engine was reloading. Reload it if the experiment does not behave as expected.'

@@ -298,8 +298,52 @@ describe('reloading the engine from the top bar', () => {
     return w
   }
 
+  // A new account, with no experiment chosen, was asked to confirm, and then nothing visible happened
+  // but a red "1" on the Output button: the server's refusal went into the engine error card.
+  it('says "Choose an experiment first" without asking when no experiment is chosen', async () => {
+    const chosen = admin.experiment
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experiment: '', experimentInstance: '' })
+    expect(admin.experiment).toBeNull()
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    toasts.splice(0)
+    const w = await askToReload()
+    await tick()
+    expect(confirmState.open).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    expect(toasts.map(t => [t.kind, t.title])).toEqual([['info', 'Choose an experiment first']])
+    expect(toasts[0].detail).toContain('Pick one in the experiment switcher')
+    connection.state.value = 'idle'
+    w.unmount()
+    admin.experiment = chosen
+  })
+
+  it('shows the server\'s refusal to reload as a message, not as an error of the experiment\'s scripts', async () => {
+    admin.engine = 'ready'
+    toasts.splice(0)
+    const errorsBefore = admin.unseenErrors
+    const why = 'Nothing was reloaded: the engine is running “Network game” (the autopilot\'s session “Autopilot · 1”), and reloading it would end that session for everyone in it. Select an experiment first.'
+    __receive({ error: why, request: 'ReloadEngine' })
+    expect(toasts.map(t => [t.kind, t.title, t.detail])).toEqual([['warning', 'The engine wasn’t reloaded', why]])
+    // in the output panel as a note, not counted as a new error, and not the engine's failure
+    const last = admin.output[admin.output.length - 1]
+    expect(last).toMatchObject({ kind: 'info', text: why })
+    expect(admin.unseenErrors).toBe(errorsBefore)
+    expect(admin.engine).toBe('ready')
+    expect(admin.requestError).toMatchObject({ request: 'ReloadEngine', text: why })
+    // a reload that failed once begun is still the engine's failure
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ error: 'Caught error: boom', request: 'ReloadEngine' })
+    expect(admin.output[admin.output.length - 1]).toMatchObject({ kind: 'error', text: 'Caught error: boom' })
+    expect(admin.engine).toBe('stale')
+    expect(toasts).toHaveLength(1)
+    admin.engine = 'ready'
+    admin.engineProblem = ''
+  })
+
   it('says that it pauses the autopilot when the engine runs the autopilot\'s session', async () => {
-    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    const exp = { id: 1, name: 'A', uid: 'u1', fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 }
+    __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: '' })
     graph.clear()
     connection.state.value = 'open'
     const send = vi.spyOn(connection, 'send').mockReturnValue(true)

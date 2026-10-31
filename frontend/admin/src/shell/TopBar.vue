@@ -120,6 +120,12 @@ const engineHeading = computed(() => {
 })
 
 async function reload () {
+  // nothing to load before an experiment is chosen: said at once, without asking first (the server
+  // would refuse it over a live session anyway)
+  if (!admin.experiment) {
+    notify.info('Choose an experiment first', 'Reload engine loads the chosen experiment’s steps. Pick one in the experiment switcher at the top of the sidebar.')
+    return
+  }
   // not over another experiment's live session, which a reload would end (the server refuses it too)
   if (reloadBlocked.value) {
     notify.info('The engine can’t be reloaded now', reloadBlocked.value)
