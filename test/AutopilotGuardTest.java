@@ -281,6 +281,18 @@ public class AutopilotGuardTest extends BaseTest {
         return n == null ? -1 : ((Number) n).intValue();
     }
 
+    /**
+     * Their own page held their seat in this session (ScriptBoard.ownPageHolds): they took part, as
+     * someone does who isn't in the game as it ends because they were away when a reload of the engine
+     * carried the session on. A page of theirs that comes back after the end is given how it ended
+     * (endedSessionScreen); one of someone who never took part, the plain end.
+     */
+    private static void tookPart(ExperimentInstance session, String clientId) throws Exception {
+        java.lang.reflect.Method m = ScriptBoard.class.getDeclaredMethod("ownPageHolds", ExperimentInstance.class, String.class);
+        m.setAccessible(true);
+        m.invoke(null, session, clientId);
+    }
+
     /** What a page that comes back to a session that has ended is sent (ScriptBoard.endedSessionScreen). */
     private static JsonNode endedScreen(ExperimentInstance session, String clientId) throws Exception {
         java.lang.reflect.Method m = ScriptBoard.class.getDeclaredMethod("endedSessionScreen", Long.class, String.class);
@@ -362,8 +374,11 @@ public class AutopilotGuardTest extends BaseTest {
         // The second came from Prolific, and the experiment has given them their completion code.
         engine().eval("def v = g.getVertex('tl-2'); recruitment.registerProlific(v); "
             + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
-        // Someone else came from Prolific, and isn't connected as the session ends.
+        // Someone else came from Prolific and took part, and isn't in the game as the session ends; and
+        // someone from Prolific never took part.
         prolificEntry("tl-9");
+        tookPart(session, "tl-9");
+        prolificEntry("tl-8");
 
         // Within the limit nothing happens.
         watchdog();
@@ -388,12 +403,17 @@ public class AutopilotGuardTest extends BaseTest {
         assertEquals("outOfTime", second.last().get("sessionOver").get("player").get("ended").asText());
         assertTrue(second.closed);
         assertTrue(first.last().toString(), first.last().get("player").get("text").asText().contains("You can close this page"));
-        // and so do the pages that come back to it, in the words for Prolific to someone who came from there
+        // and so do the pages of its participants that come back to it, in the words for Prolific to
+        // someone who came from there
         assertEquals("outOfTime", endedScreen(session, "tl-1").get("player").get("ended").asText());
         JsonNode prolific = endedScreen(session, "tl-9").get("player");
         assertEquals("outOfTime", prolific.get("ended").asText());
         assertTrue(prolific.toString(), prolific.get("text").asText().contains("It ran out of time.")
             && prolific.get("text").asText().contains("please message the researcher on Prolific about your submission"));
+        // (someone who never took part gets the plain end: how it ended isn't news to them)
+        JsonNode never = endedScreen(session, "tl-8").get("player");
+        assertFalse(never.toString(), never.has("ended"));
+        assertTrue(never.toString(), never.get("text").asText().contains("This session has ended"));
         assertEquals("C0DE42", endedScreen(session, "tl-2").get("player").get("_system").get("recruitment")
             .get("completionCode").asText());
         // The game is frozen: no computer player picks, no timer runs.
@@ -1215,6 +1235,7 @@ public class AutopilotGuardTest extends BaseTest {
         Page plain = joins(experiment, session, "st-1");
         prolificEntry("st-2");
         prolificEntry("st-9");
+        tookPart(session, "st-9");
         Page prolific = joins(experiment, session, "st-2");
         await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED
             && plain.closed && prolific.closed);
@@ -1230,7 +1251,7 @@ public class AutopilotGuardTest extends BaseTest {
         assertTrue(text, text.contains("It had to stop because of a problem with the study."));
         assertTrue(text, text.contains("You can open the study again from Prolific later"));
         assertTrue(text, text.contains("please return the study on Prolific"));
-        // and to someone from Prolific whose page comes back to it later
+        // and to someone from Prolific who took part, whose page comes back to it later
         assertTrue(endedScreen(session, "st-9").toString(),
             endedScreen(session, "st-9").get("player").get("text").asText().contains("return the study on Prolific"));
         assertTrue(endedScreen(session, "st-1").get("player").get("text").asText().contains("You can close this page"));

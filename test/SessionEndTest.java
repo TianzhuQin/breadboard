@@ -618,17 +618,22 @@ public class SessionEndTest extends BaseTest {
 
     @Test
     public void whoeverIsAwayWhenTheAutopilotsGuardEndsAResumedSessionGetsItsScreenNotTheEarlierStop() throws Throwable {
+        // carl came from Prolific
+        java.util.LinkedHashMap<Object, Object> entry = new java.util.LinkedHashMap<>();
+        entry.put("clientId", "p2");
+        ScriptBoard.trackEvent("prolificEntry", entry);
         stoppedResumedThenAwayAtAReload();
         // The autopilot's guard for the longest session ends it (Autopilot.endTooLong), through
-        // ScriptBoard.endForGuard, called here without the autopilot's settings and clock.
+        // ScriptBoard.endForGuard with each participant's out-of-time screen, called here without the
+        // autopilot's settings and clock.
         java.lang.reflect.Method guard = ScriptBoard.class.getDeclaredMethod("endForGuard", Long.class, String.class,
-            java.util.LinkedHashMap.class, ObjectNode.class, boolean.class, Callable.class);
+            java.util.LinkedHashMap.class, java.util.function.Function.class, boolean.class, Callable.class);
         guard.setAccessible(true);
-        java.lang.reflect.Method outOfTime = ScriptBoard.class.getDeclaredMethod("outOfTimeScreen");
+        java.lang.reflect.Method outOfTime = ScriptBoard.class.getDeclaredMethod("outOfTimeScreens", Long.class);
         outOfTime.setAccessible(true);
         Callable<Boolean> stillWanted = () -> true;
         assertEquals(Boolean.TRUE, guard.invoke(null, session.id, "sessionTooLong", new java.util.LinkedHashMap<Object, Object>(),
-            outOfTime.invoke(null), true, stillWanted));
+            outOfTime.invoke(null, session.id), true, stillWanted));
         assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
         // (it is how the session ended for its participants: the Stop's screen from before the Resume
         // used to come first)
@@ -637,6 +642,9 @@ public class SessionEndTest extends BaseTest {
             assertEquals(back.toString(), "outOfTime", ended(back));
             assertTrue(text(back), text(back).contains("ran out of time"));
         }
+        // in the words for Prolific to carl
+        assertTrue(text(connect("p2").frames.get(0)).contains("please message the researcher on Prolific"));
+        assertFalse(text(connect("p1").frames.get(0)).contains("Prolific"));
     }
 
     @Test
