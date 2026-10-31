@@ -75,14 +75,31 @@ public class EngineCleanupTest {
     public void aReplacedEnginesClassesStillWorkWhenTheirCodeRunsAgain() throws Exception {
         // A task of the old engine under way when its timers were cancelled can go on after the release:
         // its classes, gone from Groovy's caches, still make objects (Groovy looks them up anew).
+        JsonSetup.install();
+        replaced(played(new ScriptTestHarness(false))); // (the JVM's first engines can stay: see above)
         ScriptTestHarness engine = played(new ScriptTestHarness(false));
         Closure<?> laterTask = (Closure<?>) engine.eval("{ -> new Note().text }");
+        WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
         replaced(engine);
+        engine = null;
         for (int i = 0; i < 3; i++) {
             System.gc(); // (what Groovy holds weakly goes)
             Thread.sleep(50);
         }
         assertEquals("an object of an experiment's own class", laterTask.call());
+        laterTask = null;
+        // That run put the classes it used back in Groovy's caches, which kept them, and so the whole
+        // engine, until memory ran short. The next release takes them out again.
+        replaced(played(new ScriptTestHarness(false)));
+        ScriptTestHarness next = played(new ScriptTestHarness(false));
+        try {
+            SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
+            assertTrue("the classes of an engine whose code ran again after its release are still loaded",
+                collected(classes, 20000));
+            assertNotNull("memory ran short: soft references were cleared", noShortage.get());
+        } finally {
+            next.close();
+        }
     }
 
     @Test

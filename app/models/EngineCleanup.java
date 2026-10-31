@@ -20,10 +20,13 @@ import java.beans.Introspector;
 import java.lang.ref.Reference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * Lets go of what kept every replaced script engine in memory. Each session runs in an engine of its
@@ -32,11 +35,20 @@ import java.util.Set;
  * session, until the server did little but collect garbage. Its classes (each engine compiles the
  * scripts and steps again, about 300 classes) then stayed loaded until the class space (metaspace)
  * was full, as Groovy and Java kept them in caches that only a shortage of memory empties. Now each
- * engine's classes are unloaded by the second rebuild after it, as every rebuild collects garbage.
+ * engine's classes are unloaded by the second rebuild after it, as every rebuild collects garbage;
+ * when its code ran again after it was dropped (a task of its timers still at work), by the second
+ * rebuild after that.
  */
 public final class EngineCleanup {
 
   private EngineCleanup() {}
+
+  /**
+   * The class loaders of the engines dropped so far, held weakly: each goes from here when its engine
+   * is unloaded. See {@link #forgetClasses}.
+   */
+  private static final Set<ClassLoader> RELEASED =
+      Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<ClassLoader, Boolean>()));
 
   /**
    * Called when {@code old} is dropped: after its timers are cancelled, before the next engine is
@@ -100,10 +112,22 @@ public final class EngineCleanup {
    * choices the metaclasses of the classes that outlive the engine remember. The engine's classes
    * leave the first three last, as looking up a class's metaclass adds its entry back.
    *
-   * @param scripts the loader the dropped engine compiled with: only classes loaded under it are
-   *     touched, never those of another engine (the next one isn't built yet; a test may hold one).
+   * <p>An engine's code can run again after it was dropped: a task of its timers that was at work when
+   * they were cancelled carries on. Groovy then puts the classes that code uses back in its caches,
+   * and they stayed there, with the whole engine, until memory ran short. So the classes of the
+   * engines dropped before go as well, should they be back: their loaders are kept, weakly, in
+   * {@link #RELEASED}.
+   *
+   * @param scripts the loader the dropped engine compiled with: only classes loaded under it or under
+   *     the loader of an engine dropped before are touched, never those of an engine in use (the next
+   *     one isn't built yet; a test may hold one).
    */
   static void forgetClasses(GroovyClassLoader scripts) {
+    Set<ClassLoader> dropped = Collections.newSetFromMap(new IdentityHashMap<ClassLoader, Boolean>());
+    synchronized (RELEASED) {
+      RELEASED.add(scripts);
+      dropped.addAll(RELEASED);
+    }
     List<Object> known = entries(groovyCache(ClassInfo.class.getName(), "globalClassSet"));
     AbstractConcurrentMap<?, ?> classNodes = groovyCache(ClassHelper.class.getName() + "$ClassHelperCache", "classCache");
     Set<Class<?>> classes = new LinkedHashSet<Class<?>>();
@@ -115,7 +139,7 @@ public final class EngineCleanup {
       Object metaClass = it.next();
       if (metaClass instanceof MetaClass) {
         Class<?> c = ((MetaClass) metaClass).getTheClass();
-        if (c != null && loadedUnder(c, scripts)) {
+        if (c != null && loadedUnder(c, dropped)) {
           classes.add(c);
         }
       }
@@ -125,7 +149,7 @@ public final class EngineCleanup {
     }
     for (Object entry : known) {
       Class<?> c = keyOf(entry);
-      if (c != null && loadedUnder(c, scripts)) {
+      if (c != null && loadedUnder(c, dropped)) {
         classes.add(c);
       } else if (c != null && entry instanceof ClassInfo) {
         forgetChoices(((ClassInfo) entry).getStrongMetaClass());
@@ -134,7 +158,7 @@ public final class EngineCleanup {
     }
     for (Object entry : entries(classNodes)) {
       Class<?> c = keyOf(entry);
-      if (c != null && loadedUnder(c, scripts)) {
+      if (c != null && loadedUnder(c, dropped)) {
         classes.add(c);
       }
     }
@@ -171,10 +195,13 @@ public final class EngineCleanup {
     }
   }
 
-  /** Whether {@code c} was loaded by {@code loader} or a loader below it (one per compiled script). */
-  static boolean loadedUnder(Class<?> c, ClassLoader loader) {
+  /**
+   * Whether {@code c} was loaded by one of {@code loaders} or by a loader below one of them (an
+   * engine's loader has one for each script it compiles).
+   */
+  static boolean loadedUnder(Class<?> c, Set<ClassLoader> loaders) {
     for (ClassLoader l = c.getClassLoader(); l != null; l = l.getParent()) {
-      if (l == loader) {
+      if (loaders.contains(l)) {
         return true;
       }
     }

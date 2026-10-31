@@ -92,7 +92,62 @@ public class EngineReplacementTest extends BaseTest {
         assertNull("the classes of an engine replaced four rebuilds ago are still loaded", itsClasses.get());
     }
 
+    @Test
+    public void anEngineWhoseTimerTaskFinishesAfterTheReloadIsUnloadedToo() throws Exception {
+        // A rebuild cancels the timers, but a timer's task under way then runs on, and so runs the old
+        // engine's code after its release. That put the classes it used back in Groovy's caches, which
+        // kept them, and so the whole engine, until the class space was full. The next rebuild takes
+        // them out again.
+        User user = user("task");
+        final AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Task");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        play(t);
+        reload(t);
+        play(t);
+        for (String signal : new String[]{TASK_STARTED, ENGINE_REPLACED, TASK_FINISHED}) {
+            System.clearProperty(signal);
+        }
+        final String sent = "slow-task-sent";
+        t.send("SendScript", "script", "class SlowWork { String finish() { 'finished' } }\n"
+            + "timers.newTimer().runAfter(10) {\n"
+            + "  System.setProperty('" + TASK_STARTED + "', 'yes')\n"
+            + "  def until = System.currentTimeMillis() + 30000\n"
+            + "  while (System.getProperty('" + ENGINE_REPLACED + "') == null && System.currentTimeMillis() < until) {\n"
+            + "    Thread.sleep(20)\n"
+            + "  }\n"
+            + "  System.setProperty('" + TASK_FINISHED + "', new SlowWork().finish())\n"
+            + "}\n"
+            + "'" + sent + "'");
+        await(sent, () -> t.count(AdminSocketsTest.output(sent)) == 1);
+        await("the task under way", () -> System.getProperty(TASK_STARTED) != null);
+        WeakReference<ClassLoader> itsClasses = new WeakReference<ClassLoader>(EngineCleanup.scriptLoader(engine()));
+        try {
+            reload(t);
+        } finally {
+            System.setProperty(ENGINE_REPLACED, "yes");
+        }
+        await("the task finished, after the engine was replaced", () -> System.getProperty(TASK_FINISHED) != null);
+        assertEquals("an object of the replaced engine's own class", "finished", System.getProperty(TASK_FINISHED));
+        for (int rebuild = 1; rebuild <= 3 && itsClasses.get() != null; rebuild++) {
+            play(t);
+            reload(t);
+        }
+        SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
+        assertTrue("the engine whose timer task finished after the reload is still loaded",
+            EngineCleanupTest.collected(itsClasses, 20000));
+        assertNotNull("memory ran short: soft references were cleared", noShortage.get());
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------
+
+    /** What the slow task of anEngineWhoseTimerTaskFinishesAfterTheReloadIsUnloadedToo and the test tell each other. */
+    private static final String TASK_STARTED = "EngineReplacementTest.taskStarted";
+    private static final String ENGINE_REPLACED = "EngineReplacementTest.engineReplaced";
+    private static final String TASK_FINISHED = "EngineReplacementTest.taskFinished";
 
     private int played = 0;
 
