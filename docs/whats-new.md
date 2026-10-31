@@ -336,14 +336,17 @@ playing, and a waiting room doesn't count them.
 - **Gaps in a connection.** A page that connects again after its connection dropped signs in again
   with how long it was out of touch, from when it last heard from the server
   (`{"action": "LogIn", "clientId": ..., "awayMs": ...}`), and the session records `connectionGap`
-  (`player`, `awayMs`) rather than another `clientLogIn`. A short outage without a word (the network
-  gone for less than the 30 seconds of silence that close a page) is recorded only that way: the
-  participant never counts as gone. When the page's old socket closes after it was out of touch (it
-  had sent nothing for 10 seconds, or what it sent meanwhile came through only just before the
-  close), they count as gone only once 30 seconds have passed since it was last heard from, unless
-  a page of theirs is back by then. That close comes through only as the network comes back, just
-  before the page's new socket or just after it, so the same outage used to be recorded as a
-  `clientDisconnected` and a `clientConnected` 2 ms apart, or not at all.
+  (`player`, `awayMs`) rather than another `clientLogIn`. An outage without a word is recorded this
+  way once the page has noticed it: after 15 to 20 seconds without a word from the server, it gives
+  the connection up and makes a new one. When the page is back before the 30 seconds of silence that
+  close a page, the `connectionGap` is all that is recorded: the participant never counts as gone. An
+  outage too short for the page to notice, which the connection lives through, leaves no record.
+  When the page's old socket closes after it was out of touch (it had sent nothing for 10 seconds,
+  or what it sent meanwhile came through only just before the close), they count as gone only once
+  30 seconds have passed since it was last heard from, unless a page of theirs is back by then. That
+  close comes through only as the network comes back, just before the page's new socket or just
+  after it, so the same outage used to be recorded as a `clientDisconnected` and a
+  `clientConnected` 2 ms apart, or not at all.
 - **Answers that come too late.** A choice or tie change says when it was given, in the server's
   time as the page reckons it from the pongs (`bbSentAt`, in `MakeChoice` and in the `CustomEvent`s
   that `sendGroupChoice` and `sendEdgeEdit` send, and in anything sent with `Breadboard.sendType`'s
@@ -442,7 +445,8 @@ restarts the running session.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
   or goes (not for every page that takes over their seat), and `connectionGap` (`player`, `awayMs`)
   each time a participant's page connects again after its connection dropped, with how long it was
-  out of touch, also when that was too short to count as leaving. `answerDropped` (`player`, `ageMs`):
+  out of touch, also when that was too short to count as leaving; an outage too short for the page to
+  notice, which its connection lives through, isn't recorded. `answerDropped` (`player`, `ageMs`):
   a choice or tie change that reached the server more than 10 seconds after it was given, and didn't
   count.
 - **Order:** events recorded in the same millisecond come out in the order they were recorded. Their
