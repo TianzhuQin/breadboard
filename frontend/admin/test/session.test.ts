@@ -385,6 +385,9 @@ describe('live session state', () => {
       node('_bot1', { _system: { connected: true } }),
     ], 4)
     expect(s).toEqual({ people: 4, connected: 2, aiSeats: 2, bots: 1, takenOver: 1, ties: 4 })
+    // a session that isn't running has nobody connected, whatever its players last said
+    expect(networkStats([node('p1', { _system: { connected: true } }), node('p2', { _system: { connected: true } })], 1, false))
+      .toEqual({ people: 2, connected: 0, aiSeats: 0, bots: 0, takenOver: 0, ties: 1 })
   })
 
   it('summarises the waiting room from the players\' autopilot status', () => {
@@ -959,6 +962,29 @@ describe('SessionPage', () => {
     expect(w.text()).toContain('Game started')
     expect(w.text()).not.toContain('Start it anyway')
     w.unmount()
+  })
+
+  // The pages of a stopped session's participants show its end and stop connecting, but the players
+  // keep the _system.connected they had: "Connected now 2 / 0 not on the page" for a stopped session.
+  it('counts nobody as connected in a session that has stopped', async () => {
+    const people = [['p1', { _system: { connected: true } }], ['p2', { _system: { connected: true } }]]
+    for (const [id, data] of people) store2.graph.nodes.set(id, { id, data })
+    try {
+      const connected = (w: VueWrapper) => w.findAll('.live-stat').find(d => d.text().includes('Connected now'))!
+      const w = await mountPage()
+      expect(connected(w).find('.live-stat__value').text()).toBe('2')
+      expect(connected(w).find('.live-stat__sub').text()).toBe('0 not on the page')
+      w.unmount()
+      store2.admin.instance = { ...store2.admin.instance, status: 'STOPPED' }
+      const stopped = await mountPage()
+      expect(connected(stopped).find('.live-stat__value').text()).toBe('0')
+      expect(connected(stopped).find('.live-stat__sub').text()).toBe('the session isn’t running')
+      // (they were in the network all the same)
+      expect(stopped.findAll('.live-stat').find(d => d.text().includes('In the network'))!.find('.live-stat__value').text()).toBe('2')
+      stopped.unmount()
+    } finally {
+      store2.graph.nodes.clear()
+    }
   })
 
   it('offers Start the game again after a start that threw', async () => {
