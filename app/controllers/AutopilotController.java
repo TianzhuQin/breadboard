@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import models.Autopilot;
 import models.AutopilotSettings;
 import models.Experiment;
+import models.ScriptBoard;
 import models.User;
 import play.libs.Json;
 import play.mvc.Controller;
@@ -79,6 +80,9 @@ public class AutopilotController extends Controller {
     // live session of another experiment; otherwise the autopilot waits for it to end.
     JsonNode takeOver = body.get("takeOver");
     Autopilot.settingsSaved(next, takeOver != null && takeOver.isBoolean() && takeOver.booleanValue());
+    // Whether the live session is the autopilot's own can change with a save (switched off or on, or
+    // handed a session of its experiment): every console is told (engine.autopilotSession).
+    ScriptBoard.engineChanged();
     return ok(Autopilot.stateJson());
   }
 
@@ -99,6 +103,8 @@ public class AutopilotController extends Controller {
       return badRequest(message("The autopilot is off, so there is nothing to resume. Switch it on and save instead."));
     }
     Autopilot.resume(user);
+    // (Resume can hand it the live session of its experiment: every console is told, as after a save)
+    ScriptBoard.engineChanged();
     return ok(Autopilot.stateJson());
   }
 

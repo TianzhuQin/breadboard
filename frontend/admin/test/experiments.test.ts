@@ -432,6 +432,24 @@ describe('New experiment dialog', () => {
     w.unmount()
   })
 
+  it('says, once the example is made, that each tab joins with an ID of its own', async () => {
+    store.exps.splice(0, store.exps.length)
+    http.put.mockResolvedValue({ id: 6, name: 'Network game' })
+    const admin = (store as any).admin
+    store.actions.selectExperiment.mockImplementationOnce(async () => { admin.experiment = { id: 6, name: 'Network game' }; return null })
+    toasts.splice(0, toasts.length)
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    await w.setProps({ open: true })
+    await flushPromises()
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    const created = toasts.find(t => t.title === 'Created “Network game”')!
+    expect(created.detail).toBe('It runs as it is: open a session, then join it from two tabs with its sign-in link, typing an ID in each (any name or number; one seat per ID).')
+    expect(created.action!.label).toBe('Open a session')
+    admin.experiment = null
+    w.unmount()
+  })
+
   it('creates from the template with copyExperimentId -1 and asks for the new list', async () => {
     http.put.mockResolvedValue({ id: 6, name: 'Fresh' })
     const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })

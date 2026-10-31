@@ -72,6 +72,19 @@ export interface EngineInfo {
    * start that threw. Null when the server does not say (older servers leave it out).
    */
   gameStarted?: boolean | null
+  /**
+   * Whether steps of that experiment were saved (or deleted) since the engine loaded them, so the
+   * session running there doesn't use them yet: "Reload needed". The server keeps it (EngineSteps),
+   * so every console says the same. Null when the server does not say (older servers leave it out).
+   */
+  stepsChanged?: boolean | null
+  /**
+   * Whether that session is the autopilot's own, which it runs now: it opened it (or was handed it on
+   * Resume or a save), and is on, neither paused nor done. Steps saved meanwhile go into its next
+   * session. Every console hears when it changes, also when the autopilot is switched off and leaves
+   * its session running. Null when the server does not say (older servers leave it out).
+   */
+  autopilotSession?: boolean | null
 }
 
 export interface User {
@@ -91,6 +104,8 @@ export interface OutputEntry {
   source?: string
   /** The id of the request it answers, when the request carried one and the server echoed it (SendScript, SendStep). */
   requestId?: string
+  /** The step an engine error happened in (e.g. RoundStep), when the server knows it. */
+  step?: string
   at: number
 }
 

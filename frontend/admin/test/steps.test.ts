@@ -781,6 +781,209 @@ describe('StepsPage', () => {
     admin.engine = 'ready'
     w.unmount()
   })
+
+  it('says the autopilot\'s next session uses what is saved while its own session is open, with Reload as a secondary action', async () => {
+    const { w } = await open()
+    try {
+      const autopilot = { status: { on: true, experimentId: 7, instance: { id: 5, name: 'Autopilot · 1', status: 'RUNNING' } }, settings: { continuous: true, nextSessionDelaySeconds: 10 } }
+      get.mockImplementation(async (url: string) => url === '/autopilot' ? autopilot : { steps })
+      // what the engine runs says that its session is the autopilot's own (engine.autopilotSession)
+      const engine = (more: any) => ({ experimentId: 7, experimentName: 'Trust game', sessionId: 5, sessionName: 'Autopilot · 1', owner: 'other@lab.org', gameStarted: true, stepsChanged: true, autopilotSession: true, ...more })
+      admin.user = { ...admin.user, engine: engine({}) }
+      admin.instance = { id: 5, name: 'Autopilot · 1', status: 'RUNNING' }
+      await flushPromises()
+      admin.engine = 'stale'
+      await flushPromises()
+      const text = () => w.text().replace(/\s+/g, ' ')
+      expect(text()).toContain('Saved: the autopilot’s next session uses it. The session it has open now goes on with the steps it started with.')
+      expect(text()).not.toContain('The engine isn\'t running your latest steps')
+      // the autopilot runs as another account: a reload from this one would end its session
+      expect(text()).toContain('Reloading the engine from your account would end that session and pause the autopilot.')
+      // it runs as this account: a reload carries its session on, and starts its game again
+      admin.user = { ...admin.user, engine: engine({ owner: 'r@lab.org' }) }
+      // (the server's stepsChanged keeps it so; this store's stand-in clears it on the new engine info)
+      await flushPromises()
+      admin.engine = 'stale'
+      await flushPromises()
+      expect(text()).toContain('Reload the engine only to use them there now: its game then starts again from the beginning.')
+      expect(text()).not.toContain('would end that session')
+      // the step's own line under the editor says the same
+      const d = ensureBucket(7, false).drafts.find(x => x.name === 'InitStep')!
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      d.engineBehind = true
+      await flushPromises()
+      expect(w.find('.steps__hint.is-behind').text().replace(/\s+/g, ' ')).toBe('Saved: the autopilot’s next session uses it. Run loads it into the session it has open now (it doesn\'t start the step).')
+      d.engineBehind = false
+      expect(w.find('.steps__banner.is-stale').exists()).toBe(false)
+      // still there, as the lesser choice, and it asks first
+      const reload = w.findAll('.steps__banner.is-unattended button').find(b => b.text() === 'Reload engine')!
+      expect(reload.classes()).toContain('b-btn--ghost')
+      await reload.trigger('click')
+      await flushPromises()
+      expect(confirmState.open).toBe(true)
+      settleConfirm(false)
+      await flushPromises()
+
+      // The autopilot is switched off while its session goes on, here or in another console: the server
+      // says the session is no longer its own, and the page asks for a reload, as for any session
+      // someone runs. It asks the autopilot again too: the experiment no longer runs unattended.
+      autopilot.status = { ...autopilot.status, on: false }
+      admin.user = { ...admin.user, engine: engine({ owner: 'r@lab.org', autopilotSession: false }) }
+      await flushPromises()
+      admin.engine = 'stale'
+      await flushPromises()
+      expect(text()).toContain('The engine isn\'t running your latest steps')
+      expect(text()).not.toContain('Saved: the autopilot’s next session uses it')
+      expect(w.find('.steps__banner.is-unattended').exists()).toBe(false)
+    } finally {
+      get.mockReset()
+      settleConfirm(false)
+      admin.instance = null
+      admin.engine = 'ready'
+      admin.user = { ...admin.user, engine: undefined }
+      w.unmount()
+    }
+  })
+})
+
+describe('opening a step at a line', () => {
+  it('finds a step by its name or by the variable its code defines', async () => {
+    const { stepNamed, stepAt } = await import('../src/pages/steps/stepsModel')
+    const drafts = [{ name: 'RoundStep', savedName: 'RoundStep' }, { name: 'FinishStep', savedName: 'FinishStep' }, { name: 'Draft', savedName: null }]
+    expect(stepNamed(drafts, 'RoundStep')).toBe(drafts[0])
+    expect(stepNamed(drafts, 'finishStep')).toBe(drafts[1])
+    expect(stepNamed(drafts, 'roundstep')).toBe(drafts[0])
+    expect(stepNamed(drafts, 'draft')).toBe(drafts[2])
+    expect(stepNamed(drafts, 'Missing')).toBe(null)
+    expect(stepNamed(drafts, '')).toBe(null)
+    expect(stepAt('RoundStep', 71)).toEqual({ path: '/steps', query: { step: 'RoundStep', line: '71' } })
+    expect(stepAt('RoundStep', null)).toEqual({ path: '/steps', query: { step: 'RoundStep' } })
+    // with the experiment it is in, when that is known
+    expect(stepAt('InitStep', 23, 8)).toEqual({ path: '/steps', query: { step: 'InitStep', line: '23', experiment: '8' } })
+    expect(stepAt('InitStep', 23, null)).toEqual({ path: '/steps', query: { step: 'InitStep', line: '23' } })
+  })
+
+  it('asks to switch to the experiment a step is in, instead of opening the selected experiment\'s step of that name', async () => {
+    const mine = [{ id: 1, name: 'InitStep', source: 'initStep = 1' }, { id: 2, name: 'RoundStep', source: 'roundStep = "Trust game"' }]
+    const theirs = [{ id: 21, name: 'InitStep', source: 'initStep = 2' }, { id: 22, name: 'RoundStep', source: 'roundStep = "Game A"\nx = 1' }]
+    const userBefore = admin.user
+    admin.user = { ...admin.user, experiments: [{ id: 7, name: 'Trust game' }, { id: 8, name: 'Game A' }] }
+    admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps: mine }
+    get.mockImplementation(async (url: string) => url === '/steps/8' ? { steps: theirs } : url === '/steps/7' ? { steps: mine } : {})
+    actions.selectExperiment.mockImplementation(async (id: number) => {
+      admin.experiment = { id, name: 'Game A', fileMode: false, steps: theirs }
+      return { experiment: admin.experiment }
+    })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }] })
+    router.push('/steps?step=RoundStep&line=2&experiment=8')
+    await router.isReady()
+    const stubs = { BCodeEditor: { props: ['modelValue'], template: '<textarea class="code-stub" :value="modelValue" />' } }
+    const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs } })
+    const code = () => (w.find('textarea.code-stub').element as HTMLTextAreaElement).value
+    try {
+      await flushPromises()
+      // asked first, and this experiment's RoundStep isn't opened meanwhile
+      expect(confirmState.open).toBe(true)
+      expect(confirmState.req).toMatchObject({ title: 'Switch to “Game A” to open RoundStep?', confirmLabel: 'Switch to “Game A”' })
+      expect(confirmState.req!.message).toBe('RoundStep, line 2, is a step of “Game A”. You are working on “Trust game”.')
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      expect(code()).toBe('initStep = 1')
+      expect(router.currentRoute.value.query).toEqual({})
+      settleConfirm(true)
+      await flushPromises()
+      expect(actions.selectExperiment).toHaveBeenCalledWith(8)
+      expect(w.find('.steps__title').text()).toBe('RoundStep')
+      expect(code()).toBe('roundStep = "Game A"\nx = 1')
+      expect(toasts.some(t => t.title === 'Switched to “Game A”')).toBe(true)
+
+      // turned down: nothing is switched or opened
+      actions.selectExperiment.mockClear()
+      await router.push('/steps?step=InitStep&line=1&experiment=7')
+      await flushPromises()
+      expect(confirmState.open).toBe(true)
+      settleConfirm(false)
+      await flushPromises()
+      expect(actions.selectExperiment).not.toHaveBeenCalled()
+      expect(admin.experiment.id).toBe(8)
+      expect(w.find('.steps__title').text()).toBe('RoundStep')
+
+      // an experiment that is gone: said, nothing asked
+      toasts.splice(0, toasts.length)
+      await router.push('/steps?step=InitStep&experiment=99')
+      await flushPromises()
+      expect(confirmState.open).toBe(false)
+      expect(toasts.some(t => t.title === '“InitStep” can’t be opened')).toBe(true)
+
+      // a step of the experiment worked on: opened at once
+      await router.push('/steps?step=InitStep&line=1&experiment=8')
+      await flushPromises()
+      expect(confirmState.open).toBe(false)
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      expect(code()).toBe('initStep = 2')
+    } finally {
+      settleConfirm(false)
+      get.mockReset()
+      actions.selectExperiment.mockReset()
+      admin.user = userBefore
+      w.unmount()
+    }
+  })
+
+  it('says why when the switch to the step\'s experiment doesn\'t go through, and opens nothing', async () => {
+    const mine = [{ id: 1, name: 'InitStep', source: 'initStep = 1' }, { id: 2, name: 'RoundStep', source: 'roundStep = 1' }]
+    const userBefore = admin.user
+    admin.user = { ...admin.user, experiments: [{ id: 7, name: 'Trust game' }, { id: 8, name: 'Game A' }] }
+    admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps: mine }
+    get.mockImplementation(async (url: string) => url === '/steps/7' ? { steps: mine } : {})
+    actions.selectExperiment.mockImplementation(async () => {
+      admin.requestError = { request: 'SelectExperiment', text: 'You can\'t switch now.', at: Date.now() }
+      return null
+    })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }] })
+    router.push('/steps?step=RoundStep&line=2&experiment=8')
+    await router.isReady()
+    const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs: { BCodeEditor: { template: '<textarea class="code-stub" />' } } } })
+    try {
+      await flushPromises()
+      toasts.splice(0, toasts.length)
+      settleConfirm(true)
+      await flushPromises()
+      expect(toasts.some(t => t.title === 'Couldn’t switch to “Game A”' && t.detail === 'You can\'t switch now.')).toBe(true)
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      // (not asked again)
+      expect(confirmState.open).toBe(false)
+    } finally {
+      settleConfirm(false)
+      get.mockReset()
+      actions.selectExperiment.mockReset()
+      admin.requestError = null
+      admin.user = userBefore
+      w.unmount()
+    }
+  })
+
+  it('opens the step an error names, and says so when there is none', async () => {
+    const steps = [{ id: 1, name: 'InitStep', source: 'initStep = 1' }, { id: 4, name: 'Apple', source: 'apple = 1' }]
+    admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps }
+    get.mockResolvedValue({ steps })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }] })
+    router.push('/steps?step=apple&line=1')
+    await router.isReady()
+    const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs: { BCodeEditor: { template: '<textarea class="code-stub" />' } } } })
+    try {
+      await flushPromises()
+      expect(w.find('.steps__title').text()).toBe('Apple')
+      // once: the address no longer asks for it
+      expect(router.currentRoute.value.query).toEqual({})
+      toasts.splice(0, toasts.length)
+      await router.push('/steps?step=Missing&line=3')
+      await flushPromises()
+      expect(toasts.some(t => t.title === 'There is no step “Missing”')).toBe(true)
+      expect(w.find('.steps__title').text()).toBe('Apple')
+    } finally {
+      w.unmount()
+    }
+  })
 })
 
 describe('StepsPage while the engine runs another experiment', () => {

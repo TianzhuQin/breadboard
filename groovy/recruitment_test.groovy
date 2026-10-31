@@ -134,3 +134,33 @@ test("completeMturk refuses a non-mturk player") {
   try { recruitment.completeMturk(v, [bonus: 1.0]) } catch (Exception e) { threw = true }
   assert threw : 'completeMturk on a prolific player must throw'
 }
+
+// --- the console's completion code (Recruitment → When a participant finishes) --------------------
+// The code the console gives to paste into a step (completionSnippet in the console's prolific.ts),
+// with `p` for the participant: it completes those from Prolific and leaves everyone else alone,
+// where completeProlific alone threw for them and so stopped the step.
+
+test("the console's completion code completes Prolific participants and leaves everyone else alone") {
+  eventTracker = null
+  def finish = { p ->
+    // (as the console gives it)
+    if (p._system?.recruitment?.source == "prolific") {
+      recruitment.completeProlific(p, [
+        completionCode: 'C7K2M9QX',
+        message: 'Thank you for taking part!'
+      ])
+    }
+  }
+  def fromProlific = g.addPlayer('rec-snippet-1')
+  recruitment.registerProlific(fromProlific)
+  def fromMturk = g.addPlayer('rec-snippet-2')
+  recruitment.registerMturk(fromMturk)
+  def signedIn = g.addPlayer('rec-snippet-3')
+  def computer = g.addAI(a, 1, { player -> })[0]
+  [fromProlific, fromMturk, signedIn, computer].each { finish(it) }
+  assert fromProlific._system.recruitment.completed == true
+  assert fromProlific._system.recruitment.completionCode == 'C7K2M9QX'
+  assert !fromMturk._system.recruitment.completed
+  assert signedIn._system?.recruitment == null
+  assert computer._system?.recruitment == null
+}

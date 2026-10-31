@@ -60,6 +60,7 @@ import { Menu, WifiOff, PanelBottom, Cpu, CircleCheck, TriangleAlert, RotateCw }
 import { BMenu, BSpinner, confirm, notify, type MenuItem } from '@/ui'
 import { admin, actions, connectionState, ensureConnected, reloadBlocked } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse, reloadKeeps } from '@/store/engineGuard'
+import { autopilotRunsSession } from '@/pages/session/autopilot'
 
 defineProps<{ outputOpen: boolean, navOpen?: boolean }>()
 const emit = defineEmits<{ menu: [], 'toggle-output': [] }>()
@@ -87,23 +88,31 @@ const sessionTitle = computed(() => admin.instance ? `Session "${admin.instance.
 // (With no experiment chosen yet, e.g. right after creating the first account, the engine's loading
 // means nothing to the researcher: it just says Engine.)
 // Steps saved since the last load matter only to a running session (and to the Script console):
-// the next session loads what is saved, so with none running the chip just says they are saved.
+// the next session loads what is saved, so with none running the chip just says they are saved. So
+// it does while the session is the autopilot's own: its next session loads them. (As the server
+// says with what the engine runs, which every console hears when the autopilot is switched off.)
+const autopilotsSession = computed(() => autopilotRunsSession(admin.user?.engine, admin.instance))
 const engineState = computed(() => {
   if (!admin.experiment) return 'ready'
   const live = admin.instance?.status === 'RUNNING' || admin.instance?.status === 'TESTING'
-  if (admin.engine === 'stale' && !admin.engineProblem && !live) return 'saved'
+  if (admin.engine === 'stale' && !admin.engineProblem && (!live || autopilotsSession.value)) return 'saved'
   return admin.engine
 })
 const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', saved: 'Steps saved', stale: 'Reload needed' }[engineState.value]))
 const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, saved: CircleCheck, stale: TriangleAlert }[engineState.value]))
 const engineTitle = computed(() => engineState.value === 'saved'
-  ? 'The next session you open uses the saved steps. Reload the engine only to try them now (Script console, Preview).'
+  ? autopilotsSession.value
+    // (a reload carries the autopilot's session on only for the account it runs as)
+    ? `Saved: the autopilot’s next session uses it. ${reloadKeeps() === admin.instance?.id
+      ? 'Reload the engine only to use the saved steps in its session now, whose game then starts again.'
+      : 'Reloading the engine from your account would end its session and pause the autopilot.'}`
+    : 'The next session you open uses the saved steps. Reload the engine only to try them now (Script console, Preview).'
   : admin.engine === 'stale'
     ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')
     : 'The script engine that runs the experiment')
 const engineHeading = computed(() => {
   if (admin.engine !== 'stale') return 'Script engine'
-  if (engineState.value === 'saved') return 'Steps saved since the last load'
+  if (engineState.value === 'saved') return autopilotsSession.value ? 'Saved: the autopilot’s next session uses it' : 'Steps saved since the last load'
   return admin.engineProblem ? 'The last reload may not have finished' : 'Steps changed since the last load'
 })
 

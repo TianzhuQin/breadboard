@@ -56,7 +56,7 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 | Item | |
 |---|---|
 | The session | Its status and name ("Running · Session 1"), or "No session". Click it to go to Live session. |
-| **Engine** | The script engine that runs the experiment. It reads **Reloading…** while it restarts and **Reload needed** when steps changed since it last loaded them, or a reload didn't finish. Its menu has **Reload engine**. |
+| **Engine** | The script engine that runs the experiment. It reads **Loading steps…** while it restarts, and **Reload needed** when steps were saved since it last loaded them (every researcher's console says so, also after a refresh) or a reload didn't finish. With no session running, or the autopilot's own session open, it reads **Steps saved** instead: the next session loads them. Its menu has **Reload engine**. |
 | **Reconnecting…** | The console has lost its connection to the server. |
 | Output (Ctrl+J) | What the experiment's scripts print and return, and their errors. A red badge counts new errors. |
 
@@ -128,12 +128,17 @@ OnJoinStep, OnLeaveStep: they can't be renamed or deleted, and a missing one has
 saved**, **Copy the code** and **Delete step** (with **Undo** afterwards).
 
 **Save** (Ctrl+S) saves the step and **Save all** (Ctrl+Shift+S) every changed step. Saving doesn't
-change what the engine runs: the page says **The engine isn't running your latest steps** and
-offers **Reload engine**. **Run**, or **Save & run** (Ctrl+Enter), loads just this step's code
-into the live engine instead. It doesn't start the step. While the engine runs another
-experiment, **Run** is off and the page says why: saving still works, and the next session of this
-experiment uses what is saved. **Reload engine** then loads this experiment, unless the other one
-has a session running, which a reload would end.
+change what the engine runs: while a session runs, the page says **The engine isn't running your
+latest steps** and offers **Reload engine**, in every researcher's console. **Run**, or **Save &
+run** (Ctrl+Enter), loads just this step's code into the live engine instead. It doesn't start the
+step. While the autopilot's own session is open, the page says instead that the autopilot's next
+session uses what is saved, and **Reload engine** is the lesser button there: a reload would start
+that session's game again (from the account the autopilot runs as; from any other, it would end that
+session and pause the autopilot, and the page says so). Switched off, the autopilot leaves its
+session running as an ordinary one, and every console asks for a reload again. While the engine
+runs another experiment, **Run** is off and the page says why: saving still works, and the next
+session of this experiment uses what is saved. **Reload engine** then loads this experiment, unless
+the other one has a session running, which a reload would end.
 
 ### Content
 
@@ -202,7 +207,8 @@ preview, theirs or another console's (which a preview here would take it from).
 
 A session is one run of the experiment. **New session** asks for a **Session name** and the
 **Launch parameters**, filled in with their defaults. **Create session** opens it at once, and
-people can join with its links. If a session is running, the button reads **Stop it and create**.
+people can join with its links; its game starts when you press **Start the game**, or when its
+waiting room starts it. If a session is running, the button reads **Stop it and create**.
 
 | Button | Shown when | What it does |
 |---|---|---|
@@ -214,12 +220,19 @@ people can join with its links. If a session is running, the button reads **Stop
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
 how many people are here and the countdown. **Events** lists what the session records, newest
-first, as it happens; click one to see its data.
+first, as it happens, with what the well-known ones mean (a researcher's preview signing in says
+so); click one to see its data. When the experiment's scripts report an error, a card at the top
+says what went wrong in plain words and on which line of which step (click it to open the step at
+that line); **Full error** has the rest, Breadboard's own code included. When the engine runs
+another experiment than the one you work on (the autopilot's, say), the card names it, and the
+Steps page asks to switch to it before opening the step.
 
 Under **Links for participants**, **This session** works while this session runs. **Whichever
 session is open** leads to this experiment's open session whose game hasn't started, so it can be
-shared once and reused. **Prolific study URL** goes into Prolific. The links use the address you
-opened the console at, so open it at the server's public address before copying them.
+shared once and reused. With these two, participants type an ID to join: any name or number you
+give them (up to 64 characters, not starting with `_`), one seat per ID. **Prolific study URL** goes
+into Prolific. The links use the address you opened the console at, so open it at the server's
+public address before copying them.
 
 ### Network
 
@@ -247,10 +260,10 @@ The Players page lists everyone in the session. Type an id, or a filter: `score=
 a property (`_system.connected=false`). The buttons above the table show **Everyone**, **People**,
 **AI players**, **Connected**, **Disconnected** or who **Has a choice**. **Columns** adds properties
 to the table, and **Download CSV** saves the players shown with every property. Computer players
-(`g.addAI`) are called AI 1 (`_1`), AI 2 (`_2`) and so on, here and on the Network and Preview
-pages; scripts, filters and the data use their ids. A participant's page calls the people around
-them Person A, Person B, … in the order it first shows them, so a player's letter can differ from
-one participant's page to another.
+(`g.addAI`) are called AI 1 (`_1`), AI 2 (`_2`) and so on, here, on the Network and Preview pages
+and in Live session's events; scripts, filters and the data use their ids. A participant's page
+calls the people around them Person A, Person B, … in the order it first shows them, so a player's
+letter can differ from one participant's page to another.
 
 Click a player (here or on the Network page) to see what is **On their screen** and their
 choices, their **Ties** and **Properties**. Clicking a choice submits it for them, after you
@@ -276,14 +289,17 @@ change the live session.
 scripts from its saved steps. The engine is shared by every researcher on the server, so everyone
 in the network is disconnected and the network is emptied, whoever's session they are in. Your own
 running session carries on, with its launch parameters (so does the autopilot's, when you saved its
-settings: it goes on running it), and a game under way in it starts again from the beginning: its
-game counts as not started, so **Start the game** (or its waiting room) runs InitStep again. The
-pages of those who held a seat get back in by themselves as they reconnect, and it takes newcomers
-as before its game. Its data records an `engineReloaded` event, with `restarted` (whether a game
-was under way) and `by`, as a Resume records `sessionResumed`. Creating a session and resuming one
-restart the engine too, and so does switching experiments while no session is running. While anyone
-is using it, the console says who before doing any of these, and whether it pauses the autopilot.
-While another experiment's session is running, a reload is refused: it would end that session.
+settings: it runs as your account, and goes on running it), and a game under way in it starts again
+from the beginning: its game counts as not started, so **Start the game** (or its waiting room) runs
+InitStep again. The pages of those who held a seat get back in by themselves as they reconnect, and
+it takes newcomers as before its game. Its data records an `engineReloaded` event, with `restarted`
+(whether a game was under way) and `by`, as a Resume records `sessionResumed`. Before such a reload,
+the console asks while that session's game is in progress or anyone is connected to it, and says
+that the game starts again from the beginning and that the people in it rejoin by themselves.
+Creating a session and resuming one restart the engine too, and so does switching experiments while
+no session is running. While anyone is using it, the console says who before doing any of these, and
+whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
+it would end that session.
 
 ## Running sessions with nobody at the console
 
@@ -303,7 +319,7 @@ page suggests the experiment you're working on and leaves to its steps whatever 
 |---|---|---|
 | **Run this experiment unattended** | off | Keeps a session of the chosen **Experiment** open: right after saving, when the server starts, and after each session ends. Turned off, it opens no new session; an open one keeps running. |
 | **Open the next session when one finishes** | on | Also after a session is called off. |
-| **Pause before the next session** | 10 seconds | 0 opens it at once. |
+| **Pause before the next session** | 10 seconds | Restarting the experiment's scripts for it adds a few seconds; with 0, the next session opens a few seconds after one finishes. |
 | **Longest session** | 120 minutes | Counted from the start of the game. A game that runs longer is ended (see below). Empty: no limit. New settings start at 120 minutes; settings saved with an older release keep no limit until you set one. |
 | **Use the waiting room set here** | on (off when the steps set one) | The waiting room: people who arrive early see a waiting page, and the game starts by itself. |
 | **Minimum players** | 2 | The game can start once this many people are here. |
@@ -325,7 +341,9 @@ first (that pauses it) or open a session of the other experiment (which ends the
 after asking), then press **Resume** here when you are done.
 
 The top of the page shows the autopilot's state, its **Open session** (with **Watch it live**),
-recent activity, any problem that keeps it from opening sessions, and the **Participant links**:
+its recent activity (games started, seats the computer took over, step failures, including those the
+game went on after, and what ended or stopped it), any problem that keeps it from opening sessions,
+and the **Participant links**:
 the **Sign-in link** (`/play/<experiment id>/login`) and the **Prolific link**. They always lead to
 the session open at the moment, so the same links keep working from one session to the next. While
 none takes participants (its game is under way, its full waiting room counts down, or the next one is
@@ -357,8 +375,10 @@ survives a server restart.
 
 **A mistake in a step pauses it too.** When the steps of a session it opens don't load (a typo, a
 name that isn't defined), the autopilot stops that session before anyone can join, records
-`stepsFailedToLoad` in it, and pauses, saying which step and line failed. Fix the step on the Steps
-page, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
+`stepsFailedToLoad` in it, and pauses. This page then says which step and line failed and what
+went wrong, in the words the Steps page uses, with a link that opens the step at that line (when
+you are working on another experiment, the link names the autopilot's, and the Steps page asks to
+switch to it first). Fix the step, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
 next session it opens uses what you save there.
 
 **A step that fails during the game.** When a step's code throws while the game runs (on a timer,
@@ -407,23 +427,47 @@ one for Mechanical Turk.
 
 **Prolific.** **Study URL** is the address to paste into your study on Prolific (**Copy URL**). In
 Prolific, choose to record Prolific IDs with URL parameters, and leave the parts like
-`{{%PROLIFIC_PID%}}` as they are. The link leads to this experiment's open session whose game
-hasn't started, and the page says which one that is now, or warns that participants would see
-"No session is open right now" (while the autopilot opens the next session by itself, they see a
-page that waits for it instead: see [above](#running-sessions-with-nobody-at-the-console)).
+`{{%PROLIFIC_PID%}}` as they are. Prolific sends people from the internet, so the URL must use the
+server's public address: open the console there to copy it. The page says so when the console was
+opened at localhost or at an address of the lab's own network, and so does the Autopilot page under
+its Prolific link. The link leads to this experiment's open session whose game hasn't started, and
+the page says which one that is now, or warns that participants would see
+"No session is open right now". While the autopilot opens the next session by itself, it says that
+the link holds newcomers on a page that waits for that session instead (see
+[above](#running-sessions-with-nobody-at-the-console)), and it warns when something keeps the
+autopilot from opening it (another experiment's session on the engine, a researcher with another
+experiment loaded, a problem on the Autopilot page): the link then says that no session is open and
+asks Prolific participants to return the study, so pause recruiting meanwhile.
 **Try it as a test participant** opens it with a made-up Prolific ID, taking a seat like a real
 participant.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
-recorded in a `prolificEntry` event. **When a participant finishes** builds the line for your last
-step from your completion code, `recruitment.completeProlific(player, [completionCode: "…"])`:
-participants then see the code and a **Finish** button that takes them back to Prolific. **From
-Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event. What a participant
-writes under **Comments for the researcher** on that screen (it isn't shown with
-`noFeedback: true`) is kept in their session's data as a `participantComment` event, with `player`
-and `text`, also once their game has ended and the next session has opened: find it with **View
-events** in **Sessions & data**, or in the data you download.
+recorded in a `prolificEntry` event. **When a participant finishes** builds the code for your last
+step from your completion code. It completes participants from Prolific only, as
+`recruitment.completeProlific` refuses anyone else; change `p` to what your step calls the
+participant:
+
+```groovy
+if (p._system?.recruitment?.source == "prolific") {
+  recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
+}
+```
+
+Participants then see the code and a **Finish** button that takes them back to Prolific. An
+experiment with a `prolificCode` launch parameter, such as **Example: network game**, gives the code
+by itself: the card then says so, with the code it gives now, and you set it as that parameter's
+default on the Parameters page instead. **From Prolific in this session** lists who joined and who
+finished, with **Copy bonus list** for Prolific's bulk bonus. Each completion is recorded as a
+`prolificComplete` event. **From Prolific in every session** lists them for every session of the
+experiment, newest first, from the sessions' data, so a session the autopilot has moved on from can
+still be paid: when each person joined, whether they finished, their code and bonus, and
+**Copy bonus list** for all of them (someone paid in two sessions gets one line with both amounts
+added up). Both lists count someone the game ended for without a completion code as finished, marked
+**No code** (the example records a `noCompletionCode` event for them while its `prolificCode` is
+empty). What a participant writes under **Comments for the researcher** on the finish screen (it
+isn't shown with `noFeedback: true`) is kept in their session's data as a `participantComment`
+event, with `player` and `text`, also once their game has ended and the next session has opened:
+find it with **View events** in **Sessions & data**, or in the data you download.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game
@@ -482,7 +526,7 @@ participants could type such values.
 |---|---|
 | **Account** | The email you are signed in with, **Sign out**, and the **Default language** new content is written in. |
 | **Password** | **Current password**, **New password** (at least 8 characters) and **Repeat the new password**, then **Change password**. You stay signed in; other browsers signed in to this account are signed out, and previews must be opened again. |
-| **Researchers** | The server's accounts. **Add a researcher** takes an email address and shows the new account's password once (**Copy sign-in details** copies the address, email and password to pass on); they change it in Settings after signing in. **New password** gives another account a new password (shown once) and signs it out everywhere; **Remove** deletes another account and signs it out (its experiments and data stay). You can't remove your own account. |
+| **Researchers** | The server's accounts. **Add a researcher** takes an email address and shows the new account's password once (**Copy sign-in details** copies the address, email and password to pass on; with the console open at localhost, the address is the server's on this network, or a note says the copied one works on this computer only); they change it in Settings after signing in. **New password** gives another account a new password (shown once) and signs it out everywhere; **Remove** deletes another account and signs it out (its experiments and data stay). You can't remove your own account. |
 | **Backups** | The copies of the database the server makes in `backups/` (every day, and before an upgrade; the newest 14 are kept). **Back up now** makes one; **Download** saves one. To go back to a backup, see [install.md](install.md#backups). |
 | **Appearance** | **System** (follows your computer), **Light** or **Dark**, saved in this browser only. The menu under your email has the same choice. |
 | **Previous console** | **Open it** goes to `/legacy-admin`. |

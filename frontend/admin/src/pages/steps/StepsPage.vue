@@ -27,14 +27,33 @@
       </div>
       <div v-if="!fileMode && unattended" class="steps__banner is-unattended" role="note">
         <Bot :size="17" aria-hidden="true" class="steps__banner-icon" />
-        <p class="steps__banner-text">
+        <!-- the autopilot's own session runs: what is saved goes into its next one, nothing to reload for -->
+        <p v-if="savedForAutopilot" class="steps__banner-text">
+          <strong>Saved: the autopilot’s next session uses it.</strong> The session it has open now goes on with the
+          steps it started with.
+          <template v-if="reloadCarriesOn">Reload the engine only to use them there now: its game then starts again from the beginning.</template>
+          <!-- (the server carries the autopilot's session through a reload only for the account that runs it) -->
+          <template v-else>Reloading the engine from your account would end that session and pause the autopilot.</template>
+        </p>
+        <p v-else class="steps__banner-text">
           <strong>“{{ admin.experiment?.name }}” runs unattended.</strong> The next session the autopilot opens uses
           the steps saved here. If a step doesn't load, the autopilot stops that session before anyone joins and
           pauses until you fix the step and press Resume.
         </p>
+        <BButton
+          v-if="savedForAutopilot"
+          size="sm"
+          variant="ghost"
+          :icon="RotateCw"
+          :disabled="!!reloadBlocked"
+          :title="reloadBlocked || (reloadCarriesOn
+            ? 'Loads the saved steps into the autopilot’s session now: its game starts again from the beginning'
+            : 'Ends the autopilot’s session and pauses the autopilot, then loads the saved steps')"
+          @click="reloadEngine"
+        >Reload engine</BButton>
         <BButton size="sm" @click="router.push('/autopilot')">Autopilot</BButton>
       </div>
-      <div v-if="!fileMode && admin.engine === 'stale' && (sessionLive || admin.engineProblem)" class="steps__banner is-stale" role="status">
+      <div v-if="!fileMode && admin.engine === 'stale' && (sessionLive || admin.engineProblem) && !savedForAutopilot" class="steps__banner is-stale" role="status">
         <RotateCw :size="16" aria-hidden="true" class="steps__banner-icon" />
         <p class="steps__banner-text">
           <strong>The engine isn't running your latest steps.</strong> Reload it to load everything that is saved,
@@ -220,7 +239,10 @@
           </p>
           <p v-else-if="cur.engineBehind && !fileMode" class="steps__hint is-behind">
             <Info :size="14" aria-hidden="true" />
-            Saved. The live engine isn't using this version yet: <strong>Run</strong> loads it now (it doesn't start the step).
+            <template v-if="autopilotsSession">
+              Saved: the autopilot’s next session uses it. <strong>Run</strong> loads it into the session it has open now (it doesn't start the step).
+            </template>
+            <template v-else>Saved. The live engine isn't using this version yet: <strong>Run</strong> loads it now (it doesn't start the step).</template>
           </p>
           <p v-else class="steps__hint">
             <template v-if="fileMode">Edit the file on the server to change this step.</template>
@@ -239,7 +261,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
   Bot,
   ArrowLeft, CircleAlert, CircleCheck, Copy, CopyPlus, Ellipsis, FolderOpen, Hourglass, Info, ListOrdered, Lock,
@@ -250,16 +272,16 @@ import {
 } from '@/ui'
 import BCodeEditor from '@/ui/BCodeEditor.vue'
 import { actions, admin, ensureConnected, fileStepsWait, reloadBlocked, runBlocked } from '@/store/admin'
-import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
+import { confirmEngineRebuild, confirmSwitch, reloadKeeps, switchedNote } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
-import { useAutopilotStatus } from '../session/autopilot'
+import { autopilotRunsSession, useAutopilotStatus } from '../session/autopilot'
 import { goToLine, viewIn } from '../console/editorView'
 import { parseGroovyError } from '../console/groovyError'
 import StepList from './StepList.vue'
 import UnsavedDialog from './UnsavedDialog.vue'
 import {
-  TEMPLATES, builtinOf, isDirty, isNew, newDraft, renameDraft, sortDrafts, validateName,
+  TEMPLATES, builtinOf, isDirty, isNew, newDraft, renameDraft, sortDrafts, stepNamed, validateName,
   type Builtin, type LeaveChoice, type StepDraft, type TemplateKind,
 } from './stepsModel'
 import {
@@ -273,9 +295,18 @@ const sessionLive = computed(() => {
   const s = admin.instance?.status
   return s === 'RUNNING' || s === 'TESTING'
 })
+// The open session is the autopilot's own: saved steps go into its next session (no reload is needed),
+// so the page says that instead of asking for a reload, which would start its game again. (As the
+// server says with what the engine runs: every console hears when the autopilot is switched off.)
+const autopilotsSession = computed(() => sessionLive.value && autopilotRunsSession(admin.user?.engine, admin.instance))
 // The autopilot runs this experiment: what is saved here is what its next session loads.
 const autopilot = useAutopilotStatus()
-const unattended = computed(() => !!autopilot.value?.on && !!admin.experiment && autopilot.value.experimentId === admin.experiment.id)
+const unattended = computed(() => autopilotsSession.value ||
+  (!!autopilot.value?.on && !!admin.experiment && autopilot.value.experimentId === admin.experiment.id))
+const savedForAutopilot = computed(() => autopilotsSession.value && admin.engine === 'stale' && !admin.engineProblem)
+// Whether a reload from this account carries the open session on (the server's ReloadEngine): the
+// autopilot's is carried on only for the account it runs as; for any other it ends, pausing the autopilot.
+const reloadCarriesOn = computed(() => admin.instance != null && reloadKeeps() === admin.instance.id)
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 const modKey = isMac ? 'Cmd' : 'Ctrl'
 const modSymbol = isMac ? '⌘' : 'Ctrl+'
@@ -404,6 +435,102 @@ function goto (line: number, column?: number) {
   if (v) goToLine(v, line, column)
 }
 
+// ---- opened at a step's line (/steps?step=RoundStep&line=71&experiment=4) -----------------------
+// An engine error elsewhere ("Line 71 of RoundStep" on Live session, a pause on the Autopilot page)
+// links here, to that step with that line selected. The link names the experiment the step belongs
+// to (the engine's, the autopilot's), which can be another than the one this console works on: every
+// experiment has an InitStep, and a copy has all its steps' names. Then the page asks to switch to it
+// first, and opens the step once it shows that experiment's steps.
+
+const route = useRoute()
+/** The step the route asked for, until it is open (or the researcher chose not to switch to its experiment). */
+const wanted = ref<{ experiment: number | null, step: string, line: number | null } | null>(null)
+let askingToSwitch = false
+
+watch(() => route.query.step, (step) => {
+  if (typeof step !== 'string' || !step) return
+  const n = Number(route.query.line)
+  const e = Number(route.query.experiment)
+  wanted.value = { experiment: Number.isInteger(e) && e > 0 ? e : null, step, line: Number.isInteger(n) && n > 0 ? n : null }
+  // (once: coming back to the page, or a refresh, doesn't jump there again)
+  void router.replace({ query: {} })
+}, { immediate: true })
+
+function followWanted () {
+  const want = wanted.value
+  if (!want) return
+  if (want.experiment !== null && want.experiment !== admin.experiment?.id) {
+    if (!askingToSwitch) void switchToOpen(want)
+    return
+  }
+  if (!bucket.value?.loaded) return
+  wanted.value = null
+  void openAt(want.step, want.line)
+}
+watch(() => [wanted.value, admin.experiment?.id, bucket.value?.loaded], followWanted, { immediate: true })
+
+/** The step asked for is in another experiment: switch to it (asked first), then it opens. */
+async function switchToOpen (want: { experiment: number | null, step: string, line: number | null }) {
+  const target = (admin.user?.experiments || []).find(e => e.id === want.experiment)
+  if (!target) {
+    wanted.value = null
+    notify.info(`“${want.step}” can’t be opened`, 'The experiment it belongs to is no longer on this server.')
+    return
+  }
+  askingToSwitch = true
+  try {
+    const here = admin.experiment ? ` You are working on “${admin.experiment.name}”.` : ''
+    const ok = await confirmSwitch({
+      title: `Switch to “${target.name}” to open ${want.step}?`,
+      action: 'Switching experiments',
+      confirmLabel: `Switch to “${target.name}”`,
+      ask: `${want.step}${want.line ? `, line ${want.line},` : ''} is a step of “${target.name}”.${here}`,
+    })
+    if (wanted.value !== want) return
+    if (!ok || !ensureConnected()) {
+      wanted.value = null
+      return
+    }
+    const asked = Date.now()
+    await actions.selectExperiment(target.id)
+    if (admin.experiment?.id !== target.id) {
+      if (wanted.value === want) wanted.value = null
+      const refusal = admin.requestError
+      notify.warning(`Couldn’t switch to “${target.name}”`, refusal && refusal.request === 'SelectExperiment' && refusal.at >= asked
+        ? refusal.text : 'The server didn’t confirm the switch. Choose the experiment at the top left to try again.')
+      return
+    }
+    // (the watch above opens the step once this experiment's steps have loaded)
+    notify.success(`Switched to “${target.name}”`, switchedNote() || undefined)
+  } finally {
+    askingToSwitch = false
+    // another step asked for while this was asked
+    if (wanted.value && wanted.value !== want) followWanted()
+  }
+}
+
+async function openAt (name: string, line: number | null) {
+  const b = bucket.value
+  const d = b ? stepNamed(b.drafts, name) : null
+  if (!d) {
+    notify.info(`There is no step “${name}”`, 'It may have been renamed or deleted since. Choose a step on the left.')
+    return
+  }
+  if (editingName.value) finishNameEdit()
+  select(d.uid)
+  if (line == null) return
+  // its editor comes with the next render (and the code editor's own code, the first time)
+  for (let i = 0; i < 60; i++) {
+    await nextTick()
+    const v = current.value === d ? editorView() : null
+    if (v && v.state.doc.toString() === d.source) {
+      goToLine(v, line)
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+}
+
 // ---- naming (new steps get an inline name, and their template follows it, DL-5) ---------------
 
 function startRename () {
@@ -498,7 +625,9 @@ async function saveCurrent () {
     refreshStore()
     if (d.engineBehind) actions.markEngineStale(b.experimentId)
     announce.value = `Saved ${d.name}.`
-    notify.success(`Saved “${d.name}”`, d.engineBehind && !sessionLive.value ? 'The next session you open uses it.' : undefined)
+    notify.success(`Saved “${d.name}”`, !d.engineBehind
+      ? undefined
+      : autopilotsSession.value ? 'The autopilot’s next session uses it.' : !sessionLive.value ? 'The next session you open uses it.' : undefined)
   } else {
     notify.error(`Couldn't save “${d.name}”`, d.error || undefined)
   }
@@ -596,7 +725,8 @@ async function saveAll (): Promise<boolean> {
     if (behind) actions.markEngineStale(b.experimentId)
     notify.success(`Saved ${saved} step${saved === 1 ? '' : 's'}`, !behind
       ? undefined
-      : sessionLive.value ? 'Reload the engine, or Run a step, to use the new versions in the running session.' : 'The next session you open uses them.')
+      : autopilotsSession.value ? 'The autopilot’s next session uses them.'
+        : sessionLive.value ? 'Reload the engine, or Run a step, to use the new versions in the running session.' : 'The next session you open uses them.')
   }
   if (failed.length) {
     notify.error(`Couldn't save ${failed.length} step${failed.length === 1 ? '' : 's'}`, failed.map(d => `${d.name}: ${d.error}`).join('\n'))
@@ -882,6 +1012,8 @@ function clock (t: number) {
   .steps__head { padding: 10px 12px; }
   .steps__title { max-width: 60vw; }
   .steps__banner { padding: 10px 12px; flex-wrap: wrap; }
+  /* the buttons go under the text when they don't fit beside it, instead of squeezing it into a narrow column */
+  .steps__banner-text { flex: 1 1 240px; }
   .steps__about, .steps__alert { margin: 10px 12px 0; }
   .steps__editor { padding: 10px 12px; }
   .steps__foot { padding: 0 12px 12px; }

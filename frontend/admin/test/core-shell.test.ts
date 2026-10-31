@@ -258,6 +258,56 @@ describe('reloading the engine from the top bar', () => {
   })
 })
 
+describe('the top bar\'s engine chip', () => {
+  const exp = (id: number, name: string, instances: any[] = []) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances, images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
+  const session = { id: 9, name: 'Auto 3', status: 'RUNNING' }
+
+  it('says "Reload needed" as the server says, and that the autopilot\'s next session uses the saved steps while its session is open', async () => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    admin.engine = 'ready'
+    // (what the engine runs says whose session it is: the top bar doesn't ask the autopilot)
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'))
+    const engine = (more: any) => ({ experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 3', owner: 'r@lab', stepsChanged: true, autopilotSession: true, ...more })
+    __receive({
+      user: { email: 'r@lab', experiments: [exp(1, 'A', [session])], currentScript: '' },
+      experiment: exp(1, 'A', [session]),
+      experimentInstance: session,
+      engine: engine({}),
+    })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
+    const w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    const chip = () => w.find('.topbar__chip')
+    await vi.waitFor(() => expect(chip().text()).toBe('Steps saved'))
+    expect(chip().attributes('title')).toMatch(/^Saved: the autopilot’s next session uses it\./)
+    // (it runs as this account: a reload carries its session on; as another, it would end it)
+    expect(chip().attributes('title')).toContain('Reload the engine only to use the saved steps in its session now, whose game then starts again.')
+    __receive({ engine: engine({ owner: 'other@lab' }) })
+    await vi.waitFor(() => expect(chip().attributes('title')).toContain('Reloading the engine from your account would end its session and pause the autopilot.'))
+    __receive({ engine: engine({}) })
+    await chip().trigger('click')
+    await nextTick()
+    expect(w.text()).toContain('Saved: the autopilot’s next session uses it')
+    await chip().trigger('click')
+
+    // The autopilot is switched off (or paused) while its session goes on: every console hears it, and
+    // the saved steps need a reload to reach that session. The top bar stays where it is.
+    __receive({ engine: engine({ autopilotSession: false }) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Reload needed'))
+    expect(chip().attributes('title')).toBe('The steps changed since the engine loaded them. Reload it to use the new steps.')
+    // switched on again, it takes that session as its own
+    __receive({ engine: engine({}) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Steps saved'))
+    __receive({ engine: engine({ autopilotSession: false }) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Reload needed'))
+    // and once the server says the engine runs the saved steps, nothing is needed
+    __receive({ engine: engine({ stepsChanged: false }) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Engine'))
+    expect(fetch.mock.calls.map(c => String(c[0])).filter(u => u.includes('/autopilot'))).toEqual([])
+    w.unmount()
+  })
+})
+
 describe('the engine running another experiment', () => {
   const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
   const engine = (experimentId: number, experimentName: string, sessionName: string | null, owner = 'other@lab') =>

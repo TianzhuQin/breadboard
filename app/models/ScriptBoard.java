@@ -779,9 +779,12 @@ public class ScriptBoard extends UntypedActor {
         engineGeneration++;
         gameStartedIn = null;
         engineBuiltFor = builtFor;
+        EngineSteps.building(experiment);
         buildEngine(experiment);
       }
     } catch (Throwable failed) {
+      // It loaded none of the steps: they count as changed ("Reload needed") from now on.
+      EngineSteps.settled();
       // Every console saw "Reloading", so every console hears that it failed, not only the one
       // that asked (which also gets the error itself).
       toAllAdmins(reloadFailed(failed));
@@ -947,6 +950,7 @@ public class ScriptBoard extends UntypedActor {
         failed = step.name + ": " + problem;
       }
     }
+    EngineSteps.loaded(experiment);
     afterStepsLoaded(experiment);
     if (failed == null) {
       Autopilot.stepsLoaded(experiment);
@@ -2238,7 +2242,7 @@ public class ScriptBoard extends UntypedActor {
           generation = engineGeneration;
         }
         getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out, "SendStep",
-            generation, sendStep.requestId), null);
+            generation, sendStep.requestId, sendStep.id), null);
         // A re-run step may set the autopilot up itself; the console's settings apply again after it.
         getSelf().tell(new Breadboard.StepsLoaded(breadboardMessage.user, engineExperiment(), breadboardMessage.out, generation), null);
       } else {
@@ -2254,7 +2258,11 @@ public class ScriptBoard extends UntypedActor {
               "Nothing was run: the engine was reloaded (by you or someone else) before the step could run. Check what it runs now, then try again.",
               null, runStep.echo());
         } else if (runStep.request != null) {
-          processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
+          String problem = processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
+          // A saved step run without an error: the engine has that code of it now (see EngineSteps).
+          if (problem == null && EngineSteps.ran(engineExperimentId, runStep.stepId, runStep.source)) {
+            engineChanged();
+          }
         } else {
           processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE, null, true);
         }
@@ -2884,8 +2892,10 @@ public class ScriptBoard extends UntypedActor {
    * What the shared engine runs, for the console's User JSON ({@code engine}): {@code experimentId},
    * {@code experimentName}, {@code sessionId}, {@code sessionName} (its live session, if any),
    * {@code owner} (the account running it) and {@code gameStarted} (initStep.start() has run without
-   * an error since the engine was last built); null values when unknown. An account's own selection
-   * can differ, and its engine actions are refused then (see engineRefusal).
+   * an error since the engine was last built); null values when unknown. {@code stepsChanged}: steps
+   * saved since the engine loaded them (EngineSteps). {@code autopilotSession}: the live session is
+   * the autopilot's own, which it runs now (autopilotRuns). An account's own selection can differ,
+   * and its engine actions are refused then (see engineRefusal).
    */
   static ObjectNode engineJson() {
     ObjectNode json = Json.newObject();
@@ -2900,6 +2910,8 @@ public class ScriptBoard extends UntypedActor {
       json.put("experimentId", experiment.id);
       json.put("experimentName", experiment.name);
     }
+    // Steps of that experiment saved since the engine loaded them ("Reload needed"; see EngineSteps)
+    json.put("stepsChanged", EngineSteps.changed(experiment));
     if (session == null) {
       json.putNull("sessionId");
       json.putNull("sessionName");
@@ -2907,12 +2919,38 @@ public class ScriptBoard extends UntypedActor {
       json.put("sessionId", session.id);
       json.put("sessionName", session.name);
     }
+    // Steps saved while it runs go into the autopilot's next session: the consoles say so, rather than
+    // "Reload needed". Every console hears it change: with the session, and on a save or Resume on the
+    // Autopilot page (AutopilotController), which can switch it off or hand it a session.
+    json.put("autopilotSession", session != null && autopilotRuns(session));
     if (owner == null) {
       json.putNull("owner");
     } else {
       json.put("owner", owner);
     }
     return json;
+  }
+
+  /**
+   * Whether the autopilot runs this live session as its own (Autopilot.isOwnSession: one it opened,
+   * or was handed on Resume or a save, while it is neither paused nor done) and is on for its
+   * experiment. Switched off, the autopilot leaves its session running, and it is no longer its own.
+   */
+  private static boolean autopilotRuns(ExperimentInstance session) {
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long id = session.id;
+    Long of = session.experiment == null ? null : session.experiment.id;
+    if (id == null || of == null || !Autopilot.isOwnSession(id)) {
+      return false;
+    }
+    Autopilot.Effective settings;
+    try {
+      settings = Autopilot.effective();
+    } catch (Exception e) {
+      Logger.warn("Could not read the autopilot's settings: " + e);
+      return false;
+    }
+    return settings.isOn() && of.equals(settings.settings.experimentId);
   }
 
   // Whether a push of what the engine runs is waiting to go out (see engineChanged).
@@ -2942,7 +2980,7 @@ public class ScriptBoard extends UntypedActor {
    * Never waits: the caller may hold the game's own locks (a waiting room giving up finishes its
    * session while holding its own).
    */
-  static void engineChanged() {
+  public static void engineChanged() {
     if (!engineNewsDue.compareAndSet(false, true)) {
       return;
     }
@@ -2973,6 +3011,9 @@ public class ScriptBoard extends UntypedActor {
       List<Long> ended;
       try {
         synchronized (REBUILD_LOCK) {
+          // No build is under way while this holds the lock: one that stopped before its steps
+          // loaded (a launch that threw half-way) left the engine without them (EngineSteps).
+          EngineSteps.settled();
           ObjectNode engineNow = engineJson();
           news.put("engine", engineNow);
           JsonNode sessionId = engineNow.get("sessionId");

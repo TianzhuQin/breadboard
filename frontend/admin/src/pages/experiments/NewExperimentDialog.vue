@@ -166,7 +166,7 @@ async function submit () {
     if (switchTo.value && created && typeof created.id === 'number') {
       // (the example runs as it is: the next step is a session to try it)
       await switchToNew(created.id, finalName, `Created “${finalName}”`, from.value === 'example'
-        ? { label: 'Open a session', detail: 'It runs as it is: open a session, then join it from two tabs with its sign-in link.', run: () => { void router.push('/session?new=1') } }
+        ? { label: 'Open a session', detail: 'It runs as it is: open a session, then join it from two tabs with its sign-in link, typing an ID in each (any name or number; one seat per ID).', run: () => { void router.push('/session?new=1') } }
         : undefined)
     } else {
       notify.success(`Created “${finalName}”`)

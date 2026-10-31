@@ -3,6 +3,7 @@ package controllers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import models.EngineSteps;
 import models.Experiment;
 import models.Step;
 import play.libs.Json;
@@ -35,7 +36,10 @@ public class StepsController extends Controller {
     if (step == null) {
       return badRequest("Invalid Step ID");
     }
+    Long experimentId = EngineSteps.experimentOf(stepId);
     step.delete();
+    // the engine keeps what the step defined: every console hears that it needs a reload
+    EngineSteps.saved(experimentId);
     return ok();
   }
 
@@ -93,6 +97,8 @@ public class StepsController extends Controller {
     } else {
       step.update();
     }
+    // every console hears whether the engine runs the steps saved now ("Reload needed")
+    EngineSteps.saved(isNewStep ? experiment.id : EngineSteps.experimentOf(step.id));
 
     return ok(step.toJson());
   }

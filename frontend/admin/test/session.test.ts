@@ -6,17 +6,22 @@ import {
   parseBound, rangeText, suggestName,
 } from '../src/pages/session/params'
 import {
-  FEED_CAP, describeEvent, eventNameCounts, eventTone, filterEvents, formatValue, fromLive, fromSeed, mergeEvents,
+  FEED_CAP, describeEvent, eventNameCounts, eventTone, filterEvents, formatDataValue, formatValue, fromLive, fromSeed, mergeEvents,
   mergeFeed, parseServerTime, participantsSeen, summarizeData,
 } from '../src/pages/session/events'
+import EventRow from '../src/pages/session/EventRow.vue'
 import {
-  classifyStartReply, cleanError, detectGameStarted, engineGameFlag, formatDuration, isLocalOrigin, isStartReply, joinLinks,
+  classifyStartReply, cleanError, detectGameStarted, engineGameFlag, formatDuration, isLocalOrigin, isPrivateOrigin, isStartReply, joinLinks,
   networkStats, safeFileName, waitingRoom,
 } from '../src/pages/session/live'
+import LocalOnlyNote from '../src/pages/session/LocalOnlyNote.vue'
 import { busy, resumeSession, startGame, stopSession } from '../src/pages/session/controls'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
 import type { Parameter } from '../src/store/types'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const store = vi.hoisted(() => ({
   launch: vi.fn(),
@@ -60,10 +65,11 @@ vi.mock('../src/pages/session/autopilot', async (orig) => {
   const { ref } = await import('vue')
   return { ...(await orig<any>()), useAutopilotStatus: () => ref(autopilotHint.status) }
 })
+const routerPush = vi.hoisted(() => vi.fn())
 vi.mock('vue-router', async (orig) => ({
   ...(await orig<any>()),
   useRoute: () => ({ query: {} }),
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn(), push: routerPush }),
 }))
 
 function param (p: Partial<Parameter> & { name: string, type: any }): Parameter {
@@ -284,6 +290,54 @@ describe('event feed', () => {
     expect(describeEvent('myEvent')).toBe('')
   })
 
+  it('says a preview\'s sign-in is a researcher\'s, and names computer players as the other pages do', () => {
+    expect(describeEvent('clientLogIn', { clientId: '_6', preview: 'true' })).toBe('A researcher’s preview signed in as AI 6')
+    expect(describeEvent('clientLogIn', { clientId: 't1', preview: true })).toBe('A researcher’s preview signed in as t1')
+    expect(describeEvent('clientLogIn', { clientId: 'p1' })).toBe('Someone signed in')
+    expect(summarizeData({ player: '_4', choice: 'Blue', playerId: 'p2' }).shown).toEqual([['player', 'AI 4 (_4)'], ['choice', 'Blue'], ['playerId', 'p2']])
+    expect(formatDataValue('clientId', '_12')).toBe('AI 12 (_12)')
+    // other data keeps its values as recorded
+    expect(formatDataValue('choice', '_4')).toBe('_4')
+    const w = mount(EventRow, { props: { event: { key: 'e1', id: 1, name: 'clientLogIn', at: Date.now(), data: { clientId: '_6', preview: 'true' } } } })
+    expect(w.find('.live-evr__plain').text()).toBe('A researcher’s preview signed in as AI 6')
+    // (the whole line on hover too, where a narrow column clamps it)
+    expect(w.find('.live-evr__plain').attributes('title')).toBe('A researcher’s preview signed in as AI 6')
+    expect(w.find('.live-evr__data').text()).toContain('AI 6 (_6)')
+    w.unmount()
+  })
+
+  it('explains failures, ends and the newer events in plain words, and failures stand out', () => {
+    for (const name of ['stepFailed', 'sessionStalled', 'sessionFailed']) expect(eventTone(name)).toBe('danger')
+    for (const name of ['sessionTooLong', 'serverStopping', 'noCompletionCode', 'answerDropped', 'sessionFull']) expect(eventTone(name)).toBe('warning')
+    expect(eventTone('engineReloaded')).toBe('accent')
+    expect(eventTone('prolificComplete')).toBe('success')
+    // someone left out is no milestone (it ends in "Start", as a step's own event does)
+    expect(eventTone('missedStart')).toBe('warning')
+    expect(describeEvent('missedStart')).toBe('The game started without someone who was away')
+    expect(describeEvent('stepFailed')).toBe('A step failed: its code threw an error')
+    expect(describeEvent('sessionStalled')).toMatch(/nothing left to do/)
+    expect(describeEvent('sessionTooLong')).toMatch(/longest session/)
+    expect(describeEvent('serverStopping')).toMatch(/server was stopped/)
+    expect(describeEvent('sessionFailed')).toMatch(/autopilot ended the session/)
+    for (const name of ['aiChoice', 'prolificComplete', 'noCompletionCode', 'engineReloaded', 'sessionFull', 'participantComment', 'answerDropped', 'connectionGap']) {
+      expect(describeEvent(name), name).not.toBe('')
+    }
+  })
+
+  it('names the step and line of a failure, and says whether a reload started the game again, from the event\'s data', () => {
+    expect(describeEvent('stepFailed', { step: 'RoundStep', error: 'line 72: No such property: roundNote' })).toBe('A step failed (RoundStep, line 72): its code threw an error')
+    expect(describeEvent('sessionFailed', { step: 'RoundStep', line: '71', error: 'No such property: x' })).toBe('A step failure (RoundStep, line 71) stalled the game, so the autopilot ended the session')
+    expect(describeEvent('sessionStalled', { step: 'FinishStep', error: 'boom' })).toBe('After a step failed (FinishStep), the game had nothing left to do, so it was ended')
+    expect(describeEvent('engineReloaded', { restarted: 'true', by: 'a@example.org' })).toBe('A researcher reloaded the engine: the game started again from the beginning')
+    expect(describeEvent('engineReloaded', { restarted: false, by: 'a@example.org' })).toBe('A researcher reloaded the engine; the session carried on')
+    expect(describeEvent('connectionGap', { player: 'p1', awayMs: '25300' })).toBe('A participant’s connection dropped for 25 s, then came back')
+    expect(describeEvent('answerDropped', { player: 'p1', ageMs: 8000 })).toBe('A participant’s answer was dropped: it waited 8 s for the connection')
+    // without that data, the plain line
+    expect(describeEvent('stepFailed', {})).toBe('A step failed: its code threw an error')
+    expect(describeEvent('engineReloaded')).toBe('A researcher reloaded the engine')
+    expect(describeEvent('connectionGap', { awayMs: 'soon' })).toBe('A participant’s connection dropped for a moment, then came back')
+  })
+
   it('counts distinct participants from arrival events, not AI seats', () => {
     const ev = mergeEvents([], [
       { id: 1, name: 'clientLogIn', datetime: '2026-10-27T10:00:00Z', data: { clientId: 'p1' } },
@@ -345,6 +399,57 @@ describe('live session state', () => {
     expect(isLocalOrigin('http://localhost:9000')).toBe(true)
     expect(isLocalOrigin('http://127.0.0.1:9000')).toBe(true)
     expect(isLocalOrigin('https://bb.lab.org')).toBe(false)
+  })
+
+  it('says a finished or stopped session\'s network card that the session has ended, not that nobody joined', async () => {
+    const NetworkPreview = (await import('../src/pages/session/NetworkPreview.vue')).default
+    const stubs = { AdminNetwork: { template: '<div class="net-stub"><slot name="empty" /></div>' }, RouterLink: true }
+    let w = mount(NetworkPreview, { props: { people: 0, ties: 0, ended: true }, global: { stubs } })
+    expect(w.find('.live-net__empty').text()).toBe('This session has ended.')
+    expect(w.find('.b-panel__subtitle').text()).toBe('The session has ended')
+    w.unmount()
+    w = mount(NetworkPreview, { props: { people: 0, ties: 0 }, global: { stubs } })
+    expect(w.find('.live-net__empty').text()).toBe('No one has joined yet.')
+    expect(w.find('.b-panel__subtitle').text()).toBe('0 people · 0 ties')
+    w.unmount()
+    // what is still there when it ended
+    w = mount(NetworkPreview, { props: { people: 2, ties: 1, ended: true }, global: { stubs } })
+    expect(w.find('.b-panel__subtitle').text()).toBe('2 people · 1 tie')
+    w.unmount()
+  })
+
+  it('says under the links that participants type an ID to join', async () => {
+    const JoinLinks = (await import('../src/pages/session/JoinLinks.vue')).default
+    const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })
+    expect(w.find('.live-links__ids').text()).toBe('With the first two links, participants type an ID to join: any name or number you give them, one seat per ID. People from Prolific don\'t type one.')
+    w.unmount()
+  })
+
+  it('says a link for Prolific needs the server\'s public address, without the tip for the lab\'s network', async () => {
+    const { admin } = await import('@/store/admin') as any
+    admin.lanAddresses = ['http://10.0.0.5:9000']
+    // (the tests' page is at localhost)
+    const host = window.location.host
+    const prolific = mount(LocalOnlyNote, { props: { what: 'This URL uses', internet: true } })
+    const text = prolific.text().replace(/\s+/g, ' ')
+    expect(text).toContain(`This URL uses ${host}, which only works on this computer.`)
+    expect(text).toContain('Prolific sends people from the internet, so it needs the server’s public address: open the console at that address and copy it there (see putting Breadboard on a server).')
+    expect(text).not.toContain('same network')
+    expect(prolific.find('a').attributes('href')).toMatch(/install\.md#putting-it-on-a-server$/)
+    prolific.unmount()
+    // other links keep it
+    const links = mount(LocalOnlyNote)
+    expect(links.text().replace(/\s+/g, ' ')).toContain('For people on the same network (say, the lab\'s computers), open the console at http://10.0.0.5:9000')
+    links.unmount()
+    admin.lanAddresses = []
+    // a lab network's address is no good for Prolific either
+    expect(isPrivateOrigin('http://192.168.1.23:9000')).toBe(true)
+    expect(isPrivateOrigin('http://10.254.125.201:19841')).toBe(true)
+    expect(isPrivateOrigin('http://172.20.1.2')).toBe(true)
+    expect(isPrivateOrigin('http://172.40.1.2')).toBe(false)
+    expect(isPrivateOrigin('http://lab-mac.local:9000')).toBe(true)
+    expect(isPrivateOrigin('https://bb.lab.org')).toBe(false)
+    expect(isPrivateOrigin('http://localhost:9000')).toBe(false)
   })
 
   it('tells when the game has started', () => {
@@ -536,6 +641,17 @@ describe('session controls', () => {
     expect(toasts.some(t => /No answer/.test(t.title))).toBe(false)
   })
 
+  it('says in plain words what starting the game does, without the code it runs', async () => {
+    const done = startGame(ctx)
+    expect(confirmState.open).toBe(true)
+    expect(confirmState.req!.title).toBe('Start the game?')
+    expect(confirmState.req!.message).toContain('Everyone who is waiting is let in and the experiment begins. People who arrive after this are turned away.')
+    expect(confirmState.req!.message).not.toContain('initStep')
+    settleConfirm(false)
+    await done
+    expect(store.startGame).not.toHaveBeenCalled()
+  })
+
   it('takes the server\'s tagged answer to the start', async () => {
     store.nextMessage.mockImplementationOnce(async (match: any) => {
       const m = { request: 'RunGame', error: '', output: 'initStep.start()\n\n==>null' }
@@ -714,6 +830,60 @@ describe('SessionPage', () => {
   }
   const startButton = (w: VueWrapper) => w.findAll('button').find(b => b.text().includes('Start the game'))
 
+  it('leaves the error card\'s explained error its full height, so its message and Full error aren\'t squeezed', () => {
+    // (EngineError is a flex column: a height cap on it shrank its message and "Full error" to a few
+    // pixels. jsdom lays nothing out, so this reads the rule itself.)
+    const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'pages', 'session', 'SessionPage.vue'), 'utf8')
+    const rule = /\.live-err__text\s*\{([^}]*)\}/.exec(page)
+    expect(rule).not.toBeNull()
+    expect(rule![1]).not.toMatch(/max-height\s*:|(^|[\s;])overflow(-y)?\s*:/)
+  })
+
+  it('names the step an engine error happened in, links to its line, and keeps Breadboard\'s own code under Full error', async () => {
+    const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: roundNoteText for class: Script306\n' +
+      '  at Script306.groovy:71\n  at step.groovy:200\n  at step.groovy:160\n  at actions.groovy:327'
+    store2.admin.output = [{ id: 5, kind: 'error', text, source: 'roundStep', step: 'RoundStep', at: Date.now() }]
+    routerPush.mockClear()
+    const w = await mountPage()
+    const card = w.find('.live-err')
+    expect(card.text()).toContain('Unknown name “roundNoteText”')
+    expect(card.findAll('.eng-err__places li').map(li => li.text())).toEqual(['Line 71 of RoundStep'])
+    expect(card.find('.eng-err__raw').text()).toContain('at step.groovy:200')
+    await card.find('button.eng-err__place').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith({ path: '/steps', query: { step: 'RoundStep', line: '71' } })
+    // a server that doesn't name the step: "a step", without a link
+    store2.admin.output = [{ id: 6, kind: 'error', text, source: 'roundStep', at: Date.now() }]
+    await nextTick()
+    expect(w.find('.eng-err__place.is-own').text()).toBe('Line 71 of a step')
+    expect(w.find('button.eng-err__place').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('links to the step in the experiment the engine runs, and names that experiment when it isn\'t the one worked on', async () => {
+    const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: two for class: Script12\n  at Script12.groovy:23'
+    store2.admin.output = [{ id: 7, kind: 'error', text, source: 'initStep', step: 'InitStep', at: Date.now() }]
+    const engine = (experimentId: number, experimentName: string) =>
+      ({ experimentId, experimentName, sessionId: 4, sessionName: 'Autopilot · 1', owner: 'me@lab.org', gameStarted: false, stepsChanged: false, autopilotSession: true })
+    store2.admin.user = { email: 'me@lab.org', experiments: [], currentScript: '', engine: engine(12, 'Exp') }
+    routerPush.mockClear()
+    const w = await mountPage()
+    try {
+      // the experiment worked on (12, "Exp")
+      expect(w.find('.live-err__title').text()).toMatch(/^The experiment's scripts reported an error/)
+      await w.find('button.eng-err__place').trigger('click')
+      expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '23', experiment: '12' } })
+      // the autopilot's, while this console works on another: its InitStep, not this one's
+      store2.admin.user = { ...store2.admin.user, engine: engine(13, 'Game A') }
+      await nextTick()
+      expect(w.find('.live-err__title').text()).toMatch(/^The scripts of “Game A” reported an error/)
+      await w.find('button.eng-err__place').trigger('click')
+      expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '23', experiment: '13' } })
+    } finally {
+      store2.admin.user = null
+      w.unmount()
+    }
+  })
+
   it('offers "start anyway" when only the session\'s log shows the start', async () => {
     // the autopilot's start (or one that threw after logging its start) seen in the feed
     store2.admin.engineReloadedAt = Date.now() - 60000
@@ -787,7 +957,13 @@ describe('SessionPage', () => {
     store2.admin.instance = { id: 9, name: 'Done one', status: 'FINISHED', creationTime: '', data: [], events: [] }
     autopilotHint.status = autopilotStatusOf(raw({}))
     let w = await mountPage()
-    expect(w.find('.live-hero__explain').text()).toContain('Autopilot opens the next session about 10 seconds after one finishes.')
+    // (and the few seconds restarting the scripts takes)
+    expect(w.find('.live-hero__explain').text()).toContain('Autopilot opens the next session about 10 seconds after one finishes, plus a few seconds to restart the experiment\'s scripts.')
+    w.unmount()
+    autopilotHint.status = autopilotStatusOf({ settings: { continuous: true, nextSessionDelaySeconds: 0 }, status: { on: true, experimentId: 12, instance: null } })
+    w = await mountPage()
+    expect(w.find('.live-hero__explain').text()).toContain('Autopilot opens the next session a few seconds after one finishes, once the experiment\'s scripts have restarted.')
+    expect(w.find('.live-hero__explain').text()).not.toContain('right after')
     w.unmount()
     autopilotHint.status = autopilotStatusOf(raw({ paused: true, problemKind: 'paused' }))
     expect(autopilotHint.status.halted).toBe('paused')
@@ -799,6 +975,14 @@ describe('SessionPage', () => {
     expect(autopilotStatusOf(raw({ problemKind: 'done' }))!.halted).toBe('done')
     expect(autopilotStatusOf(raw({ done: true }))!.halted).toBe('done')
     expect(autopilotStatusOf(raw({ problemKind: 'waiting' }))!.halted).toBe(null)
+    // what it waits for, as the Autopilot page reads it: another experiment's session, or the engine
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' }))!.waiting).toEqual({ session: null })
+    expect(autopilotStatusOf(raw({}))!.waiting).toBe(null)
+    expect(autopilotStatusOf(raw({ paused: true, problemKind: 'paused', problem: 'It is paused: …', engineSession: other }))!.waiting).toBe(null)
+    expect(autopilotStatusOf(raw({ problemKind: 'error', problem: 'There is no admin account to open sessions as.', engineSession: other }))!.waiting).toBe(null)
     expect(autopilotStatusOf({ error: 'x' })).toBe(null)
 
     // with no session open, the empty page says so too
@@ -810,6 +994,37 @@ describe('SessionPage', () => {
     expect(none.text()).toContain('Autopilot runs this experiment and opens a session by itself, again after each one finishes.')
     none.unmount()
     autopilotHint.status = null
+  })
+
+  it('tells when the autopilot opens the next session soon, as the server does for the study links, and what keeps it from it', async () => {
+    const { autopilotHold, autopilotOpensNextSoon, autopilotStatusOf } = await import('../src/pages/session/autopilot')
+    const raw = (status: any, settings: any = {}) => autopilotStatusOf({ settings: { continuous: true, nextSessionDelaySeconds: 10, ...settings }, status: { on: true, experimentId: 12, instance: null, ...status } })
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    // nothing in the way (Autopilot.opensNextSoon): on for this experiment, continuous, neither paused nor done, no problem
+    expect(autopilotOpensNextSoon(raw({}), 12)).toBe(true)
+    expect(autopilotHold(raw({}), 12)).toBe(null)
+    expect(raw({ problem: 'There is no admin account to open sessions as.', problemKind: 'error' })!.problem).toBe('There is no admin account to open sessions as.')
+    // another experiment's session on the shared engine, or a researcher who has another experiment loaded there
+    const waitingForSession = raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other })
+    expect(autopilotOpensNextSoon(waitingForSession, 12)).toBe(false)
+    expect(autopilotHold(waitingForSession, 12)).toEqual({ by: 'session', session: other })
+    const waitingForEngine = raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' })
+    expect(autopilotOpensNextSoon(waitingForEngine, 12)).toBe(false)
+    expect(autopilotHold(waitingForEngine, 12)).toEqual({ by: 'engine' })
+    // any other problem the Autopilot page shows: the last session reported an error, the disk is almost full, ...
+    for (const problem of ['The last session it opened reported an error: RoundStep failed', 'The disk is almost full (80 MB free where the database is kept)']) {
+      const st = raw({ problemKind: 'error', problem })
+      expect(autopilotOpensNextSoon(st, 12)).toBe(false)
+      expect(autopilotHold(st, 12)).toEqual({ by: 'problem' })
+    }
+    // it doesn't open this experiment's next session by itself at all: nothing to hold up
+    for (const st of [raw({ paused: true, problemKind: 'paused', problem: 'It is paused: …' }), raw({ done: true, problemKind: 'done', problem: 'Its session finished' }), raw({}, { continuous: false }), raw({ on: false })]) {
+      expect(autopilotOpensNextSoon(st, 12)).toBe(false)
+      expect(autopilotHold(st, 12)).toBe(null)
+    }
+    expect(autopilotOpensNextSoon(raw({}), 13)).toBe(false)
+    expect(autopilotHold(waitingForSession, 13)).toBe(null)
+    expect(autopilotOpensNextSoon(null, 12)).toBe(false)
   })
 
   it('disables Start the game while the engine runs another experiment, and says why', async () => {
@@ -869,6 +1084,11 @@ describe('NewSessionDialog', () => {
     await nextTick()
     return wrapper
   }
+
+  it('says the session opens right away, and that its game starts when you or its waiting room start it', async () => {
+    await open()
+    expect(page().find('.nsd-foot-note').text()).toBe('Opens right away. Its game starts when you, or its waiting room, start it.')
+  })
 
   it('pre-fills the name and defaults, and flags a default that cannot be used', async () => {
     await open()

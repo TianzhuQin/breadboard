@@ -23,7 +23,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
    - **Windows**：解压之前，先右键点下载的 zip，选 **属性**，勾选 **解除锁定**，点 **确定**。不然 Windows（智能应用控制）可能不让运行从网上下载的 `breadboard.bat`。然后右键点 zip，选 **全部解压缩**，再双击解压出的文件夹里的 `breadboard.bat`。（直接在 zip 里双击的话，它会提示先解压。）第一次启动时，Windows 防火墙会询问是否允许 Java 访问网络：勾选 **专用网络**，实验室里的其他电脑才能连上，再点 **允许访问**。如果 SmartScreen 还是拦截，点 **更多信息** → **仍要运行**。
    - **Linux**：解压（没有 `unzip` 的话，先运行 `sudo apt install unzip`），在文件夹里运行 `./breadboard.sh`。
 3. 服务器启动好后，浏览器会自动打开控制台。窗口里也会写出访问地址：`On this computer: http://localhost:9000` 给这台电脑用，`On this network: http://192.168.…:9000` 给同一网络（比如实验室）里的其他电脑用。如果是从别的电脑打开一台新服务器（例如远程的服务器），还要填 **Setup code**：服务器会把它打印在自己的窗口里和 `logs/application.log` 里，这样只有管理这台服务器的人能创建第一个账号。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**（新内容默认用的语言），点 **Create account**。以后用这个账号登录。
-4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。所有研究者都能看到和修改这台服务器上的每个实验。
+4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。用 localhost 打开控制台时，复制的地址会换成服务器在实验室网络里的地址，同事的电脑才能打开；找不到这个地址时，页面会提醒你 localhost 只能在这台电脑上用。所有研究者都能看到和修改这台服务器上的每个实验。
 5. 停止服务器：在它的窗口里按 Ctrl+C，或直接关掉窗口。
 
 服务器运行期间，Mac 和 Windows 电脑不会自己进入睡眠。在 Linux 上，如果是在图形桌面里启动的（不是通过 SSH 或作为服务），启动脚本会请求 systemd（在 GNOME 桌面上也会请求桌面环境）不让电脑睡眠；如果电脑仍然会自动睡眠（有些桌面会这样，比如 Linux Mint 的 Cinnamon），请在电源设置里关掉"自动挂起"。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里"显示器关闭时防止自动进入睡眠"那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
@@ -37,7 +37,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 控制台的大多数页面都针对一个实验：侧栏顶部选中的那个。点它可以切换实验，也可以新建或导入。
 
 - **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 InitStep、OnJoinStep、OnLeaveStep 三个空步骤和标准的参与者页面）开始，从 **Example: network game**（一个可以直接运行的网络小游戏）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
-- **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S）只是保存。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。注意：重新加载会让网络里的所有人断开。
+- **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S）只是保存。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。注意：重新加载会让网络里的所有人断开。重新加载后，你自己开的那一场（或者自动运行用你的账号开的那一场）会继续；如果它的游戏已经开始或有人在线，控制台会先问你，并说明游戏会从头开始，里面的人会自己重新连上。有场次在运行时，保存后、重新加载前，顶栏会显示 **Reload needed**（没有场次在运行时显示 **Steps saved**，下一场会自动用上），所有研究者的控制台都一样，刷新页面也还在。自动运行自己的那一场开着时，下一场也会自动用上保存的代码，所以顶栏同样显示 **Steps saved**，Steps 页只提示已保存，不催你重新加载（如果自动运行用的不是你的账号，你这时重新加载会结束这一场并让自动运行暂停，页面也会这样提醒）。
 - **Content**：参与者读到的文字，比如说明和知情同意书。每段文字有一个名字，程序里用 `c.get("名字")` 显示。每种语言各写一份。
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
 - **Preview**（页面标题是 Participant preview）：开场后，在这里按选中参与者的视角看页面，可选 **Desktop** 或 **Phone**。**预览是真的**：在预览里点一个选项，就等于那位参与者做了这个选择，会记进数据。但如果这位参与者自己的页面在线，预览只能看：你看到的就是他的屏幕，不能替他选择，也不会打扰他的页面。他自己的页面在这一场里连过、现在不在（比如他离开了，或者电脑接手了他的位置）时，预览可以替他选择，但他仍算作离开，无论打开、刷新还是放大预览多少次：到了设定时间电脑照常接手（或者接着玩），等候室也不再算他。电脑玩家的预览也只能看：你看到电脑怎么玩，电脑接着玩。只有测试玩家（自己的页面从没在这一场连过）由预览来玩：预览算作他在线，预览里的选择就算作他本人的。预览不会把人加进游戏：不在网络里的人（比如恢复场次后还没回来的人），他的预览只显示“不在游戏里”，等他回来后会自动重新载入；恢复场次或重新加载引擎以后，上面这些规则照样适用。
@@ -51,7 +51,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 "一场"（session）就是实验的一次运行。
 
 1. 在 **Live session** 页点 **New session**，填 **Session name**，检查 **Launch parameters**（已填好默认值），点 **Create session**。这一场马上开放，参与者可以用链接加入。
-2. 把 **Links for participants** 里的链接发给参与者。**This session** 只在这一场运行时有效。**Whichever session is open** 总是指向这个实验当前开放、还没开始的那一场，可以一直用同一个。**Prolific study URL** 给 Prolific 用。参与者打开链接，在 **Your ID** 里输入一个 ID，点 **Continue**。
+2. 把 **Links for participants** 里的链接发给参与者。**This session** 只在这一场运行时有效。**Whichever session is open** 总是指向这个实验当前开放、还没开始的那一场，可以一直用同一个。**Prolific study URL** 给 Prolific 用。参与者打开链接，在 **Your ID** 里输入一个 ID，点 **Continue**。ID 可以是你给他们的任何名字或编号（最多 64 个字符，不能以 `_` 开头），一个 ID 只占一个位置。
 3. 链接用的是你打开控制台时的网址。用 localhost 打开时，链接只在你自己的电脑上能用。放到服务器上以后，要用服务器的公开网址打开控制台，再复制链接。
 4. 人到齐后点 **Start the game**。等待的人一起进入，实验开始。之后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面"设置写在哪里"）。
 5. 在 **Network** 页实时看网络。选 **Tie**（快捷键 C），先点一个人再点另一个人，就加了一条连接；选 **Cut**（X）再点一条连接，就把它切断。成功后会出现 **Undo**，Ctrl+Z 也能撤销。每次修改都记成一条 `edgeEdit` 事件，操作者是 `admin`。
@@ -66,7 +66,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | 设置 | 默认 | 作用 |
 |---|---|---|
 | **Run this experiment unattended** | 关 | 总开关。在 **Experiment** 里选要运行的实验。 |
-| **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场。 |
+| **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场；重启实验脚本还要再花几秒。 |
 | **Longest session** | 120 分钟 | 从游戏开始算起。游戏一到这个时间就会被结束：参与者看到这一场时间已用完（从 Prolific 来的人会被告知在 Prolific 上给你发消息，说明自己的提交；已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionTooLong` 事件，过了暂停时间再开下一场，Autopilot 页会写明是哪一场。连续 3 场都超时，自动运行就暂停。留空表示不限。新的设置默认 120 分钟；用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。 |
 | **Start the game automatically when enough people are here** | 开 | 等待室：先到的人看到等待页面。 |
 | **Minimum players** / **Maximum players** | 2 / 不限 | 到了最少人数就可以开始。最多人数是真正的上限：人数一到（暂时掉线、还保留座位的人也算），马上开始倒计时，链接也不再把新来的人带进这一场；游戏开始时还多出来的人（按到达先后，晚到的）会看到这一场已满，并知道怎么参加下一场。 |
@@ -90,16 +90,18 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 ## 用 Prolific 招募
 
 1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行。
-2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 里选择用 URL 参数记录 Prolific ID，链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。
-3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，如果自动运行开着、会自己开下一场，而且没有什么让它开不了，参与者会看到一个等待页，下一场一开就自动进入（他们也可以选择退回研究）；否则会看到 "No session is open right now"。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
+2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 里选择用 URL 参数记录 Prolific ID，链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。Prolific 的参与者都是从互联网来的，所以这个网址必须用服务器的公开网址：用公开网址打开控制台，再复制。如果你是用 localhost 或实验室内网的地址打开控制台的，页面会提醒你。
+3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，如果自动运行开着、会自己开下一场，而且没有什么让它开不了，参与者会看到一个等待页，下一场一开就自动进入（他们也可以选择退回研究）；否则会看到 "No session is open right now"。Study URL 下面会写明现在是哪种情况；如果它提醒链接会显示 "No session is open right now"（比如引擎里正跑着别的实验的场次），就先在 Prolific 上暂停招募。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
 4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。**同一个人不会参加两次**：在这个实验里已经参加过的人（拿到过完成码，或者游戏结束时还在场）再打开 Prolific 链接，会看到 "You have already taken part in this study" 和他的完成码，不会被安排进新的一场（服务器重启后也一样）；场次被停止或因重启中断的人可以再加入。这个检查按整个实验算：如果要在 Prolific 上用同一批人做新一期，就复制一个实验。自己测试时请用 **Try it as a test participant**，它每次都会生成新的 Prolific ID。
-5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回。然后在 **When a participant finishes** 的 **Your completion code** 里填上这个码，用 **Copy code** 复制生成的代码，放进实验步骤里参与者结束的地方（比如最后一步）。它的核心是这一行（把 `C1A2B3C4` 换成你的完成码）：
+5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回。实验有 `prolificCode` 这个启动参数时（比如 Example: network game），它自己会把完成码给从 Prolific 来的人：**When a participant finishes** 会写明现在用的是哪个码，你只要在 **Parameters** 页把 `prolificCode` 的默认值（**Default**）设成你的完成码，不用改代码。没有这个参数时，在 **Your completion code** 里填上这个码，用 **Copy code** 复制生成的代码，放进实验步骤里参与者结束的地方（比如最后一步）。这段代码只给从 Prolific 来的人完成码（`completeProlific` 对别的参与者会出错）；代码里的 `p` 要换成那一步里代表参与者的变量（常见的是 `player`，或者 `g.V.each { p -> ... }` 里的 `p`）。它的核心是这几行（把 `C1A2B3C4` 换成你的完成码）：
 
 ```groovy
-recruitment.completeProlific(player, [completionCode: "C1A2B3C4"])
+if (p._system?.recruitment?.source == "prolific") {
+  recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
+}
 ```
 
-参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
+参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场；**From Prolific in every session** 按场次列出这个实验所有场次从 Prolific 来的人（最新的一场在最上面）：什么时候加入的、有没有完成、完成码和奖金，它的 **Copy bonus list** 会复制所有场次的奖金名单。游戏结束时没拿到完成码的人（比如例子实验的 `prolificCode` 还空着的时候），在两个列表里都算完成，标成 **No code**。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 
 ## 导出数据
 

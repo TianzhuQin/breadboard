@@ -50,6 +50,7 @@ PUT         /amtadmin/addQualificationType/:experimentUid                       
 
 # AMT Workers Controller
 GET         /experiment/:experimentId/amtassignments                             controllers.AMTAssignmentController.getAMTAssignments(experimentId: Long, sandbox: Boolean ?= false)
+GET         /experiment/:experimentId/prolific                                   controllers.ProlificController.participants(experimentId: Long)
 
 # Customize dialog
 GET         /customize/clientHtml/:experimentId                                  controllers.CustomizeController.getClientHtml(experimentId: Long)

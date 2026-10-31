@@ -13,7 +13,7 @@ vi.mock('@/lib/http', async (orig) => {
 
 import { http, HttpError } from '@/lib/http'
 import { admin, actions, adoptUid, boot, connection, graph, logout, __receive } from '../src/store/admin'
-import { confirmEngineRebuild } from '../src/store/engineGuard'
+import { confirmEngineRebuild, confirmSwitch } from '../src/store/engineGuard'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
 
@@ -221,6 +221,46 @@ describe('asking before an engine rebuild', () => {
     await tick()
   })
 
+  it('asks before a switch the researcher didn\'t choose in the switcher, saying why first, and what it rebuilds under whom', async () => {
+    const ask = 'InitStep, line 23, is a step of “Game A”. You are working on “Game B”.'
+    const opts = { title: 'Switch to “Game A” to open InitStep?', action: 'Switching experiments', confirmLabel: 'Switch to “Game A”', ask }
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    graph.clear()
+
+    // nobody uses the engine: asked all the same, as a plain question
+    get.mockResolvedValue({ status: { on: false, instance: null } })
+    let answer = confirmSwitch(opts)
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req).toMatchObject({ title: opts.title, message: ask, confirmLabel: 'Switch to “Game A”' })
+    expect(confirmState.req!.danger).toBeFalsy()
+    settleConfirm(true)
+    expect(await answer).toBe(true)
+    // (without a reason to give, as from the switcher: not asked)
+    expect(await confirmSwitch({ title: 'Switch?', action: 'Switching experiments' })).toBe(true)
+    expect(confirmState.open).toBe(false)
+
+    // a session is live in the engine: the switch leaves it alone, so only the reason is said
+    get.mockResolvedValue({ status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+    answer = confirmSwitch(opts)
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toBe(ask)
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+    expect(await confirmSwitch({ title: 'Switch?', action: 'Switching experiments' })).toBe(true)
+
+    // the switch rebuilds the engine under people in its network: the reason, then the warning
+    __receive({ action: 'addNode', id: 'p1' })
+    get.mockRejectedValue(new TypeError('Failed to fetch'))
+    answer = confirmSwitch(opts)
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req).toMatchObject({ danger: true, confirmLabel: 'Switch to “Game A”' })
+    expect(confirmState.req!.message).toMatch(/^InitStep, line 23, is a step of “Game A”\. You are working on “Game B”\.\n\n1 player is in the network right now, perhaps in another researcher's session\.\n\nSwitching experiments restarts the script engine/)
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+    graph.clear()
+    await tick()
+  })
+
   it('does not warn about the people a finished session left in the network', async () => {
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
     __receive({ action: 'addNode', id: 'p1' })
@@ -328,11 +368,63 @@ describe('what a reload or resume carries on', () => {
     const ended = await engineUse()
     expect(ended.pausesAutopilot).toBe(true)
     expect(ended.endsSession).toBe(true)
-    expect(ended.who).toContain('Your session “Auto 3” is running.')
+    // (it is the autopilot's, though it runs as this account)
+    expect(ended.who).toContain('The autopilot has session “Auto 3” open.')
+    expect(ended.who).not.toContain('Your session')
 
-    // another account's engine: a reload here doesn't carry it on
+    // another account's engine: a reload here doesn't carry it on, and the session is the autopilot's
+    // or that account's, not this one's
     __receive({ user: { email: 'r@lab', experiments: [], currentScript: '' }, experiment: { id: 3, name: 'Trust', instances: [] }, experimentInstance: { id: 9, name: 'Auto 3', status: 'RUNNING' }, engine: { ...engine, owner: 'other@lab' } })
     expect(reloadKeeps()).toBeUndefined()
+    expect((await engineUse()).who).toContain('The autopilot has session “Auto 3” open.')
+    get.mockResolvedValue({ status: { on: false, instance: null } })
+    expect((await engineUse()).who).toContain('other@lab has session “Auto 3” running.')
+    get.mockResolvedValue({ status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+  })
+
+  it('asks before a reload that carries on a session whose game is going or that has anyone connected, the autopilot\'s too', async () => {
+    const { engineUse, reloadKeeps } = await import('../src/store/engineGuard')
+    admin.email = 'r@lab'
+    const engine = { experimentId: 3, experimentName: 'Trust', sessionId: 9, sessionName: 'Auto 3', owner: 'r@lab', gameStarted: true }
+    const userJson = (eng: any) => __receive({ user: { email: 'r@lab', experiments: [], currentScript: '' }, experiment: { id: 3, name: 'Trust', instances: [] }, experimentInstance: { id: 9, name: 'Auto 3', status: 'RUNNING' }, engine: eng })
+    userJson(engine)
+    graph.clear()
+    __receive({ action: 'addNode', id: 'p1' })
+    __receive({ action: 'nodePropertyChanged', id: 'p1', key: '_system', value: { connected: true } })
+    __receive({ action: 'addNode', id: 'p2' })
+    __receive({ action: 'nodePropertyChanged', id: 'p2', key: '_system', value: { connected: true } })
+    __receive({ action: 'addNode', id: '_1' })
+    __receive({ action: 'nodePropertyChanged', id: '_1', key: '_system', value: { connected: true } })
+    // the autopilot's own session, opened as this account: the server carries it on, and it isn't paused
+    get.mockResolvedValue({ status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+    expect(reloadKeeps()).toBe(9)
+    let use = await engineUse(9)
+    expect(use).toEqual({
+      who: 'The autopilot’s session “Auto 3” carries on, but its game is in progress: reloading starts the game again from the beginning. The 2 people in it are disconnected for a moment and rejoin by themselves.',
+      pausesAutopilot: false,
+      endsSession: false,
+    })
+    const answer = confirmEngineRebuild({ title: 'Reload the script engine?', action: 'Reloading', confirmLabel: 'Reload anyway', keeping: 9 })
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toMatch(/^The autopilot’s session “Auto 3” carries on, but its game is in progress: .*rejoin by themselves\.\n\nReloading restarts the script engine/)
+    expect(confirmState.req!.message).not.toContain('pauses the autopilot')
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+
+    // this account's own session, before its game: asked while anyone is connected
+    get.mockResolvedValue({ status: { on: false, instance: null } })
+    userJson({ ...engine, gameStarted: false })
+    use = await engineUse(9)
+    expect(use.who).toBe('Your session “Auto 3” carries on. The 2 people in it are disconnected for a moment and rejoin by themselves.')
+    graph.clear()
+    expect((await engineUse(9)).who).toBe('')
+    // its game going, with nobody connected: the game starts again all the same
+    userJson(engine)
+    expect((await engineUse(9)).who).toBe('Your session “Auto 3” carries on, but its game is in progress: reloading starts the game again from the beginning.')
+    // a stopped session that is resumed isn't in the engine: nothing of the sort
+    userJson({ ...engine, sessionId: null, sessionName: null })
+    expect((await engineUse(9)).who).toBe('')
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })
 })
