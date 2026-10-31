@@ -1055,7 +1055,11 @@ public class ScriptBoard extends UntypedActor {
    * session). Returns "<step>: <what went wrong>" for the first step that didn't load, or null when
    * they all did. The language their texts are in then (c.setDefaultLanguage) is recorded for the
    * session (SessionLanguage), as Breadboard's own words to its participants follow it: for a new one,
-   * in place of the one it was given as it was created (startGame).
+   * in place of the one it was given as it was created (startGame). Not when they failed to load
+   * without choosing one (an InitStep that doesn't compile never chose it): the session keeps the
+   * language it had, the one it was given (a launch) or its own (a Reload engine or a Resume of it).
+   * That was recorded as none, English, which turned the pages between sessions English after a
+   * failed launch, and a live Chinese session's pages English on a Reload engine with a broken step.
    */
   private String loadSteps(Experiment experiment, ThrottledWebSocketOut out, ExperimentInstance session) {
     if (experiment == null) {
@@ -1073,8 +1077,10 @@ public class ScriptBoard extends UntypedActor {
     } finally {
       loadingSteps = false;
     }
-    SessionLanguage.record(session == null || session.id == null ? Experiment.TEST_INSTANCE_ID : session.id,
-        experiment.contentFetcher.languageCode());
+    String chosen = experiment.contentFetcher.languageCode();
+    if (failed == null || chosen != null) {
+      SessionLanguage.record(session == null || session.id == null ? Experiment.TEST_INSTANCE_ID : session.id, chosen);
+    }
     EngineSteps.loaded(experiment);
     afterStepsLoaded(experiment);
     if (failed == null) {

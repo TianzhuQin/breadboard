@@ -45,6 +45,9 @@ public class SessionLanguageTest extends BaseTest {
         + "c.setDefaultLanguage(paramOr('language', 'eng'))\n"
         + "autopilot.waitingRoom([minPlayers: 3, waitSeconds: 60])\n";
 
+    // The InitStep with a syntax error: none of it runs, so it chooses no language.
+    private static final String BROKEN = STEP + "autopilot.waitingRoom([minPlayers: 3,\n";
+
     // A step that holds the steps' load while a test keeps its gate shut: the session runs, so takes
     // people, a moment before its steps have loaded and chosen the language of its texts.
     private static final String REACHED = "breadboard.test.stepsReached";
@@ -58,6 +61,7 @@ public class SessionLanguageTest extends BaseTest {
     private final List<AdminSocketsTest.Tab> tabs = new ArrayList<>();
     private AdminSocketsTest.Tab console;
     private Experiment experiment;
+    private Step initStep;
 
     @Before
     public void select() throws Exception {
@@ -68,7 +72,7 @@ public class SessionLanguageTest extends BaseTest {
         User user = createUser("lang-" + UUID.randomUUID() + "@test.org", "lang", "secret-1", english);
         experiment = createExperiment("Languages");
         createParameter(experiment, "language", "Text", "eng");
-        createStep(experiment, "InitStep", STEP);
+        initStep = createStep(experiment, "InitStep", STEP);
         createStep(experiment, "GateStep", GATE_STEP);
         user.ownedExperiments.add(experiment);
         user.saveManyToManyAssociations("ownedExperiments");
@@ -329,6 +333,76 @@ public class SessionLanguageTest extends BaseTest {
         await("taken up again", () -> engine() != held && session.id.equals(engineSessionId()));
         afterTheEngineChange();
         assertEquals("zho", recorded(session));
+    }
+
+    /** The step's code, as the console's Steps page saves it. */
+    private static void setSource(Step step, String source) {
+        Ebean.createSqlUpdate("update steps set source = :source where id = :id")
+            .setParameter("source", source).setParameter("id", step.id).execute();
+    }
+
+    private void stop(final ExperimentInstance session) throws Exception {
+        console.send("StopGame", "id", session.id);
+        await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        afterTheEngineChange();
+    }
+
+    @Test
+    public void stepsThatFailToLoadLeaveTheSessionsLanguageUnlessTheyChoseOneFirst() throws Exception {
+        stop(launch("First", "zho"));
+
+        // A launch whose InitStep doesn't compile: the steps chose no language, and the session keeps the
+        // one it was given (its experiment's most recent session's). It was recorded as none, English,
+        // so the pages between sessions (the experiment's most recent session's language) were English.
+        setSource(initStep, BROKEN);
+        ExperimentInstance broken = launch("Broken", "zho");
+        assertEquals("zho", recorded(broken));
+        assertEquals("zho", SessionLanguage.of(broken.id));
+        stop(broken);
+        assertEquals("zho", SessionLanguage.ofExperiment(experiment.id));
+        String between = play.test.Helpers.contentAsString(play.test.Helpers.route(
+            play.test.Helpers.fakeRequest("GET", "/play/" + experiment.id + "/login")));
+        assertTrue(between, between.contains("<html lang=\"zh-CN\">"));
+        assertTrue(between, between.contains("<h1>" + SystemTexts.text("zho", "noSession.title") + "</h1>"));
+
+        // Steps that chose a language before a later one failed to load: the one they chose.
+        setSource(initStep, STEP);
+        createStep(experiment, "LaterStep", "def broken = (\n");
+        ExperimentInstance chose = launch("Chose", "eng");
+        assertEquals("eng", recorded(chose));
+        assertEquals("eng", SessionLanguage.of(chose.id));
+    }
+
+    @Test
+    public void aReloadWhoseStepsFailToLoadLeavesTheLiveSessionsLanguageAndItsPages() throws Exception {
+        final ExperimentInstance session = launch("Live", "zho");
+        setSource(initStep, BROKEN);
+        // A Reload engine with the InitStep broken. Its participants' pages, which the rebuild closes,
+        // come back while the steps load: one is held loading here.
+        CountDownLatch reached = new CountDownLatch(1);
+        CountDownLatch gate = new CountDownLatch(1);
+        System.getProperties().put(REACHED, reached);
+        System.getProperties().put(GATE, gate);
+        final ScriptEngine before = engine();
+        final Page page;
+        try {
+            console.send("ReloadEngine");
+            assertTrue("its steps are loading", reached.await(30, TimeUnit.SECONDS));
+            page = connect(session, "p1");
+        } finally {
+            gate.countDown();
+        }
+        await("a new engine", () -> engine() != before);
+        afterTheEngineChange();
+        assertEquals("carried on", session.id, engineSessionId());
+        assertTrue(page.frames.toString(), page.got(f -> "zho".equals(f.path("bbLanguage").asText())));
+        // The session stays Chinese, and its page isn't told English (it was, {"bbLanguage": null}).
+        assertEquals("zho", recorded(session));
+        assertEquals("zho", SessionLanguage.of(session.id));
+        assertFalse(page.frames.toString(), page.got(f -> f.has("bbLanguage") && f.get("bbLanguage").isNull()));
+        String signIn = play.test.Helpers.contentAsString(play.test.Helpers.route(
+            play.test.Helpers.fakeRequest("GET", "/game/" + experiment.id + "/" + session.id + "/login")));
+        assertTrue(signIn, signIn.contains("<html lang=\"zh-CN\">"));
     }
 
     @Test

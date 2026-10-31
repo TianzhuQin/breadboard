@@ -139,7 +139,8 @@ Chinese used to show its participants English around its own texts.
   network game example does from its `language` launch parameter, and each session can have its own.
   The server records it with the session once its steps have loaded (`content_language` in
   `experiment_instances`), and again when the steps choose another while it runs (from a step, or the
-  Script console); it never asks the engine. A new session takes people a moment before its steps have
+  Script console); it never asks the engine. Steps that fail to load before choosing one (an InitStep
+  that doesn't compile) leave the session's language as it was. A new session takes people a moment before its steps have
   loaded: until then it has the experiment's most recent session's language, so the study's link
   doesn't show its sign-in page in English meanwhile. The pages people see before a session opens, or
   between two, use the language of the session they lead to, or else the experiment's most recent
