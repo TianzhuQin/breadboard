@@ -215,7 +215,7 @@ page only shows them:
 ```
 breadboard.autopilot.experiment = "My experiment"
 breadboard.autopilot.user = "researcher@lab.org"   # admin account it runs as (default: first user)
-breadboard.autopilot.continuous = true             # open the next session when one finishes
+breadboard.autopilot.continuous = true             # open the next session when one finishes (left out: true)
 breadboard.autopilot.nextSessionDelaySeconds = 10
 breadboard.autopilot.maxSessionMinutes = 120       # longest a session's game may run; 0 or left out: no limit
 ```

@@ -56,7 +56,8 @@ import java.util.concurrent.TimeUnit;
  * <pre>
  * breadboard.autopilot.experiment = "My experiment"   # experiment name; unset = autopilot off
  * breadboard.autopilot.user = "researcher@lab.org"    # admin account it runs as (default: first user)
- * breadboard.autopilot.continuous = true              # open a new session when one finishes
+ * breadboard.autopilot.continuous = true              # open a new session when one finishes (the default;
+ *                                                     # false: one session, then it is done)
  * breadboard.autopilot.nextSessionDelaySeconds = 10
  * breadboard.autopilot.maxSessionMinutes = 120        # longest a session's game may run; 0 or unset = no limit
  * </pre>
@@ -212,7 +213,9 @@ public final class Autopilot {
     s.enabled = true;
     Experiment experiment = findExperimentByName(experimentName);
     s.experimentId = experiment == null ? null : experiment.id;
-    s.continuous = conf.getBoolean("breadboard.autopilot.continuous", false);
+    // (left out: on, as the console suggests; a lab that wrote only the experiment's line got one
+    // session, then "The autopilot is done")
+    s.continuous = conf.getBoolean("breadboard.autopilot.continuous", true);
     s.nextSessionDelaySeconds = Math.max(0, conf.getInt("breadboard.autopilot.nextSessionDelaySeconds", 10));
     // (left out, or 0 or less: no limit. A study set up in the file before there was a limit goes on as
     // it was: its games may run longer than the 2 hours new settings start with.)

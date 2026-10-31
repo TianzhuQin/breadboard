@@ -484,6 +484,8 @@ Settings saved on this page take precedence over the server's settings file, `co
 Until some are saved, a `breadboard.autopilot.experiment` line in `conf/local.conf` turns the
 autopilot on, and the page only shows the settings
 ([whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot) lists them).
+As here, it opens the next session when one finishes unless the file says
+`breadboard.autopilot.continuous = false`.
 Remove the `breadboard.autopilot.*` lines and restart the server to manage them here.
 
 ## Recruiting participants
