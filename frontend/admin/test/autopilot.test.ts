@@ -9,9 +9,12 @@ vi.mock('@/lib/http', async (orig) => {
 })
 vi.mock('@/store/admin', async () => {
   const { computed, reactive, ref, shallowRef } = await import('vue')
+  // the experiments' steps, by id, for a test to set (none by default)
+  const expSteps = reactive<Record<number, any>>({})
   return {
     admin: reactive({ experiment: { id: 12, name: 'Public goods' }, instance: null, events: [] }),
-    experiments: computed(() => [{ id: 12, name: 'Public goods' }, { id: 13, name: 'Trust' }]),
+    experiments: computed(() => [{ id: 12, name: 'Public goods', steps: expSteps[12] }, { id: 13, name: 'Trust', steps: expSteps[13] }]),
+    expSteps,
     running: ref(false),
     graph: { version: shallowRef(0), nodes: new Map() },
   }
@@ -23,7 +26,7 @@ import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
   participantLinks, pauseFailure, pausedLine, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
-  stepsCall,
+  stepsCall, stepsMaxWait,
 } from '../src/pages/autopilot/autopilot'
 import { HttpError } from '../src/lib/http'
 import { unsavedTotal } from '../src/shell/unsaved'
@@ -496,6 +499,60 @@ describe('Autopilot page', () => {
     expect(sent.experimentId).toBe(12)
     expect(sent.waitingRoom).toMatchObject({ enabled: true, maxWaitSeconds: 600 })
     w.unmount()
+  })
+
+  // For the example, whose steps set their own waiting room, both switches start off. Switching the
+  // room on here left Give up after empty ("Never"), so a lone participant waited for good, with nobody
+  // at the console: it takes the steps' own give-up time (600 s in the example), or else ten minutes.
+  it('fills an empty Give up after with the steps\' own give-up time, or ten minutes, when the waiting room set here is switched on', async () => {
+    const steps = (await import('@/store/admin') as any).expSteps
+    const exampleRoom = 'autopilot.waitingRoom([minPlayers: paramOr("minPlayers", 2) as Integer, maxPlayers: NETWORK_SIZE,\n' +
+      '                       waitSeconds: paramOr("waitSeconds", 20) as Integer,\n                       maxWaitSeconds: 450, countdownSeconds: 5])'
+    expect(stepsMaxWait([{ source: `x = 1\n${exampleRoom}` }])).toBe(450)
+    expect(stepsMaxWait([{ source: 'autopilot.waitingRoom([minPlayers: 2, maxWaitSeconds: giveUp])' }])).toBeNull()
+    expect(stepsMaxWait([{ source: '// autopilot.waitingRoom([maxWaitSeconds: 30])' }])).toBeNull()
+    expect(stepsMaxWait([{ source: 'autopilot.waitingRoom([maxWaitSeconds: 0])' }])).toBeNull()
+    expect(stepsMaxWait(undefined)).toBeNull()
+
+    const room = () => w.findAll('.ap-sec').find(sec => sec.text().includes('Use the waiting room set here'))!
+    const giveUp = () => room().findAll('.b-field').find(f => f.find('label').text().startsWith('Give up after'))!.find('input')
+    const roomSwitch = () => room().find('input[role="switch"]')
+    const saved = (more: any = {}) => stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12, waitingRoom: { ...DEFAULTS.waitingRoom, enabled: false, maxWaitSeconds: null, ...more } } })
+    steps[12] = [{ source: exampleRoom }]
+    http.get.mockResolvedValue(saved())
+    let w = await mountPage()
+    try {
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('450')
+      // switched off and on again, it stays as it is now
+      await giveUp().setValue('120')
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('120')
+      // emptied here, empty is the researcher's choice
+      await giveUp().setValue('')
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('')
+      w.unmount()
+
+      // steps whose waiting room gives up in code: ten minutes
+      steps[12] = [{ source: 'autopilot.waitingRoom([minPlayers: 2, maxWaitSeconds: giveUp])' }]
+      w = await mountPage()
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('600')
+      w.unmount()
+
+      // saved with this waiting room on and no limit: that was chosen, so switching it off and on keeps it
+      http.get.mockResolvedValue(saved({ enabled: true }))
+      w = await mountPage()
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('')
+    } finally {
+      w.unmount()
+      delete steps[12]
+    }
   })
 
   it('explains a pause for a mistake in a step as the Steps page does, with a link to the step at that line', async () => {

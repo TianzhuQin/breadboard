@@ -642,6 +642,22 @@ export function autopilotActivity (events: { name: string, datetime: string, dat
   return out
 }
 
+/** What the page suggests for Give up after: a lone participant is told after ten minutes, rather than waiting for good. */
+export const SUGGESTED_MAX_WAIT_SECONDS = 600
+
+/**
+ * The give-up time of the experiment's own waiting room: `maxWaitSeconds` in its steps'
+ * `autopilot.waitingRoom(…)` call, when it is written there as a number (600 in the example); null
+ * when the steps set none, or work it out in code.
+ */
+export function stepsMaxWait (steps: { source: string }[] | undefined): number | null {
+  const call = stepsCall(steps, 'waitingRoom', 4000)
+  const m = call ? /\bmaxWaitSeconds\s*:\s*(\d+)\s*[,\])]/.exec(call) : null
+  if (!m) return null
+  const n = Number(m[1])
+  return n >= 1 && n <= MAX_SECONDS ? n : null
+}
+
 /**
  * The experiment's own `autopilot.<method>(…)` call in its steps (e.g. "waitingRoom"), as written,
  * up to its closing parenthesis and cut to `max` characters; null when its steps make none.

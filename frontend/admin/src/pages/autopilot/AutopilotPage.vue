@@ -204,7 +204,7 @@
               <TriangleAlert :size="15" aria-hidden="true" />
               <span>This experiment's steps set no waiting room, so with the switch off its sessions wait for someone to press Start the game.</span>
             </p>
-            <BSwitch v-model="form.waitingRoom.enabled" :disabled="readOnly">Use the waiting room set here</BSwitch>
+            <BSwitch :model-value="form.waitingRoom.enabled" :disabled="readOnly" @update:model-value="switchRoom">Use the waiting room set here</BSwitch>
             <!-- (hidden while the steps' own waiting room is used: these values would not be in effect) -->
             <div v-if="form.waitingRoom.enabled || !ownRoom || readOnly" class="ap-grid">
               <BField label="Minimum players" :error="errors['waitingRoom.minPlayers']" hint="The game can start once this many people are here.">
@@ -269,6 +269,7 @@
                     step="1"
                     inputmode="numeric"
                     placeholder="Never"
+                    @update:model-value="giveUpEdited = true"
                     :disabled="roomOff"
                     :aria-describedby="describedby"
                     :aria-invalid="errors['waitingRoom.maxWaitSeconds'] ? 'true' : undefined"
@@ -381,6 +382,7 @@ import {
   autopilotActivity, describeEngineSession, describeWaitingRoom, fetchAutopilot, haltOf, humanSeconds, participantLinks,
   resumeAutopilot, resumeLabel, sameForm, saveAutopilot, takeOverTarget, DEFAULTS, MAX_SESSION_MINUTES, toForm, toSettings,
   validateAutopilot, stepsCall, waitingRoomLive, type AutopilotForm, type AutopilotState, type EngineSession,
+  SUGGESTED_MAX_WAIT_SECONDS, stepsMaxWait,
 } from './autopilot'
 
 type Phase = 'loading' | 'ready' | 'unavailable' | 'error'
@@ -490,8 +492,26 @@ function suggested (s: AutopilotState): AutopilotForm {
   if (stepsCall(admin.experiment.steps, 'waitingRoom')) f.waitingRoom.enabled = false
   if (stepsCall(admin.experiment.steps, 'replaceDisconnected')) f.replaceDisconnected.enabled = false
   // a lone participant is told after ten minutes, rather than waiting for good
-  if (f.waitingRoom.enabled && f.waitingRoom.maxWaitSeconds == null) f.waitingRoom.maxWaitSeconds = 600
+  if (f.waitingRoom.enabled && f.waitingRoom.maxWaitSeconds == null) f.waitingRoom.maxWaitSeconds = SUGGESTED_MAX_WAIT_SECONDS
   return f
+}
+
+/** The researcher has changed Give up after since the form was loaded: an empty one is their choice. */
+const giveUpEdited = ref(false)
+/**
+ * Switching the waiting room set here on or off. Switched on with Give up after empty, a lone
+ * participant would wait for good, with nobody at the console to step in: it is filled in with the
+ * give-up time of the experiment's own waiting room, which this one replaces (600 seconds in the
+ * example), or else the suggested ten minutes. Not when empty is the researcher's choice: emptied
+ * here, or saved so with this waiting room on.
+ */
+function switchRoom (on: boolean) {
+  const room = form.value.waitingRoom
+  room.enabled = on
+  const savedEmpty = baseline.value.waitingRoom.enabled && baseline.value.waitingRoom.maxWaitSeconds == null
+  if (on && room.maxWaitSeconds == null && !giveUpEdited.value && !savedEmpty) {
+    room.maxWaitSeconds = stepsMaxWait(formExperiment.value?.steps) ?? SUGGESTED_MAX_WAIT_SECONDS
+  }
 }
 
 // Choosing another experiment here: its steps' own waiting room and takeover (if they set them)
@@ -513,11 +533,13 @@ function adopt (s: AutopilotState, resetForm: boolean) {
     // (never set up: the suggestion is the starting point, not an edit; Save still saves it)
     form.value = suggested(s)
     baseline.value = suggested(s)
+    giveUpEdited.value = false
   } else if (!dirty.value && !sameForm(baseline.value, suggested(s))) {
     // changed elsewhere (another admin, or the config) while nothing was being edited here
     // (and, never set up, the suggestion stays the suggestion)
     form.value = suggested(s)
     baseline.value = suggested(s)
+    giveUpEdited.value = false
   }
 }
 
@@ -586,6 +608,7 @@ function minutesHint (v: number | null, text: string) {
 
 function discard () {
   form.value = toForm(baseline.value)
+  giveUpEdited.value = false
   saveError.value = ''
 }
 
