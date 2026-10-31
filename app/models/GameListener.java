@@ -104,7 +104,17 @@ public class GameListener {
     }
   }
 
+  /**
+   * The game came to its end (a step's finish(), a waiting room giving up): its session is marked
+   * finished, and the autopilot and the consoles hear of it. Not by a game whose engine a rebuild is
+   * replacing: its waiting room giving up as the engine was rebuilt finished the session the new one
+   * carries on.
+   */
   public void finish() {
+    if (this.engine != null && !ScriptBoard.inService(this.engine)) {
+      play.Logger.info("The game of an engine that is being replaced came to its end; its session goes on in the new one");
+      return;
+    }
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.finish();
       this.experimentInstance.save();

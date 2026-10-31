@@ -326,7 +326,12 @@ settings: it runs as your account, and goes on running it), and a game under way
 from the beginning: its game counts as not started, so **Start the game** (or its waiting room) runs
 InitStep again. The pages of those who held a seat get back in by themselves as they reconnect, and
 it takes newcomers as before its game. Its data records an `engineReloaded` event, with `restarted`
-(whether a game was under way) and `by`, as a Resume records `sessionResumed`. Before such a reload,
+(whether a game was under way) and `by`, as a Resume records `sessionResumed`. Everything the game
+before it did is recorded before that event, and nothing of it after: while the engine restarts
+(about half a second), a choice or tie change a participant makes doesn't count (their page shows
+the restarted game once it is back), and one you make from the console waits for the restart and
+is answered by the restarted game, where the choice is usually no longer on offer. A step of the
+old game that fails as it is replaced isn't reported as the restarted game's. Before such a reload,
 the console asks while that session's game is in progress or anyone is connected to it, and says
 that the game starts again from the beginning and that the people in it rejoin by themselves.
 Creating a session and resuming one restart the engine too, and so does switching experiments while
