@@ -16,8 +16,9 @@ import java.util.Map;
  *
  * <p>Recorded as a session is created, as its experiment's most recent session's (recordProvisional),
  * then when the steps have loaded for it (ScriptBoard.loadSteps; steps that failed to load before
- * choosing one leave it as it was), and again when they choose another language while it runs. "" when they chose none (English), null when nothing was recorded (a session
- * from before 3.1, or an imported one). The experiment's test session (0) is kept in memory only.
+ * choosing one leave it as it was), and again when they choose another language while it runs.
+ * "" when they chose none (English), null when nothing was recorded (a session from before 3.1, or
+ * an imported one). The experiment's test session (0) is kept in memory only.
  */
 public final class SessionLanguage {
   /** Evolution 35, which the server's start makes too, for databases from older releases (Global). */
