@@ -947,7 +947,8 @@ public class ScriptBoard extends UntypedActor {
    * Load the experiment's steps into the engine, for {@code session} (null: none, so its test
    * session). Returns "<step>: <what went wrong>" for the first step that didn't load, or null when
    * they all did. The language their texts are in then (c.setDefaultLanguage) is recorded for the
-   * session (SessionLanguage), as Breadboard's own words to its participants follow it.
+   * session (SessionLanguage), as Breadboard's own words to its participants follow it: for a new one,
+   * in place of the one it was given as it was created (startGame).
    */
   private String loadSteps(Experiment experiment, ThrottledWebSocketOut out, ExperimentInstance session) {
     if (experiment == null) {
@@ -3568,6 +3569,9 @@ public class ScriptBoard extends UntypedActor {
 
     selectedExperiment.instances.add(instance);
     selectedExperiment.save();
+    // Before it runs, and so takes people (the study's link leads to its sign-in page): the language of
+    // its texts until its steps have loaded and chosen one (loadSteps).
+    SessionLanguage.recordProvisional(instance.id, selectedExperiment.id);
 
     if (!onAccount) {
       return instance;

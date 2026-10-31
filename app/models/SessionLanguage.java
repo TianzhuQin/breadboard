@@ -14,10 +14,10 @@ import java.util.Map;
  * (experiment_instances.content_language), so its pages know it without asking the engine, also once
  * the engine runs another session, or after a restart of the server.
  *
- * <p>Recorded when the steps have loaded for a session (ScriptBoard.loadSteps), and again when they
- * choose another language while it runs. "" when they chose none (English), null when nothing was
- * recorded (a session from before 3.1, or whose steps never loaded). The experiment's test session (0)
- * is kept in memory only.
+ * <p>Recorded as a session is created, as its experiment's most recent session's (recordProvisional),
+ * then when the steps have loaded for it (ScriptBoard.loadSteps), and again when they choose another
+ * language while it runs. "" when they chose none (English), null when nothing was recorded (a session
+ * from before 3.1, or an imported one). The experiment's test session (0) is kept in memory only.
  */
 public final class SessionLanguage {
   /** Evolution 35, which the server's start makes too, for databases from older releases (Global). */
@@ -128,6 +128,21 @@ public final class SessionLanguage {
     if (before != null || !chosen.isEmpty()) {
       ScriptBoard.tellLanguage(instanceId, chosen.isEmpty() ? null : chosen);
     }
+  }
+
+  /**
+   * Record the language of a new session's texts until its steps have loaded and chosen one
+   * (ScriptBoard.startGame): its experiment's most recent session's (ofExperiment), which its steps
+   * most likely choose again. A session is open to participants as soon as it runs, a moment before its
+   * steps have loaded, and the study's link (and a holding page, which loads it every few seconds)
+   * takes people to its sign-in page at once: that page was in English until then, and stayed so until
+   * they sent it. ScriptBoard.loadSteps records what the steps chose.
+   */
+  public static void recordProvisional(Long instanceId, Long experimentId) {
+    if (instanceId == null || Experiment.TEST_INSTANCE_ID.equals(instanceId)) {
+      return;
+    }
+    record(instanceId, ofExperiment(experimentId));
   }
 
   /** Forget what is known in memory (tests). */

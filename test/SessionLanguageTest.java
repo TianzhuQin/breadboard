@@ -21,6 +21,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.*;
 
@@ -43,6 +45,16 @@ public class SessionLanguageTest extends BaseTest {
         + "c.setDefaultLanguage(paramOr('language', 'eng'))\n"
         + "autopilot.waitingRoom([minPlayers: 3, waitSeconds: 60])\n";
 
+    // A step that holds the steps' load while a test keeps its gate shut: the session runs, so takes
+    // people, a moment before its steps have loaded and chosen the language of its texts.
+    private static final String REACHED = "breadboard.test.stepsReached";
+    private static final String GATE = "breadboard.test.stepsGate";
+    private static final String GATE_STEP = "def reached = System.getProperties().get('" + REACHED + "')\n"
+        + "def gate = System.getProperties().get('" + GATE + "')\n"
+        + "if (reached != null) reached.countDown()\n"
+        + "if (gate != null) gate.await(20, java.util.concurrent.TimeUnit.SECONDS)\n"
+        + "null\n";
+
     private final List<AdminSocketsTest.Tab> tabs = new ArrayList<>();
     private AdminSocketsTest.Tab console;
     private Experiment experiment;
@@ -57,6 +69,7 @@ public class SessionLanguageTest extends BaseTest {
         experiment = createExperiment("Languages");
         createParameter(experiment, "language", "Text", "eng");
         createStep(experiment, "InitStep", STEP);
+        createStep(experiment, "GateStep", GATE_STEP);
         user.ownedExperiments.add(experiment);
         user.saveManyToManyAssociations("ownedExperiments");
         console = new AdminSocketsTest.Tab(user.uid);
@@ -71,6 +84,9 @@ public class SessionLanguageTest extends BaseTest {
     @After
     @SuppressWarnings("unchecked")
     public void closeTabs() throws Throwable {
+        System.getProperties().remove(REACHED);
+        Object gate = System.getProperties().remove(GATE);
+        if (gate instanceof CountDownLatch) ((CountDownLatch) gate).countDown();
         for (AdminSocketsTest.Tab t : tabs) t.close();
         Map<String, Client> clients = (Map<String, Client>) field("clients").get(null);
         for (Client c : clients.values()) c.disconnect();
@@ -212,6 +228,65 @@ public class SessionLanguageTest extends BaseTest {
         engine().eval("c.setDefaultLanguage(null); null");
         assertNull("none chosen: English", SessionLanguage.of(session.id));
         await("told", () -> p1.got(f -> f.size() == 1 && f.has("bbLanguage") && f.get("bbLanguage").isNull()));
+    }
+
+    @Test
+    public void aNewSessionsPagesAreInItsExperimentsLanguageWhileItsStepsLoad() throws Exception {
+        final ExperimentInstance first = launch("First", "zho");
+        console.send("StopGame", "id", first.id);
+        await("stopped", () -> ExperimentInstance.findById(first.id).status == ExperimentInstance.Status.STOPPED);
+        afterTheEngineChange();
+
+        // The next session runs, and the study's link leads to it, before its steps have loaded and
+        // chosen the language of its texts: its pages were in English until then.
+        CountDownLatch reached = new CountDownLatch(1);
+        CountDownLatch gate = new CountDownLatch(1);
+        System.getProperties().put(REACHED, reached);
+        System.getProperties().put(GATE, gate);
+        final Long next;
+        try {
+            console.send("LaunchGame", "name", "Next", "parameters", Json.parse("{\"language\": \"zho\"}"));
+            assertTrue("its steps are loading", reached.await(30, TimeUnit.SECONDS));
+            next = whileItsStepsLoad("Next");
+            assertEquals("still loading", 1, gate.getCount());
+        } finally {
+            gate.countDown();
+        }
+        afterTheEngineChange();
+        // what its steps chose, once they have loaded
+        assertEquals("zho", recorded(ExperimentInstance.findById(next)));
+
+        // A session whose steps choose another language: theirs, once they have loaded.
+        console.send("StopGame", "id", next);
+        await("stopped", () -> ExperimentInstance.findById(next).status == ExperimentInstance.Status.STOPPED);
+        afterTheEngineChange();
+        System.getProperties().remove(REACHED);
+        System.getProperties().remove(GATE);
+        ExperimentInstance english = launch("English", "eng");
+        assertEquals("eng", recorded(english));
+        assertEquals("eng", SessionLanguage.of(english.id));
+    }
+
+    /**
+     * The session {@code name} runs, while its steps are held loading: it has its experiment's most
+     * recent session's language, and the study's link leads to its sign-in page, in that language.
+     * (Not inline in the try above: Ebean's enhancement of field reads there makes a class Java won't load.)
+     */
+    private Long whileItsStepsLoad(String name) throws Exception {
+        ExperimentInstance next = named(name);
+        assertEquals(ExperimentInstance.Status.RUNNING, next.status);
+        assertEquals(next.id, engineSessionId());
+
+        play.mvc.Result toIt = play.test.Helpers.route(play.test.Helpers.fakeRequest("GET", "/play/" + experiment.id + "/login"));
+        assertEquals(play.test.Helpers.SEE_OTHER, play.test.Helpers.status(toIt));
+        String signInUrl = play.test.Helpers.header("Location", toIt);
+        assertEquals("/game/" + experiment.id + "/" + next.id + "/login", signInUrl);
+        String signIn = play.test.Helpers.contentAsString(play.test.Helpers.route(play.test.Helpers.fakeRequest("GET", signInUrl)));
+        assertTrue(signIn, signIn.contains("<html lang=\"zh-CN\">"));
+        assertTrue(signIn, signIn.contains("<h1>加入实验</h1>"));
+        assertEquals("its experiment's most recent session's, for now", "zho", recorded(next));
+        assertEquals("zho", SessionLanguage.of(next.id));
+        return next.id;
     }
 
     @Test
