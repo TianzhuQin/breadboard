@@ -21,6 +21,8 @@ GET         /game/:experimentId/:experimentInstanceId/:clientId/state           
 OPTIONS     /game/:experimentId/:experimentInstanceId/:clientId/state            controllers.ClientController.stateOptions(experimentId: String, experimentInstanceId: String, clientId: String)
 GET         /game/:experimentId/:experimentInstanceId/:clientId/connect          controllers.ClientController.connectClient(experimentId: String, experimentInstanceId: String, clientId: String)
 POST        /game/:experimentId/:experimentInstanceId/:clientId/comment          controllers.ClientLogin.comment(experimentId: String, experimentInstanceId: String, clientId: String)
+# The token the finish screen sends its comment with later, also once the seat is forgotten (security.CommentTokens)
+GET         /game/:experimentId/:experimentInstanceId/:clientId/comment          controllers.ClientLogin.commentToken(experimentId: String, experimentInstanceId: String, clientId: String)
 # A token for the console to show a participant's page as that player (security.PreviewTokens)
 POST        /preview-token                                                       controllers.ClientController.previewToken()
 

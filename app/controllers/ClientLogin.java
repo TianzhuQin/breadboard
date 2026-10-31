@@ -11,6 +11,7 @@ import play.mvc.Controller;
 import play.mvc.Http;
 import play.mvc.Result;
 import play.mvc.WebSocket;
+import security.CommentTokens;
 import security.ParticipantAuth;
 import views.html.*;
 import java.util.List;
@@ -472,18 +473,26 @@ public class ClientLogin extends Controller {
    * A participant's comment for the researcher, from the Prolific finish screen's "Comments for the
    * researcher": {@code POST /game/{experimentId}/{instanceId}/{clientId}/comment} with
    * {@code {"text": "..."}} as JSON (no form: a page of another site can't send this) and the seat's
-   * token (its cookie, or the X-Breadboard-Token header). Recorded in that participant's own session
+   * token (its cookie, or the X-Breadboard-Token header), or the comment token the finish screen got
+   * for it (commentToken) as {@code "token"} in the JSON. Recorded in that participant's own session
    * as participantComment (player, text), whatever the engine runs now: the screen comes once their
    * game is over, and the autopilot may have opened the next session since. It used to go to the
-   * engine as a message nothing listened to, and was lost. Only the seat's own token counts, not a
-   * researcher's preview. Answers 204 (also for an empty comment, which records nothing), 403 without
-   * the seat's token, 400 without a text, 404 for a session that isn't this experiment's.
+   * engine as a message nothing listened to, and was lost. Only the seat's own token counts, or a
+   * comment token, which only the seat's own token gets: not a researcher's preview. The comment
+   * token is good for a week, also once the server has forgotten the seat (ten more sessions have
+   * ended since, or it restarted), which refused the comment: the finish screen then went on to
+   * Prolific, and the comment was lost without anyone knowing. Answers 204 (also for an empty
+   * comment, which records nothing), 403 without either token, 400 without a text, 404 for a session
+   * that isn't this experiment's.
    */
   public static Result comment(String experimentId, String experimentInstanceId, String clientId) {
-    if (!ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
+    JsonNode body = request().body().asJson();
+    JsonNode commentToken = body == null ? null : body.get("token");
+    if (!ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))
+        && !(commentToken != null && commentToken.isTextual()
+             && CommentTokens.verify(experimentId, experimentInstanceId, clientId, commentToken.textValue()))) {
       return forbidden(commentRefused("This page can't send comments for this participant."));
     }
-    JsonNode body = request().body().asJson();
     JsonNode text = body == null ? null : body.get("text");
     if (text == null || !text.isTextual()) {
       return badRequest(commentRefused("Send {\"text\": \"...\"} as JSON."));
@@ -511,6 +520,35 @@ public class ClientLogin extends Controller {
       return internalServerError(commentRefused("The comment could not be saved."));
     }
     return noContent();
+  }
+
+  /**
+   * The token the Prolific finish screen sends its comment with (comment, as {@code "token"}), asked
+   * for as the screen appears: {@code GET /game/{experimentId}/{instanceId}/{clientId}/comment} with
+   * the seat's own token, not a researcher's preview's. Good for this participant's comments for a
+   * week (security.CommentTokens), also once the server has forgotten the seat's token. Answers
+   * {@code {"token", "expiresAt"}} (both null while application.secret is a published default: the
+   * seat's token alone counts then), 403 without the seat's token, 404 for a session that isn't this
+   * experiment's.
+   */
+  public static Result commentToken(String experimentId, String experimentInstanceId, String clientId) {
+    response().setHeader("Cache-Control", "no-store");
+    if (!ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
+      return forbidden(commentRefused("This page can't send comments for this participant."));
+    }
+    if (!sessionExists(experimentId, experimentInstanceId)) {
+      return notFound(commentRefused("There is no such session."));
+    }
+    CommentTokens.Issued issued = CommentTokens.issue(experimentId, experimentInstanceId, clientId);
+    com.fasterxml.jackson.databind.node.ObjectNode answer = play.libs.Json.newObject();
+    if (issued == null) {
+      answer.putNull("token");
+      answer.putNull("expiresAt");
+    } else {
+      answer.put("token", issued.token);
+      answer.put("expiresAt", models.Timestamps.iso(new java.util.Date(issued.expiresAt)));
+    }
+    return ok(answer);
   }
 
   private static com.fasterxml.jackson.databind.node.ObjectNode commentRefused(String why) {

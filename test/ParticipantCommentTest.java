@@ -1,3 +1,4 @@
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import models.*;
 import org.junit.After;
@@ -6,8 +7,11 @@ import play.libs.Json;
 import play.mvc.Http;
 import play.mvc.Result;
 import play.test.FakeRequest;
+import security.CommentTokens;
 import security.ParticipantAuth;
+import security.PreviewTokens;
 
+import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.List;
 
@@ -25,6 +29,8 @@ public class ParticipantCommentTest extends BaseTest {
     @After
     public void forgetSeats() {
         ParticipantAuth.reset();
+        CommentTokens.reset();
+        PreviewTokens.reset();
     }
 
     private static FakeRequest post(Experiment experiment, ExperimentInstance session, String clientId) {
@@ -121,5 +127,96 @@ public class ParticipantCommentTest extends BaseTest {
         assertEquals(NO_CONTENT, status(route(post(experiment, session, "pc-2").withHeader(ParticipantAuth.HEADER, token)
             .withJsonBody(text(withEmoji.toString())))));
         assertEquals(9999, value(comments(session).get(1), "text").length());
+    }
+    /** The finish screen's comment token for this participant: what GET .../comment answers their page. */
+    private static Result tokenFor(Experiment experiment, ExperimentInstance session, String clientId, String seatToken) {
+        FakeRequest request = fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/" + clientId + "/comment");
+        return route(seatToken == null ? request : request.withHeader(ParticipantAuth.HEADER, seatToken));
+    }
+
+    private static ObjectNode text(String text, String commentToken) {
+        ObjectNode body = text(text);
+        body.put("token", commentToken);
+        return body;
+    }
+
+    /**
+     * The finish screen asks for a comment token as it appears, with the seat's token, and sends the
+     * comment with it: it is kept for a week, also once the server has forgotten the seat's token (ten
+     * more sessions have ended since theirs, or it restarted), which refused the comment, and the
+     * screen went on to Prolific without a word. Only for that participant of that session, and only
+     * their own page gets one: not a researcher's preview.
+     */
+    @Test
+    public void aCommentIsKeptForAWeekAlsoOnceTheSeatIsForgotten() throws Exception {
+        Language lang = createLanguage("eng", "English");
+        User researcher = createUser("late-comments@lab.org", "PI", "password123", lang);
+        Experiment experiment = createExperiment("Comments later");
+        ExperimentInstance theirs = createInstance("theirs", experiment);
+        theirs.status = ExperimentInstance.Status.FINISHED;
+        theirs.save();
+        String seat = ParticipantAuth.claim(theirs.id.toString(), "pc-late");
+        ParticipantAuth.claim(theirs.id.toString(), "pc-other");
+
+        // Their finish screen asks for a token as it appears.
+        Result asked = tokenFor(experiment, theirs, "pc-late", seat);
+        assertEquals(contentAsString(asked), OK, status(asked));
+        assertEquals("no-store", header("Cache-Control", asked));
+        JsonNode answer = Json.parse(contentAsString(asked));
+        String token = answer.get("token").asText();
+        assertTrue(token, token.length() > 40);
+        long until = java.time.Instant.parse(answer.get("expiresAt").asText()).toEpochMilli();
+        assertTrue("a week", Math.abs(until - (System.currentTimeMillis() + CommentTokens.LIFETIME_MS)) < 60000);
+        assertTrue("the token says until when", token.startsWith(until + "."));
+        // Only their own page gets one.
+        assertEquals("no token", FORBIDDEN, status(tokenFor(experiment, theirs, "pc-late", null)));
+        assertEquals("another seat's", FORBIDDEN, status(tokenFor(experiment, theirs, "pc-other", seat)));
+        String preview = PreviewTokens.issue(researcher.email, experiment.id.toString(), theirs.id.toString(), "pc-late").token;
+        assertEquals("a researcher's preview", FORBIDDEN, status(tokenFor(experiment, theirs, "pc-late", preview)));
+        assertEquals("another experiment's session", NOT_FOUND, status(route(fakeRequest(GET,
+            "/game/" + createExperiment("Other").id + "/" + theirs.id + "/pc-late/comment").withHeader(ParticipantAuth.HEADER, seat))));
+
+        // Ten more sessions end, as the autopilot's do one after the other: the seat's token is forgotten.
+        Method end = ScriptBoard.class.getDeclaredMethod("endParticipants", Long.class, ObjectNode.class);
+        end.setAccessible(true);
+        end.invoke(null, theirs.id, Json.newObject());
+        for (int i = 0; i < 10; i++) {
+            ExperimentInstance later = createInstance("later " + i, experiment);
+            later.status = ExperimentInstance.Status.FINISHED;
+            later.save();
+            end.invoke(null, later.id, Json.newObject());
+        }
+        assertEquals("the seat's token alone is refused by now", FORBIDDEN, status(route(post(experiment, theirs, "pc-late")
+            .withHeader(ParticipantAuth.HEADER, seat).withJsonBody(text("Seat only.")))));
+        assertEquals(0, comments(theirs).size());
+        // With the comment token, it is kept.
+        Result saved = route(post(experiment, theirs, "pc-late").withHeader(ParticipantAuth.HEADER, seat)
+            .withJsonBody(text("The second round was confusing.", token)));
+        assertEquals(contentAsString(saved), NO_CONTENT, status(saved));
+        assertEquals(1, comments(theirs).size());
+        assertEquals("pc-late", value(comments(theirs).get(0), "player"));
+        assertEquals("The second round was confusing.", value(comments(theirs).get(0), "text"));
+
+        // The server restarts (it forgets every seat), a day later: kept all the same.
+        ParticipantAuth.reset();
+        CommentTokens.moveClockForTests(24L * 60 * 60 * 1000);
+        assertEquals(NO_CONTENT, status(route(post(experiment, theirs, "pc-late").withJsonBody(text("A day later.", token)))));
+        assertEquals(2, comments(theirs).size());
+
+        // Only for them, in their session, and as it was given.
+        assertEquals("another participant", FORBIDDEN, status(route(post(experiment, theirs, "pc-other")
+            .withJsonBody(text("Not mine.", token)))));
+        ExperimentInstance next = createInstance("next", experiment);
+        assertEquals("another session", FORBIDDEN, status(route(post(experiment, next, "pc-late").withJsonBody(text("Wrong.", token)))));
+        String[] parts = token.split("\\.");
+        assertEquals("a later end, signed for an earlier one", FORBIDDEN, status(route(post(experiment, theirs, "pc-late")
+            .withJsonBody(text("Longer.", (Long.parseLong(parts[0]) + 86400000L) + "." + parts[1])))));
+        assertEquals("not a token", FORBIDDEN, status(route(post(experiment, theirs, "pc-late").withJsonBody(text("Hi.", "nonsense")))));
+        assertEquals(2, comments(theirs).size());
+
+        // A week after it was given, it is good no more.
+        CommentTokens.moveClockForTests(CommentTokens.LIFETIME_MS);
+        assertEquals(FORBIDDEN, status(route(post(experiment, theirs, "pc-late").withJsonBody(text("Too late.", token)))));
+        assertEquals(2, comments(theirs).size());
     }
 }

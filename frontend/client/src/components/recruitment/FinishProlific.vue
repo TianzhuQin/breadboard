@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { PlayerData, participantToken } from '@human-nature-lab/breadboard-core'
 
 const props = defineProps<{
@@ -12,44 +12,103 @@ const submitUrl = computed(() => {
   return `https://app.prolific.com/submissions/complete?cc=${data.value?.completionCode}`
 })
 
-// How long the comment may take to save before the page goes to Prolific all the same (ms).
-const SAVE_WAIT_MS = 3000
+// How long the comment may take to save before the screen says it couldn't be (ms).
+const SAVE_WAIT_MS = 10000
+
+/** The seat's token, as the page's own requests carry it, with what the server reads as JSON. */
+function headers (): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = participantToken()
+  if (token) h['X-Breadboard-Token'] = token
+  return h
+}
 
 /**
- * The comment goes to the server on its own ('comment', next to the page's own address, with the
- * seat's token), which keeps it in the participant's session's data (participantComment): this screen
- * comes once the game is over, when the page's live connection may be closed and the server may run
- * the next session already. Sent through the game only, it was lost. Resolves whatever happens.
+ * The token the comment is sent with ('comment', next to the page's own address: GET, with the seat's
+ * token), asked for as this screen appears. The server keeps the comment with it for a week, also once
+ * it has forgotten the seat's token (ten more sessions have ended since, or it restarted), which used
+ * to refuse the comment. Null when the server gives none (an older one, a researcher's preview, the
+ * network down: then asked for again as the comment is sent).
  */
-async function saveComment (text: string): Promise<void> {
-  const comment = text.trim()
-  if (!comment) return
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const token = participantToken()
-  if (token) headers['X-Breadboard-Token'] = token
+let commentToken: string | null = null
+async function getCommentToken (): Promise<string | null> {
   try {
-    await Promise.race([
-      fetch('comment', { method: 'POST', headers, credentials: 'same-origin', body: JSON.stringify({ text: comment }) }),
-      new Promise(resolve => setTimeout(resolve, SAVE_WAIT_MS)),
-    ])
+    const res = await fetch('comment', { headers: headers(), credentials: 'same-origin' })
+    if (!res || res.status !== 200) return null
+    const body = await res.json()
+    return body && typeof body.token === 'string' && body.token ? body.token : null
   } catch (e) {
-    // (the way back to Prolific matters more than the comment)
+    return null
+  }
+}
+onMounted(async () => {
+  if (data.value && !data.value.noFeedback) commentToken = await getCommentToken()
+})
+
+/**
+ * The comment goes to the server on its own ('comment', POST, with the seat's token and the comment
+ * token), which keeps it in the participant's session's data (participantComment): this screen comes
+ * once the game is over, when the page's live connection may be closed and the server may run the
+ * next session already. Sent through the game only, it was lost. True once the server has it; false
+ * when it doesn't (refused, no answer within SAVE_WAIT_MS, no network).
+ */
+async function saveComment (comment: string): Promise<boolean> {
+  if (!commentToken) commentToken = await getCommentToken()
+  const body: Record<string, string> = { text: comment }
+  if (commentToken) body.token = commentToken
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const res: any = await Promise.race([
+      fetch('comment', { method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify(body) }),
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), SAVE_WAIT_MS) }),
+    ])
+    return !!res && res.status >= 200 && res.status < 300
+  } catch (e) {
+    return false
+  } finally {
+    clearTimeout(timer)
   }
 }
 
 const feedback = ref('')
-const sending = ref(false)
-async function submit () {
-  sending.value = true
-  const started = Date.now()
-  // (still sent to the game as well, for an experiment's own code that listens for it)
-  try {
-    Breadboard.send('exiting', { feedback: feedback.value })
-  } catch (e) {}
-  await saveComment(feedback.value)
+/**
+ * 'saving' the comment, 'leaving' for Prolific, or the comment 'failed' to save: the screen says so,
+ * and goes to Prolific only when the participant asks (it used to go all the same, and the comment
+ * was lost without anyone knowing).
+ */
+const state = ref<'ready' | 'saving' | 'leaving' | 'failed'>('ready')
+const busy = computed(() => state.value === 'saving' || state.value === 'leaving')
+let toldTheGame = false
+
+function leave (started: number) {
+  state.value = 'leaving'
   setTimeout(() => {
     window.location.href = submitUrl.value
   }, Math.max(0, 1000 - (Date.now() - started)))
+}
+
+async function submit () {
+  const started = Date.now()
+  // (still sent to the game as well, once, for an experiment's own code that listens for it)
+  if (!toldTheGame) {
+    toldTheGame = true
+    try {
+      Breadboard.send('exiting', { feedback: feedback.value })
+    } catch (e) {}
+  }
+  const comment = feedback.value.trim()
+  if (comment) {
+    state.value = 'saving'
+    if (!(await saveComment(comment))) {
+      state.value = 'failed'
+      return
+    }
+  }
+  leave(started)
+}
+
+function leaveWithoutIt () {
+  leave(Date.now())
 }
 </script>
 
@@ -71,8 +130,15 @@ async function submit () {
         <span class="bb-finish__label">Comments for the researcher (optional)</span>
         <textarea v-model="feedback" rows="3" />
       </label>
-      <button type="button" class="bb-finish__btn" :disabled="sending" @click="submit">
-        {{ sending ? 'Returning to Prolific…' : 'Finish and return to Prolific' }}
+      <p v-if="state === 'failed'" class="bb-finish__failed" role="alert">
+        Your comment couldn’t be saved, so the researcher won’t get it this way. Try again, or copy it and
+        send it to the researcher through Prolific’s messages.
+      </p>
+      <button type="button" class="bb-finish__btn" :disabled="busy" @click="submit">
+        {{ state === 'saving' ? 'Saving your comment…' : state === 'leaving' ? 'Returning to Prolific…' : state === 'failed' ? 'Try again' : 'Finish and return to Prolific' }}
+      </button>
+      <button v-if="state === 'failed'" type="button" class="bb-finish__btn bb-finish__btn--quiet" @click="leaveWithoutIt">
+        Return to Prolific without it
       </button>
       <p class="bb-finish__note">
         If nothing happens, open <a :href="submitUrl">{{ submitUrl }}</a>, or enter the code above on Prolific.
@@ -158,6 +224,9 @@ async function submit () {
   box-shadow: 0 4px 14px rgba(79, 70, 229, 0.25);
 }
 .bb-finish__btn:hover { background: #4338ca; }
+.bb-finish__btn--quiet { margin-top: 10px; background: #fff; color: #4338ca; border: 1px solid #c7d2fe; box-shadow: none; }
+.bb-finish__btn--quiet:hover { background: #eef2ff; }
+.bb-finish__failed { margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: #fff7ed; color: #9a3412; font-size: 14px; line-height: 1.5; text-align: left; }
 .bb-finish__btn:disabled { opacity: 0.7; cursor: default; }
 .bb-finish__btn:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 3px; }
 .bb-finish__note { margin: 14px 0 0; font-size: 13px; color: #64748b; overflow-wrap: anywhere; }
