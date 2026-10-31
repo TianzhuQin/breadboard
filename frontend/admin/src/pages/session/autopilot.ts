@@ -84,6 +84,11 @@ export function autopilotStatusOf (s: any): AutopilotStatus | null {
   if (!s || typeof s !== 'object' || !s.status || typeof s.status !== 'object') return null
   // (read as the Autopilot page reads it)
   const state = normalizeState(s)
+  // The server's "waiting" note while a session of the experiment that a researcher opened by hand is
+  // open (status.handSession) only says that the autopilot opens its own once that one has ended: it
+  // keeps nothing from opening it then, so the study's links still wait for it during that session's
+  // game (the server leaves it out of Autopilot.nextSessionHeldUp). Paused or done, the reason stays.
+  const handNote = !!s.status.handSession && problemKind(state) === 'waiting'
   return {
     on: !!s.status.on,
     experimentId: s.status.experimentId ?? null,
@@ -92,8 +97,8 @@ export function autopilotStatusOf (s: any): AutopilotStatus | null {
     continuous: !!(s.settings && s.settings.continuous),
     nextSessionDelaySeconds: Number(s.settings?.nextSessionDelaySeconds) || 0,
     halted: haltedOf(s.status),
-    waiting: problemKind(state) === 'waiting' ? { session: state.status.engineSession } : null,
-    problem: state.status.problem,
+    waiting: problemKind(state) === 'waiting' && !handNote ? { session: state.status.engineSession } : null,
+    problem: handNote ? null : state.status.problem,
   }
 }
 

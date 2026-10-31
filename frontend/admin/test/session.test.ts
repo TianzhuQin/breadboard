@@ -1017,6 +1017,22 @@ describe('SessionPage', () => {
       expect(autopilotOpensNextSoon(st, 12)).toBe(false)
       expect(autopilotHold(st, 12)).toEqual({ by: 'problem' })
     }
+    // a session of this experiment that a researcher opened by hand: the autopilot opens its own once
+    // that one has ended, and the links wait for it during that session's game (the server's note
+    // about it holds nothing up); paused or done, the reason stays
+    const hand = { id: 9, name: 'By hand', status: 'RUNNING', gameStarted: true, openToNewcomers: false, owner: 'b@lab.org' }
+    const handOpen = raw({ handSession: hand, problemKind: 'waiting', problem: '"By hand", a session of this experiment that b@lab.org opened by hand, is running. The autopilot opens its own session once that one has ended.' })
+    expect(handOpen!.problem).toBe(null)
+    expect(handOpen!.waiting).toBe(null)
+    expect(autopilotOpensNextSoon(handOpen, 12)).toBe(true)
+    expect(autopilotHold(handOpen, 12)).toBe(null)
+    const handPaused = raw({ handSession: hand, paused: true, problemKind: 'paused', problem: 'It is paused: … Meanwhile "By hand", a session of this experiment that b@lab.org opened by hand, is running. Resume hands it to the autopilot.' })
+    expect(handPaused!.halted).toBe('paused')
+    expect(handPaused!.problem).toMatch(/^It is paused/)
+    expect(autopilotOpensNextSoon(handPaused, 12)).toBe(false)
+    const handAndError = raw({ handSession: hand, problemKind: 'error', problem: 'The last session it opened reported an error: RoundStep failed' })
+    expect(autopilotOpensNextSoon(handAndError, 12)).toBe(false)
+    expect(autopilotHold(handAndError, 12)).toEqual({ by: 'problem' })
     // it doesn't open this experiment's next session by itself at all: nothing to hold up
     for (const st of [raw({ paused: true, problemKind: 'paused', problem: 'It is paused: …' }), raw({ done: true, problemKind: 'done', problem: 'Its session finished' }), raw({}, { continuous: false }), raw({ on: false })]) {
       expect(autopilotOpensNextSoon(st, 12)).toBe(false)
