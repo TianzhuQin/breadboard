@@ -377,19 +377,37 @@ describe('Prolific helpers', () => {
     // between two of its sessions
     await w.setProps({ started: null })
     expect(note()).toMatch(/^The autopilot opens the next session in a moment; until then, the link shows a page that waits for it/)
-    // waiting for another experiment's session on the shared engine to end: no "in a moment"
-    await w.setProps({ waiting: { session: { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' } } })
-    expect(note()).toBe('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine, which every researcher on this server shares. The autopilot opens its next session once that one has ended. Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as soon as it opens.')
-    await w.setProps({ waiting: { session: { id: 4, name: '', experimentId: null, experimentName: null, owner: null } } })
-    expect(note()).toMatch(/^Another experiment’s session, “Session #4”, is running on the script engine/)
-    // for a researcher who has the engine loaded with another experiment
-    await w.setProps({ waiting: { session: null } })
-    expect(note()).toBe('The script engine, which every researcher on this server shares, has another experiment loaded for a researcher whose console is open (the Autopilot page says who). The autopilot opens its next session once they close the console. Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as soon as it opens.')
-    expect(note()).not.toContain('in a moment')
-    await w.setProps({ waiting: null })
     // a session open to newcomers
     await w.setProps({ target: { id: 10, name: 'Autopilot 4', status: 'RUNNING', hasStarted: false } as any })
     expect(w.find('.rc-note--success').text().replace(/\s+/g, ' ')).toContain('Once its game has started, newcomers wait on a page that takes them into the autopilot’s next session as soon as it opens.')
+    w.unmount()
+  })
+
+  it('says, while something keeps the autopilot from opening its next session, that the link turns newcomers away meanwhile', async () => {
+    const StudyLinkCard = (await import('@/pages/recruit/prolific/StudyLinkCard.vue')).default
+    const exp = { id: 12, name: 'Game', instances: [] }
+    const stubs = { RouterLink: { template: '<a><slot /></a>' } }
+    // (the panel passes autopilot: false whenever it is held up)
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const w = mount(StudyLinkCard, { props: { experiment: exp as any, target: null, started: null, autopilot: false, heldUp: { by: 'session', session: other } }, global: { stubs } })
+    const note = () => w.find('.rc-note--warning').text().replace(/\s+/g, ' ')
+    expect(w.find('.rc-note--info').exists()).toBe(false)
+    // waiting for another experiment's session on the shared engine to end
+    expect(note()).toBe('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine, which every researcher on this server shares. The autopilot opens its next session once that one has ended. Until then, the link shows “No session is open right now” and asks people from Prolific to return the study, so pause recruiting on Prolific meanwhile.')
+    await w.setProps({ heldUp: { by: 'session', session: { id: 4, name: '', experimentId: null, experimentName: null, owner: null } } })
+    expect(note()).toMatch(/^Another experiment’s session, “Session #4”, is running on the script engine/)
+    // for a researcher who has the engine loaded with another experiment
+    await w.setProps({ heldUp: { by: 'engine' } })
+    expect(note()).toBe('The script engine, which every researcher on this server shares, has another experiment loaded for a researcher whose console is open (the Autopilot page says who). The autopilot opens its next session once they close the console. Until then, the link shows “No session is open right now” and asks people from Prolific to return the study, so pause recruiting on Prolific meanwhile.')
+    // a problem the Autopilot page shows (the last session reported an error, the disk is almost full, ...)
+    await w.setProps({ heldUp: { by: 'problem' } })
+    expect(note()).toBe('The Autopilot page shows a problem. While it does, the link shows “No session is open right now” instead of a page that waits for the autopilot’s next session, and asks people from Prolific to return the study: pause recruiting on Prolific until the problem is gone.')
+    await w.setProps({ started: { id: 9, name: 'Autopilot 3', status: 'RUNNING', hasStarted: true } as any })
+    expect(note()).toMatch(/^The game in Autopilot 3 has started, and the Autopilot page shows a problem\. While it does, the link shows “No session is open right now”/)
+    for (const text of [note(), w.text()]) {
+      expect(text).not.toContain('takes newcomers in')
+      expect(text).not.toContain('in a moment')
+    }
     w.unmount()
   })
 
@@ -534,7 +552,17 @@ describe('Recruitment page with the autopilot', () => {
     w.unmount()
   })
 
-  it('says, while the autopilot waits for another experiment’s session to end, that it opens the next one then, not in a moment', async () => {
+  /** What the page promises newcomers who find no session open, as the study link's pages do then. */
+  function promises (w: any) {
+    const text = w.text().replace(/\s+/g, ' ')
+    return {
+      text,
+      holds: ['takes newcomers in', 'wait on a page', 'Late arrivals wait for the next session.'].some(t => text.includes(t)),
+      turnsAway: text.includes('Otherwise they see “No session is open right now”.') && text.includes('Late arrivals are turned away politely.'),
+    }
+  }
+
+  it('says, while the autopilot waits for another experiment’s session to end, that the link turns newcomers away until then', async () => {
     admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [{ id: 6, name: 'Autopilot 6', status: 'FINISHED', hasStarted: true, hits: [] }] }
     admin.instance = { id: 6, name: 'Autopilot 6', status: 'FINISHED', hasStarted: true, hits: [] }
     const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
@@ -545,13 +573,101 @@ describe('Recruitment page with the autopilot', () => {
         problem: 'Another session is running: "pilot 3" (a@lab.org). The autopilot opens its own session once that one has ended and the engine is free.',
       },
     })
-    const text = () => w.text().replace(/\s+/g, ' ')
-    expect(text()).toContain('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine')
-    expect(text()).toContain('The autopilot opens its next session once that one has ended.')
-    expect(text()).not.toContain('in a moment')
-    // (late arrivals still wait on the page that takes them into it)
-    expect(text()).toContain('Late arrivals wait for the next session.')
+    const { text, holds, turnsAway } = promises(w)
+    expect(text).toContain('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine')
+    expect(text).toContain('The autopilot opens its next session once that one has ended. Until then, the link shows “No session is open right now” and asks people from Prolific to return the study, so pause recruiting on Prolific meanwhile.')
+    expect(text).not.toContain('in a moment')
+    // as the study link's pages say then (Autopilot.opensNextSoon): no session is open
+    expect(holds).toBe(false)
+    expect(turnsAway).toBe(true)
     w.unmount()
+  })
+
+  it('says, while a researcher has another experiment loaded in the engine, that the link turns newcomers away until the autopilot can open its session', async () => {
+    admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [] }
+    admin.instance = null
+    const w = await page({
+      settings: { continuous: true, nextSessionDelaySeconds: 10 },
+      status: {
+        on: true, experimentId: 3, experimentName: 'Trust game', instance: null, engineSession: null, problemKind: 'waiting',
+        problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open, so the autopilot leaves the engine to them.',
+      },
+    })
+    const { text, holds, turnsAway } = promises(w)
+    expect(text).toContain('has another experiment loaded for a researcher whose console is open')
+    expect(text).toContain('Until then, the link shows “No session is open right now” and asks people from Prolific to return the study')
+    expect(holds).toBe(false)
+    expect(turnsAway).toBe(true)
+    w.unmount()
+  })
+
+  it('says, while the Autopilot page shows a problem, that the link turns newcomers away, also during the autopilot’s own game', async () => {
+    const w = await page({
+      settings: { continuous: true, nextSessionDelaySeconds: 10 },
+      status: {
+        on: true, experimentId: 3, experimentName: 'Trust game', instance: { id: 7, name: 'Autopilot 7', status: 'RUNNING' }, engineSession: null,
+        problemKind: 'error', problem: 'The last session it opened reported an error: RoundStep failed at line 72',
+      },
+    })
+    const { text, holds, turnsAway } = promises(w)
+    expect(text).toContain('The game in Autopilot 7 has started, and the Autopilot page shows a problem. While it does, the link shows “No session is open right now”')
+    expect(text).not.toContain('The autopilot opens the next session when it ends')
+    expect(holds).toBe(false)
+    expect(turnsAway).toBe(true)
+    w.unmount()
+  })
+
+  it('asks the server again while the page is open, and as the engine starts another session, so what it promises follows', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [] }
+      admin.instance = null
+      const free = { settings: { continuous: true, nextSessionDelaySeconds: 10 }, status: { on: true, experimentId: 3, experimentName: 'Trust game', instance: null } }
+      const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+      const waiting = {
+        settings: free.settings,
+        status: { ...free.status, engineSession: other, problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).' },
+      }
+      let answer: any = free
+      const w = await page(null)
+      vi.mocked(http.get).mockImplementation(async (url: string) => {
+        if (url === '/autopilot') return answer
+        throw new HttpError(404, 'Not found')
+      })
+      const asked = () => vi.mocked(http.get).mock.calls.filter(([u]) => u === '/autopilot').length
+      // (the page asked once as it opened, before the answer above was set: ask again now)
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(promises(w).text).toContain('The autopilot opens the next session in a moment')
+      expect(promises(w).holds).toBe(true)
+      // another experiment's session opens on the engine: every console hears, and the page asks again
+      answer = waiting
+      const before = asked()
+      admin.user = { engine: { experimentId: 5, experimentName: 'Ultimatum', sessionId: 4, sessionName: 'pilot 3', owner: 'a@lab.org' } }
+      await flushPromises()
+      expect(asked()).toBe(before + 1)
+      expect(promises(w).holds).toBe(false)
+      expect(promises(w).turnsAway).toBe(true)
+      // what no console hears of (the autopilot's session reported an error, say): the next ask finds it
+      answer = free
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(promises(w).holds).toBe(true)
+      answer = { settings: free.settings, status: { ...free.status, problemKind: 'error', problem: 'There is no admin account to open sessions as.' } }
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(promises(w).holds).toBe(false)
+      expect(promises(w).text).toContain('The Autopilot page shows a problem.')
+      w.unmount()
+      // and stops asking once the page is closed
+      const after = asked()
+      vi.advanceTimersByTime(30000)
+      await flushPromises()
+      expect(asked()).toBe(after)
+    } finally {
+      delete admin.user
+      vi.useRealTimers()
+    }
   })
 
   it('says the link leads nowhere while the autopilot is paused', async () => {

@@ -1,4 +1,4 @@
-import { onMounted, ref, watch, type Ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { http } from '@/lib/http'
 import { admin } from '@/store/admin'
 import type { EngineInfo } from '@/store/types'
@@ -25,6 +25,13 @@ export interface AutopilotStatus {
    * (`session` null). Null when it waits for neither.
    */
   waiting: { session: EngineSession | null } | null
+  /**
+   * Why the autopilot opens no session by itself now, in the server's words (status.problem), of
+   * whatever kind: paused or done (see `halted`), waiting for the shared engine (see `waiting`), or a
+   * problem the Autopilot page shows (the last session it opened reported an error, the disk is almost
+   * full, there is no admin account to open sessions as, …). Null when nothing keeps it from opening one.
+   */
+  problem: string | null
 }
 
 /** The status's reason to open no new session until Resume (newer servers say problemKind too). */
@@ -37,9 +44,11 @@ function haltedOf (st: any): AutopilotStatus['halted'] {
 /**
  * Whether Breadboard runs this experiment's sessions by itself. Only a hint on this page (the
  * Autopilot page owns the settings), so a server without the route, or a failed request,
- * leaves it null and the page shows its plain link to Autopilot instead.
+ * leaves it null and the page shows its plain link to Autopilot instead. `everyMs` also asks again
+ * that often while the page is in view, for what no console hears about (a session of the autopilot
+ * that reported an error, say).
  */
-export function useAutopilotStatus (): Ref<AutopilotStatus | null> {
+export function useAutopilotStatus (opts: { everyMs?: number } = {}): Ref<AutopilotStatus | null> {
   const status = ref<AutopilotStatus | null>(null)
   let seq = 0
   async function load () {
@@ -53,10 +62,20 @@ export function useAutopilotStatus (): Ref<AutopilotStatus | null> {
       if (mine === seq) status.value = null
     }
   }
-  onMounted(load)
-  // a session opening or finishing may be the autopilot's doing; and every console hears when the
-  // autopilot is switched off, paused, resumed or saved while a session is live (engine.autopilotSession)
-  watch(() => [admin.experiment?.id, admin.instance?.id, admin.instance?.status, admin.user?.engine?.autopilotSession], () => { void load() })
+  let timer: ReturnType<typeof setInterval> | undefined
+  onMounted(() => {
+    void load()
+    if (opts.everyMs) timer = setInterval(() => { if (document.visibilityState !== 'hidden') void load() }, opts.everyMs)
+  })
+  onBeforeUnmount(() => clearInterval(timer))
+  // A session opening or finishing may be the autopilot's doing; every console hears when the
+  // autopilot is switched off, paused, resumed or saved while a session is live (engine.autopilotSession),
+  // and when the engine starts or ends a session or loads another experiment, which the autopilot
+  // may wait for (engine.sessionId, engine.experimentId).
+  watch(() => [
+    admin.experiment?.id, admin.instance?.id, admin.instance?.status,
+    admin.user?.engine?.autopilotSession, admin.user?.engine?.sessionId, admin.user?.engine?.experimentId,
+  ], () => { void load() })
   return status
 }
 
@@ -74,12 +93,47 @@ export function autopilotStatusOf (s: any): AutopilotStatus | null {
     nextSessionDelaySeconds: Number(s.settings?.nextSessionDelaySeconds) || 0,
     halted: haltedOf(s.status),
     waiting: problemKind(state) === 'waiting' ? { session: state.status.engineSession } : null,
+    problem: state.status.problem,
   }
 }
 
 /** True when the autopilot is on for this experiment. */
 export function autopilotRuns (s: AutopilotStatus | null, experimentId: number | null | undefined): boolean {
   return !!s && s.on && s.experimentId != null && s.experimentId === experimentId
+}
+
+/**
+ * True when the autopilot opens this experiment's next session by itself: it is on for it, opens the
+ * next one when one finishes (continuous), and is neither paused nor done. Something may still keep it
+ * from opening one for now (autopilotHold).
+ */
+export function autopilotOpensNext (s: AutopilotStatus | null, experimentId: number | null | undefined): boolean {
+  return autopilotRuns(s, experimentId) && !!s && s.continuous && !s.halted
+}
+
+/**
+ * What keeps the autopilot, which opens this experiment's sessions by itself (autopilotOpensNext),
+ * from opening the next one now: another experiment's session that runs on the shared engine
+ * (`session`), a researcher who has another experiment loaded there (`engine`), or a problem the
+ * Autopilot page shows (`problem`). Null when nothing does, or when it doesn't open them by itself.
+ */
+export type AutopilotHold = { by: 'session', session: EngineSession } | { by: 'engine' } | { by: 'problem' }
+export function autopilotHold (s: AutopilotStatus | null, experimentId: number | null | undefined): AutopilotHold | null {
+  if (!s || !autopilotOpensNext(s, experimentId) || !s.problem) return null
+  if (s.waiting?.session) return { by: 'session', session: s.waiting.session }
+  if (s.waiting) return { by: 'engine' }
+  return { by: 'problem' }
+}
+
+/**
+ * True when the autopilot opens this experiment's next session by itself, and nothing keeps it from
+ * doing so now (no status.problem of any kind). The server decides the same way what the study's
+ * links show while no session takes newcomers (Autopilot.opensNextSoon): a page that holds them until
+ * the autopilot's next session opens; otherwise "No session is open right now", which asks Prolific
+ * participants to return the study.
+ */
+export function autopilotOpensNextSoon (s: AutopilotStatus | null, experimentId: number | null | undefined): boolean {
+  return autopilotOpensNext(s, experimentId) && !!s && !s.problem
 }
 
 /**

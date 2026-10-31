@@ -996,6 +996,37 @@ describe('SessionPage', () => {
     autopilotHint.status = null
   })
 
+  it('tells when the autopilot opens the next session soon, as the server does for the study links, and what keeps it from it', async () => {
+    const { autopilotHold, autopilotOpensNextSoon, autopilotStatusOf } = await import('../src/pages/session/autopilot')
+    const raw = (status: any, settings: any = {}) => autopilotStatusOf({ settings: { continuous: true, nextSessionDelaySeconds: 10, ...settings }, status: { on: true, experimentId: 12, instance: null, ...status } })
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    // nothing in the way (Autopilot.opensNextSoon): on for this experiment, continuous, neither paused nor done, no problem
+    expect(autopilotOpensNextSoon(raw({}), 12)).toBe(true)
+    expect(autopilotHold(raw({}), 12)).toBe(null)
+    expect(raw({ problem: 'There is no admin account to open sessions as.', problemKind: 'error' })!.problem).toBe('There is no admin account to open sessions as.')
+    // another experiment's session on the shared engine, or a researcher who has another experiment loaded there
+    const waitingForSession = raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other })
+    expect(autopilotOpensNextSoon(waitingForSession, 12)).toBe(false)
+    expect(autopilotHold(waitingForSession, 12)).toEqual({ by: 'session', session: other })
+    const waitingForEngine = raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' })
+    expect(autopilotOpensNextSoon(waitingForEngine, 12)).toBe(false)
+    expect(autopilotHold(waitingForEngine, 12)).toEqual({ by: 'engine' })
+    // any other problem the Autopilot page shows: the last session reported an error, the disk is almost full, ...
+    for (const problem of ['The last session it opened reported an error: RoundStep failed', 'The disk is almost full (80 MB free where the database is kept)']) {
+      const st = raw({ problemKind: 'error', problem })
+      expect(autopilotOpensNextSoon(st, 12)).toBe(false)
+      expect(autopilotHold(st, 12)).toEqual({ by: 'problem' })
+    }
+    // it doesn't open this experiment's next session by itself at all: nothing to hold up
+    for (const st of [raw({ paused: true, problemKind: 'paused', problem: 'It is paused: …' }), raw({ done: true, problemKind: 'done', problem: 'Its session finished' }), raw({}, { continuous: false }), raw({ on: false })]) {
+      expect(autopilotOpensNextSoon(st, 12)).toBe(false)
+      expect(autopilotHold(st, 12)).toBe(null)
+    }
+    expect(autopilotOpensNextSoon(raw({}), 13)).toBe(false)
+    expect(autopilotHold(waitingForSession, 13)).toBe(null)
+    expect(autopilotOpensNextSoon(null, 12)).toBe(false)
+  })
+
   it('disables Start the game while the engine runs another experiment, and says why', async () => {
     const w = await mountPage()
     expect(startButton(w)!.attributes('disabled')).toBeUndefined()

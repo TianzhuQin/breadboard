@@ -404,10 +404,15 @@ Prolific, choose to record Prolific IDs with URL parameters, and leave the parts
 `{{%PROLIFIC_PID%}}` as they are. Prolific sends people from the internet, so the URL must use the
 server's public address: open the console there to copy it. The page says so when the console was
 opened at localhost or at an address of the lab's own network, and so does the Autopilot page under
-its Prolific link. The link leads to this experiment's open session whose game
-hasn't started, and the page says which one that is now, or warns that participants would see
-"No session is open right now". **Try it as a test participant** opens it with a made-up Prolific
-ID, taking a seat like a real participant.
+its Prolific link. The link leads to this experiment's open session whose game hasn't started, and
+the page says which one that is now, or warns that participants would see
+"No session is open right now". While the autopilot runs the experiment, it says when the link
+holds newcomers for the autopilot's next session instead, and warns when something keeps the
+autopilot from opening it (another experiment's session on the engine, a researcher with another
+experiment loaded, a problem on the Autopilot page): the link then says that no session is open and
+asks Prolific participants to return the study, so pause recruiting meanwhile.
+**Try it as a test participant** opens it with a made-up Prolific ID, taking a seat like a real
+participant.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
 recorded in a `prolificEntry` event. **When a participant finishes** builds the code for your last
