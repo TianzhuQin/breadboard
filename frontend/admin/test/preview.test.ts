@@ -27,7 +27,18 @@ vi.mock('@/store/admin', async () => {
   const { reactive } = await import('vue')
   const { LiveGraph } = await import('../src/lib/graph')
   const { computed, ref } = await import('vue')
-  const admin = reactive({ experiment: null as any, instance: null as any, engine: 'ready', events: [] as any[] })
+  const admin = reactive({
+    experiment: null as any,
+    instance: null as any,
+    engine: 'ready',
+    events: [] as any[],
+    output: [] as any[],
+    // what the engine runs (newer servers say whether its game has started)
+    user: null as any,
+    engineInfoCurrent: true,
+    engineInfoAt: 0,
+    engineReloadedAt: 0,
+  })
   const actions = { selectInstance: vi.fn(async () => ({ user: {} })) }
   const running = computed(() => admin.instance?.status === 'RUNNING')
   return { admin, graph: new LiveGraph(), actions, running, connectionState: ref('open') }
@@ -267,6 +278,7 @@ describe('PreviewPage', () => {
     Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false, device: 'desktop', size: 'M', interactive: false })
     store.admin.experiment = { id: 7, name: 'Trust game', instances: [] }
     store.admin.instance = { id: 44, name: 'pilot', status: 'RUNNING', creationTime: '', hitId: '', hits: [], data: [] }
+    Object.assign(store.admin, { user: null, events: [], output: [], engineInfoCurrent: true, engineInfoAt: 0, engineReloadedAt: 0 })
     route.query = {}
     try { localStorage.clear() } catch (e) { /* ignore */ }
   })
@@ -933,6 +945,34 @@ describe('PreviewPage', () => {
       store.admin.instance = { ...store.admin.instance, hasStarted: true }
       await settle()
       expect(w.find('.pt__note').text()).toBe('Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.')
+    } finally {
+      w.unmount()
+      http.get.mockReset()
+    }
+  })
+
+  // With breadboard.allowLateJoin the server leaves the session's hasStarted unset, so mid-game the
+  // note said that a waiting room didn't count them. The engine says whether the game has started,
+  // as on Live session.
+  it('says what standing in means now by the engine\'s word on the game, as Live session does', async () => {
+    addPlayer('p2', { _system: { connected: false, preview: true } })
+    await settle()
+    http.get.mockResolvedValue({ settings: { enabled: false }, source: 'off', status: { on: false } })
+    const engine = (gameStarted: boolean) => ({ experimentId: 7, experimentName: 'Trust game', sessionId: 44, sessionName: 'pilot', owner: 'ann@example.org', gameStarted })
+    store.admin.user = { engine: engine(true) }
+    store.admin.engineInfoAt = Date.now()
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p2']
+    const w = await mountPage()
+    try {
+      await settle()
+      expect(store.admin.instance.hasStarted).toBeUndefined()
+      expect(w.find('.pt__note').text()).toBe('Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.')
+      // a resumed session, whose game hasn't started again: the engine forgot the start
+      store.admin.instance = { ...store.admin.instance, hasStarted: true }
+      store.admin.user = { engine: engine(false) }
+      await settle()
+      expect(w.find('.pt__note').text()).toBe('Away: you are standing in, but they count as away, so a waiting room doesn’t count them.')
     } finally {
       w.unmount()
       http.get.mockReset()

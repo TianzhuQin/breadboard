@@ -174,6 +174,8 @@ import { playerName } from '@/network/players'
 import { describeError } from '../experiments/experiments'
 import { canResume } from '../sessions/sessionData'
 import { autopilotNow } from '../autopilot/autopilot'
+import { detectGameStarted, engineGameFlag } from '../session/live'
+import { fromLive } from '../session/events'
 import { useSessionActions } from '../sessions/useSessionActions'
 import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
@@ -223,8 +225,21 @@ function noteOf (t: { id: string, data: Record<string, any>, missing: boolean })
   if (t.missing) return admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''
   if (previewRole(t) !== 'away') return ''
   const known = takeover.value?.instanceId === inst.value?.id ? takeover.value : null
-  return awayText(t, { gameStarted: inst.value?.hasStarted === true, takeoverSeconds: known?.seconds ?? null, returnToHuman: known?.returnToHuman ?? null })
+  return awayText(t, { gameStarted: gameStarted.value, takeoverSeconds: known?.seconds ?? null, returnToHuman: known?.returnToHuman ?? null })
 }
+
+/**
+ * The session's game has started, as Live session says it: the engine's own word, when it runs this
+ * session. (The session's hasStarted alone said a waiting room still counted, mid-game, when people
+ * may join late: breadboard.allowLateJoin leaves it unset.)
+ */
+const gameStarted = computed(() => detectGameStarted({
+  hasStarted: inst.value?.hasStarted,
+  events: admin.events.filter(Boolean).map(fromLive),
+  output: admin.output,
+  since: admin.engineReloadedAt,
+  engine: engineGameFlag(admin.user?.engine, admin.engineInfoCurrent, inst.value?.id, admin.engineInfoAt),
+}).started)
 
 // What the computer does with the seat of someone away, said on their tile, when the console knows
 // it: in the autopilot's own session, with its takeover switched on, how long it waits before it
