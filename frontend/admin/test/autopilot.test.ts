@@ -26,7 +26,7 @@ import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
   participantLinks, pauseFailure, pausedLine, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
-  stepsCall, stepsMaxWait,
+  stepsCall, stepsMaxWait, failureNoticeText,
 } from '../src/pages/autopilot/autopilot'
 import { HttpError } from '../src/lib/http'
 import { unsavedTotal } from '../src/shell/unsaved'
@@ -131,6 +131,20 @@ describe('reading the server\'s answer', () => {
     expect(st.noticeAt).toBe('2026-10-29T10:05:00Z')
     expect(normalizeState({ status: { on: true } }).status).toMatchObject({ notice: null, noticeAt: null })
     expect(normalizeState({ status: { notice: ' ', noticeAt: 'later' } }).status).toMatchObject({ notice: null, noticeAt: null })
+  })
+  it('reads the notice of a step failure the game went on after, and says it in words', () => {
+    const raw = { step: 'RoundStep', line: 81, error: 'No such property: roundNoteText for class: Script12', sessionId: 12, session: 'Autopilot · 2026-10-31 19:23:41 UTC', at: '2026-10-31T19:41:30.120Z', count: 1 }
+    const n = normalizeState({ status: { on: true, failureNotice: raw } }).status.failureNotice!
+    expect(n).toEqual(raw)
+    expect(failureNoticeText(n)).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on).')
+    expect(failureNoticeText({ ...n, count: 4 })).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on). '
+      + 'The latest of 4 such failures since the settings were saved or Resume was pressed.')
+    expect(failureNoticeText({ ...n, line: null, session: null })).toBe('RoundStep failed in session #12 (the game went on).')
+    // an older server, or nothing to say
+    expect(normalizeState({ status: { on: true } }).status.failureNotice).toBeNull()
+    expect(normalizeState({ status: { failureNotice: { step: ' ' } } }).status.failureNotice).toBeNull()
+    expect(normalizeState({ status: { failureNotice: { step: 'X', line: '7', count: 'two', at: 'later' } } }).status.failureNotice)
+      .toMatchObject({ step: 'X', line: 7, count: 1, at: null, error: null, session: null })
   })
   it('reads the state, with unknown sources as "off"', () => {
     const st = normalizeState({ source: 'weird', status: { on: 1, instance: { id: 3, name: 'auto', status: 'RUNNING' } } })
@@ -966,6 +980,36 @@ describe('Autopilot page', () => {
     http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null } }))
     const w2 = await mountPage()
     expect(w2.find('.apst__notice').exists()).toBe(false)
+    w2.unmount()
+  })
+
+  // While its session ran, recent activity said "RoundStep failed at line 81; the game went on"; once
+  // the next session had opened, 10 s after the game ended, nothing on the page said so any more.
+  it('keeps a step failure the game went on after, once the next session has opened, with the way to the step', async () => {
+    const failureNotice = { step: 'RoundStep', line: 81, error: 'No such property: roundNoteText for class: Script306', sessionId: 10,
+      session: 'Autopilot · 2026-10-31 19:23:41 UTC', at: new Date().toISOString(), count: 2 }
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 11, name: 'Autopilot · 2026-10-31 19:41:47 UTC', status: 'RUNNING' }, links: null, failureNotice },
+    }))
+    const w = await mountPage()
+    const box = w.findAll('.apst__notice').find(b => b.text().includes('the game went on'))!
+    expect(box.attributes('role')).toBe('status')
+    expect(box.find('.apst__problem-title').text()).toMatch(/^A step failed, and the game went on \(at .+\)$/)
+    expect(box.find('.apst__problem-text').text()).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on). '
+      + 'The latest of 2 such failures since the settings were saved or Resume was pressed.')
+    // what went wrong, in the words the Steps page uses
+    expect(box.text()).toContain('Unknown name “roundNoteText”')
+    const link = box.find('a.apst__open-step')
+    expect(link.text()).toBe('Open RoundStep at line 81')
+    expect(link.attributes('href')).toBe('/steps?step=RoundStep&line=81&experiment=12')
+    // the autopilot runs on: nothing to resume
+    expect(w.find('.apst__title').text()).toBe('The autopilot is on')
+    w.unmount()
+
+    http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null, failureNotice: null } }))
+    const w2 = await mountPage()
+    expect(w2.text()).not.toContain('the game went on')
     w2.unmount()
   })
 

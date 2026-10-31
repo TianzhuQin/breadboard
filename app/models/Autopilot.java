@@ -131,6 +131,12 @@ public final class Autopilot {
   // (status.notice); kept until the settings are saved or Resume is pressed.
   private static volatile String notice = null;
   private static volatile long noticeAt = 0L;
+  // The last step failure in its own session that the game went on after (failureWentOn), with how many
+  // there have been, for the console (status.failureNotice); kept, like the notice above, until the
+  // settings are saved or Resume is pressed: in an unattended run, the session may have finished and
+  // the next one opened before anyone looks. failuresSeenAt is when that last happened.
+  private static volatile FailureNotice failureNotice = null;
+  private static volatile long failuresSeenAt = 0L;
   // How long its own session's game may have nothing to wait for, after a step failure was recorded
   // in it, before it is ended (watchForStall). A field so tests can shorten it.
   static volatile long stallMs = 60000L;
@@ -780,6 +786,65 @@ public final class Autopilot {
     return true;
   }
 
+  /** A step failure in its own session that the game went on after: where, in which session, how many so far. */
+  static final class FailureNotice {
+    final String step;
+    final Integer line;
+    final String error;
+    final Long sessionId;
+    final String session;
+    final long at;
+    final int count;
+
+    FailureNotice(String step, Integer line, String error, Long sessionId, String session, long at, int count) {
+      this.step = step;
+      this.line = line;
+      this.error = error;
+      this.sessionId = sessionId;
+      this.session = session;
+      this.at = at;
+      this.count = count;
+    }
+  }
+
+  /**
+   * A step failed in the game of session {@code sessionId} and the game went on: the failure didn't keep
+   * the next step from getting going (ScriptBoard.gameFailed). {@code error} is "line N: what went
+   * wrong". When that is its own session, the Autopilot page says so (status.failureNotice) until the
+   * settings are saved or Resume is pressed, as it does for a session that ran out of time: its recent
+   * activity, which also lists it, is about the open session only, and the next one opens a few seconds
+   * after a game ends. Any other session's failure is left to the researcher running it, who sees it.
+   */
+  static void failureWentOn(final Long sessionId, final String step, final String error) {
+    if (!isOwnSession(sessionId)) {
+      return;
+    }
+    final long at = System.currentTimeMillis();
+    later(new Runnable() {
+      public void run() {
+        // (not one from before a save or Resume that got here after it)
+        if (at < failuresSeenAt) {
+          return;
+        }
+        ExperimentInstance instance = ExperimentInstance.findById(sessionId);
+        String name = instance == null ? null : instance.name;
+        // (the step, its line and what went wrong, as sessionFailed records them)
+        LinkedHashMap<Object, Object> place = ScriptBoard.sessionFailedData(step, error);
+        Integer line = null;
+        try {
+          line = place.get("line") == null ? null : Integer.valueOf(place.get("line").toString());
+        } catch (NumberFormatException tooLong) {
+          line = null;
+        }
+        Object what = place.get("error");
+        FailureNotice before = failureNotice;
+        failureNotice = new FailureNotice(step, line, what == null ? null : what.toString(), sessionId, name, at,
+            (before == null ? 0 : before.count) + 1);
+        Logger.info("Autopilot: the step " + step + " failed during session " + name + " (" + error + "); the game went on");
+      }
+    });
+  }
+
   /**
    * Whether this is the session the autopilot opened (or was handed, see adoptLiveSession), and it has
    * been neither paused nor done since. A researcher's Launch while its session runs pauses it first,
@@ -902,6 +967,9 @@ public final class Autopilot {
     notice = null;
     noticeAt = 0L;
     tooLongInARow = 0;
+    // and so did the step failures its sessions went on after
+    failuresSeenAt = System.currentTimeMillis();
+    failureNotice = null;
   }
 
   /**
@@ -1529,6 +1597,25 @@ public final class Autopilot {
     } else {
       status.put("notice", said);
       status.put("noticeAt", Timestamps.iso(new Date(saidAt)));
+    }
+    // The last step failure in its own session that the game went on after (failureWentOn), until a
+    // save or Resume.
+    FailureNotice failed = failureNotice;
+    if (failed == null) {
+      status.putNull("failureNotice");
+    } else {
+      ObjectNode failure = status.putObject("failureNotice");
+      failure.put("step", failed.step);
+      if (failed.line == null) {
+        failure.putNull("line");
+      } else {
+        failure.put("line", failed.line);
+      }
+      failure.put("error", failed.error);
+      failure.put("sessionId", failed.sessionId);
+      failure.put("session", failed.session);
+      failure.put("at", Timestamps.iso(new Date(failed.at)));
+      failure.put("count", failed.count);
     }
     return status;
   }

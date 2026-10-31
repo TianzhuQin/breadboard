@@ -64,11 +64,12 @@ public class AutopilotGuardTest extends BaseTest {
             engine().eval("autopilot.stop(); timers.cancel(); null");
         } catch (Exception ignored) {}
         setStatic("launchRequestedAt", 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession", "notice", "quietSession", "endingTooLong"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession", "notice", "quietSession", "endingTooLong", "failureNotice"}) {
             setStatic(name, null);
         }
         setStatic("nextOpenAt", 0L);
         setStatic("noticeAt", 0L);
+        setStatic("failuresSeenAt", 0L);
         setStatic("tooLongInARow", 0);
         setStatic("stallMs", 60000L);
         setStatic("guardWaitMs", 5000L);
@@ -911,6 +912,103 @@ public class AutopilotGuardTest extends BaseTest {
         await("the end of the game", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
         assertFalse(autopilotStatus(researcher).get("paused").asBoolean());
         assertEquals(0, events(session, "sessionStalled").size());
+    }
+
+    // A round whose done starts the last step, which offers everyone a choice that ends the game, and
+    // then has a typo at its line 6 (recorded; the game goes on).
+    private static final String FAILS_AND_GOES_ON = "roundStep = stepFactory.createStep('RoundStep')\n"
+        + "roundStep.duration = 0.3\n"
+        + "roundStep.run = { }\n"
+        + "roundStep.done = {\n"
+        + "  lastStep.start()\n"
+        + "  println \"round ${roundd} done\"\n"
+        + "}\n"
+        + "lastStep = stepFactory.createStep('LastStep')\n"
+        + "lastStep.run = { g.V.filter { !it.id.startsWith('_') }.each { p -> a.add(p, [name: 'Done', result: { }]) } }\n"
+        + "lastStep.done = { lastStep.finish() }";
+
+    // A failure the game went on after was listed under the page's recent activity only while its
+    // session was open: once it finished and the next one opened (10 s later), nothing showed that a
+    // step fails every round.
+    @Test
+    public void aStepFailureTheGameWentOnAfterStaysOnTheAutopilotPageUntilASaveOrResume() throws Exception {
+        final User researcher = user("wenton");
+        final Experiment experiment = createExperiment("Fails and goes on");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { roundStep.start() }");
+        createStep(experiment, "RoundStep", FAILS_AND_GOES_ON);
+        own(researcher, experiment);
+        ObjectNode s = settings(experiment, 1, 1, 120);
+        assertEquals(OK, status(post(researcher, s)));
+        assertTrue(autopilotStatus(researcher).get("failureNotice").isNull());
+
+        // the first session's game: the failure, recorded, and the game goes on to its end
+        final ExperimentInstance first = nextSession(experiment, 1);
+        arrives("wenton-1");
+        await("the failure", () -> events(first, "stepFailed").size() == 1);
+        await("the notice", () -> !autopilotStatus(researcher).get("failureNotice").isNull());
+        JsonNode notice = autopilotStatus(researcher).get("failureNotice");
+        assertEquals(notice.toString(), "RoundStep", notice.get("step").asText());
+        assertEquals(notice.toString(), 6, notice.get("line").asInt());
+        assertTrue(notice.toString(), notice.get("error").asText().startsWith("No such property: roundd"));
+        assertEquals(first.name, notice.get("session").asText());
+        assertEquals(first.id.longValue(), notice.get("sessionId").asLong());
+        assertEquals(1, notice.get("count").asInt());
+        assertTrue(notice.get("at").asText().endsWith("Z"));
+        assertFalse(autopilotStatus(researcher).get("paused").asBoolean());
+        await("round 2's choice", () -> ((Number) engineValue("a.actions.size()")).intValue() == 1);
+        everyoneChooses();
+        await("the end of the game", () -> ExperimentInstance.findById(first.id).status == ExperimentInstance.Status.FINISHED);
+
+        // the next session opens: the notice stays, and counts its game's failure too
+        final ExperimentInstance second = nextSession(experiment, 2);
+        assertEquals(first.name, autopilotStatus(researcher).get("failureNotice").get("session").asText());
+        arrives("wenton-2");
+        await("the second failure", () -> events(second, "stepFailed").size() == 1);
+        await("the notice of it", () -> autopilotStatus(researcher).get("failureNotice").get("count").asInt() == 2);
+        assertEquals(second.name, autopilotStatus(researcher).get("failureNotice").get("session").asText());
+
+        // Resume (or a save) means the researcher has seen it
+        assertEquals(OK, status(resume(researcher)));
+        assertTrue(autopilotStatus(researcher).get("failureNotice").isNull());
+        await("round 2's choice", () -> ((Number) engineValue("a.actions.size()")).intValue() == 1);
+        everyoneChooses();
+        await("the end of the second game", () -> ExperimentInstance.findById(second.id).status == ExperimentInstance.Status.FINISHED);
+        final ExperimentInstance third = nextSession(experiment, 3);
+        arrives("wenton-3");
+        await("the third failure", () -> events(third, "stepFailed").size() == 1);
+        await("a new notice", () -> !autopilotStatus(researcher).get("failureNotice").isNull());
+        assertEquals(1, autopilotStatus(researcher).get("failureNotice").get("count").asInt());
+        assertEquals(OK, status(post(researcher, s)));
+        assertTrue(autopilotStatus(researcher).get("failureNotice").isNull());
+    }
+
+    @Test
+    public void aStepFailureInASessionRunByHandLeavesNoNoticeOnTheAutopilotPage() throws Exception {
+        final User researcher = user("handfail");
+        final Experiment experiment = createExperiment("Fails by hand");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { roundStep.start() }");
+        createStep(experiment, "RoundStep", FAILS_AND_GOES_ON);
+        own(researcher, experiment);
+        assertEquals(OK, status(post(researcher, settings(experiment, 2, null, 120))));
+        nextSession(experiment, 1);
+
+        // The researcher takes over with a session of their own (the autopilot pauses), and its game
+        // fails as the autopilot's would: theirs to see, on Live session.
+        final AdminSocketsTest.Tab tab = console(researcher, experiment);
+        tab.send("LaunchGame", "name", "by hand", "parameters", Json.newObject());
+        await("their session", () -> named(experiment, "by hand") != null
+            && named(experiment, "by hand").status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance byHand = named(experiment, "by hand");
+        engine().eval("g.addPlayer('handfail-1'); null");
+        tab.send("RunGame");
+        await("the failure", () -> events(byHand, "stepFailed").size() == 1);
+        Thread.sleep(300);
+        assertTrue(autopilotStatus(researcher).get("failureNotice").isNull());
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(byHand.id).status);
     }
 
     @Test

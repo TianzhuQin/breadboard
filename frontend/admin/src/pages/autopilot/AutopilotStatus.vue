@@ -68,6 +68,21 @@
       </div>
     </div>
 
+    <!-- a step failure in its own session that the game went on after: kept until the settings are saved
+         or Resume is pressed, as the next session opens a few seconds after a game ends -->
+    <div v-if="wentOn" class="apst__problem apst__notice" role="status">
+      <TriangleAlert :size="16" aria-hidden="true" />
+      <div>
+        <p class="apst__problem-title">A step failed, and the game went on{{ wentOnTime ? ` (at ${wentOnTime})` : '' }}</p>
+        <p class="apst__problem-text">{{ failureNoticeText(wentOn) }}</p>
+        <EngineError v-if="wentOn.error" class="apst__problem-err" :error="wentOn.error" :own-name="wentOn.step" />
+        <RouterLink class="apst__open-step" :to="stepAt(wentOn.step, wentOn.line, status.experimentId)">
+          Open {{ wentOn.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ wentOn.line ? ` at line ${wentOn.line}` : '' }}
+          <ArrowRight :size="14" aria-hidden="true" />
+        </RouterLink>
+      </div>
+    </div>
+
     <div v-if="status.on || status.instance" class="apst__block" aria-live="polite">
       <h3 class="apst__label">Open session</h3>
       <div v-if="status.instance" class="apst__session">
@@ -140,7 +155,9 @@ import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
 import LocalOnlyNote from '../session/LocalOnlyNote.vue'
 import EngineError from '../console/EngineError.vue'
-import { describeEngineSession, haltOf, pauseFailure, pausedLine, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import {
+  describeEngineSession, failureNoticeText, haltOf, pauseFailure, pausedLine, problemKind, type AutopilotState, type WaitingRoomLive,
+} from './autopilot'
 import { stepAt } from '../steps/stepsModel'
 import { admin } from '@/store/admin'
 
@@ -266,15 +283,20 @@ function timeOf (iso: string) {
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-/** When the session in the notice was ended: a time today, else a date and time. */
-const noticeTime = computed(() => {
-  const at = status.value.noticeAt ? new Date(status.value.noticeAt) : null
+/** A time today, else a date and time. */
+function shortWhen (iso: string | null): string {
+  const at = iso ? new Date(iso) : null
   if (!at || isNaN(at.getTime())) return ''
   const today = at.toDateString() === new Date().toDateString()
   return today
     ? at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
     : at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-})
+}
+/** When the session in the notice was ended. */
+const noticeTime = computed(() => shortWhen(status.value.noticeAt))
+/** The last step failure in its own session that the game went on after, and when. */
+const wentOn = computed(() => status.value.failureNotice)
+const wentOnTime = computed(() => shortWhen(wentOn.value?.at ?? null))
 </script>
 
 <style>

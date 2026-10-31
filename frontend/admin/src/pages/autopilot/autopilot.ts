@@ -86,6 +86,25 @@ export interface AutopilotStatus {
    */
   notice: string | null
   noticeAt: string | null
+  /**
+   * The last step failure in its own session that the game went on after, kept until the settings are
+   * saved or Resume is pressed (newer servers); see FailureNotice.
+   */
+  failureNotice: FailureNotice | null
+}
+/**
+ * A step failure in the autopilot's own session that the game went on after (GET /autopilot's
+ * status.failureNotice): the step, its line and what went wrong there, the session, when, and how
+ * many such failures there have been since the settings were saved or Resume was pressed.
+ */
+export interface FailureNotice {
+  step: string
+  line: number | null
+  error: string | null
+  sessionId: number | null
+  session: string | null
+  at: string | null
+  count: number
 }
 export interface AutopilotState {
   settings: AutopilotSettings
@@ -178,6 +197,33 @@ function normalizeEngineSession (raw: any): EngineSession | null {
   }
 }
 
+function normalizeFailureNotice (raw: any): FailureNotice | null {
+  if (!raw || typeof raw !== 'object' || !text(raw.step)) return null
+  const line = Number(raw.line)
+  const at = text(raw.at)
+  const count = Number(raw.count)
+  return {
+    step: text(raw.step)!,
+    line: Number.isInteger(line) && line > 0 ? line : null,
+    error: text(raw.error),
+    sessionId: idOrNull(raw.sessionId),
+    session: text(raw.session),
+    at: at && !isNaN(Date.parse(at)) ? at : null,
+    count: Number.isInteger(count) && count > 0 ? count : 1,
+  }
+}
+
+/**
+ * The notice's line: "RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game
+ * went on).", and how many such failures there have been, when more than one.
+ */
+export function failureNoticeText (n: FailureNotice): string {
+  const where = n.line ? ` at line ${n.line}` : ''
+  const session = n.session ? ` in “${n.session}”` : n.sessionId != null ? ` in session #${n.sessionId}` : ''
+  const more = n.count > 1 ? ` The latest of ${n.count} such failures since the settings were saved or Resume was pressed.` : ''
+  return `${n.step} failed${where}${session} (the game went on).${more}`
+}
+
 function normalizeHandSession (raw: any): HandSession | null {
   if (!raw || typeof raw !== 'object' || idOrNull(raw.id) == null) return null
   return {
@@ -215,6 +261,7 @@ export function normalizeState (raw: any): AutopilotState {
       engineSession: normalizeEngineSession(s.engineSession),
       notice: text(s.notice),
       noticeAt: noticeAt && !isNaN(Date.parse(noticeAt)) ? noticeAt : null,
+      failureNotice: normalizeFailureNotice(s.failureNotice),
     },
   }
 }
