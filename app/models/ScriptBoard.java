@@ -1257,18 +1257,43 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  // Why a researcher's action stopped a live session: sessionStopped's "reason" (with "by", the account).
+  /** Stop session. */
+  static final String STOPPED_BY_STOP = "stopSession";
+  /** Reload engine, when it doesn't carry the session on (another account's, or another experiment's). */
+  static final String STOPPED_BY_RELOAD = "reloadEngine";
+  /** New session (Stop it and create), or a session launched some other way. */
+  static final String STOPPED_BY_NEW_SESSION = "newSession";
+  /** Another session resumed or selected (Resume, Make current). */
+  static final String STOPPED_BY_OTHER_SESSION = "otherSession";
+  /** The autopilot took the engine for its session, as a save of its settings asked (Save and end it now). */
+  static final String STOPPED_BY_AUTOPILOT = "autopilot";
+
+  /** sessionStopped's data: who ended the session ({@code by}, an account) and how ({@code reason}, STOPPED_BY_...). */
+  static LinkedHashMap<Object, Object> stoppedData(User by, String reason) {
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    if (by != null && by.email != null) {
+      data.put("by", by.email);
+    }
+    data.put("reason", reason);
+    return data;
+  }
+
   /**
    * A rebuild of the engine is about to end the live session {@code listener} runs (a launch over it,
    * as Stop it and create does, another session opened, a reload that doesn't carry it on): it ends
-   * for its participants first, as Stop ends it. The computer players go off, the session is marked
-   * stopped (a page that comes back is given its end screen), its participants and the previews
-   * watching them are told the session was stopped (a completion code on screen stays), the game's
-   * timers stop and nothing more is recorded in it. The rebuild used to close their sockets without
-   * a word and keep each page's game view as its last screen: a page that came back showed a round
-   * whose buttons did nothing, for as long as it stayed open. Nothing for a session that isn't live,
-   * nor for the test session. Under the engine lock.
+   * for its participants first, as Stop ends it. Its data says so, as Stop's does: sessionStopped, by
+   * the account whose action ended it ({@code by}), with the {@code reason} (STOPPED_BY_...), after
+   * which its game records nothing more; the data of a session ended so used to stop at whatever its
+   * game recorded last, and only the server's log said why. The computer players go off, the session
+   * is marked stopped (a page that comes back is given its end screen), its participants and the
+   * previews watching them are told the session was stopped (a completion code on screen stays), the
+   * game's timers stop and nothing more is recorded in it. The rebuild used to close their sockets
+   * without a word and keep each page's game view as its last screen: a page that came back showed a
+   * round whose buttons did nothing, for as long as it stayed open. Nothing for a session that isn't
+   * live, nor for the test session. Under the engine lock.
    */
-  private static void endBeforeRebuild(GameListener listener) {
+  private static void endBeforeRebuild(GameListener listener, User by, String reason) {
     Long id = instanceIdOf(listener);
     if (id == null || Experiment.TEST_INSTANCE_ID.equals(id)) {
       return;
@@ -1277,6 +1302,11 @@ public class ScriptBoard extends UntypedActor {
     if (live == null || !id.equals(live.id)) {
       return;
     }
+    // Nothing its game still does is recorded after sessionStopped, as for Stop (a participant's choice
+    // made meanwhile, a task of its timers). Recorded in the session itself, whichever session the
+    // server's tracker was last pointed at.
+    retireEngineTracker();
+    EventTracker.record(live, "sessionStopped", stoppedData(by, reason));
     // (the computer players first, as for Stop: a takeover as the pages close would play on)
     if (playerActions != null) {
       playerActions.turnAIOff();
@@ -2596,9 +2626,7 @@ public class ScriptBoard extends UntypedActor {
           // Nothing its game still does is recorded after sessionStopped: a participant's choice made
           // while this runs (their page holds the seat until endParticipants), a task of its timers.
           retireEngineTracker();
-          LinkedHashMap<Object, Object> stopped = new LinkedHashMap<Object, Object>();
-          stopped.put("by", breadboardMessage.user.email);
-          trackEvent("sessionStopped", stopped);
+          trackEvent("sessionStopped", stoppedData(breadboardMessage.user, STOPPED_BY_STOP));
           changeStage("stopping");
           // The computer players off before the timers stop, as a rebuild does: while they are on, a
           // pick asked for afterwards starts a timer of its own, so a takeover as the participants'
@@ -2685,7 +2713,7 @@ public class ScriptBoard extends UntypedActor {
             && own.experiment.id.equals(selectedExperiment.id);
         if (previous != null && !carriesOn) {
           pauseAutopilotIfItsSession(previous, breadboardMessage.user, "ended when %s reloaded the engine", null);
-          endBeforeRebuild(previous);
+          endBeforeRebuild(previous, breadboardMessage.user, STOPPED_BY_RELOAD);
           stopSession(previous);
           if (previous == gameListener) {
             gameListener.experimentInstance = null;
@@ -3397,7 +3425,8 @@ public class ScriptBoard extends UntypedActor {
       if (!byAutopilot) {
         pauseAutopilotIfItsSession(previous, user, "ended when %s launched another session", null);
       }
-      endBeforeRebuild(previous);
+      // (the autopilot ends another experiment's live session only when a save of its settings asked it to)
+      endBeforeRebuild(previous, user, byAutopilot ? STOPPED_BY_AUTOPILOT : STOPPED_BY_NEW_SESSION);
       rebuildScriptBoard(experiment, byAutopilot ? null : user.email);
       stopSession(previous);
       ExperimentInstance instance = startGame(launchGame.name, user.experimentInstanceId, parameters, experiment, user, onAccount);
@@ -3572,7 +3601,7 @@ public class ScriptBoard extends UntypedActor {
       }
       // (the engine's session, unless it is the one selected, which carries on)
       if (previous != null && (continuing == null || !continuing.equals(instanceIdOf(previous)))) {
-        endBeforeRebuild(previous);
+        endBeforeRebuild(previous, user, STOPPED_BY_OTHER_SESSION);
       }
       // The engine's live session selected again carries on in the new engine, as with a reload.
       boolean carriesOn = continuing != null && continuing.equals(instanceIdOf(previous)) && !resuming;

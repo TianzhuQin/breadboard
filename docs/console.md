@@ -271,7 +271,9 @@ starts it. If a session is running, the button reads **Stop it and create**.
 
 A session you stop yourself is no longer the one shown: the page says **No session is open** and
 lists it under **Recent sessions**, the experiment's five newest. Its **Resume** there, or on
-**Sessions & data**, takes it up again; the confirmation's button reads **Resume session**.
+**Sessions & data**, takes it up again; the confirmation's button reads **Resume session**. A session
+of yours that someone else ended stays shown, and the page says who did it and how (stopped it,
+reloaded the engine, created or resumed another session), as its data does.
 
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
@@ -358,8 +360,9 @@ old game that fails as it is replaced isn't reported as the restarted game's. Be
 the console asks while that session's game is in progress or anyone is connected to it, and says
 that the game starts again from the beginning and that the people in it rejoin by themselves.
 Creating a session and resuming one restart the engine too, and so does switching experiments while
-no session is running. While anyone is using it, the console says who before doing any of these, and
-whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
+no session is running. While anyone is using it, the console says who before doing any of these,
+that it stops a session of another researcher or of the autopilot (its participants are told it was
+stopped, and it can be resumed), and whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
 it would end that session.
 
 ## Running sessions with nobody at the console
@@ -596,7 +599,7 @@ of event with a column per data name.
 
 | Download | Where | Contents |
 |---|---|---|
-| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. A participant's page that connects again after its connection dropped is recorded as `connectionGap`, with `awayMs`: how long it was out of touch, also when that was too short to count as leaving. An outage too short for the page to notice (it notices after 15 to 20 seconds without a word from the server), which its connection lives through, isn't recorded. A choice or tie change that reached the server more than 10 seconds after it was given (sent just before a connection died without a word, and delivered as it came back) doesn't count, and is recorded as `answerDropped`, with `ageMs`. |
+| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. `sessionStopped` is recorded however a researcher's action ended the running session, with `by` (the account) and `reason`: `stopSession` (**Stop session**), `reloadEngine` (a **Reload engine** that doesn't carry it on, such as another account's), `newSession` (a new session was created, as **Stop it and create** does), `otherSession` (another session was resumed or selected) or `autopilot` (the autopilot opened its session over it, after a save that asked it to); nothing the session's game does is recorded after it. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. A participant's page that connects again after its connection dropped is recorded as `connectionGap`, with `awayMs`: how long it was out of touch, also when that was too short to count as leaving. An outage too short for the page to notice (it notices after 15 to 20 seconds without a word from the server), which its connection lives through, isn't recorded. A choice or tie change that reached the server more than 10 seconds after it was given (sent just before a connection died without a word, and delivered as it came back) doesn't count, and is recorded as `answerDropped`, with `ageMs`. |
 | **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
 | **Export all**, **Export filtered** | A session's events | The same columns and times as the session's file. Events without data keep a row. |

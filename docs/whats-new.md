@@ -55,7 +55,11 @@ console, and its `eventTracker` records nothing more: each engine has its own, w
 the session until the engine is replaced. So nothing of the old game comes after `engineReloaded`.
 When a researcher stops the session, the engine's `eventTracker` stops before `sessionStopped` is
 recorded, and the stopped game, should a choice made as it stopped play it on, doesn't finish the
-session.
+session. `sessionStopped` is recorded, with `by` (the account) and `reason` (`stopSession`,
+`reloadEngine`, `newSession`, `otherSession` or `autopilot`), however a researcher's action ends the
+running session: Stop, a reload that doesn't carry it on (another account's), a new session (Stop it
+and create), or another session resumed or selected. The data of a session ended any other way than
+Stop used to end with whatever its game recorded last.
 
 ## What participants receive about others
 

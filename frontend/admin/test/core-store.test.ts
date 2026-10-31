@@ -301,7 +301,9 @@ describe('asking before an engine rebuild', () => {
     get.mockRejectedValue(new TypeError('Failed to fetch'))
     let answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
     await vi.waitFor(() => expect(confirmState.open).toBe(true))
-    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 2” of “Trust” running.')
+    // and that it stops their session, which they would otherwise learn only from their own console
+    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 2” of “Trust” running. This stops their session “Pilot 2”: '
+      + 'its participants are told it was stopped, and it can be resumed.')
     settleConfirm(false)
     expect(await answer).toBe(false)
 
@@ -337,7 +339,10 @@ describe('asking before an engine rebuild', () => {
     answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
     await vi.waitFor(() => expect(confirmState.open).toBe(true))
     const message = confirmState.req!.message || ''
-    expect(message).toContain('The autopilot has session “Auto 3” open. The engine is running session “Pilot 2” of “Trust”.')
+    expect(message).toContain('The autopilot has session “Auto 3” open. This stops it: its participants are told it was stopped, and it can be resumed. '
+      + 'The engine is running session “Pilot 2” of “Trust”.')
+    // (this account's own: no word of stopping someone else's)
+    expect(message).not.toContain('their session')
     expect(message.match(/Pilot 2/g)!.length).toBe(1)
     settleConfirm(false)
     await answer
@@ -378,7 +383,7 @@ describe('what a reload or resume carries on', () => {
     expect(reloadKeeps()).toBeUndefined()
     expect((await engineUse()).who).toContain('The autopilot has session “Auto 3” open.')
     get.mockResolvedValue({ status: { on: false, instance: null } })
-    expect((await engineUse()).who).toContain('other@lab has session “Auto 3” running.')
+    expect((await engineUse()).who).toContain('other@lab has session “Auto 3” running. This stops their session “Auto 3”: its participants are told it was stopped, and it can be resumed.')
     get.mockResolvedValue({ status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })

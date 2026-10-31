@@ -63,11 +63,30 @@ function otherSession (status: any): EngineSession | null {
   return { id, name: String(e.name || id), experimentName: textOf(e.experimentName), owner: textOf(e.owner) }
 }
 
-/** "other@lab has session “S” of “E” running." (or "The engine is running …" when it is no one else's) */
+/** Whether `owner` is another account than this one (an account the server names; null: nobody's). */
+function anotherAccount (owner: string | null | undefined): owner is string {
+  return !!owner && owner.toLowerCase() !== admin.email.toLowerCase()
+}
+
+/**
+ * Said of a session of another account that the rebuild ends: it is stopped, as their Stop would, and
+ * its data records who stopped it and why (the server's sessionStopped, with by and reason).
+ */
+export function stopsTheirSession (name: string): string {
+  return `This stops their session “${name}”: its participants are told it was stopped, and it can be resumed.`
+}
+
+/** Said of the autopilot's session, which the rebuild ends as it ends another account's. */
+const STOPS_IT = 'This stops it: its participants are told it was stopped, and it can be resumed.'
+
+/**
+ * "other@lab has session “S” of “E” running. This stops their session “S”: …" (or "The engine is
+ * running …" when it is no one else's)
+ */
 function runningLine (s: { name: string, experimentName: string | null, owner: string | null }): string {
   const session = `session “${s.name}”${s.experimentName ? ` of “${s.experimentName}”` : ''}`
-  return s.owner && s.owner.toLowerCase() !== admin.email.toLowerCase()
-    ? `${s.owner} has ${session} running.`
+  return anotherAccount(s.owner)
+    ? `${s.owner} has ${session} running. ${stopsTheirSession(s.name)}`
     : `The engine is running ${session}.`
 }
 
@@ -131,13 +150,13 @@ export async function engineUse (keeping?: number): Promise<{ who: string, pause
     // autopilot's, and a colleague's, of the experiment it works on)
     const e = admin.user?.engine
     const owner = e && e.sessionId === own.id ? e.owner : null
-    if (auto && auto.id === own.id) lines.push(`The autopilot has session “${own.name}” open.`)
-    else if (owner && owner.toLowerCase() !== admin.email.toLowerCase()) lines.push(`${owner} has session “${own.name}” running.`)
+    if (auto && auto.id === own.id) lines.push(`The autopilot has session “${own.name}” open. ${STOPS_IT}`)
+    else if (anotherAccount(owner)) lines.push(`${owner} has session “${own.name}” running. ${stopsTheirSession(own.name)}`)
     else lines.push(`Your session “${own.name}” is running.`)
     named.add(own.id)
   }
   if (auto && !named.has(auto.id)) {
-    lines.push(`The autopilot has session “${auto.name}” open.`)
+    lines.push(`The autopilot has session “${auto.name}” open. ${STOPS_IT}`)
     named.add(auto.id)
   }
   if (other && !named.has(other.id)) {

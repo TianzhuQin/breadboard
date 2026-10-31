@@ -1092,6 +1092,55 @@ describe('SessionPage', () => {
     expect(autopilotOpensNextSoon(null, 12)).toBe(false)
   })
 
+  it('says who stopped the session, and how, when another researcher\'s action ended it', async () => {
+    const at = Date.now() - 5000
+    const stopped = (data: any, id = 40) => ({ id, name: 'sessionStopped', datetime: new Date(at).toISOString(), data })
+    store2.admin.instance = { id: 9, name: 'Hand session', status: 'STOPPED', creationTime: '', data: [], events: [] }
+    // pushed live as it was recorded: another account reloaded the engine
+    store2.admin.events = [stopped({ by: 'bob@lab.org', reason: 'reloadEngine' })]
+    const w = await mountPage()
+    const explain = () => w.find('.live-hero__explain').text()
+    expect(explain()).toMatch(/^bob@lab\.org reloaded the engine, which stopped this session\. Nobody can join it now\. Resuming it runs its game again/)
+    store2.admin.events = [stopped({ by: 'bob@lab.org', reason: 'newSession' })]
+    await nextTick()
+    expect(explain()).toMatch(/^bob@lab\.org created a new session, which stopped this one\./)
+    store2.admin.events = [stopped({ by: 'bob@lab.org', reason: 'otherSession' })]
+    await nextTick()
+    expect(explain()).toMatch(/^bob@lab\.org resumed or selected another session, which stopped this one\./)
+    store2.admin.events = [stopped({ by: 'BOB@lab.org', reason: 'stopSession' })]
+    await nextTick()
+    expect(explain()).toMatch(/^BOB@lab\.org stopped this session\./)
+    // (this account's own; one recorded by an older server, which gave no reason)
+    store2.admin.events = [stopped({ by: 'Me@Lab.org', reason: 'reloadEngine' })]
+    await nextTick()
+    expect(explain()).toMatch(/^You reloaded the engine, which stopped this session\./)
+    store2.admin.events = [stopped({ by: 'bob@lab.org' })]
+    await nextTick()
+    expect(explain()).toMatch(/^bob@lab\.org stopped this session\./)
+    // nothing said by whom: as before
+    store2.admin.events = [stopped({})]
+    await nextTick()
+    expect(explain()).toMatch(/^This session is stopped, so nobody can join\. Resuming it/)
+    w.unmount()
+  })
+
+  it('names who stopped a session only from its last end, not from one before a resume', async () => {
+    const { stoppedByText } = await import('../src/pages/session/stopped')
+    const ev = (name: string, at: number, data: any = {}) => fromLive({ id: at, name, datetime: new Date(at).toISOString(), data } as any)
+    const stop = ev('sessionStopped', 1000, { by: 'bob@lab.org', reason: 'reloadEngine' })
+    expect(stoppedByText([stop], 'me@lab.org')).toBe('bob@lab.org reloaded the engine, which stopped this session.')
+    // (newest first) resumed since, then cut short by a restart: not bob's doing
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), ev('sessionInterrupted', 3000)], []), 'me@lab.org')).toBe('')
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000)], []), 'me@lab.org')).toBe('')
+    // a later Stop after the resume names its own account
+    const again = ev('sessionStopped', 4000, { by: 'carl@lab.org', reason: 'stopSession' })
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), again, ev('clientDisconnected', 5000)], []), 'me@lab.org'))
+      .toBe('carl@lab.org stopped this session.')
+    expect(stoppedByText(mergeFeed([ev('autopilotStart', 1), ev('sessionStopped', 2, { by: 'ann@lab.org', reason: 'autopilot' })], []), ''))
+      .toBe('ann@lab.org let the autopilot take over the engine for its session, which stopped this one.')
+    expect(stoppedByText([], 'me@lab.org')).toBe('')
+  })
+
   it('disables Start the game while the engine runs another experiment, and says why', async () => {
     const w = await mountPage()
     expect(startButton(w)!.attributes('disabled')).toBeUndefined()
