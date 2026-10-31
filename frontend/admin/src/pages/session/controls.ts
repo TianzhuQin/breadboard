@@ -1,7 +1,7 @@
 import { reactive, ref } from 'vue'
 import { admin, actions, engineElsewhere, ensureConnected, nextMessage, NOT_CONNECTED } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse } from '@/store/engineGuard'
-import { http, saveText } from '@/lib/http'
+import { csvForExcel, downloadCsv } from '@/lib/csvFiles'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Instance } from '@/store/types'
@@ -168,14 +168,18 @@ export async function resumeSession (inst: Instance) {
   }
 }
 
-/** The session's recorded events as CSV (GET /csv/data/:id), saved as "<name>_<id>.csv". */
+/**
+ * The session's recorded events as CSV (GET /csv/data/:id), saved as "<name>_<id>.csv": for Excel when
+ * that is chosen on Sessions & data, as the same file there is. The checkbox isn't on this page, so
+ * the message says so.
+ */
 export async function downloadData (inst: Instance) {
   if (busy.download != null) return
   busy.download = inst.id
   try {
-    const text = await http.get<string>(`/csv/data/${inst.id}`, { raw: true })
-    saveText(`${safeFileName(inst.name)}_${inst.id}.csv`, text || '')
-    notify.success('Downloaded the session\'s data', `${safeFileName(inst.name)}_${inst.id}.csv`)
+    const file = `${safeFileName(inst.name)}_${inst.id}.csv`
+    await downloadCsv(`/csv/data/${inst.id}`, file)
+    notify.success('Downloaded the session\'s data', csvForExcel.value ? `${file}, for Excel (as chosen on Sessions & data)` : file)
   } catch (e: any) {
     notify.error('Could not download the data', e?.message || 'The server did not answer.')
   } finally {

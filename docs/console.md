@@ -10,8 +10,10 @@ Shortcuts are written with Ctrl; on a Mac, use Cmd.
 ## Signing in
 
 On a new install the console asks for the first researcher account (**Welcome to Breadboard**):
-an **Email**, a **Password** of at least 8 characters (typed twice), and the **Default language**
-new content is written in. Opened from another computer than the server's own, it also asks for the
+an **Email**, a **Password** of at least 8 characters (typed twice), and the **Default language**:
+the language you write participants' texts in on the Content page, which new experiments get (the
+console itself stays in English; Settings can change it later). Opened from another computer than
+the server's own, it also asks for the
 **Setup code** the server prints in its window and in `logs/application.log`. **Create account** creates it and signs you in. The form only appears
 while the server has no account. From then on the console opens with **Sign in to Breadboard**.
 
@@ -121,8 +123,12 @@ when their pick matches most of their neighbors'; the network shows what each ne
 round and the ties among their neighbors, and during a round everyone may cut one of their own ties
 by clicking it. The size of the network, the waiting room's minimum and wait, and the number and
 length of rounds are launch parameters, so they change on the Parameters page, and everything
-participants read is on the Content page, to reword or translate. Picks and scores are
-recorded as `ColourPick` and `RoundResult` events. Open a session (or turn on the autopilot) and
+participants read is on the Content page, to reword or translate. Picks, scores and cut ties are
+recorded as `ColourPick`, `RoundResult` and `TieCut` events. Its texts are written in English: when
+your default language is another, that language is added next to English, and participants read it
+(the `language` launch parameter), each text in English until it is translated. With `prolificCode`
+set, participants who came from Prolific are given that completion code at the end (see
+[Recruiting participants](#recruiting-participants)). Open a session (or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
 
@@ -155,7 +161,10 @@ the other one has a session running, which a reload would end.
 Content holds the texts participants read: instructions, consent forms, messages. Scripts show a
 text with `c.get("Name")`, shown above the editor with a copy button. Each text is written once
 per language: **Languages** sets the experiment's languages, and the language bar switches between
-them. **New text** starts from an empty text or a copy of another. Edit in **Visual** or **HTML**;
+them. The steps choose the language participants read with `c.setDefaultLanguage("zho")` (the codes
+are the ones the language bar shows); a text that has no version in it yet is shown in English, or
+else in the language it was written in first. **New text** starts from an empty text or a copy of
+another. Edit in **Visual** or **HTML**;
 **Preview** shows the text as participants see it. **Save** saves this text, and the button at the
 top right saves every changed text (Ctrl+S). The **⋯** menu has **Rename** (F2), **Discard
 changes** and **Delete text…**. After a rename, scripts that use the old name need the new one.
@@ -446,12 +455,12 @@ Live session and Autopilot show the sign-in links. The Recruitment page has a ta
 one for Mechanical Turk.
 
 **Prolific.** **Study URL** is the address to paste into your study on Prolific (**Copy URL**). In
-Prolific, choose to record Prolific IDs with URL parameters, and leave the parts like
-`{{%PROLIFIC_PID%}}` as they are. Prolific sends people from the internet, so the URL must use the
-server's public address: open the console there to copy it. The page says so when the console was
-opened at localhost or at an address of the lab's own network, and so does the Autopilot page under
-its Prolific link. The link leads to this experiment's open session whose game hasn't started, and
-the page says which one that is now, or warns that participants would see
+Prolific's Data collection section, choose **I'll use URL parameters** to record Prolific IDs, and
+leave the parts like `{{%PROLIFIC_PID%}}` as they are. Prolific sends people from the internet, so
+the URL must use the server's public address: open the console there to copy it. The page says so
+when the console was opened at localhost or at an address of the lab's own network, and so does the
+Autopilot page under its Prolific link. The link leads to this experiment's open session whose game
+hasn't started, and the page says which one that is now, or warns that participants would see
 "No session is open right now". While the autopilot opens the next session by itself, it says that
 the link holds newcomers on a page that waits for that session instead (see
 [above](#running-sessions-with-nobody-at-the-console)), and it warns when something keeps the
@@ -462,32 +471,48 @@ asks Prolific participants to return the study, so pause recruiting meanwhile.
 participant.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
-recorded in a `prolificEntry` event. **When a participant finishes** builds the code for your last
-step from your completion code. It completes participants from Prolific only, as
-`recruitment.completeProlific` refuses anyone else; change `p` to what your step calls the
-participant:
+recorded in a `prolificEntry` event. To send participants back to Prolific with your completion
+code when they finish (**When a participant finishes** says how for this experiment):
 
-```groovy
-if (p._system?.recruitment?.source == "prolific") {
-  recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
-}
-```
+- **Example: network game**, and copies of it, do it by themselves, from their `prolificCode`
+  launch parameter: the card says so, with the code it gives now. Set `prolificCode` on the
+  Parameters page (its **Default**), preferably before you open a session or turn on the autopilot.
+  A session keeps the value it opened with. The autopilot opens its sessions with the defaults: to
+  give its open session the new code, stop that session on Live session while nobody is in it, then
+  press **Resume** on the Autopilot page. **New session** on Live session fills in the last
+  session's values instead ("Filled in as in “Session 1”, the last session"), not a Default changed
+  since: press **Use default** under `prolificCode` (or **Reset to defaults**) and check the code
+  before **Create session**.
+- In steps of your own, give your completion code to **When a participant finishes** and **Copy
+  code**: it builds the code for the step where participants finish, which completes only those who
+  came from Prolific. Put it in that step, with the step's variable for the participant in place of
+  `p`:
 
-Participants then see the code and a **Finish** button that takes them back to Prolific. An
-experiment with a `prolificCode` launch parameter, such as **Example: network game**, gives the code
-by itself: the card then says so, with the code it gives now, and you set it as that parameter's
-default on the Parameters page instead. **From Prolific in this session** lists who joined and who
-finished, with **Copy bonus list** for Prolific's bulk bonus. Each completion is recorded as a
-`prolificComplete` event. **From Prolific in every session** lists them for every session of the
-experiment, newest first, from the sessions' data, so a session the autopilot has moved on from can
-still be paid: when each person joined, whether they finished, their code and bonus, and
-**Copy bonus list** for all of them (someone paid in two sessions gets one line with both amounts
-added up). Both lists count someone the game ended for without a completion code as finished, marked
-**No code** (the example records a `noCompletionCode` event for them while its `prolificCode` is
-empty). What a participant writes under **Comments for the researcher** on the finish screen (it
-isn't shown with `noFeedback: true`) is kept in their session's data as a `participantComment`
-event, with `player` and `text`, also once their game has ended and the next session has opened:
-find it with **View events** in **Sessions & data**, or in the data you download.
+  ```groovy
+  if (p._system?.recruitment?.source == "prolific") {
+    recruitment.completeProlific(p, [completionCode: "C1A2B3C4"])
+  }
+  ```
+
+  For someone who didn't come from Prolific, `completeProlific` does nothing (the server's log says
+  why), so a call without the check doesn't stop the game either.
+- Before you publish the study, open a session (with the example, check that its `prolificCode` is
+  your code), go through it with **Try it as a test participant** (press **Start the game** on Live
+  session if the waiting room waits for more people), and check that the code shows at the end.
+
+Participants then see the code and a **Finish and return to Prolific** button that takes them back
+to Prolific. **From Prolific in this session** lists who joined and who finished, with
+**Copy bonus list** for Prolific's bulk bonus. Each completion is recorded as a `prolificComplete`
+event. **From Prolific in every session** lists them for every session of the experiment, newest
+first, from the sessions' data, so a session the autopilot has moved on from can still be paid: when
+each person joined, whether they finished, their code and bonus, and **Copy bonus list** for all of
+them (someone paid in two sessions gets one line with both amounts added up). Both lists count
+someone the game ended for without a completion code as finished, marked **No code** (the example
+records a `noCompletionCode` event for them while its `prolificCode` is empty). What a participant
+writes under **Comments for the researcher** on the finish screen (it isn't shown with
+`noFeedback: true`) is kept in their session's data as a `participantComment` event, with `player`
+and `text`, also once their game has ended and the next session has opened: find it with
+**View events** in **Sessions & data**, or in the data you download.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game
@@ -526,16 +551,29 @@ of event with a column per data name.
 | **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. A participant's page that connects again after its connection dropped is recorded as `connectionGap`, with `awayMs`: how long it was out of touch, also when that was too short to count as leaving. An outage too short for the page to notice (it notices after 15 to 20 seconds without a word from the server), which its connection lives through, isn't recorded. A choice or tie change that reached the server more than 10 seconds after it was given (sent just before a connection died without a word, and delivered as it came back) doesn't count, and is recorded as `answerDropped`, with `ageMs`. |
 | **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
-| **Export all**, **Export filtered** | A session's events | The same columns as the session's file, with times in standard ISO 8601 (`2026-10-28T13:24:23.757Z`). Events without data keep a row. |
-| **Export as table** | A session's events, By event | One row per event of that kind, one column per data name. |
+| **Export all**, **Export filtered** | A session's events | The same columns and times as the session's file. Events without data keep a row. |
+| **Export as table** | A session's events, By event, under an event's name | One row per event of that kind, one column per data name. |
 | **Download CSV** | Players | The players shown, with every property. |
 
-Timestamps in the CSV files are in UTC, written as `2026-10-28T13:24:23:757Z` (with a colon
-before the milliseconds, as earlier versions of Breadboard wrote them, so existing analysis scripts
-keep working). In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
+**For Excel**, next to the download buttons, makes the CSV files of this page (and Live session's
+**Download data** and the Players page's **Download CSV**) start with the UTF-8 byte-order mark.
+Without it, Excel and WPS read a file in the computer's own encoding (on a Chinese Windows, GBK),
+and Chinese and other non-Latin text turns into garbage; with it, they open it correctly with a
+double-click. The choice is kept in this browser. Leave it off for R, Python and existing analysis
+scripts: the server's files then have no byte-order mark. **Download data** and **Download list**
+are exactly as 3.0 wrote them, and **Download all data** (new in 3.1) is written the same way. A
+file downloaded without it opens correctly in Excel through **Data → From Text/CSV** with **File
+origin** set to **65001: Unicode (UTF-8)**, and in WPS when you import it as UTF-8. The server's
+addresses give the same files with `excel=true`, e.g. `/csv/data/<session id>?excel=true`.
+
+Timestamps in the CSV files, the console's own exports included, are in UTC, written as
+`2026-10-28T13:24:23:757Z` (with a colon before the milliseconds, as earlier versions of Breadboard
+wrote them, so existing analysis scripts keep working). The files saved from **View events** write
+them this way since 3.1; 3.0 wrote `2026-10-28T13:24:23.757Z` there. In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
 reads them; in Python, `pandas.to_datetime(s, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`.
-Sort rows by `event_date`, not by `id`: ids are given out in blocks and don't follow the order
-events happened in. After a session finishes or is stopped, nothing more is recorded in it.
+Sort rows by `event_date`, then `id`. Since 3.1, ids follow the order events were recorded; in data
+recorded by earlier versions they were given out in blocks and can be out of order. After a session
+finishes or is stopped, nothing more is recorded in it.
 Values are written exactly as recorded. A spreadsheet may
 read a value that starts with `=`, `+`, `-` or `@` as a formula, so import the file as text when
 participants could type such values.

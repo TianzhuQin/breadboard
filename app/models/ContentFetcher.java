@@ -1,6 +1,8 @@
 package models;
 
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import com.avaje.ebean.Expr;
 import play.Logger;
@@ -13,11 +15,15 @@ public class ContentFetcher {
   }
 
   public void setDefaultLanguage(String languageString) {
-    Language language = Language.find.where()
+    Language language = languageString == null ? null : Language.find.where()
         .or(Expr.eq("code", languageString),
             Expr.eq("name", languageString))
         .setMaxRows(1)
         .findUnique();
+    if (language == null && languageString != null) {
+      Logger.warn("c.setDefaultLanguage(\"" + languageString + "\"): there is no such language (use a code shown on the "
+          + "Content page, such as eng); texts are shown in the language each was written in first");
+    }
 
     this.defaultLanguage = language;
   }
@@ -58,20 +64,33 @@ public class ContentFetcher {
     return returnString;
   }
 
+  /**
+   * The text {@code name} in the language {@code languageCode}, or in the language a script chose with
+   * setDefaultLanguage when that is null. A text with no version in that language, or an empty one, is
+   * given in English, or else in the language it was written in first: an experiment translated
+   * text by text (the network game example, whose English texts a researcher translates one at a
+   * time) shows every text meanwhile. That used to stop the step (a NullPointerException), or give ""
+   * in file mode. Without a language, the text's first version, as before.
+   */
   private String getContentString(String name, String languageCode) {
     // Accessing selectedExperiment.fileMode directly does not update due to some Ebean caching going on
     Experiment experiment = Experiment.findById(selectedExperiment.id);
     String returnString = "";
     if (experiment.fileMode) {
+      List<Translation> versions = new ArrayList<>();
       for (Content c : experiment.getContent()) {
         if (c.name.equals(name)) {
           for (Translation t : c.translations) {
-            if (languageCode == null || t.language.code.equals(languageCode)) {
+            if (languageCode == null) {
               returnString = t.getHtml();
               break;
             }
+            versions.add(t);
           }
         }
+      }
+      if (languageCode != null) {
+        returnString = html(inLanguage(versions, languageCode));
       }
     } else {
       Content c = Content.find.where()
@@ -85,24 +104,44 @@ public class ContentFetcher {
               .eq("content_id", c.id)
               .setMaxRows(1)
               .findUnique();
-          returnString = t.getHtml();
+          returnString = html(t);
         } else {
-          Language l = Language.find.where()
-              .eq("code", languageCode)
-              .setMaxRows(1)
-              .findUnique();
-
-          Translation t = Translation.find.where()
+          List<Translation> versions = Translation.find.where()
               .eq("content_id", c.id)
-              .eq("languages_id", l.id)
-              .setMaxRows(1)
-              .findUnique();
-          returnString = t.getHtml();
+              .orderBy("id")
+              .findList();
+          returnString = html(inLanguage(versions, languageCode));
         }
       } else {
         Logger.debug("getTranslated -> c == null");
       }
     }
     return returnString;
+  }
+
+  /** The version in {@code languageCode}; else the English one; else the first; null when none has text. */
+  private static Translation inLanguage(List<Translation> versions, String languageCode) {
+    for (String code : new String[]{languageCode, "eng"}) {
+      for (Translation t : versions) {
+        Language l = t.getLanguage();
+        if (l != null && code.equals(l.getCode()) && hasText(t)) {
+          return t;
+        }
+      }
+    }
+    for (Translation t : versions) {
+      if (hasText(t)) {
+        return t;
+      }
+    }
+    return null;
+  }
+
+  private static boolean hasText(Translation t) {
+    return t.getHtml() != null && !t.getHtml().trim().isEmpty();
+  }
+
+  private static String html(Translation t) {
+    return t == null || t.getHtml() == null ? "" : t.getHtml();
   }
 }

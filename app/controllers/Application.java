@@ -338,10 +338,10 @@ public class Application extends Controller {
   /**
    * The experiment's sessions as CSV: id, name, status, creation time and every parameter value.
    * Every field is quoted, with quotes inside doubled (names and values used to go in as typed, so
-   * one with a quote or a comma shifted the columns).
+   * one with a quote or a comma shifted the columns). {@code excel}: see {@link #csvFile}.
    */
   @Security.Authenticated(Secured.class)
-  public static Result dataCsv(Long experimentId) {
+  public static Result dataCsv(Long experimentId, Boolean excel) {
     Experiment experiment = Experiment.findById(experimentId);
     if (experiment == null) {
       return badRequest("There is no experiment with id " + experimentId + ".");
@@ -376,7 +376,7 @@ public class Application extends Controller {
       csvRow(csv, row);
     }
 
-    return ok(csv.toString());
+    return csvFile(csv, excel);
   }
 
   /**
@@ -385,9 +385,10 @@ public class Application extends Controller {
    * id, name and status and one column per launch parameter, so the rows of all sessions can be
    * analysed together. {@code ids}: only these sessions (comma-separated), e.g. the ones the page
    * lists; all of them when empty. Sessions oldest first, events in time order within each.
+   * {@code excel}: see {@link #csvFile}.
    */
   @Security.Authenticated(Secured.class)
-  public static Result experimentDataCsv(Long experimentId, String ids) {
+  public static Result experimentDataCsv(Long experimentId, String ids, Boolean excel) {
     Experiment experiment = Experiment.findById(experimentId);
     if (experiment == null) {
       return badRequest("There is no experiment with id " + experimentId + ".");
@@ -452,7 +453,7 @@ public class Application extends Controller {
         }
       }
     }
-    return ok(csv.toString());
+    return csvFile(csv, excel);
   }
 
   /** A session's events by time; events in the same millisecond in the order they were recorded. */
@@ -469,9 +470,9 @@ public class Application extends Controller {
     return events;
   }
 
-  /** One session's events as CSV: a row per event data item, every field quoted. */
+  /** One session's events as CSV: a row per event data item, every field quoted. {@code excel}: see {@link #csvFile}. */
   @Security.Authenticated(Secured.class)
-  public static Result eventCsv(Long experimentInstanceId) {
+  public static Result eventCsv(Long experimentInstanceId, Boolean excel) {
     ExperimentInstance ei = ExperimentInstance.findById(experimentInstanceId);
     if (ei == null) {
       return badRequest("There is no session with id " + experimentInstanceId + ".");
@@ -501,6 +502,20 @@ public class Application extends Controller {
       }
     }
 
+    return csvFile(csv, excel);
+  }
+
+  /**
+   * A CSV file as the server has always sent it: UTF-8 without a byte-order mark, which analysis
+   * scripts read as it is. With {@code excel} (?excel=true, the console's "For Excel" choice) it
+   * starts with the UTF-8 byte-order mark, without which Excel and WPS read the file in the
+   * computer's own encoding (on a Chinese Windows, GBK) and Chinese turns into garbage. The values
+   * are the same either way.
+   */
+  static Result csvFile(StringBuilder csv, Boolean excel) {
+    if (excel != null && excel) {
+      return ok("\uFEFF" + csv).as("text/csv; charset=utf-8");
+    }
     return ok(csv.toString());
   }
 

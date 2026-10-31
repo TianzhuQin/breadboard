@@ -22,7 +22,9 @@ form.
 Prolific participants get a pseudonymous client id (`pp-…`). The PID is never in a URL and never
 sent to other participants. It is logged as a `prolificEntry` event for payment, and stored in the
 player's own `_system.recruitment`, which drives the built-in Prolific completion screen
-(`recruitment.completeProlific(player, [completionCode: "..."])`).
+(`recruitment.completeProlific(player, [completionCode: "..."])`). For a player who didn't come
+from Prolific, `completeProlific` does nothing and returns false (the server's log says why); it
+used to throw, which stopped the step that called it.
 
 | Setting (in `conf/local.conf`) | Effect |
 |---|---|
@@ -74,7 +76,9 @@ Every `allow()` starts a new turn (`player.edgeEdits.turn`); a change sent with 
 as one confirmed just as a round ended and the next one called `allow()` again, is refused rather
 than made in (and counted against) the new turn.
 The answer (`bb:edge-edit-result`) says whether the edit was accepted (`ok`). It also says whether
-the network changed (`applied`), which is false when `onEdit` only collects it. Every edit,
+the network changed (`applied`), which is false when `onEdit` only collects it, and true when
+`onEdit` makes the change itself (the network game example does, to record a cut as a `TieCut`
+event of its own). Every edit,
 accepted or not, is logged as an `edgeEdit` event naming the actor.
 
 Scopes `amongNeighbors` and `visible` concern ties among a participant's neighbors. Turn those ties
@@ -466,10 +470,13 @@ restarts the running session.
 
 ## Data
 
-- **Timestamps:** CSV exports are now in true UTC. The format is unchanged.
+- **Timestamps:** CSV exports are now in true UTC. The format is unchanged
+  (`2026-10-28T13:24:23:757Z`), and the files the console makes from a session's events use it too.
 - **Exact values:** every CSV, the server's and the console's downloads, keeps values exactly as
-  recorded, with no byte-order mark. A spreadsheet may read a value that starts with `=`, `+`,
-  `-` or `@` as a formula, so import the file as text when participants could type such values.
+  recorded, with no byte-order mark unless you ask for one: **For Excel** on Sessions & data, or
+  `excel=true` on the server's CSV addresses, adds the mark Excel and WPS need to read Chinese. A
+  spreadsheet may read a value that starts with `=`, `+`, `-` or `@` as a formula, so import the
+  file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
   or goes (not for every page that takes over their seat), and `connectionGap` (`player`, `awayMs`)

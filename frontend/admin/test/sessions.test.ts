@@ -3,7 +3,7 @@ import { nextTick, reactive } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { HttpError } from '../src/lib/http'
 import {
-  canDelete, canResume, canStop, csvDataRows, csvField, describeError, eventNameCounts, eventsToCsv, eventsToWideCsv,
+  canDelete, canResume, canStop, csvDataRows, csvField, csvTime, describeError, eventNameCounts, eventsToCsv, eventsToWideCsv,
   filterEvents, formatClock, groupEvents, matchesSession, mergeEvents, normalizeEvent, parseServerTime, safeFileName,
   sortEvents, sortSessions, toCsv, waitUntil,
 } from '../src/pages/sessions/sessionData'
@@ -34,7 +34,7 @@ vi.mock('@/store/admin', async () => {
 })
 vi.mock('@/lib/http', async (orig) => {
   const real = await orig<typeof import('../src/lib/http')>()
-  return { ...real, http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }, saveText: vi.fn() }
+  return { ...real, http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }, saveText: vi.fn(), saveFile: vi.fn() }
 })
 vi.mock('@/ui', async (orig) => {
   const real = await orig<typeof import('../src/ui')>()
@@ -52,9 +52,35 @@ vi.mock('vue-router', () => ({
   useRoute: () => reactive({ query: {} }),
 }))
 
+// Node's own (file-less) localStorage shadows jsdom's here; use a plain in-memory one.
+const memory = new Map<string, string>()
+vi.stubGlobal('localStorage', {
+  getItem: (k: string) => memory.has(k) ? memory.get(k)! : null,
+  setItem: (k: string, v: string) => { memory.set(k, String(v)) },
+  removeItem: (k: string) => { memory.delete(k) },
+  clear: () => memory.clear(),
+})
+
 const store = await import('@/store/admin') as any
 const httpMod = await import('@/lib/http') as any
 const ui = await import('@/ui') as any
+const { csvForExcel } = await import('../src/lib/csvFiles')
+
+/** A file as the server sends it (http.get with bytes). */
+function bytes (text: string): ArrayBuffer {
+  const b = new TextEncoder().encode(text)
+  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer
+}
+/** What a saved file holds, byte for byte. */
+function blobBytes (blob: Blob): Promise<number[]> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve([...new Uint8Array(r.result as ArrayBuffer)])
+    r.onerror = () => reject(r.error)
+    r.readAsArrayBuffer(blob)
+  })
+}
+const UTF8_BOM = [0xEF, 0xBB, 0xBF]
 
 function session (id: number, name: string, status: any, data: any[] = [], creationTime = '2026-10-27 13:06:00,5') {
   return { id, name, status, creationTime, hitId: '', hits: [], data }
@@ -247,11 +273,22 @@ describe('CSV', () => {
     ]
     expect(eventsToCsv(evs)).toBe([
       '"id","event","event_date","data_name","data_value"',
-      '"1","start","2026-10-27T12:00:00.000Z","",""',
-      '"2","say ""x""","2026-10-27T12:00:01.250Z","text","a,b"',
-      '"2","say ""x""","2026-10-27T12:00:01.250Z","n","1"',
+      '"1","start","2026-10-27T12:00:00:000Z","",""',
+      '"2","say ""x""","2026-10-27T12:00:01:250Z","text","a,b"',
+      '"2","say ""x""","2026-10-27T12:00:01:250Z","n","1"',
       '',
     ].join('\n'))
+  })
+
+  it('writes times as the server\'s files do, in UTC with a colon before the milliseconds', () => {
+    // (the server's Timestamps.csv: "yyyy-MM-dd'T'HH:mm:ss:SSS'Z'"; these files wrote ".250Z", which a
+    // script reading the server's files with that format can't parse)
+    const live = normalizeEvent({ id: 3, name: 'ColourPick', datetime: '2026-10-30T13:27:26.036Z', data: { colour: 'Blue' } })
+    expect(csvTime(live)).toBe('2026-10-30T13:27:26:036Z')
+    expect(eventsToCsv([live]).split('\n')[1]).toBe('"3","ColourPick","2026-10-30T13:27:26:036Z","colour","Blue"')
+    expect(eventsToWideCsv([live]).split('\n')[1]).toBe('"3","ColourPick","2026-10-30T13:27:26:036Z","Blue"')
+    // a time it couldn't read is kept as the server sent it
+    expect(csvTime(normalizeEvent({ id: 4, name: 'x', datetime: 'soon', data: [] }))).toBe('soon')
   })
 
   it('exports one event as a table with a column per data name', () => {
@@ -261,8 +298,8 @@ describe('CSV', () => {
     ]
     expect(eventsToWideCsv(evs, ['player', 'value'])).toBe([
       '"id","event","event_date","player","value"',
-      '"1","choice","2026-10-27T12:00:00.000Z","p1","A"',
-      '"2","choice","2026-10-27T12:00:01.000Z","p2",""',
+      '"1","choice","2026-10-27T12:00:00:000Z","p1","A"',
+      '"2","choice","2026-10-27T12:00:01:000Z","p2",""',
       '',
     ].join('\n'))
     expect(eventsToWideCsv(evs).split('\n')[0]).toBe('"id","event","event_date","player","value"')
@@ -331,27 +368,61 @@ describe('useSessionActions', () => {
     actionsApi = useSessionActions()
   })
 
-  it('downloads a session\'s data as <name>_<id>.csv', async () => {
-    httpMod.http.get.mockResolvedValueOnce('"id","event","event_date","data_name","data_value"\n"1","a","t","n","v"\n')
+  afterEach(() => { csvForExcel.value = false })
+
+  it('downloads a session\'s data as <name>_<id>.csv, byte for byte', async () => {
+    const file = '"id","event","event_date","data_name","data_value"\n"1","a","t","n","张伟"\n'
+    httpMod.http.get.mockResolvedValueOnce(bytes(file))
     await actionsApi.downloadData({ id: 1, name: 'pilot 1' })
-    expect(httpMod.http.get).toHaveBeenCalledWith('/csv/data/1', { raw: true })
-    expect(httpMod.saveText).toHaveBeenCalledWith('pilot 1_1.csv', expect.stringContaining('"id"'))
-    expect(ui.notify.success).toHaveBeenCalled()
+    expect(httpMod.http.get).toHaveBeenCalledWith('/csv/data/1', { bytes: true })
+    expect(httpMod.saveFile).toHaveBeenCalledWith('pilot 1_1.csv', expect.any(Blob))
+    expect(await blobBytes(httpMod.saveFile.mock.calls[0][1])).toEqual([...new Uint8Array(bytes(file))])
+    expect(ui.notify.success).toHaveBeenCalledWith('Downloaded pilot 1_1.csv', '1 data row.')
+  })
+
+  it('asks the server for the files for Excel when that is chosen, and keeps their byte-order mark', async () => {
+    csvForExcel.value = true
+    const file = '\uFEFF"id","event","event_date","data_name","data_value"\n"1","a","t","n","张伟"\n'
+    httpMod.http.get.mockResolvedValueOnce(bytes(file))
+    await actionsApi.downloadData({ id: 1, name: 'pilot 1' })
+    expect(httpMod.http.get).toHaveBeenLastCalledWith('/csv/data/1?excel=true', { bytes: true })
+    const saved = await blobBytes(httpMod.saveFile.mock.calls[0][1])
+    expect(saved.slice(0, 3)).toEqual(UTF8_BOM)
+    expect(saved).toEqual([...new Uint8Array(bytes(file))])
+    // the mark isn't a row
+    expect(ui.notify.success).toHaveBeenCalledWith('Downloaded pilot 1_1.csv', '1 data row.')
+
+    httpMod.http.get.mockResolvedValueOnce(bytes('\uFEFF"id","instance"\n'))
+    await actionsApi.downloadList({ id: 5, name: 'Trust game' })
+    expect(httpMod.http.get).toHaveBeenLastCalledWith('/csv/instances/5?excel=true', { bytes: true })
+    httpMod.http.get.mockResolvedValueOnce(bytes('\uFEFF"session_id"\n'))
+    await actionsApi.downloadAllData({ id: 5, name: 'Trust game' }, [1, 2])
+    expect(httpMod.http.get).toHaveBeenLastCalledWith('/csv/experiment/5/data?ids=1,2&excel=true', { bytes: true })
+  })
+
+  it('remembers the choice for Excel in this browser', async () => {
+    csvForExcel.value = true
+    await nextTick()
+    expect(localStorage.getItem('bb-admin-csv-for-excel')).toBe('1')
+    csvForExcel.value = false
+    await nextTick()
+    expect(localStorage.getItem('bb-admin-csv-for-excel')).toBe(null)
   })
 
   it('says so when a download fails, in words', async () => {
     httpMod.http.get.mockRejectedValueOnce(new HttpError(500, '<html><title>NullPointerException</title></html>'))
     const ok = await actionsApi.downloadData({ id: 1, name: 'pilot 1' })
     expect(ok).toBe(false)
-    expect(httpMod.saveText).not.toHaveBeenCalled()
+    expect(httpMod.saveFile).not.toHaveBeenCalled()
     expect(ui.notify.error).toHaveBeenCalledWith('Could not download the data of “pilot 1”', 'The server ran into an error (500): NullPointerException')
   })
 
   it('downloads the list of sessions as <experiment>.csv', async () => {
-    httpMod.http.get.mockResolvedValueOnce('"id","instance"\n')
+    httpMod.http.get.mockResolvedValueOnce(bytes('"id","instance"\n'))
     await actionsApi.downloadList({ id: 5, name: 'Trust/game' })
-    expect(httpMod.http.get).toHaveBeenCalledWith('/csv/instances/5', { raw: true })
-    expect(httpMod.saveText).toHaveBeenCalledWith('Trust-game.csv', '"id","instance"\n')
+    expect(httpMod.http.get).toHaveBeenCalledWith('/csv/instances/5', { bytes: true })
+    expect(httpMod.saveFile).toHaveBeenCalledWith('Trust-game.csv', expect.any(Blob))
+    expect(await blobBytes(httpMod.saveFile.mock.calls[0][1])).toEqual([...new Uint8Array(bytes('"id","instance"\n'))])
   })
 
   it('asks for the name before deleting, and reports a delete the server refused', async () => {
@@ -546,7 +617,10 @@ describe('useSessionActions', () => {
 // ---- the page -------------------------------------------------------------------------------------
 
 describe('SessionsPage', () => {
-  afterEach(() => { document.body.innerHTML = '' })
+  afterEach(() => {
+    document.body.innerHTML = ''
+    csvForExcel.value = false
+  })
 
   async function mountPage () {
     const SessionsPage = (await import('../src/pages/sessions/SessionsPage.vue')).default
@@ -608,6 +682,20 @@ describe('SessionsPage', () => {
     await nameHeader.trigger('click')
     expect(w.findAll('tr.ss__row').map(r => r.find('.ss__name-text').text())).toEqual(['main', 'pilot 1', 'pilot 2'])
     expect(nameHeader.element.closest('th')!.getAttribute('aria-sort')).toBe('ascending')
+    w.unmount()
+  })
+
+  it('offers the CSV files for Excel, a choice kept in this browser', async () => {
+    const w = await mountPage()
+    const box = w.findAll('label.b-check').find(l => l.text() === 'For Excel')!
+    expect(box.attributes('title')).toMatch(/byte-order mark.*Excel and WPS.*R, Python/)
+    expect(csvForExcel.value).toBe(false)
+    await box.find('input').setValue(true)
+    expect(csvForExcel.value).toBe(true)
+    await nextTick()
+    expect(localStorage.getItem('bb-admin-csv-for-excel')).toBe('1')
+    await box.find('input').setValue(false)
+    expect(csvForExcel.value).toBe(false)
     w.unmount()
   })
 
@@ -704,7 +792,30 @@ describe('SessionEventsDrawer', () => {
     expect(csv).toContain(long)
     expect(csv).toContain('clientLogIn')
     expect(csv).not.toContain('…')
+    expect(csv.startsWith('"id"')).toBe(true)
     w.unmount()
+  })
+
+  it('puts the byte-order mark before the files it makes when they are for Excel', async () => {
+    const finished = session(2, 'pilot', 'FINISHED')
+    store.actions.instanceEvents.mockResolvedValueOnce({ name: 'pilot', events: [
+      { id: 6, name: 'ColourPick', datetime: '2026-10-27 13:05:59,0', data: [{ name: 'player', value: '张伟' }] },
+    ] })
+    csvForExcel.value = true
+    try {
+      const w = await mountDrawer(finished)
+      const exportAll = [...document.body.querySelectorAll<HTMLButtonElement>('.sev button')].find(b => b.textContent?.includes('Export all'))!
+      expect(exportAll.title).toBe('Save the events listed here as a CSV file for Excel')
+      exportAll.click()
+      await flushPromises()
+      const [file, csv] = httpMod.saveText.mock.calls[0]
+      expect(file).toBe('pilot_2_events.csv')
+      expect(csv.startsWith('\uFEFF"id","event","event_date"')).toBe(true)
+      expect(csv).toContain('张伟')
+      w.unmount()
+    } finally {
+      csvForExcel.value = false
+    }
   })
 
   it('does not export a list it could not load again', async () => {
