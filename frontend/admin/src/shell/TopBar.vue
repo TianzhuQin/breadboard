@@ -60,7 +60,7 @@ import { Menu, WifiOff, PanelBottom, Cpu, CircleCheck, TriangleAlert, RotateCw }
 import { BMenu, BSpinner, confirm, notify, type MenuItem } from '@/ui'
 import { admin, actions, connectionState, ensureConnected, reloadBlocked } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse, reloadKeeps } from '@/store/engineGuard'
-import { autopilotRunsSession, useAutopilotStatus } from '@/pages/session/autopilot'
+import { autopilotRunsSession } from '@/pages/session/autopilot'
 
 defineProps<{ outputOpen: boolean, navOpen?: boolean }>()
 const emit = defineEmits<{ menu: [], 'toggle-output': [] }>()
@@ -89,9 +89,9 @@ const sessionTitle = computed(() => admin.instance ? `Session "${admin.instance.
 // means nothing to the researcher: it just says Engine.)
 // Steps saved since the last load matter only to a running session (and to the Script console):
 // the next session loads what is saved, so with none running the chip just says they are saved. So
-// it does while the session is the autopilot's own: its next session loads them.
-const autopilot = useAutopilotStatus()
-const autopilotsSession = computed(() => autopilotRunsSession(autopilot.value, admin.experiment?.id, admin.instance?.id))
+// it does while the session is the autopilot's own: its next session loads them. (As the server
+// says with what the engine runs, which every console hears when the autopilot is switched off.)
+const autopilotsSession = computed(() => autopilotRunsSession(admin.user?.engine, admin.instance))
 const engineState = computed(() => {
   if (!admin.experiment) return 'ready'
   const live = admin.instance?.status === 'RUNNING' || admin.instance?.status === 'TESTING'

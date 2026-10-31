@@ -450,7 +450,7 @@ describe('what the engine runs', () => {
 
   it('reads it beside the user, and says when it is another experiment', () => {
     push(1, engine(2, 7))
-    expect(admin.user!.engine).toEqual({ experimentId: 2, experimentName: 'E2', sessionId: 7, sessionName: 'S7', owner: 'other@lab', gameStarted: null, stepsChanged: null })
+    expect(admin.user!.engine).toEqual({ experimentId: 2, experimentName: 'E2', sessionId: 7, sessionName: 'S7', owner: 'other@lab', gameStarted: null, stepsChanged: null, autopilotSession: null })
     expect(engineElsewhere.value).toMatchObject({ experimentId: 2, sessionName: 'S7' })
     push(2, engine(2, 7))
     expect(engineElsewhere.value).toBe(null)
@@ -480,6 +480,19 @@ describe('what the engine runs', () => {
     __receive({ notify: { ScriptEngineReloaded: 2 } })
     push(1, { ...engine(1, 7), gameStarted: false })
     expect(admin.engineInfoAt).toBeGreaterThan(0)
+  })
+
+  it('reads whether its session is the autopilot\'s own, from the User JSON and from every push', () => {
+    push(1, { ...engine(1, 7), autopilotSession: true })
+    expect(admin.user!.engine!.autopilotSession).toBe(true)
+    // switched off: the session goes on, no longer the autopilot's
+    __receive({ engine: { ...engine(1, 7), autopilotSession: false } })
+    expect(admin.user!.engine!.autopilotSession).toBe(false)
+    __receive({ engine: { ...engine(1, 7), autopilotSession: true } })
+    expect(admin.user!.engine!.autopilotSession).toBe(true)
+    // an older server that does not say
+    __receive({ engine: engine(1, 7) })
+    expect(admin.user!.engine!.autopilotSession).toBe(null)
   })
 
   it('asks what the engine runs when a game starts, or a start is taken back, without this console asking', () => {

@@ -68,12 +68,16 @@ to a production build.
 - The User JSON's `engine` says what the shared engine runs, `gameStarted` whether its game
   has started since the engine was last built, and `stepsChanged` whether steps of its experiment
   were saved (or deleted) since it loaded them, which Run of a step's saved code or a reload catches
-  up ("Reload needed"; `models.EngineSteps`). It is false while a rebuild's steps are loading. Every console hears `{"notify": {"GameStarted": …}}`
+  up ("Reload needed"; `models.EngineSteps`). It is false while a rebuild's steps are loading.
+  `autopilotSession` says whether its live session is the autopilot's own, which it runs now (on,
+  neither paused nor done): steps saved meanwhile go into its next session, so the console says
+  "Steps saved" instead. Every console hears `{"notify": {"GameStarted": …}}`
   (or `GameStartFailed`) when a game starts without a console asking, or when a Start answered
   with an error got the game going all the same, and then asks again.
 - Every console also hears `{"engine": {…}}` (as in the User JSON) whenever what the engine runs
   changes: a session launched, resumed, started, stopped, finished or ended, a rebuild done, or a
-  step of its experiment saved, deleted or run, whichever account (or the autopilot) did it. The console takes it as `user.engine`, and asks for
+  step of its experiment saved, deleted or run, whichever account (or the autopilot) did it; and
+  after a save or Resume on the Autopilot page. The console takes it as `user.engine`, and asks for
   its User JSON again when a session of its selected experiment began or ended.
 - `SelectExperiment` while a session is live in the engine changes only the selection: its answer
   (the User JSON) carries `"engineKept": true`, and no rebuild follows. With that session's

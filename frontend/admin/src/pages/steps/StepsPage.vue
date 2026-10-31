@@ -295,12 +295,14 @@ const sessionLive = computed(() => {
   const s = admin.instance?.status
   return s === 'RUNNING' || s === 'TESTING'
 })
+// The open session is the autopilot's own: saved steps go into its next session (no reload is needed),
+// so the page says that instead of asking for a reload, which would start its game again. (As the
+// server says with what the engine runs: every console hears when the autopilot is switched off.)
+const autopilotsSession = computed(() => sessionLive.value && autopilotRunsSession(admin.user?.engine, admin.instance))
 // The autopilot runs this experiment: what is saved here is what its next session loads.
 const autopilot = useAutopilotStatus()
-const unattended = computed(() => !!autopilot.value?.on && !!admin.experiment && autopilot.value.experimentId === admin.experiment.id)
-// The open session is the autopilot's own: saved steps go into its next session (no reload is needed),
-// so the page says that instead of asking for a reload, which would start its game again.
-const autopilotsSession = computed(() => sessionLive.value && autopilotRunsSession(autopilot.value, admin.experiment?.id, admin.instance?.id))
+const unattended = computed(() => autopilotsSession.value ||
+  (!!autopilot.value?.on && !!admin.experiment && autopilot.value.experimentId === admin.experiment.id))
 const savedForAutopilot = computed(() => autopilotsSession.value && admin.engine === 'stale' && !admin.engineProblem)
 // Whether a reload from this account carries the open session on (the server's ReloadEngine): the
 // autopilot's is carried on only for the account it runs as; for any other it ends, pausing the autopilot.

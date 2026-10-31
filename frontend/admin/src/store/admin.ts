@@ -313,6 +313,7 @@ function engineInfoOf (v: any): EngineInfo | null {
     owner: str(v.owner),
     gameStarted: typeof v.gameStarted === 'boolean' ? v.gameStarted : null,
     stepsChanged: typeof v.stepsChanged === 'boolean' ? v.stepsChanged : null,
+    autopilotSession: typeof v.autopilotSession === 'boolean' ? v.autopilotSession : null,
   }
 }
 

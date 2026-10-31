@@ -1,6 +1,7 @@
 import { onMounted, ref, watch, type Ref } from 'vue'
 import { http } from '@/lib/http'
 import { admin } from '@/store/admin'
+import type { EngineInfo } from '@/store/types'
 import { normalizeState, problemKind, type EngineSession } from '../autopilot/autopilot'
 
 /** What this page needs from GET /autopilot (see the Autopilot page for the full settings). */
@@ -53,8 +54,9 @@ export function useAutopilotStatus (): Ref<AutopilotStatus | null> {
     }
   }
   onMounted(load)
-  // a session opening or finishing may be the autopilot's doing
-  watch(() => [admin.experiment?.id, admin.instance?.id, admin.instance?.status], () => { void load() })
+  // a session opening or finishing may be the autopilot's doing; and every console hears when the
+  // autopilot is switched off, paused, resumed or saved while a session is live (engine.autopilotSession)
+  watch(() => [admin.experiment?.id, admin.instance?.id, admin.instance?.status, admin.user?.engine?.autopilotSession], () => { void load() })
   return status
 }
 
@@ -81,11 +83,15 @@ export function autopilotRuns (s: AutopilotStatus | null, experimentId: number |
 }
 
 /**
- * True when session `sessionId` is the autopilot's own, open now: it is on for this experiment, isn't
- * paused or done, and that is the session it opened. Steps saved meanwhile go into the next session
- * it opens, so there is nothing to reload for.
+ * True when `session`, running or testing, is the autopilot's own, open now, as the server says with
+ * what the engine runs (engine.autopilotSession): it opened that session (or was handed it on Resume
+ * or a save), and is on, neither paused nor done. Steps saved meanwhile go into the next session it
+ * opens, so there is nothing to reload for. Every console hears when that changes, also when the
+ * autopilot is switched off and leaves its session running (a status asked for once would keep
+ * saying it is the autopilot's).
  */
-export function autopilotRunsSession (s: AutopilotStatus | null, experimentId: number | null | undefined, sessionId: number | null | undefined): boolean {
-  if (!s || !autopilotRuns(s, experimentId) || s.halted || !s.instance || sessionId == null) return false
-  return s.instance.id === sessionId && (s.instance.status === 'RUNNING' || s.instance.status === 'TESTING')
+export function autopilotRunsSession (engine: EngineInfo | null | undefined, session: { id: number, status: string } | null | undefined): boolean {
+  if (!engine || engine.autopilotSession !== true || !session) return false
+  if (session.status !== 'RUNNING' && session.status !== 'TESTING') return false
+  return engine.sessionId === session.id
 }

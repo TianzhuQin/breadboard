@@ -78,6 +78,13 @@ export interface EngineInfo {
    * so every console says the same. Null when the server does not say (older servers leave it out).
    */
   stepsChanged?: boolean | null
+  /**
+   * Whether that session is the autopilot's own, which it runs now: it opened it (or was handed it on
+   * Resume or a save), and is on, neither paused nor done. Steps saved meanwhile go into its next
+   * session. Every console hears when it changes, also when the autopilot is switched off and leaves
+   * its session running. Null when the server does not say (older servers leave it out).
+   */
+  autopilotSession?: boolean | null
 }
 
 export interface User {

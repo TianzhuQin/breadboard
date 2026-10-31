@@ -266,36 +266,44 @@ describe('the top bar\'s engine chip', () => {
     __receive({ notify: { ScriptEngineReloading: 1 } })
     __receive({ notify: { ScriptEngineReloaded: 2 } })
     admin.engine = 'ready'
-    let status: any = { on: true, experimentId: 1, paused: false, instance: session }
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ status, settings: { continuous: true } })))
+    // (what the engine runs says whose session it is: the top bar doesn't ask the autopilot)
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'))
+    const engine = (more: any) => ({ experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 3', owner: 'r@lab', stepsChanged: true, autopilotSession: true, ...more })
     __receive({
       user: { email: 'r@lab', experiments: [exp(1, 'A', [session])], currentScript: '' },
       experiment: exp(1, 'A', [session]),
       experimentInstance: session,
-      engine: { experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 3', owner: 'r@lab', stepsChanged: true },
+      engine: engine({}),
     })
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
-    let w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    const w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
     const chip = () => w.find('.topbar__chip')
     await vi.waitFor(() => expect(chip().text()).toBe('Steps saved'))
     expect(chip().attributes('title')).toMatch(/^Saved: the autopilot’s next session uses it\./)
     // (it runs as this account: a reload carries its session on; as another, it would end it)
     expect(chip().attributes('title')).toContain('Reload the engine only to use the saved steps in its session now, whose game then starts again.')
-    __receive({ engine: { experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 3', owner: 'other@lab', stepsChanged: true } })
+    __receive({ engine: engine({ owner: 'other@lab' }) })
     await vi.waitFor(() => expect(chip().attributes('title')).toContain('Reloading the engine from your account would end its session and pause the autopilot.'))
-    __receive({ engine: { experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 3', owner: 'r@lab', stepsChanged: true } })
+    __receive({ engine: engine({}) })
     await chip().trigger('click')
     await nextTick()
     expect(w.text()).toContain('Saved: the autopilot’s next session uses it')
-    w.unmount()
+    await chip().trigger('click')
 
-    // a session someone runs by hand (the autopilot paused): the saved steps need a reload to reach it
-    status = { ...status, paused: true }
-    w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    // The autopilot is switched off (or paused) while its session goes on: every console hears it, and
+    // the saved steps need a reload to reach that session. The top bar stays where it is.
+    __receive({ engine: engine({ autopilotSession: false }) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Reload needed'))
+    expect(chip().attributes('title')).toBe('The steps changed since the engine loaded them. Reload it to use the new steps.')
+    // switched on again, it takes that session as its own
+    __receive({ engine: engine({}) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Steps saved'))
+    __receive({ engine: engine({ autopilotSession: false }) })
     await vi.waitFor(() => expect(chip().text()).toBe('Reload needed'))
     // and once the server says the engine runs the saved steps, nothing is needed
-    __receive({ engine: { experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 3', owner: 'r@lab', stepsChanged: false } })
+    __receive({ engine: engine({ stepsChanged: false }) })
     await vi.waitFor(() => expect(chip().text()).toBe('Engine'))
+    expect(fetch.mock.calls.map(c => String(c[0])).filter(u => u.includes('/autopilot'))).toEqual([])
     w.unmount()
   })
 })

@@ -787,7 +787,11 @@ describe('StepsPage', () => {
     try {
       const autopilot = { status: { on: true, experimentId: 7, instance: { id: 5, name: 'Autopilot · 1', status: 'RUNNING' } }, settings: { continuous: true, nextSessionDelaySeconds: 10 } }
       get.mockImplementation(async (url: string) => url === '/autopilot' ? autopilot : { steps })
+      // what the engine runs says that its session is the autopilot's own (engine.autopilotSession)
+      const engine = (more: any) => ({ experimentId: 7, experimentName: 'Trust game', sessionId: 5, sessionName: 'Autopilot · 1', owner: 'other@lab.org', gameStarted: true, stepsChanged: true, autopilotSession: true, ...more })
+      admin.user = { ...admin.user, engine: engine({}) }
       admin.instance = { id: 5, name: 'Autopilot · 1', status: 'RUNNING' }
+      await flushPromises()
       admin.engine = 'stale'
       await flushPromises()
       const text = () => w.text().replace(/\s+/g, ' ')
@@ -796,7 +800,7 @@ describe('StepsPage', () => {
       // the autopilot runs as another account: a reload from this one would end its session
       expect(text()).toContain('Reloading the engine from your account would end that session and pause the autopilot.')
       // it runs as this account: a reload carries its session on, and starts its game again
-      admin.user = { ...admin.user, engine: { experimentId: 7, experimentName: 'Trust game', sessionId: 5, sessionName: 'Autopilot · 1', owner: 'r@lab.org', gameStarted: true, stepsChanged: true } }
+      admin.user = { ...admin.user, engine: engine({ owner: 'r@lab.org' }) }
       // (the server's stepsChanged keeps it so; this store's stand-in clears it on the new engine info)
       await flushPromises()
       admin.engine = 'stale'
@@ -820,12 +824,17 @@ describe('StepsPage', () => {
       settleConfirm(false)
       await flushPromises()
 
-      // the session open is someone's own (the autopilot is paused): the reload is asked for, as before
-      autopilot.status = { ...autopilot.status, paused: true } as any
-      admin.instance = { ...admin.instance }
+      // The autopilot is switched off while its session goes on, here or in another console: the server
+      // says the session is no longer its own, and the page asks for a reload, as for any session
+      // someone runs. It asks the autopilot again too: the experiment no longer runs unattended.
+      autopilot.status = { ...autopilot.status, on: false }
+      admin.user = { ...admin.user, engine: engine({ owner: 'r@lab.org', autopilotSession: false }) }
+      await flushPromises()
+      admin.engine = 'stale'
       await flushPromises()
       expect(text()).toContain('The engine isn\'t running your latest steps')
       expect(text()).not.toContain('Saved: the autopilot’s next session uses it')
+      expect(w.find('.steps__banner.is-unattended').exists()).toBe(false)
     } finally {
       get.mockReset()
       settleConfirm(false)

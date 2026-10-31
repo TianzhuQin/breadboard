@@ -2576,8 +2576,10 @@ public class ScriptBoard extends UntypedActor {
    * What the shared engine runs, for the console's User JSON ({@code engine}): {@code experimentId},
    * {@code experimentName}, {@code sessionId}, {@code sessionName} (its live session, if any),
    * {@code owner} (the account running it) and {@code gameStarted} (initStep.start() has run without
-   * an error since the engine was last built); null values when unknown. An account's own selection
-   * can differ, and its engine actions are refused then (see engineRefusal).
+   * an error since the engine was last built); null values when unknown. {@code stepsChanged}: steps
+   * saved since the engine loaded them (EngineSteps). {@code autopilotSession}: the live session is
+   * the autopilot's own, which it runs now (autopilotRuns). An account's own selection can differ,
+   * and its engine actions are refused then (see engineRefusal).
    */
   static ObjectNode engineJson() {
     ObjectNode json = Json.newObject();
@@ -2601,12 +2603,38 @@ public class ScriptBoard extends UntypedActor {
       json.put("sessionId", session.id);
       json.put("sessionName", session.name);
     }
+    // Steps saved while it runs go into the autopilot's next session: the consoles say so, rather than
+    // "Reload needed". Every console hears it change: with the session, and on a save or Resume on the
+    // Autopilot page (AutopilotController), which can switch it off or hand it a session.
+    json.put("autopilotSession", session != null && autopilotRuns(session));
     if (owner == null) {
       json.putNull("owner");
     } else {
       json.put("owner", owner);
     }
     return json;
+  }
+
+  /**
+   * Whether the autopilot runs this live session as its own (Autopilot.isOwnSession: one it opened,
+   * or was handed on Resume or a save, while it is neither paused nor done) and is on for its
+   * experiment. Switched off, the autopilot leaves its session running, and it is no longer its own.
+   */
+  private static boolean autopilotRuns(ExperimentInstance session) {
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long id = session.id;
+    Long of = session.experiment == null ? null : session.experiment.id;
+    if (id == null || of == null || !Autopilot.isOwnSession(id)) {
+      return false;
+    }
+    Autopilot.Effective settings;
+    try {
+      settings = Autopilot.effective();
+    } catch (Exception e) {
+      Logger.warn("Could not read the autopilot's settings: " + e);
+      return false;
+    }
+    return settings.isOn() && of.equals(settings.settings.experimentId);
   }
 
   // Whether a push of what the engine runs is waiting to go out (see engineChanged).
@@ -2636,7 +2664,7 @@ public class ScriptBoard extends UntypedActor {
    * Never waits: the caller may hold the game's own locks (a waiting room giving up finishes its
    * session while holding its own).
    */
-  static void engineChanged() {
+  public static void engineChanged() {
     if (!engineNewsDue.compareAndSet(false, true)) {
       return;
     }
