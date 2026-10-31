@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { mount } from '@vue/test-utils'
 import { h, nextTick } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -396,6 +399,21 @@ describe('the engine running another experiment', () => {
   const button = (w: any, label: string) => w.findAll('button').find((b: any) => b.text() === label)
 
   afterEach(() => { connection.state.value = 'idle' })
+
+  it('gives its text the whole line beside the icon on a narrow window, so the buttons wrap below it', () => {
+    // (with flex: 1 alone, the text's basis was 0: at phone width it stayed beside the buttons, one
+    // letter per line, and pushed the page some 3,600 px down. jsdom lays nothing out, so this reads the rule.)
+    const file = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'shell', 'EngineNotice.vue'), 'utf8')
+    const narrow = /@media \(max-width: 900px\) \{([\s\S]*?)\n\}/.exec(file)
+    expect(narrow).not.toBeNull()
+    expect(narrow![1]).toMatch(/\.engine-notice \{[^}]*flex-wrap: wrap/)
+    const rule = /\.engine-notice__text \{([^}]*)\}/.exec(narrow![1])
+    expect(rule).not.toBeNull()
+    // the icon (16px) and the gap (12px) take the rest of the line
+    expect(rule![1]).toMatch(/flex: 1 1 calc\(100% - 28px\)/)
+    expect(file).toMatch(/\.engine-notice__icon \{ flex: none; \}/)
+    expect(file).toMatch(/\.engine-notice \{[^}]*gap: 12px;/)
+  })
 
   it('says what the engine runs and what that means here, and switching to it rebuilds nothing', async () => {
     admin.email = 'r@lab'
