@@ -522,6 +522,53 @@ describe('the page\'s connection, as the participant hears of it', () => {
     expect(since.filter(c => c !== 'blocked')).toEqual(['open'])
   })
 
+  // A network that swallows the live connection's handshake, without a word, once the page had been
+  // connected: each attempt is given up after 15 s, and the page named the network only after five
+  // of them, about 100 s on. One such attempt is reason enough to ask the server over HTTP.
+  it('says the network may block it within about 30 s when, having been open, its attempts get no answer at all', async () => {
+    const fetch = stateAnswers([200, CONFIG])
+    const page = await openPage(fetch)
+    const droppedAt = Date.now()
+    FakeSocket.all[0].drop()
+    await nextAttempt()
+    expect(FakeSocket.all.length).toBe(2)
+    // no answer: given up after 15 s, the page asks the server over plain HTTP, which answers, and
+    // tries the live connection again at once
+    await vi.advanceTimersByTimeAsync(15000)
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(FakeSocket.all.length).toBe(3)
+    expect(page.Breadboard.connection).toBe('lost')
+    // no answer again: the network lets the page reach the server, but not open its live connection
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(page.Breadboard.connection).toBe('blocked')
+    expect(Date.now() - droppedAt).toBeLessThanOrEqual(31100)
+    // it goes on trying, and is open once the network lets it through
+    await settle()
+    ;(await nextAttempt()).accept()
+    expect(page.Breadboard.connection).toBe('open')
+  })
+
+  it('stays lost when its attempts get no answer at all and neither does the server over HTTP: the network is down', async () => {
+    // (each wait between attempts half the longest, so each attempt is given up before the next starts)
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    let calls = 0
+    const fetch = vi.fn(async () => {
+      if (calls++ === 0) return { status: 200, json: async () => CONFIG }
+      throw new TypeError('Failed to fetch')
+    })
+    const page = await openPage(fetch as any)
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 3; k++) {
+      await nextAttempt()
+      await vi.advanceTimersByTimeAsync(15000)
+      await settle()
+    }
+    expect(fetch.mock.calls.length).toBe(4)
+    expect(page.Breadboard.connection).toBe('lost')
+    expect(page.connections).not.toContain('blocked')
+  })
+
   it('takes the attempt right after the server answers over HTTP, when the server has just come back', async () => {
     const page = await openPage(stateAnswers([200, CONFIG]))
     FakeSocket.all[0].drop()

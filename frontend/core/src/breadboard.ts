@@ -38,7 +38,9 @@ const SEAT_CHECK_MS = 20 * 1000
 const RELEASED_CHECK_MS = 2 * 1000
 const SEAT_CHECK_TIMEOUT_MS = 10 * 1000
 // A participant's page whose connection had opened, and then can't open it again this many times
-// in a row, asks the server over plain HTTP whether it is there (see checkServer)
+// in a row, asks the server over plain HTTP whether it is there (see checkServer); so does one whose
+// attempt got no answer at all (given up after 15 s, socket.ts), at once: five of those took well
+// over a minute, so a network that swallows the connection was named only after 100 s
 const BLOCKED_AFTER_DROP = 5
 // How long that question may take
 const SERVER_CHECK_TIMEOUT_MS = 10 * 1000
@@ -540,7 +542,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         }
       })
       // A participant's page that had connected and can't again: the network, or the server?
-      if (config.clientId) this.socket.on('unopened', (inARow: number) => this.onUnopened(inARow))
+      if (config.clientId) this.socket.on('unopened', (inARow: number, timedOut?: boolean) => this.onUnopened(inARow, !!timedOut))
       // Propagate all socket events out to the Breadboard object
       for (const event of ['connect', 'open', 'close', 'error', 'retry']) {
         this.socket.on(event, (...args: any) => this.emit(event, ...args))
@@ -972,13 +974,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /**
    * An attempt to connect again didn't open, `inARow` in a row. From the BLOCKED_AFTER_DROP-th on,
-   * the page asks the server over plain HTTP (checkServer) after each one. When the server answered
-   * and the attempt made right after that didn't open either, the network lets the page reach the
-   * server but not open its live connection: 'blocked', which tells the participant to try another
-   * network. A page that has never connected is the socket's own 'blocked'.
+   * and after any that got no answer at all (`timedOut`, given up after 15 s), the page asks the
+   * server over plain HTTP (checkServer) after each one. When the server answered and the attempt
+   * made right after that didn't open either, the network lets the page reach the server but not
+   * open its live connection: 'blocked', which tells the participant to try another network, after
+   * about 30 s when the network swallows the connection (two attempts of 15 s), or 20 s when it
+   * refuses it (five quick ones). A page that has never connected is the socket's own 'blocked'.
    */
-  private onUnopened (inARow: number) {
-    if (!this.socket.hasOpened || inARow < BLOCKED_AFTER_DROP) return
+  private onUnopened (inARow: number, timedOut: boolean) {
+    if (!this.socket.hasOpened || (inARow < BLOCKED_AFTER_DROP && !timedOut)) return
     if (this.serverAnswered) {
       this.serverAnswered = false
       this.setLiveBlocked(true)

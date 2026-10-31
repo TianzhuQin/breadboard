@@ -50,12 +50,14 @@ type Queued = { message: any, at: number, maxAge?: number }
  * 'message'), 'close', 'error', 'retry' (the wait in ms before the next attempt), 'unopened',
  * 'refused' and 'blocked' (below).
  *
- * After each attempt that didn't open, it emits 'unopened' with the number of such attempts in a row.
- * When the server takes the connection and closes it again without sending anything, several
- * times in a row, it emits 'refused': reconnecting alone is not going to change that. When the
- * connection has never opened after several attempts, it emits 'blocked': the network may not let
- * it through. It goes on trying in all these cases, and at once when the browser says the network
- * is back, or the page is shown again (from the background, or the back/forward cache).
+ * After each attempt that didn't open, it emits 'unopened' with the number of such attempts in a row,
+ * and whether this one got no answer at all and was given up after OPEN_TIMEOUT_MS (a network that
+ * swallows the connection). When the server takes the connection and closes it again without
+ * sending anything, several times in a row, it emits 'refused': reconnecting alone is not going to
+ * change that. When the connection has never opened after several attempts, it emits 'blocked': the
+ * network may not let it through. It goes on trying in all these cases, and at once when the
+ * browser says the network is back, or the page is shown again (from the background, or the
+ * back/forward cache).
  */
 export class Socket extends Emitter {
   public state: SocketState = SocketState.CLOSED
@@ -97,6 +99,8 @@ export class Socket extends Emitter {
   private everOpened = false
   /** Attempts in a row that never opened (since the connection last opened) */
   private unopened = 0
+  /** The attempt that is closing was given up for not opening in time (giveUpOpening) */
+  private openTimedOut = false
   /** Listening for the network or the page coming back */
   private watchingPage = false
 
@@ -235,6 +239,7 @@ export class Socket extends Emitter {
     try {
       ws.close()
     } catch (e) {}
+    this.openTimedOut = true
     this.onClose()
   }
 
@@ -433,6 +438,8 @@ export class Socket extends Emitter {
   private onClose () {
     this.clearOpenTimer()
     this.clearPing()
+    const timedOut = this.openTimedOut
+    this.openTimedOut = false
     const dropped = this.state !== SocketState.CLOSING && !this.closed
     // Taken and closed again without a word (not a server that can't be reached: that never opens)
     const refused = dropped && this.state === SocketState.OPEN && !this.heard
@@ -460,7 +467,7 @@ export class Socket extends Emitter {
         this.blocked = true
         this.emit('blocked')
       }
-      this.emit('unopened', this.unopened)
+      this.emit('unopened', this.unopened, timedOut)
     }
   }
 

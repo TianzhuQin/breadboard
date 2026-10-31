@@ -361,10 +361,12 @@ goes, and a page that has lost the seat also asks the server every 20 seconds.
 
 **A network that blocks the live connection.** A page that has never connected after three tries
 says the network may not let it through, and suggests another network or browser. So does a page
-that was connected and then can't connect again: after five failed tries in a row it asks the
-server over plain HTTP after each try. If the server answers, the page tries once more at once, and
-if that fails too, the network lets it reach the server but not open its live connection. If the
-server doesn't answer, it is down, and the page goes on saying the connection was lost.
+that was connected and then can't connect again: after five failed tries in a row, or one that got
+no answer at all (a try is given up after 15 seconds), it asks the server over plain HTTP after each
+try. If the server answers, the page tries once more at once, and if that fails too, the network
+lets it reach the server but not open its live connection: about 20 seconds after the drop when the
+network refuses the connection, and 30 when it swallows it. If the server doesn't answer, it is
+down, and the page goes on saying the connection was lost.
 
 `Breadboard.connection` says how the connection is, and Breadboard emits `bb:connection` whenever
 it may have changed (`Breadboard.on('bb:connection', () => ...)`):
