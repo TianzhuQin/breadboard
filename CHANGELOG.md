@@ -329,7 +329,8 @@ Details are in [docs/whats-new.md](docs/whats-new.md).
   `zho`). The server records each session's language as its steps load, the page gets it
   (`Breadboard.language`, the `bb:language` event), and both read the words from
   `conf/i18n/eng.json` and `zho.json`; in Groovy, `bbText`. A refused tie change is told to the
-  participant in their language and recorded in English, as before.
+  participant in their language and recorded in English, as before. A choice `a.add` gets without a
+  name is "Option 1", "Option 2", … as before, or "选项 1", "选项 2", … in Chinese.
 - The new participant page's comment links to the previous default page (SVGGraph) on GitHub, since
   a release doesn't carry that file.
 

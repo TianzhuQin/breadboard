@@ -117,11 +117,11 @@ part", the participant page's loading and idle notes, `BBWaiting` and the waitin
 countdown and "Not enough participants joined", `BBGame`'s network heading and counts, `BBNetwork`'s
 hints, confirmations, list of changes, answers and stand-in names ("参与者A" for "Person A", "你" for
 "You"), `ConnectionStatus`'s and the choices' notes and buttons, `FinishProlific`, the built-in form's
-and tutorial's buttons and checks, the engine's refusals of tie changes, its idle drop timer and the
-ready-up sequence's default words, every end screen and notice the server sends, and the pages before
-and between sessions (the holding page, "No session is open right now", "You have already taken part
-in this study", "Missing Prolific ID"). A study written in Chinese used to show its participants English
-around its own texts.
+and tutorial's buttons and checks, the engine's refusals of tie changes, its labels for choices left
+unnamed, its idle drop timer and the ready-up sequence's default words, every end screen and notice
+the server sends, and the pages before and between sessions (the holding page, "No session is open
+right now", "You have already taken part in this study", "Missing Prolific ID"). A study written in
+Chinese used to show its participants English around its own texts.
 
 - The language is the session's: set it where the steps load, e.g. InitStep outside `run`, as the
   network game example does from its `language` launch parameter, and each session can have its own.
@@ -146,6 +146,8 @@ around its own texts.
 - `ReadyUpSequence`'s texts (`pendingContent`, `readyContent`, `readyButtonContent`, `timerContent`,
   `waitingContent`) are Breadboard's own words by default; an experiment that gives its own, as
   options or by setting `content` or `contentKey` in them, keeps them.
+- A choice given to `a.add` without a `name` is labelled by its place, in the session's language:
+  "Option 1", "Option 2", … as before, or "选项 1", "选项 2", … for `zho`.
 - A refusal of a tie change is told to the participant in their language and recorded in English
   (`edgeEdit`'s `reason`), as before; a reason the experiment gives (`validate`, a candidate's
   `reason`) is its own. A researcher's edit is refused in English.

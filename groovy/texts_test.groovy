@@ -139,3 +139,18 @@ test("the ready-up sequence's defaults keep the words an experiment puts into th
   // and the ones it leaves alone are Breadboard's own, in the session's language
   assert ready.fetchContent(ready.pendingContent) == "游戏马上开始。出现“准备好了”按钮时，按下它开始任务。"
 }
+
+test("a choice the steps leave unnamed is labelled by its place, in the session's language") {
+  def english = g.addPlayer('tx-opt-en')
+  a.add(english, [result: {}], [name: "Blue", result: {}], [result: {}])
+  assert english.choices*.name == ["Option 1", "Blue", "Option 3"]
+  chose("zho")
+  def chinese = g.addPlayer('tx-opt-zh')
+  a.add(chinese, [result: {}], [name: "蓝色", result: {}], [result: {}])
+  assert chinese.choices*.name == ["选项 1", "蓝色", "选项 3"]
+  // and the label is only what the participant reads: the choice is still made by its uid
+  def picked = []
+  a.add(g.addPlayer('tx-opt-pick'), [result: { picked << "first" }], [result: { picked << "second" }])
+  a.choose(g.getVertex('tx-opt-pick').choices[1].uid)
+  assert picked == ["second"]
+}

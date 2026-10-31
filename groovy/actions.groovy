@@ -228,8 +228,8 @@ class PlayerActions {
 
         def choiceMap = [:]
 
-        // Name
-        choiceMap.name = (c.name) ? c.name : "Option " + i
+        // Name: one the steps leave out is "Option 1", "Option 2", … in the session's language
+        choiceMap.name = (c.name) ? c.name : texts("choice.option", [n: i])
 
         // Class
         if (c.class)

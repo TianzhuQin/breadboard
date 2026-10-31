@@ -220,6 +220,8 @@
   "form.minText": "Enter {min} characters or more",
   "form.maxText": "Enter {max} characters or fewer",
 
+  "choice.option": "Option {n}",
+
   "timer.dropped": "You will be dropped in: ",
 
   "ready.pending": "The game will begin shortly. When a “Ready” button appears, press it to begin the task.",

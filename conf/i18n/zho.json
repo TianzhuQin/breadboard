@@ -220,6 +220,8 @@
   "form.minText": "请至少输入 {min} 个字",
   "form.maxText": "最多输入 {max} 个字",
 
+  "choice.option": "选项 {n}",
+
   "timer.dropped": "被移出前还剩：",
 
   "ready.pending": "游戏马上开始。出现“准备好了”按钮时，按下它开始任务。",
