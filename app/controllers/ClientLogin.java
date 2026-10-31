@@ -122,9 +122,21 @@ public class ClientLogin extends Controller {
     return notRunning(lang);
   }
 
-  /** invalidLink(), for Global's not-found handler: in English, as no session is known. */
-  public static play.api.templates.Html invalidLinkPage() {
-    return invalidLink(null);
+  /**
+   * invalidLink(), for Global's not-found handler: a participant's link that leads nowhere (cut off,
+   * e.g. by a chat app, or mistyped), in the language of what it names, as that study's other pages
+   * are. That is the language of the session {@code experimentInstanceId} when it is one of the
+   * experiment {@code experimentId}'s; else of the experiment's most recent session (as its pages
+   * between sessions); else English. Either id may be null (the link names none). It was always in
+   * English: in a study in Chinese, the one participant page that wasn't.
+   */
+  public static play.api.templates.Html invalidLinkPage(String experimentId, String experimentInstanceId) {
+    if (experimentId == null) {
+      return invalidLink(null);
+    }
+    String lang = experimentInstanceId != null && sessionExists(experimentId, experimentInstanceId)
+        ? SessionLanguage.of(experimentInstanceId) : SessionLanguage.ofExperiment(experimentId);
+    return invalidLink(lang);
   }
 
   static play.api.templates.Html invalidLink(String lang) {

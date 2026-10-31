@@ -828,8 +828,9 @@ public class Global extends GlobalSettings {
 
   /**
    * A participant's link that leads nowhere (cut off, or mistyped) gets the participant pages' own
-   * notice, readable on a phone, instead of Play's developer page; a session's address without
-   * /login goes to its sign-in page.
+   * notice, readable on a phone, instead of Play's developer page, in the language of the study or
+   * session the link still names (ClientLogin.invalidLinkPage); a session's address without /login
+   * goes to its sign-in page.
    */
   @Override
   public F.Promise<play.mvc.SimpleResult> onHandlerNotFound(Http.RequestHeader request) {
@@ -840,11 +841,24 @@ public class Global extends GlobalSettings {
         return F.Promise.pure((play.mvc.SimpleResult) play.mvc.Results.redirect(
             "/game/" + session.group(1) + "/" + session.group(2) + "/login"));
       }
+      // The experiment's id (/play/{e}/..., /game/{e}/...) and the session's (/game/{e}/{i}/...), as far
+      // as the link has them.
+      java.util.regex.Matcher named = PARTICIPANT_LINK.matcher(path);
+      String experimentId = null;
+      String sessionId = null;
+      if (named.find()) {
+        experimentId = named.group(1) != null ? named.group(1) : named.group(2);
+        sessionId = named.group(3);
+      }
       return F.Promise.pure((play.mvc.SimpleResult) play.mvc.Results.notFound(
-          controllers.ClientLogin.invalidLinkPage()));
+          controllers.ClientLogin.invalidLinkPage(experimentId, sessionId)));
     }
     return super.onHandlerNotFound(request);
   }
+
+  // The ids at the start of a participant's link: /play/{experiment}/..., /game/{experiment}/{session}/...
+  private static final java.util.regex.Pattern PARTICIPANT_LINK =
+      java.util.regex.Pattern.compile("^/(?:play/(\\d+)|game/(\\d+)(?:/(\\d+))?)(?:/|$)");
 
   /**
    * What every response passes through (app/filters): the researcher's session cookie goes out with

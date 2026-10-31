@@ -247,6 +247,52 @@ public class ParticipantPagesLanguageTest extends BaseTest {
         }
     }
 
+    // The heading of the page for a link that leads nowhere, in English (as the page escapes it).
+    private static final String ENGLISH_INVALID = "<h1>This link isn&#x27;t valid</h1>";
+
+    /** What Global's not-found handler answers a request for {@code path} with: a link that leads nowhere. */
+    private static Result notFoundPage(String path) throws Exception {
+        Http.RequestHeader request = play.core.j.JavaHelpers$.MODULE$.createJavaRequest(fakeRequest(GET, path).getWrappedRequest());
+        return new Global().onHandlerNotFound(request).get(10000);
+    }
+
+    @Test
+    public void aLinkCutOffOrMistypedIsInTheLanguageOfTheSessionOrStudyItStillNames() throws Exception {
+        ExperimentInstance chinese = openSession("中文", "zho");
+        String s = chinese.id.toString();
+        // A study's link, or a session's, cut off (e.g. by a chat app) or mistyped: the session's language,
+        // or the experiment's for a session it doesn't have. It was English whatever the study's language.
+        for (String path : new String[]{"/play/" + e + "/logi", "/play/" + e, "/play/" + e + "/login/x",
+            "/game/" + e + "/" + s + "/logi", "/game/" + e + "/" + s + "/p1/connecte", "/game/" + e + "/logi",
+            "/game/" + e + "/999999/login/x"}) {
+            Result cut = notFoundPage(path);
+            assertEquals(path, NOT_FOUND, status(cut));
+            String page = contentAsString(cut);
+            assertTrue(path + ": " + page, page.contains("<html lang=\"zh-CN\">"));
+            assertTrue(path + ": " + page, page.contains("<h1>" + SystemTexts.text("zho", "link.invalidTitle") + "</h1>"));
+            assertFalse(path + ": " + page, page.contains(ENGLISH_INVALID));
+        }
+        // A session's address without /login still goes to its sign-in page.
+        Result bare = notFoundPage("/game/" + e + "/" + s + "/");
+        assertEquals(SEE_OTHER, status(bare));
+        assertEquals("/game/" + e + "/" + s + "/login", header("Location", bare));
+
+        // A session in English, of an experiment whose most recent session is in Chinese: the session's own.
+        ExperimentInstance english = openSession("English", "eng");
+        openSession("中文 2", "zho");
+        String englishPage = contentAsString(notFoundPage("/game/" + e + "/" + english.id + "/logi"));
+        assertTrue(englishPage, englishPage.contains("<html lang=\"en\">") && englishPage.contains(ENGLISH_INVALID));
+        assertTrue(contentAsString(notFoundPage("/play/" + e + "/logi")).contains("<html lang=\"zh-CN\">"));
+
+        // Nothing known: English, as before.
+        Experiment fresh = createExperiment("Fresh");
+        for (String path : new String[]{"/play/" + fresh.id + "/logi", "/game/" + fresh.id + "/1/logi", "/play/", "/game/x/1/login/x",
+            "/play/999999/logi"}) {
+            String page = contentAsString(notFoundPage(path));
+            assertTrue(path + ": " + page, page.contains("<html lang=\"en\">") && page.contains(ENGLISH_INVALID));
+        }
+    }
+
     @Test
     public void theNoticeOfASessionCutShortByARestartIsInItsLanguage() throws Exception {
         ExperimentInstance chinese = openSession("中文", "zho");

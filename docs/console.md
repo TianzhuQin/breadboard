@@ -179,7 +179,8 @@ session, "This session is full"). They are in Chinese when the steps choose `zho
 any other language, or none; those two are the languages Breadboard has its own words in. The server
 keeps the language with each session as its steps load, so a page shown before a session opens (or
 between two) is in the language of the session it leads to, or else of the experiment's most recent
-session, and in English while the experiment has had none. In English stay the console, the notes a
+session, and in English while the experiment has had none. A participant link that was cut off or
+mistyped ("This link isn't valid") follows the session or experiment it still names in the same way. In English stay the console, the notes a
 researcher's preview adds (**Watching only**), Mechanical Turk's pages, experiments that still use the
 previous AngularJS participant page, and the data (an `edgeEdit` event's `reason`, for one). The
 "Not in the game" screen in the preview of someone who isn't in the game is in the session's
