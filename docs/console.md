@@ -475,14 +475,16 @@ of event with a column per data name.
 Without it, Excel and WPS read a file in the computer's own encoding (on a Chinese Windows, GBK),
 and Chinese and other non-Latin text turns into garbage; with it, they open it correctly with a
 double-click. The choice is kept in this browser. Leave it off for R, Python and existing analysis
-scripts: the files are then exactly as earlier versions wrote them. A file downloaded without it
-opens correctly in Excel through **Data → From Text/CSV** with **File origin** set to **65001:
-Unicode (UTF-8)**, and in WPS when you import it as UTF-8. The server's addresses give the same
-files with `excel=true`, e.g. `/csv/data/<session id>?excel=true`.
+scripts: the server's files (**Download data**, **Download all data** and **Download list**) are
+then exactly as earlier versions wrote them. A file downloaded without it opens correctly in Excel
+through **Data → From Text/CSV** with **File origin** set to **65001: Unicode (UTF-8)**, and in WPS
+when you import it as UTF-8. The server's addresses give the same files with `excel=true`, e.g.
+`/csv/data/<session id>?excel=true`.
 
 Timestamps in the CSV files, the console's own exports included, are in UTC, written as
 `2026-10-28T13:24:23:757Z` (with a colon before the milliseconds, as earlier versions of Breadboard
-wrote them, so existing analysis scripts keep working). In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
+wrote them, so existing analysis scripts keep working). The files saved from **View events** write
+them this way since 3.1; 3.0 wrote `2026-10-28T13:24:23.757Z` there. In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
 reads them; in Python, `pandas.to_datetime(s, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`.
 Sort rows by `event_date`, not by `id`: ids are given out in blocks and don't follow the order
 events happened in. After a session finishes or is stopped, nothing more is recorded in it.
