@@ -225,6 +225,6 @@ breadboard.example.org {
 
 **设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的“文本编辑”，Windows 上的“记事本”）打开就能改。引号要用英文的直引号（`"`）。中文输入法的标点，和 Mac 上“文本编辑”默认打开的智能引号，都会把它打成弯引号（`“ ”`），服务器就读不了这个文件：启动脚本会提示 "Line … of conf/local.conf has curly quotes"，指出是哪一行，并且不启动服务器。遇到这种情况，切换到英文输入法，把那一行的引号重新输入一遍，保存后再启动。用“文本编辑”的话，最好先在 **编辑 → 替换** 里关掉 **智能引号** 再输入。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。Windows 上的路径要用正斜杠，例如 `breadboard.backup.dir="D:/Breadboard backups"`，或者把每个反斜杠写两遍（`"D:\\Breadboard backups"`）：引号里的单个反斜杠是转义符，会让服务器启动不了，或者悄悄变成别的路径。运行服务器的账号必须能读这个文件：读不了的话（比如用 `sudo` 复制过来的，属于 root），启动脚本会提示 "conf/local.conf can't be read by …" 并拒绝启动，免得服务器不带你的设置就跑起来；按提示把文件的所有者改成那个账号就行。
 
-**实验室几个人怎么一起用？** 每人一个账号：在 **Settings → Researchers** 里添加、删除，或给别人重置密码。所有研究者共用这台服务器上的全部实验（谁都能打开、修改、运行）。要和别的课题组分开，就各用一台服务器。
+**实验室几个人怎么一起用？** 每人一个账号：在 **Settings → Researchers** 里添加、删除，或给别人重置密码（**New password**）。被重置密码或被删除的人会在所有浏览器里退出，登录页上会写明原因。所有研究者共用这台服务器上的全部实验（谁都能打开、修改、运行）。要和别的课题组分开，就各用一台服务器。
 
 **旧版控制台还能用吗？** 能。它在 `/legacy-admin`，例如 <http://localhost:9000/legacy-admin>，也可以从 **Settings** 里 **Previous console** 下的 **Open it** 进入。新旧两个控制台用的是同样的实验、场次和引擎，可以同时打开。

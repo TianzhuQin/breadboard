@@ -29,9 +29,10 @@ const state = reactive({
   /**
    * Why the sign-in page is showing, when this console didn't sign out itself: 'ended' when the
    * server ended this browser's session (the account signed out somewhere else, or its password
-   * changed), 'removed' when another researcher removed the account. Cleared by the next sign-in.
+   * changed), 'removed' when another researcher removed the account, 'reset' when another researcher
+   * gave it a new password. Cleared by the next sign-in.
    */
-  signOutReason: null as null | 'ended' | 'removed',
+  signOutReason: null as null | 'ended' | 'removed' | 'reset',
   /** A new server opened from another computer: creating the first account needs its setup code. */
   setupCodeRequired: false,
   /** Where computers on the same network reach this server (GET /state), e.g. "http://192.168.1.23:9000". */
@@ -482,13 +483,16 @@ function resetState () {
   for (const w of pending) { clearTimeout(w.timer); w.resolve(null) }
 }
 
+/** Why the server says this browser's session ended (Secured.onUnauthorized's reason). */
+const SIGN_OUT_REASONS = new Set(['ended', 'removed', 'reset'])
+
 /** The session is gone: show the sign-in page (or the first-account form). */
 function signedOut (body?: any) {
   conn.stop()
   // a question asked on a page that is gone now
   settleConfirm(false)
   resetState()
-  state.signOutReason = body && (body.reason === 'ended' || body.reason === 'removed') ? body.reason : null
+  state.signOutReason = body && SIGN_OUT_REASONS.has(body.reason) ? body.reason : null
   state.auth = body && body.status === 'create-first-user' ? 'firstUser' : 'signedOut'
   // a new server opened from another computer: the first account needs the code the server printed
   state.setupCodeRequired = !!(body && body.setupCodeRequired)

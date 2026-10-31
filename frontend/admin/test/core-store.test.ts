@@ -133,6 +133,37 @@ describe('the server closing this console after a sign-out or password change el
   })
 })
 
+describe('the sign-in page saying why', () => {
+  // Another researcher's New password closed this console with that reason, but the sign-in page
+  // said the account had signed out, or changed its password, in another browser.
+  it('says that another researcher gave the account a new password, or removed it, as the server says', async () => {
+    const LoginPage = (await import('../src/pages/auth/LoginPage.vue')).default
+    const { mount } = await import('@vue/test-utils')
+    const CLOSED = { error: 'Another researcher gave this account a new password. Ask them for it, then sign in again.', status: 'unauthorized' }
+    for (const [reason, words] of [
+      ['reset', 'You were signed out because another researcher gave this account a new password. Ask them for it, then sign in again.'],
+      ['removed', 'You were signed out because another researcher removed this account. Ask them to add it again if you still need it.'],
+      ['ended', 'You were signed out because this account signed out, or its password was changed, in another browser or tab. Sign in again to continue here.'],
+    ]) {
+      signedInAs('r@lab', 'old')
+      get.mockReset()
+      get.mockRejectedValue(new HttpError(401, 'please login', { status: 'unauthorized', reason }))
+      __receive(CLOSED)
+      await vi.waitFor(() => expect(admin.auth).toBe('signedOut'))
+      expect(admin.signOutReason).toBe(reason)
+      const w = mount(LoginPage)
+      expect(w.find('.auth__note[role="status"]').text().replace(/\s+/g, ' ')).toBe(words)
+      w.unmount()
+    }
+    // a reason it doesn't know: none
+    signedInAs('r@lab', 'old')
+    get.mockRejectedValue(new HttpError(401, 'please login', { status: 'unauthorized', reason: 'other' }))
+    __receive(CLOSED)
+    await vi.waitFor(() => expect(admin.auth).toBe('signedOut'))
+    expect(admin.signOutReason).toBe(null)
+  })
+})
+
 describe('a new password', () => {
   it('reconnects with the new sign-in at once, and tells the other tabs', async () => {
     get.mockResolvedValue({ uid: 'u1', email: 'r@lab', connectSocket: 'ws://lab/connect' })
