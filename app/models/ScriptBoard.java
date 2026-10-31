@@ -1379,6 +1379,16 @@ public class ScriptBoard extends UntypedActor {
 
   /** @param byResearcher a researcher's preview of this player (its sign-in is recorded as such) */
   public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId, final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out, final boolean byResearcher) throws Exception {
+    addClient(experimentIdString, experimentInstanceIdString, clientId, in, out, byResearcher, 0L, false);
+  }
+
+  /**
+   * @param pageLoadedAt when the socket's page was loaded, in the server's time (0: unknown), and
+   * @param takesSeat whether it asks for the seat: see Client.Connection
+   */
+  public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId,
+                               final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out, final boolean byResearcher,
+                               long pageLoadedAt, boolean takesSeat) throws Exception {
     try {
       Long experimentId = Long.parseLong(experimentIdString);
       Long experimentInstanceId = Long.parseLong(experimentInstanceIdString);
@@ -1474,7 +1484,7 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
 
-      final Client.Connection connection = new Client.Connection(in, out, byResearcher);
+      final Client.Connection connection = new Client.Connection(in, out, byResearcher, pageLoadedAt, takesSeat);
       // Someone this session has seen: their page reconnecting, another tab, or a preview of them.
       boolean returning = client != null;
       if (client == null) {
@@ -1494,6 +1504,12 @@ public class ScriptBoard extends UntypedActor {
       // preview. Client.connect says what becomes of this socket, and of the one before, which can
       // no longer act for this participant.
       Client.Arrival arrival = client.connect(connection);
+      if (arrival == Client.Arrival.REFUSED) {
+        // An older tab of theirs reconnecting by itself, while the page they opened since holds the
+        // seat: it was told so, and changes nothing.
+        Logger.debug("addClient: " + clientId + "'s older page was refused: a page they loaded later holds the seat");
+        return;
+      }
       if (!byResearcher && arrival != Client.Arrival.WATCHING) {
         ownPageHolds(experimentInstance, clientId);
       }
@@ -1571,11 +1587,36 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
+   * Whether a page holds the participant's seat in this session now, as the page that asks counts it
+   * (ClientController.getState). A page that another one took the seat from asks: once none holds it,
+   * it takes the seat back by itself (frontend/core). For the participant's own page
+   * ({@code byResearcher} false), only an open page of theirs counts, not a researcher's preview: a
+   * page of theirs would take the seat from it. For a researcher's page (a preview, or the previous
+   * console's Testing panel, signed in by the researcher's cookie), any open socket in the seat counts,
+   * a preview's too: it never takes the seat from another page. It used to count only the
+   * participant's own, so such a page took the seat from a preview within 20 s, and two of them on
+   * screen took it from each other every 20 s, for ever. A socket that has fallen silent counts until
+   * it is closed (closeSilentPages).
+   */
+  public static boolean seatHeld(String experimentId, String instanceId, String clientId, boolean byResearcher) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    ExperimentInstance seat = client == null ? null : client.experimentInstance;
+    if (seat == null || seat.id == null || !seat.id.toString().equals(instanceId)) {
+      return false;
+    }
+    if (seat.experiment != null && seat.experiment.id != null && !seat.experiment.id.toString().equals(experimentId)) {
+      return false;
+    }
+    return byResearcher ? client.seatOpen() : client.presence() == Client.Presence.HERE;
+  }
+
+  /**
    * A message from a participant's page, or from a researcher's preview of it. Every message counts
    * as hearing from that socket (see closeSilentPages), and {"action": "Ping"} is answered on it with
    * {"pong": <the server's time in ms>}. What the page that holds the seat sends acts for the player.
    * A preview that only watches can't act: its sign-in is recorded (as a preview's), the rest is
-   * ignored. So is everything from a socket that has been replaced.
+   * ignored. So is everything from a socket that has been replaced, and an answer that reaches the
+   * server too late (see lateAnswer).
    */
   @SuppressWarnings("unchecked")
   private static void participantMessage(Client client, Client.Connection connection, final String clientId,
@@ -1587,11 +1628,21 @@ public class ScriptBoard extends UntypedActor {
     if (!client.holdsSeat(connection) && !(client.watches(connection) && "LogIn".equals(action))) {
       return;
     }
+    if (lateAnswer(client, connection, clientId, event)) {
+      return;
+    }
     try {
       ObjectMapper mapper = new ObjectMapper();
       // TODO: is event.toString() the correct method here?
       Map<String, Object> jsonInput = mapper.readValue(event.toString(), Map.class);
-      if (action.equals("LogIn")) {
+      if (action.equals("LogIn") && event.hasNonNull("awayMs") && event.get("awayMs").canConvertToLong()) {
+        // The page signs in again on a connection that follows a drop, saying how long it was out
+        // of touch: no new sign-in, but a gap in the participant's connection, recorded the same way
+        // however short it was (from 3.1, see socketClosed).
+        if (!byResearcher && client.holdsSeat(connection)) {
+          connectionGap(clientId, Math.max(0L, event.get("awayMs").asLong()));
+        }
+      } else if (action.equals("LogIn")) {
         // The browser used to report its own IP address, user agent, referer (full URL,
         // including recruitment ids) and other headers here, which were stored with every
         // login. They were unverified and mostly personal data, so only the id is kept.
@@ -1623,6 +1674,66 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  /**
+   * The event connectionGap {player, awayMs}: the participant's page came back after its connection
+   * dropped, out of touch for that long (as the page measured it, from when it last heard from the
+   * server). Not into a session that is over, nor for a computer player.
+   */
+  private static void connectionGap(String clientId, long awayMs) {
+    try {
+      if (eventTracker != null && eventTracker.sessionLive() && !Client.isComputer(clientId)) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("player", clientId);
+        data.put("awayMs", awayMs);
+        eventTracker.track("connectionGap", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not record the connection gap of " + clientId, e);
+    }
+  }
+
+  // When a page says it gave an answer (a choice, a tie change: frontend/core, breadboard.ts), in
+  // the server's time as the page reckons it from the pongs. An answer that reaches the server more
+  // than LATE_ANSWER_MS after that is dropped.
+  static final String ANSWER_SENT_AT = "bbSentAt";
+  static final long LATE_ANSWER_MS = 10000L;
+
+  /**
+   * Whether this message is an answer that reached the server more than LATE_ANSWER_MS after the page
+   * sent it: one the page sent into a connection that had died without closing, which delivered it
+   * only as the network came back (often after the page had said the connection was lost, and taken
+   * the answer back). It is dropped, and recorded as answerDropped (player, ageMs); the page is sent
+   * the participant's view again, so it shows what the server holds (the choice not made) rather
+   * than what it took for sent. Messages that don't say when they were sent (the sign-in, pages
+   * from before 3.1) are taken as they come.
+   */
+  private static boolean lateAnswer(Client client, Client.Connection connection, String clientId, JsonNode event) {
+    JsonNode sentAt = event == null ? null : event.get(ANSWER_SENT_AT);
+    if (sentAt == null || !sentAt.isNumber() || "LogIn".equals(actionOf(event))) {
+      return false;
+    }
+    long ageMs = clock.getAsLong() - sentAt.asLong();
+    if (ageMs <= LATE_ANSWER_MS) {
+      return false;
+    }
+    Logger.info("Dropped an answer of " + clientId + " that reached the server " + ageMs + " ms after it was given");
+    try {
+      if (eventTracker != null && eventTracker.sessionLive() && !Client.isComputer(clientId)) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("player", clientId);
+        data.put("ageMs", ageMs);
+        eventTracker.track("answerDropped", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not record the dropped answer of " + clientId, e);
+    }
+    ObjectNode view = client.lastFrame;
+    if (view != null) {
+      connection.write(view);
+    }
+    return true;
+  }
+
   // A message's "action", or "".
   private static String actionOf(JsonNode event) {
     JsonNode actionNode = event == null ? null : event.get("action");
@@ -1636,10 +1747,12 @@ public class ScriptBoard extends UntypedActor {
    */
   private static boolean heardFrom(Client.Connection connection, String action) {
     boolean ping = "Ping".equals(action);
-    connection.heard(ping, clock.getAsLong());
+    long now = clock.getAsLong();
+    connection.heard(ping, now);
     if (ping) {
+      // (the page reckons the server's time from it, to say when it gave an answer: see lateAnswer)
       ObjectNode pong = Json.newObject();
-      pong.put("pong", System.currentTimeMillis());
+      pong.put("pong", now);
       connection.writeAside(pong);
     }
     return ping;
@@ -1749,6 +1862,10 @@ public class ScriptBoard extends UntypedActor {
     if (client.computer()) {
       return;
     }
+    if (tookSeat) {
+      // (a page of theirs is back before a departure socketClosed put off was due)
+      client.cancelDeparture();
+    }
     synchronized (client.recordLock()) {
       Client.Presence now = client.presence();
       Client.Presence before = client.recordPresence(now);
@@ -1781,11 +1898,27 @@ public class ScriptBoard extends UntypedActor {
    * have someone with the same id). When the participant's page goes, a researcher's preview watching
    * them takes the seat (Client.seatAWatcher) and can act for them until they are back, but they have
    * left all the same: the computer takes their seat after the usual wait, and the waiting room
-   * stops counting them, as for anyone who leaves.
+   * stops counting them, as for anyone who leaves. A page that was out of touch as its socket closed
+   * (Client.Connection.outOfTouchSince) counts as gone only when the silence would have closed it,
+   * unless a page of theirs is back by then (closeSilentPages): such a close comes through only as
+   * the network comes back, just before the page's new socket, or after it. A short outage used to
+   * be recorded as a disconnection and a connection 2 ms apart in the first case, and not at all in
+   * the second; now neither, and the page's next sign-in says how long it was out of touch
+   * (connectionGap).
    */
   static void socketClosed(Client client, Client.Connection connection) {
+    socketClosed(client, connection, clock.getAsLong());
+  }
+
+  /** socketClosed, judged at {@code now}. */
+  private static void socketClosed(Client client, Client.Connection connection, long now) {
     if (client.closed(connection) && clients.get(client.id) == client) {
       client.seatAWatcher();
+      long since = connection.outOfTouchSince(now);
+      if (since > 0 && now < since + silenceLimitMs) {
+        client.departAt(since + silenceLimitMs);
+        return;
+      }
       recordConnection(client, false);
     }
   }
@@ -1797,7 +1930,9 @@ public class ScriptBoard extends UntypedActor {
    * participant counts as gone, as when a socket closes, and the computer takes over after the
    * usual wait. A preview that watches is just closed and dropped, and so is a page that got its
    * final screen as it connected (finalScreen). Pages that never ping (from before 3.1) are left
-   * alone. {@code now}: the time to judge by.
+   * alone. Someone whose page's socket closed while it was out of touch (socketClosed), and who isn't
+   * back by the time the silence would have closed it, counts as gone now. {@code now}: the time to
+   * judge by.
    */
   static void closeSilentPages(long now) {
     for (Client client : clients.values()) {
@@ -1805,9 +1940,13 @@ public class ScriptBoard extends UntypedActor {
         if (connection.silent(now, silenceLimitMs)) {
           Logger.info("Closing a socket of " + client.id + (connection.preview ? " (a preview)" : "")
               + ": nothing heard from it for " + (now - connection.lastHeard()) / 1000 + " s");
-          socketClosed(client, connection);
+          socketClosed(client, connection, now);
           connection.close(null);
         }
+      }
+      if (client.departureDue(now) && clients.get(client.id) == client) {
+        // (their page went out of touch and isn't back: gone, as the silence would have had it)
+        recordConnection(client, false);
       }
     }
     for (Client.Connection page : endedPages) {

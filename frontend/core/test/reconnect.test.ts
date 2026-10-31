@@ -35,6 +35,20 @@ class FakeSocket {
   sentFrames () { return this.sent.map(d => JSON.parse(d)) }
 }
 
+/** BroadcastChannels of one browser: what one posts, the others of that name hear (not itself) */
+class FakeChannel {
+  static all: FakeChannel[] = []
+  onmessage: ((ev: any) => void) | null = null
+  closed = false
+  constructor (public name: string) { FakeChannel.all.push(this) }
+  postMessage (data: any) {
+    for (const c of FakeChannel.all) {
+      if (c !== this && !c.closed && c.name === this.name && c.onmessage) c.onmessage({ data })
+    }
+  }
+  close () { this.closed = true }
+}
+
 /** /state's answers, one per request (the last one repeats) */
 function stateAnswers (...answers: [number, any][]) {
   let k = 0
@@ -56,6 +70,8 @@ let current: any = null
 beforeEach(() => {
   FakeSocket.all = []
   vi.stubGlobal('WebSocket', FakeSocket)
+  FakeChannel.all = []
+  vi.stubGlobal('BroadcastChannel', FakeChannel)
   location = { pathname: PAGE, search: '', hash: '', href: 'http://lab.example' + PAGE, protocol: 'http:', host: 'lab.example' }
   vi.stubGlobal('location', location)
   vi.stubGlobal('localStorage', new MemoryStorage())
@@ -69,6 +85,7 @@ beforeEach(() => {
 afterEach(() => {
   if (current) current.disconnect()
   current = null
+  delete (document as any).visibilityState
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -94,6 +111,13 @@ async function openPage (fetch: ReturnType<typeof stateAnswers>, accept = true) 
   await Breadboard.connect()
   if (accept) FakeSocket.all[0].accept()
   return { Breadboard, players, messages, connections, ended: () => ended }
+}
+
+/** Let the clock run until the page makes its next attempt (at most the longest wait), and return it. */
+async function nextAttempt () {
+  const n = FakeSocket.all.length
+  for (let t = 0; t <= 31000 && FakeSocket.all.length === n; t += 100) await vi.advanceTimersByTimeAsync(100)
+  return FakeSocket.all[FakeSocket.all.length - 1]
 }
 
 /** The server goes away and comes back: the page's next attempt is taken. */
@@ -256,6 +280,154 @@ describe('a page whose study was opened in another tab or window', () => {
     expect(FakeSocket.all.length).toBe(3)
   })
 
+  it('tells the server when it was loaded as it connects, and asks for the seat only after "Use it here"', async () => {
+    // (so that an older tab reconnecting by itself doesn't take the seat from the newer one)
+    const page = await openPage(stateAnswers([200, { ...CONFIG, connectSocket: SOCKET + '?bbt=tok', loadedAt: 1761800000000 }]))
+    expect(FakeSocket.all[0].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000')
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    page.Breadboard.useHere()
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000&bbTake=1')
+    // the participant's choice holds until a connection opens, and no longer
+    FakeSocket.all[1].fail()
+    expect((await nextAttempt()).url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000&bbTake=1')
+    FakeSocket.all[2].accept()
+    await reconnect(3)
+    expect(FakeSocket.all[3].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000')
+  })
+
+  it('leaves the socket\'s address as it is when its state doesn\'t say when it was loaded', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    page.Breadboard.useHere()
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
+    expect(FakeSocket.all[0].url).toBe(SOCKET)
+  })
+
+  // Its state names the seat (/state gives these), and so does the channel its pages share.
+  const SEATED = { ...CONFIG, experimentId: '1', experimentInstanceId: '2' }
+  const CHANNEL = 'bb-seat:1:2:p1'
+  /** The page goes to 'elsewhere', as when the participant opens the study in another tab */
+  async function replacedPage (...seat: [number, any][]) {
+    const fetch = stateAnswers([200, SEATED], ...seat)
+    const page = await openPage(fetch)
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    expect(page.Breadboard.connection).toBe('elsewhere')
+    return { page, fetch }
+  }
+  /** The seat checks the page made (/state?seat=1) */
+  const seatChecks = (fetch: any) => fetch.mock.calls.filter((c: any[]) => c[0] === 'state?seat=1').length
+  function setVisibility (state: 'visible' | 'hidden') {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  it('takes the seat back by itself once the other tab has gone, as the other tab says it goes', async () => {
+    const { page, fetch } = await replacedPage([200, { seatHeld: false }])
+    // the newer tab, which holds the seat, is closed
+    new FakeChannel(CHANNEL).postMessage({ bb: 'released' })
+    await vi.advanceTimersByTimeAsync(1900)
+    expect(seatChecks(fetch)).toBe(0)
+    // (by then, a reload of that tab would have taken the seat again)
+    await vi.advanceTimersByTimeAsync(100)
+    await settle()
+    expect(seatChecks(fetch)).toBe(1)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
+    FakeSocket.all[1].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    // and asks no more
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    expect(seatChecks(fetch)).toBe(1)
+  })
+
+  it('stays elsewhere while a page of theirs still holds the seat, and asks again every 20 s', async () => {
+    const { page, fetch } = await replacedPage([200, { seatHeld: true }], [200, { seatHeld: true }], [200, { seatHeld: false }])
+    new FakeChannel(CHANNEL).postMessage({ bb: 'released' })
+    await vi.advanceTimersByTimeAsync(2000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(1)
+    expect(FakeSocket.all.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('elsewhere')
+    // (e.g. a page in another browser, which tells this one nothing, goes)
+    await vi.advanceTimersByTimeAsync(18000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(2)
+    expect(FakeSocket.all.length).toBe(1)
+    await vi.advanceTimersByTimeAsync(20000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(3)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
+  })
+
+  // The server tells the participant's own page from one a researcher opened by the token it asks with
+  // (ClientController.getState): it counts only the participant's pages for theirs, and any page,
+  // previews included, for the researcher's (the previous console's Testing panel opens one without
+  // ?preview=1, signed in by the researcher's cookie). Told that only the participant's counted, two
+  // such pages on screen took the seat from each other every 20 s.
+  /** The token header of each seat check the page made */
+  const seatCheckTokens = (fetch: any) => fetch.mock.calls.filter((c: any[]) => c[0] === 'state?seat=1')
+    .map((c: any[]) => (c[1] && c[1].headers && c[1].headers['X-Breadboard-Token']) || null)
+
+  it('asks with the participant\'s token, so the server counts only their own pages', async () => {
+    localStorage.setItem('breadboard-token:' + PAGE, JSON.stringify({ token: 'tok', until: Date.now() + 60 * 60 * 1000 }))
+    const { fetch } = await replacedPage([200, { seatHeld: true }])
+    await vi.advanceTimersByTimeAsync(40000)
+    await settle()
+    expect(seatCheckTokens(fetch)).toEqual(['tok', 'tok'])
+  })
+
+  it('asks with no token when a researcher opened it, and stays elsewhere for as long as a page holds the seat', async () => {
+    const { page, fetch } = await replacedPage([200, { seatHeld: true }])
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    await settle()
+    expect(seatCheckTokens(fetch)).toEqual(new Array(15).fill(null))
+    expect(FakeSocket.all.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('elsewhere')
+  })
+
+  it('takes the seat back only once it is on screen', async () => {
+    const { fetch } = await replacedPage([200, { seatHeld: false }])
+    setVisibility('hidden')
+    new FakeChannel(CHANNEL).postMessage({ bb: 'released' })
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(0)
+    expect(FakeSocket.all.length).toBe(1)
+    setVisibility('visible')
+    await settle()
+    expect(seatChecks(fetch)).toBe(1)
+    expect(FakeSocket.all.length).toBe(2)
+  })
+
+  it('tells the participant\'s other pages as it goes, while it holds the seat', async () => {
+    const heard: any[] = []
+    const other = new FakeChannel(CHANNEL)
+    other.onmessage = ev => heard.push(ev.data)
+    const page = await openPage(stateAnswers([200, SEATED]))
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))
+    expect(heard).toEqual([{ bb: 'released' }])
+    // not once another page has the seat
+    FakeSocket.all[0].frame(REPLACED)
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))
+    expect(heard.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('elsewhere')
+  })
+
+  it('leaves a preview\'s seat to the console', async () => {
+    location.search = '?preview=1'
+    location.href = 'http://lab.example' + PAGE + '?preview=1'
+    const { fetch } = await replacedPage([200, { seatHeld: false }])
+    expect(FakeChannel.all.length).toBe(0)
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    await settle()
+    expect(seatChecks(fetch)).toBe(0)
+    expect(FakeSocket.all.length).toBe(1)
+  })
+
   it('keeps the seat it was given back while the other tab is told', async () => {
     const page = await openPage(stateAnswers([200, CONFIG]))
     FakeSocket.all[0].frame(REPLACED)
@@ -299,6 +471,74 @@ describe('the page\'s connection, as the participant hears of it', () => {
     expect(FakeSocket.all.length).toBe(4)
     FakeSocket.all[3].accept()
     expect(page.Breadboard.connection).toBe('open')
+  })
+
+  it('says the network may block it when, having been open, it can\'t open again while the server answers over HTTP', async () => {
+    const fetch = stateAnswers([200, CONFIG])
+    const page = await openPage(fetch)
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 4; k++) (await nextAttempt()).fail()
+    expect(page.Breadboard.connection).toBe('lost')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    // the fifth in a row: the page asks the server over plain HTTP, which answers, and tries the
+    // live connection again at once (a server that has just come back would take it)
+    ;(await nextAttempt()).fail()
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(FakeSocket.all.length).toBe(7)
+    expect(page.Breadboard.connection).toBe('lost')
+    FakeSocket.all[6].fail()
+    expect(page.Breadboard.connection).toBe('blocked')
+    // it goes on trying, and is open once the network lets it through
+    await settle()
+    ;(await nextAttempt()).accept()
+    expect(page.Breadboard.connection).toBe('open')
+    // (blocked until then: the next attempt is still under it)
+    const since = page.connections.slice(page.connections.indexOf('blocked'))
+    expect(since.filter(c => c !== 'blocked')).toEqual(['open'])
+  })
+
+  it('takes the attempt right after the server answers over HTTP, when the server has just come back', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 5; k++) (await nextAttempt()).fail()
+    await settle()
+    FakeSocket.all[6].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.connections).not.toContain('blocked')
+  })
+
+  it('stays lost while the server doesn\'t answer over HTTP either: it is down', async () => {
+    let calls = 0
+    const fetch = vi.fn(async () => {
+      if (calls++ === 0) return { status: 200, json: async () => CONFIG }
+      throw new TypeError('Failed to fetch')
+    })
+    const page = await openPage(fetch as any)
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 8; k++) {
+      ;(await nextAttempt()).fail()
+      await settle()
+    }
+    expect(fetch.mock.calls.length).toBe(5)
+    expect(page.Breadboard.connection).toBe('lost')
+    expect(page.connections).not.toContain('blocked')
+  })
+
+  it('takes a proxy\'s "bad gateway" for a server that is down, and says it is blocked no more once the server is', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG], [200, CONFIG], [502, {}]))
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 5; k++) (await nextAttempt()).fail()
+    await settle()
+    FakeSocket.all[6].fail()
+    expect(page.Breadboard.connection).toBe('blocked')
+    // the server stops answering (the proxy in front of it says so)
+    await settle()
+    for (let k = 0; k < 3; k++) {
+      ;(await nextAttempt()).fail()
+      await settle()
+    }
+    expect(page.Breadboard.connection).toBe('lost')
   })
 
   it('tries again at once when the participant asks', async () => {
@@ -361,6 +601,60 @@ describe('the heartbeat', () => {
   })
 })
 
+describe('signing in', () => {
+  const logIns = (k: number) => FakeSocket.all[k].sentFrames().filter((m: any) => m.action === 'LogIn')
+
+  it('signs in on its first connection, and again after a drop, saying how long it was out of touch', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    await page.Breadboard.login()
+    // (as it opens, before anything else)
+    FakeSocket.all[0].accept()
+    expect(FakeSocket.all[0].sentFrames()[0]).toEqual({ action: 'LogIn', clientId: 'p1' })
+    // the server last answers 3 s before the connection drops; it is back 0.5 s after
+    await vi.advanceTimersByTimeAsync(2000)
+    FakeSocket.all[0].frame({ pong: 1 })
+    await vi.advanceTimersByTimeAsync(3000)
+    FakeSocket.all[0].drop()
+    await vi.advanceTimersByTimeAsync(500)
+    FakeSocket.all[1].accept()
+    expect(FakeSocket.all[1].sentFrames()[0]).toEqual({ action: 'LogIn', clientId: 'p1', awayMs: 3500 })
+    // once per connection, however often the page asks (as useBreadboard does on every open)
+    await page.Breadboard.login()
+    await page.Breadboard.login()
+    expect(logIns(1).length).toBe(1)
+  })
+
+  it('says how long a connection that died without closing was out of touch', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    await page.Breadboard.login()
+    FakeSocket.all[0].accept()
+    FakeSocket.all[0].frame({ pong: 1 })
+    // nothing more comes: after 15 s the page connects again at once
+    await vi.advanceTimersByTimeAsync(15000)
+    FakeSocket.all[1].accept()
+    expect(logIns(1)).toEqual([{ action: 'LogIn', clientId: 'p1', awayMs: 15000 }])
+  })
+
+  it('signs in on no other connection: none after "Use it here", none if it never signed in', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]), false)
+    await page.Breadboard.login()
+    FakeSocket.all[0].accept()
+    FakeSocket.all[0].frame({ bbClosed: 'replaced' })
+    FakeSocket.all[0].drop()
+    page.Breadboard.useHere()
+    FakeSocket.all[1].accept()
+    expect(logIns(1)).toEqual([])
+    // a page that never signs in (the previous console, say) doesn't start to
+    const other = await openPage(stateAnswers([200, CONFIG]))
+    FakeSocket.all[2].drop()
+    await vi.advanceTimersByTimeAsync(10000)
+    FakeSocket.all[3].accept()
+    expect(logIns(3)).toEqual([])
+    expect(other.Breadboard).toBeDefined()
+  })
+})
+
 describe('answers given while the connection is down', () => {
   it('are dropped once they have waited 5 s for it; the page\'s other messages still go', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
@@ -378,6 +672,67 @@ describe('answers given while the connection is down', () => {
     // (then the first heartbeat)
     expect(sent.map((m: any) => m.action)).toEqual(['LogIn', 'MakeChoice', 'Ping'])
     expect(sent[1].choiceUID).toBe('fresh-choice')
+  })
+})
+
+describe('answers, as the server hears of them', () => {
+  // The server's clock is an hour ahead of the page's; a ping takes 20 ms to reach it.
+  const AHEAD = 60 * 60 * 1000
+  const answers = (k: number) => FakeSocket.all[k].sentFrames().filter((m: any) => m.action !== 'Ping' && m.action !== 'LogIn')
+  /** The server answers the ping sent at `sentAt`, now */
+  const pong = (k: number, sentAt: number) => FakeSocket.all[k].frame({ pong: sentAt + AHEAD + 20 })
+
+  it('say when they were given, in the server\'s time as the page reckons it from the heartbeat', async () => {
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    // before the server has answered a ping, the page can't tell
+    page.Breadboard.sendChoice('c0')
+    expect(answers(0)[0].bbSentAt).toBeUndefined()
+    // (the first ping went as the connection opened)
+    const pinged = Date.now()
+    await vi.advanceTimersByTimeAsync(300)
+    pong(0, pinged)
+    await vi.advanceTimersByTimeAsync(2000)
+    page.Breadboard.sendChoice('c1')
+    page.Breadboard.sendGroupChoice('g1')
+    page.Breadboard.sendEdgeEdit('remove', 'na', 'nb', 3)
+    // as the older AngularJS client sends a choice
+    page.Breadboard.sendType('MakeChoice', { choiceUID: 'c2', params: '{}' })
+    // the page's other messages don't
+    page.Breadboard.send('screen-tracker', { width: 800 })
+    await settle()
+    const now = Date.now() + AHEAD
+    const sent = answers(0).slice(1)
+    expect(sent.map((m: any) => m.action === 'CustomEvent' ? m.eventName : m.choiceUID))
+      .toEqual(['c1', 'c2', 'group-action-submit', 'bb:edge-edit', 'screen-tracker'])
+    // (a little later than the server's own time, by the 20 ms the ping took: never earlier)
+    for (const m of sent.slice(0, 4)) expect(m.bbSentAt).toBe(now + 20)
+    expect(sent[4].bbSentAt).toBeUndefined()
+  })
+
+  it('aren\'t made to look old by an answer to a ping that the page handled late', async () => {
+    // (a tab in the background, or a laptop asleep: the server answered at once, the page handles it
+    // a minute later)
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    const pinged = Date.now()
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    pong(0, pinged)
+    page.Breadboard.sendChoice('fresh')
+    expect(answers(0)[0].bbSentAt).toBe(Date.now() + AHEAD + 20)
+  })
+
+  it('keep the time they were given while they wait for the connection, and across connections', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    pong(0, Date.now())
+    FakeSocket.all[0].drop()
+    const given = Date.now() + AHEAD + 20
+    page.Breadboard.sendChoice('queued')
+    await vi.advanceTimersByTimeAsync(800)
+    FakeSocket.all[1].accept()
+    expect(answers(1)).toEqual([expect.objectContaining({ choiceUID: 'queued', bbSentAt: given })])
+    // (the new connection's server is the same: until it answers, the page goes by what it knows)
+    page.Breadboard.sendChoice('next')
+    expect(answers(1)[1].bbSentAt).toBe(Date.now() + AHEAD + 20)
   })
 })
 

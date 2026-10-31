@@ -115,6 +115,14 @@ public class ClientController extends Controller
         return uid != null && User.findByUID(uid) != null;
     }
 
+    /**
+     * Whether the request presents the participant's own seat token: it comes from their page, not a
+     * researcher's (a preview token, or the researcher's sign-in), whatever else it carries.
+     */
+    static boolean presentsSeatToken(String experimentInstanceId, String clientId) {
+        return ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId));
+    }
+
     public static Result getState(String experimentId, String experimentInstanceId, String clientId, String connectionSpeed){
         // A preview runs in an opaque origin (see PREVIEW_SANDBOX), so its request for this is
         // cross-origin. Any origin may read the answer, but never with credentials: a page elsewhere
@@ -126,6 +134,15 @@ public class ClientController extends Controller
             error.put("error", "not-logged-in");
             error.put("login", routes.ClientLogin.login(experimentId, experimentInstanceId).url());
             return unauthorized(error);
+        }
+        if (request().getQueryString(SEAT_QUERY) != null) {
+            // A page that another one took the seat from asks whether a page still holds it: once none
+            // does, it takes the seat back (frontend/core). The participant's own page counts only
+            // theirs; a researcher's page, any (ScriptBoard.seatHeld).
+            ObjectNode seat = Json.newObject();
+            seat.put("seatHeld", ScriptBoard.seatHeld(experimentId, experimentInstanceId, clientId,
+                !presentsSeatToken(experimentInstanceId, clientId)));
+            return ok(seat);
         }
         // Only what the page needs. This used to echo every request header back to page
         // JavaScript (including the Cookie header), plus the IP address and full request URI.
@@ -147,6 +164,9 @@ public class ClientController extends Controller
             }
         }
         result.put("connectSocket", socketUrl);
+        // When this page was loaded, in the server's time: its socket says so as it connects, so that
+        // of two pages of the participant's, the one opened last keeps the seat (Client.connect).
+        result.put("loadedAt", System.currentTimeMillis());
         return ok(result);
     }
 
@@ -285,6 +305,27 @@ public class ClientController extends Controller
         return experiment.getClientHtml();
     }
 
+    // What a participant's page adds to its socket's address (frontend/core, breadboard.ts): when it
+    // was loaded (its /state's loadedAt), and, when the participant chose "Use it here", that it takes
+    // the seat.
+    static final String PAGE_LOADED_QUERY = "bbPage";
+    static final String TAKE_SEAT_QUERY = "bbTake";
+    // What the page adds to its state's address to ask only whether a page of the participant's holds
+    // their seat now (getState).
+    static final String SEAT_QUERY = "seat";
+
+    /** A whole number written as text, or 0. */
+    private static long wholeNumberOrZero(String text) {
+        if (text == null) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(text.trim()));
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
     /**
     * Handle the client websocket.
     */
@@ -294,8 +335,11 @@ public class ClientController extends Controller
         // thread without access to the request.
         final boolean authorized = isAuthorized(experimentId, experimentInstanceId, clientId);
         // A researcher looking through the player's eyes, not the participant: the data says so.
-        final boolean byResearcher = authorized && !ParticipantAuth.verify(experimentInstanceId, clientId,
-            ParticipantAuth.presentedToken(request(), experimentInstanceId));
+        final boolean byResearcher = authorized && !presentsSeatToken(experimentInstanceId, clientId);
+        // When the page was loaded (its /state's loadedAt), and whether the participant asked for the
+        // seat there ("Use it here"): see Client.Connection.
+        final long pageLoadedAt = wholeNumberOrZero(request().getQueryString(PAGE_LOADED_QUERY));
+        final boolean takesSeat = "1".equals(request().getQueryString(TAKE_SEAT_QUERY));
         return new WebSocket<JsonNode>() 
         {
             // Called when the Websocket Handshake is done.
@@ -308,7 +352,8 @@ public class ClientController extends Controller
                 }
                 try
                 {
-                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE), byResearcher);
+                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE), byResearcher,
+                        pageLoadedAt, takesSeat);
                 }
                 catch (Exception ex)
                 {

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, Wrapper } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import ConnectionStatus from '../src/components/ConnectionStatus.vue'
 import Timer from '../src/components/Timer.vue'
 
@@ -337,5 +340,62 @@ describe('ConnectionStatus', () => {
     // and a change afterwards changes nothing
     breadboard.become('lost')
     expect(document.documentElement.classList.contains('bb-disconnected')).toBe(false)
+  })
+})
+
+describe('where ConnectionStatus sits on the page (the participant theme)', () => {
+  // jsdom applies the theme's rules, in their order, but lays nothing out: these check what the
+  // rules give the banner. Vuetify's alert, stubbed, keeps its class.
+  const theme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'theme', 'bb-theme.css'), 'utf8')
+  const alert = { 'v-alert': { props: ['value'], template: '<div v-if="value" class="v-alert"><slot /></div>' } }
+  let style: HTMLStyleElement
+  let app: HTMLElement
+
+  beforeEach(() => {
+    style = document.createElement('style')
+    style.textContent = theme
+    document.head.appendChild(style)
+    // Vuetify's <v-app class="bb-app">
+    app = document.createElement('div')
+    app.className = 'v-application bb-app'
+    app.appendChild(document.createElement('div'))
+    document.body.appendChild(app)
+  })
+
+  afterEach(() => {
+    style.remove()
+    app.remove()
+  })
+
+  async function banner (state: string) {
+    await mountStatus({ stubs: alert, attachTo: app.firstElementChild })
+    await become(state)
+    const el = app.querySelector('.bb-connection') as HTMLElement
+    const css = getComputedStyle(el)
+    return {
+      el,
+      position: css.position,
+      width: css.width,
+      margin: [css.marginTop, css.marginRight, css.marginBottom, css.marginLeft],
+    }
+  }
+
+  it('is a box at the top of a participant\'s page, which it moves down', async () => {
+    const b = await banner('lost')
+    expect(b.position).toBe('sticky')
+    // centred, a little below the top
+    expect(b.margin).toEqual(['12px', 'auto', '0px', 'auto'])
+  })
+
+  // Inside Vuetify's column, side margins of auto made it a box as wide as its text, centred, and
+  // 12 px below the top of the preview.
+  it('is a strip across the top of a preview that only watches', async () => {
+    breadboard = fakeBreadboard('open', true)
+    vi.stubGlobal('Breadboard', breadboard)
+    const b = await banner('watching')
+    expect(b.el.classList).toContain('bb-connection--watching')
+    expect(b.position).toBe('static')
+    expect(b.width).toBe('auto')
+    expect(b.margin).toEqual(['0px', '0px', '0px', '0px'])
   })
 })

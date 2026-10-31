@@ -246,7 +246,19 @@ is told how it ended this time.
 The page reconnects by itself, at once when the network or the participant comes back to the tab,
 and notices a connection that died without closing. `<ConnectionStatus />` says what is going on,
 with **Try now** while it reconnects. When the study is opened in another tab or window, the newer
-page takes over and the older one stops, with **Use it here** to take it back.
+page takes over and the older one stops, with **Use it here** to take it back. An older page whose
+connection comes back by itself doesn't take the seat from a newer one that is open: the page the
+participant opened last keeps it. Once the newer page has gone (closed, or its connection lost for
+good), the older one takes the seat back by itself as soon as it is on screen: the page that holds
+the seat tells the participant's other pages in the same browser as it goes, and a page that has
+lost the seat also asks the server every 20 seconds.
+
+**A network that blocks the live connection.** A page that has never connected after three tries
+says the network may not let it through, and suggests another network or browser. So does a page
+that was connected and then can't connect again: after five failed tries in a row it asks the
+server over plain HTTP after each try. If the server answers, the page tries once more at once, and
+if that fails too, the network lets it reach the server but not open its live connection. If the
+server doesn't answer, it is down, and the page goes on saying the connection was lost.
 
 `Breadboard.connection` says how the connection is, and Breadboard emits `bb:connection` whenever
 it may have changed (`Breadboard.on('bb:connection', () => ...)`):
@@ -256,7 +268,7 @@ it may have changed (`Breadboard.on('bb:connection', () => ...)`):
 | `connecting` | The first try is under way. |
 | `open` | Connected. |
 | `lost` | It dropped, and is reconnecting. |
-| `blocked` | It has never connected after several tries: the network may not let it. It goes on trying. |
+| `blocked` | It can't connect, and the network may not let it (see above). It goes on trying. |
 | `elsewhere` | Another page has the seat, e.g. the study opened in another tab. `Breadboard.useHere()` takes it back. |
 | `ended` | The session is over for this page; it no longer reconnects. |
 | `watching` | A researcher's preview that only watches (below). |
@@ -266,7 +278,11 @@ it may have changed (`Breadboard.on('bb:connection', () => ...)`):
 `PlayerChoices`'s `choice` slot get a `disabled` slot prop. A choice or tie change sent anyway
 (`Breadboard.sendChoice`, `sendGroupChoice`, `sendEdgeEdit`) waits for the connection for at most
 5 seconds and is then dropped, since the screen may have moved on. Other messages
-(`Breadboard.send`) wait as long as it takes, as before.
+(`Breadboard.send`) wait as long as it takes, as before. A choice or tie change also says when it
+was given, and the server drops one that reaches it more than 10 seconds after that: one clicked
+just before the connection died without a word came through only as the network came back, after
+the page had said the connection was lost, and used to count, 25 seconds late. The page then gets
+the participant's view again, so it shows the choice as still to be made.
 
 **`ConnectionStatus`'s slots.** The default slot replaces the message while the page reconnects
 (`lost` and `blocked`), with the slot props `time` (ms until the next try, counting down, and 0
@@ -302,17 +318,52 @@ playing, and a waiting room doesn't count them.
 
 - **One page holds the seat.** A participant's newer page (another tab, a reload) takes the seat.
   The older one is sent `{"bbClosed": "replaced"}` and closed, so it doesn't reconnect and take the
-  seat back. `clientConnected` and `clientDisconnected` are recorded only when the participant comes
-  or goes, not each time a page takes over; `bb:connection` is emitted whenever a page takes the
-  seat, so scripts may hear `connected: true` for someone who is connected already.
+  seat back. An older page that reconnects by itself while a newer one holds the seat (its connection
+  had dropped meanwhile) is sent the same and closed, and the newer page keeps the seat: the page
+  says when it was loaded, in the server's time, as it connects (its state's `loadedAt`, as `bbPage`
+  in the socket's address). **Use it here** asks for the seat (`bbTake=1`) and gets it, from a newer
+  page too. A page that has lost the seat asks `/state?seat=1`, which answers `{"seatHeld": true}`
+  while an open page of the participant's own holds it. A page a researcher opened without
+  `?preview=1` (the previous console's Testing panel, signed in by the researcher's cookie) is told
+  whether any page holds it, a preview included: it takes the seat back by itself only once nobody
+  has it, never from another page. `clientConnected` and `clientDisconnected` are recorded only when
+  the participant comes or goes, not each time a page takes over; `bb:connection` is emitted
+  whenever a page takes the seat, so scripts may hear `connected: true` for someone who is connected
+  already.
 - **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds
-  after, and gets `{"pong": <the server's time in ms>}`. A page that has pinged and then sends
+  after, and gets `{"pong": <the server's time in ms>}`, from which it reckons the server's time (see
+  below). A page that has pinged and then sends
   nothing for 30 seconds is closed and counts as gone, as when its socket closes: a connection that
   dies without closing (a phone out of range, a laptop put to sleep) used to look connected for
   good, so the computer never took that seat. Pages that never ping (from before 3.1) are left
   alone. A page given its last screen as it connects (its session is over, isn't the one running,
   or started without it: e.g. a thank-you page left open when the next session opens) has its pings
   answered too, and is closed once it falls silent; nobody used to answer them.
+- **Gaps in a connection.** A page that connects again after its connection dropped signs in again
+  with how long it was out of touch, from when it last heard from the server
+  (`{"action": "LogIn", "clientId": ..., "awayMs": ...}`), and the session records `connectionGap`
+  (`player`, `awayMs`) rather than another `clientLogIn`. An outage without a word is recorded this
+  way once the page has noticed it: after 15 to 20 seconds without a word from the server, it gives
+  the connection up and makes a new one. When the page is back before the 30 seconds of silence that
+  close a page, the `connectionGap` is all that is recorded: the participant never counts as gone. An
+  outage too short for the page to notice, which the connection lives through, leaves no record.
+  When the page's old socket closes after it was out of touch (it had sent nothing for 10 seconds,
+  or what it sent meanwhile came through only just before the close), they count as gone only once
+  30 seconds have passed since it was last heard from, unless a page of theirs is back by then. That
+  close comes through only as the network comes back, just before the page's new socket or just
+  after it, so the same outage used to be recorded as a `clientDisconnected` and a
+  `clientConnected` 2 ms apart, or not at all.
+- **Answers that come too late.** A choice or tie change says when it was given, in the server's
+  time as the page reckons it from the pongs (`bbSentAt`, in `MakeChoice` and in the `CustomEvent`s
+  that `sendGroupChoice` and `sendEdgeEdit` send, and in anything sent with `Breadboard.sendType`'s
+  `maxAge`; the older AngularJS client's choices too). One that reaches the server more than 10
+  seconds after that is dropped: the page sent it into a connection that had died without closing,
+  which delivered it only as the network came back. The session records `answerDropped` (`player`,
+  `ageMs`: how long after it was given it arrived), and the page is sent the participant's view
+  again, so it shows what the server holds. The page reckons the server's time from when it sent the
+  ping a pong answers, never from when it got round to the pong (a tab in the background, a laptop
+  asleep), so a fresh click isn't taken for an old one. Messages that don't say when they were sent
+  are taken as they come.
 - **`player._system.disconnectedAt`**: since when (ms) the player has been away, next to
   `_system.connected`; it goes when they are back.
 - **Previews.** A researcher's preview of a player whose own page is connected, or of a computer
@@ -398,7 +449,12 @@ restarts the running session.
   `-` or `@` as a formula, so import the file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
-  or goes (not for every page that takes over their seat).
+  or goes (not for every page that takes over their seat), and `connectionGap` (`player`, `awayMs`)
+  each time a participant's page connects again after its connection dropped, with how long it was
+  out of touch, also when that was too short to count as leaving; an outage too short for the page to
+  notice, which its connection lives through, isn't recorded. `answerDropped` (`player`, `ageMs`):
+  a choice or tie change that reached the server more than 10 seconds after it was given, and didn't
+  count.
 - **Order:** events recorded in the same millisecond come out in the order they were recorded. Their
   ids follow that order now; they were given out twenty at a time, in an order of the database's
   own, so such events could come out the wrong way round.
