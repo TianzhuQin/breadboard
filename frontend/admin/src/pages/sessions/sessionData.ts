@@ -142,14 +142,23 @@ export function sortSessions<T extends Pick<Instance, 'id' | 'name' | 'status' |
   return [...list].sort((a, b) => sign * cmp(a, b))
 }
 
+/**
+ * Text as the search compares it: lower case, and every run of spaces of any kind one plain space. The
+ * autopilot's session names have no-break spaces ("Autopilot · 2026-10-30 13:20:47 UTC"), which
+ * typing the name, or pasting it (browsers copy them as plain spaces), never matched.
+ */
+function searchable (text: unknown): string {
+  return `${text ?? ''}`.replace(/\s+/gu, ' ').toLowerCase()
+}
+
 /** Search by name, id ("12" or "#12") or a launch parameter's name or value. */
 export function matchesSession (s: Pick<Instance, 'id' | 'name' | 'data'>, query: string): boolean {
-  const q = query.trim().toLowerCase()
+  const q = searchable(query).trim()
   if (!q) return true
   const idq = q.startsWith('#') ? q.slice(1) : q
   if (String(s.id) === idq) return true
-  if ((s.name || '').toLowerCase().includes(q)) return true
-  return (s.data || []).some(d => `${d.name}`.toLowerCase().includes(q) || `${d.value}`.toLowerCase().includes(q))
+  if (searchable(s.name).includes(q)) return true
+  return (s.data || []).some(d => searchable(d.name).includes(q) || searchable(d.value).includes(q))
 }
 
 // ---- events -----------------------------------------------------------------------------------

@@ -176,6 +176,16 @@ describe('matchesSession', () => {
     expect(matchesSession(s, '8')).toBe(true)
     expect(matchesSession(s, 'south')).toBe(false)
   })
+  it('finds the autopilot\'s sessions by their names as typed or pasted, with plain spaces', () => {
+    // (the server names them with no-break spaces, which browsers copy as plain ones)
+    const auto = session(7, 'Autopilot · 2026-10-30 13:20:47 UTC', 'FINISHED', [])
+    for (const typed of ['Autopilot · 2026-10-30', '13:20:47 UTC', '47 utc', 'Autopilot · 2026-10-30 13:20:47 UTC', '  autopilot  ·  2026 ']) {
+      expect(matchesSession(auto, typed), typed).toBe(true)
+    }
+    // the name as it is, too
+    expect(matchesSession(auto, 'Autopilot · 2026-10-30 13:20:47 UTC')).toBe(true)
+    expect(matchesSession(auto, '13:20:48 UTC')).toBe(false)
+  })
 })
 
 describe('what can be done to a session', () => {
