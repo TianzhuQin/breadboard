@@ -358,10 +358,10 @@ const explanation = computed(() => {
     : ap.halted === 'paused'
       ? ' Autopilot is paused: it opens no new session until someone presses Resume on the Autopilot page.'
       : ap.continuous && !ap.halted
-        // (restarting the experiment's scripts for it takes a few seconds too)
+        // (restarting the experiment's scripts for it takes a second or so too)
         ? ap.nextSessionDelaySeconds
-          ? ` Autopilot opens the next session about ${ap.nextSessionDelaySeconds} seconds after one finishes, plus a few seconds to restart the experiment's scripts.`
-          : ' Autopilot opens the next session a few seconds after one finishes, once the experiment\'s scripts have restarted.'
+          ? ` Autopilot opens the next session about ${ap.nextSessionDelaySeconds} seconds after one finishes, plus a second or so to restart the experiment's scripts.`
+          : ' Autopilot opens the next session a second or so after one finishes, once the experiment\'s scripts have restarted.'
         : ''
   if (i.status === 'ARCHIVED') return `This session is archived. Its data is kept.${next}`
   return `${gaveUp ? 'The waiting room gave up because not enough people joined. ' : 'This session has finished. '}Its data is saved: download it now, or find it later under Sessions & data.${next}`

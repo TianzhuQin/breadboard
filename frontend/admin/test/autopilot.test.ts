@@ -372,11 +372,11 @@ describe('Autopilot page', () => {
     w.unmount()
   })
 
-  it('says the pause comes with a few seconds of restarting the scripts', async () => {
+  it('says the pause comes with a second or so of restarting the scripts', async () => {
     http.get.mockResolvedValue(stateJson())
     const w = await mountPage()
     const hint = w.findAll('.b-field').find(f => f.text().includes('Pause before the next session'))!
-    expect(hint.text()).toContain('Restarting the experiment\'s scripts adds a few seconds; 0 opens the next session a few seconds after one finishes.')
+    expect(hint.text()).toContain('Restarting the experiment\'s scripts adds a second or so; 0 opens the next session a second or so after one finishes.')
     expect(hint.text()).not.toContain('at once')
     w.unmount()
     expect(validateAutopilot(form(f => { f.nextSessionDelaySeconds = null })).nextSessionDelaySeconds).toBe('Enter a number of seconds (0 for no pause).')

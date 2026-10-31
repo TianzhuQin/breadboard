@@ -136,7 +136,7 @@
           <div class="ap-sec__body">
             <BSwitch v-model="form.continuous" :disabled="readOnly">Open the next session when one finishes</BSwitch>
             <div class="ap-grid">
-              <BField label="Pause before the next session" :error="errors.nextSessionDelaySeconds" :hint="secondsHint(form.nextSessionDelaySeconds, 'Time for the server to save the data. Restarting the experiment\'s scripts adds a few seconds; 0 opens the next session a few seconds after one finishes.')">
+              <BField label="Pause before the next session" :error="errors.nextSessionDelaySeconds" :hint="secondsHint(form.nextSessionDelaySeconds, 'Time for the server to save the data. Restarting the experiment\'s scripts adds a second or so; 0 opens the next session a second or so after one finishes.')">
                 <template #default="{ id, describedby }">
                   <BInput
                     :id="id"
