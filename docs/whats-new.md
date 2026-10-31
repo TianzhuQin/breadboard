@@ -141,7 +141,8 @@ around its own texts.
   a text with `one` and `other` forms is chosen by its number `{n}`. In Groovy, `bbText(key, [name:
   value])` gives one in the session's language.
 - `BBGame`'s `networkTitle`, and `BBNetwork`'s `egoLabel` and `ariaLabel`, are null by default, which
-  stands for the built-in words in the session's language; a page that sets them keeps its own.
+  stands for the built-in words in the session's language; a page that sets them keeps its own, also
+  an empty one (no heading, or no label on the participant).
 - `ReadyUpSequence`'s texts (`pendingContent`, `readyContent`, `readyButtonContent`, `timerContent`,
   `waitingContent`) are Breadboard's own words by default; an experiment that gives its own, as
   options or by setting `content` or `contentKey` in them, keeps them.

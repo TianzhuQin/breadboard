@@ -218,7 +218,7 @@ export default LinkAware.extend({
     /** Small pill under the label, e.g. "5 ties · 3 R": a function (node, player) => string. */
     nodeBadge: { type: Function, default: null },
     nodeRadius: { type: [Number, Function], default: 30 },
-    /** Label on the participant; by default "You", in the language of the session's texts. */
+    /** Label on the participant; by default (null) "You", in the language of the session's texts. */
     egoLabel: { type: String, default: null },
     /** Offer the changes as a list too, under the picture. */
     showMoveList: { type: Boolean, default: true },
@@ -227,7 +227,7 @@ export default LinkAware.extend({
      * when a later round allows editing. Automatic once the server has sent player.edgeEdits.
      */
     editable: { type: Boolean, default: false },
-    /** What screen readers call the picture; by default "Your network", in the language of the session's texts. */
+    /** What screen readers call the picture; by default (null) "Your network", in the language of the session's texts. */
     ariaLabel: { type: String, default: null },
   },
   data () {
@@ -271,8 +271,9 @@ export default LinkAware.extend({
     texts (): Record<string, string> {
       return { cancel: t('network.cancel'), cutTie: t('network.cutTie'), connect: t('network.connect') }
     },
-    egoText (): string { return this.egoLabel || t('network.egoLabel') },
-    label (): string { return this.ariaLabel || t('game.networkTitle') },
+    // (null stands for the built-in words; a page's own, even empty, is kept)
+    egoText (): string { return this.egoLabel != null ? this.egoLabel : t('network.egoLabel') },
+    label (): string { return this.ariaLabel != null ? this.ariaLabel : t('game.networkTitle') },
     // Each unnamed neighbor's stand-in name: "Person A", "Person B", ...
     fallbackNames (): Record<string, string> {
       const names: Record<string, string> = {}

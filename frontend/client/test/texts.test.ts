@@ -237,6 +237,31 @@ describe('the participant page in Chinese', () => {
     vi.unstubAllGlobals()
   })
 
+  it('keeps the words a page gives in place of the built-in ones, even empty ones', async () => {
+    fakeBreadboard('zho')
+    const node = (id: string) => ({ id, x: 0, y: 0, data: {} })
+    const me = node('me'), x = node('nx')
+    const graph = { nodes: [me, x], edges: [{ id: 1, source: me, target: x, data: {} }] }
+    const blank = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph, egoLabel: '', ariaLabel: '' } })
+    await settle(blank)
+    expect(blank.find('.bb-network__ego-label').text()).toBe('')
+    expect(blank.find('.bb-network__svg').attributes('aria-label')).toBe('')
+    const own = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph, egoLabel: '我', ariaLabel: '我的小组' } })
+    await settle(own)
+    expect(own.find('.bb-network__ego-label').text()).toBe('我')
+    expect(own.find('.bb-network__svg').attributes('aria-label')).toBe('我的小组')
+    const builtIn = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph } })
+    await settle(builtIn)
+    expect(builtIn.find('.bb-network__ego-label').text()).toBe('你')
+    expect(builtIn.find('.bb-network__svg').attributes('aria-label')).toBe('你的网络')
+
+    const stubs = { BBNetwork: { template: '<div />' }, PlayerTimers: true, PlayerChoices: true, Form: true }
+    const untitled = mount(BBGame, { propsData: { player: { id: 'me', _system: {} }, graph, networkTitle: '' }, stubs })
+    expect(untitled.find('.bb-game__eyebrow').text()).toBe('')
+    const titled = mount(BBGame, { propsData: { player: { id: 'me', _system: {} }, graph, networkTitle: '我们的小组' }, stubs })
+    expect(titled.find('.bb-game__eyebrow').text()).toBe('我们的小组')
+  })
+
   it('gives the built-in form and tutorial buttons and checks in Chinese', () => {
     fakeBreadboard('zho')
     const w = mount(Tutorial, { propsData: { player: { tutorial: { index: 0, maxSteps: 2, titles: ['一', '二'] } } }, stubs: { 'v-btn': { template: '<button><slot /></button>' }, 'v-icon': { template: '<i />' }, 'v-stepper-header': true, 'v-stepper-step': true, 'v-divider': true } })

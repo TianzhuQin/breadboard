@@ -113,7 +113,7 @@ export default Vue.extend({
     networkProps: { type: Object, default: () => ({}) },
     /** true / false, or 'auto': show the network once the player has had a tie or may edit ties. */
     network: { type: [Boolean, String], default: 'auto' },
-    /** The network's heading; by default "Your network", in the language of the session's texts. */
+    /** The network's heading; by default (null) "Your network", in the language of the session's texts. */
     networkTitle: { type: String, default: null },
   },
   data () {
@@ -132,7 +132,8 @@ export default Vue.extend({
       }
     },
     title (): string {
-      return this.networkTitle || t('game.networkTitle')
+      // (null stands for the built-in words; a page's own, even empty, is kept)
+      return this.networkTitle != null ? this.networkTitle : t('game.networkTitle')
     },
     ties (): string {
       return t('game.ties', { n: this.tieCount })
