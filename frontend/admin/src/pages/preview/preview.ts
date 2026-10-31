@@ -94,24 +94,71 @@ export function seatWord (p: PlayerLike): string {
  * said when the console knows it, in the autopilot's own session with its takeover switched on: how
  * long it waits before it takes the seat (`takeoverSeconds`), and whether it gives the seat back when
  * their own page is back (`returnToHuman`, the Autopilot page's "Give the seat back when they
- * return"). Otherwise the steps decide, if they let the computer play at all.
+ * return"). Otherwise the steps decide, if they let the computer play at all. With `anotherPreview`,
+ * this preview only watches, and another one stands in, perhaps another console's
+ * (watchesAnotherPreview): it said "you are standing in".
  */
-export function awayText (p: PlayerLike, opts: { gameStarted: boolean, takeoverSeconds?: number | null, returnToHuman?: boolean | null }): string {
+export function awayText (p: PlayerLike, opts: { gameStarted: boolean, takeoverSeconds?: number | null, returnToHuman?: boolean | null, anotherPreview?: boolean }): string {
+  const who = opts.anotherPreview ? 'another preview (perhaps another console’s) stands in' : 'you are standing in'
   if (truthyFlag(p.data?.ai)) {
-    if (opts.returnToHuman === true) return 'Away: you are standing in, and the computer plays their seat until their own page is back.'
-    if (opts.returnToHuman === false) return 'Away: you are standing in, and the computer plays their seat; it doesn’t give it back when they return.'
-    return 'Away: you are standing in, and the computer plays their seat; it gives it back when they return if the steps say so.'
+    if (opts.returnToHuman === true) return `Away: ${who}, and the computer plays their seat until their own page is back.`
+    if (opts.returnToHuman === false) return `Away: ${who}, and the computer plays their seat; it doesn’t give it back when they return.`
+    return `Away: ${who}, and the computer plays their seat; it gives it back when they return if the steps say so.`
   }
-  if (!opts.gameStarted) return 'Away: you are standing in, but they count as away, so a waiting room doesn’t count them.'
+  if (!opts.gameStarted) return `Away: ${who}, but they count as away, so a waiting room doesn’t count them.`
   const s = opts.takeoverSeconds
-  if (s != null && s >= 0) return `Away: you are standing in; the computer takes over their seat ${s > 0 ? `after ${s} s away` : 'at once'}.`
-  return 'Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.'
+  if (s != null && s >= 0) return `Away: ${who}; the computer takes over their seat ${s > 0 ? `after ${s} s away` : 'at once'}.`
+  return `Away: ${who}, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.`
 }
 
-/** Why a preview only watches, for the roles where it does (as the participant page says it). */
-export const WATCHING_WHY: Record<'computer' | 'watching', string> = {
+/**
+ * Why a preview only watches (as the participant page says it): for the roles where it does, and
+ * when another preview of the player holds the seat (`preview`, see watchesAnotherPreview).
+ */
+export const WATCHING_WHY: Record<'computer' | 'watching' | 'preview', string> = {
   computer: 'the computer plays this seat, so you see what it does but can’t answer for it',
   watching: 'their own page is connected, so you see their screen but can’t answer for them',
+  preview: 'another preview of this player (perhaps another console’s) stands in for them, so you see their screen but can’t answer here',
+}
+
+// ---- what the page in a preview's frame says ------------------------------------------------------
+
+/**
+ * Why a preview only watches, as the server tells its page (Breadboard.watchingBy, frontend/core):
+ * the player's own page holds the seat, another preview of theirs does, or the computer plays it.
+ */
+export type WatchedBy = 'page' | 'preview' | 'computer'
+/** The page in a preview's frame, as it says of its connection (Breadboard.connection). */
+export interface FrameConnection { connection: string, watchingBy: WatchedBy | null }
+/** What the page in a preview's frame posts to the console (client/src/lib/previewBridge.ts). */
+export type FrameMessage = { kind: 'connection', state: FrameConnection }
+
+const CONNECTION_STATES = ['connecting', 'open', 'lost', 'blocked', 'elsewhere', 'ended', 'watching']
+const WATCHED_BY: readonly WatchedBy[] = ['page', 'preview', 'computer']
+
+/**
+ * A message from the page in a preview's frame (PreviewFrame takes only its own frame's), or null
+ * for anything else. The page is a participant's, the experiment's scripts and all, so only these
+ * shapes are taken, with the values they may have.
+ */
+export function frameMessage (data: unknown): FrameMessage | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as Record<string, unknown>
+  if (d.bbPreview === 'connection' && typeof d.connection === 'string' && CONNECTION_STATES.includes(d.connection)) {
+    const by = WATCHED_BY.find(w => w === d.watchingBy) ?? null
+    return { kind: 'connection', state: { connection: d.connection, watchingBy: by } }
+  }
+  return null
+}
+
+/**
+ * Whether the page in a preview's frame only watches because another preview of the player holds
+ * their seat: it stands in for them while they are away, perhaps from another console. The session's
+ * data says only that a preview stands in (heldByPreview), so the tile of a preview that only watched
+ * said "Away: you are standing in".
+ */
+export function watchesAnotherPreview (f: FrameConnection | null | undefined): boolean {
+  return !!f && f.connection === 'watching' && f.watchingBy === 'preview'
 }
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })

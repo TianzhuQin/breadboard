@@ -910,6 +910,44 @@ describe('a researcher\'s preview of a player whose own page is connected', () =
     expect(page.Breadboard.connection).toBe('watching')
   })
 
+  // Two consoles previewing someone away: one preview stands in, and the other only watches. It said
+  // that the player's own page was connected: the server now says why it watches.
+  it('says why it watches, as the server says, and again whenever the seat changes hands', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    expect(page.Breadboard.watchingBy).toBe(null)
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'page' })
+    expect(page.Breadboard.connection).toBe('watching')
+    expect(page.Breadboard.watchingBy).toBe('page')
+    const heard = page.connections.length
+    // the player's page went, and another preview (another console's) took the seat
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'preview' })
+    expect(page.Breadboard.connection).toBe('watching')
+    expect(page.Breadboard.watchingBy).toBe('preview')
+    expect(page.connections.length).toBe(heard + 1)
+    // the same again changes nothing
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'preview' })
+    expect(page.connections.length).toBe(heard + 1)
+    // the other preview went: this one stands in, and can answer for them
+    FakeSocket.all[0].frame({ bbWatching: false })
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.Breadboard.watchingBy).toBe(null)
+    // from a server that doesn't say why (before 3.1), or says something else
+    FakeSocket.all[0].frame(WATCHING)
+    expect(page.Breadboard.watchingBy).toBe(null)
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'someone' })
+    expect(page.Breadboard.watchingBy).toBe(null)
+    // a new connection is asked again
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'page' })
+    FakeSocket.all[0].drop()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(page.Breadboard.watchingBy).toBe(null)
+    FakeSocket.all[1].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.Breadboard.watchingBy).toBe(null)
+  })
+
   it('is told when another preview takes the seat for real, like a participant\'s other tab', async () => {
     asPreview()
     const page = await openPage(stateAnswers([200, CONFIG]))

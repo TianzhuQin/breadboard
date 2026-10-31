@@ -239,16 +239,20 @@ own page comes back, it takes over, and the preview goes on read-only. The tile 
 preview only watches (their own page is connected, or it is a computer player) is tagged
 **Watching**. The tile of someone away is tagged **Away**, and says what standing in for them means
 now: a waiting room doesn't count them, the computer takes their seat after the usual wait, or the
-computer plays it, and gives it back when they return if the steps say so. In the autopilot's own
-session, with its takeover on, the tile says when the computer takes over (its **Take over after**)
-and whether it gives the seat back (**Give the seat back when they return**). In the list, a green
-dot means the seat is connected, and **Watching** or **Away** says when a preview of that player
-only watches, or stands in for someone away; the tooltip says why: their own page, a preview (maybe
-another console's), or the computer. The first look at a session shows the test players whose seat
-is neither connected nor held by a preview, theirs or another console's (which a preview here would
-take it from). It is taken once the session's players have loaded, however the page was opened: a
-player opened with **Preview their screen** is shown with them. In a session without test players,
-it is taken when the first ones appear, unless you have chosen whose pages to see by then.
+computer plays it, and gives it back when they return if the steps say so. Only one preview stands
+in for someone away at a time, the one opened last; another one that was watching them (in another
+researcher's console, say) goes on watching: its tile is tagged **Watching**, and says that another
+preview (perhaps another console's) stands in. When that preview closes, this one stands in. In the
+autopilot's own session, with its takeover on, the tile says when the computer takes over (its
+**Take over after**) and whether it gives the seat back (**Give the seat back when they return**).
+In the list, a green dot means the seat is connected, and **Watching** or **Away** says when a
+preview of that player only watches, or stands in for someone away; the tooltip says why: their own
+page, a preview (maybe another console's), or the computer. The first look at a session shows the
+test players whose seat is neither connected nor held by a preview, theirs or another console's
+(which a preview here would take it from). It is taken once the session's players have loaded,
+however the page was opened: a player opened with **Preview their screen** is shown with them. In a
+session without test players, it is taken when the first ones appear, unless you have chosen whose
+pages to see by then.
 
 ## Running a session
 

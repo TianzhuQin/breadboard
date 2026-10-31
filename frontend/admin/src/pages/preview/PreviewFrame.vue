@@ -13,9 +13,11 @@
         cookies, storage or socket. The token lets it act only as this player of this session.
         No allow-top-navigation, so an end-of-study redirect written for window.top can't navigate
         the console away; no allow-popups-to-escape-sandbox, so its pop-ups stay sandboxed too.
+        What it posts to the console is read only from this frame, and only as frameMessage takes it.
       -->
       <iframe
         v-if="src"
+        ref="frameEl"
         :src="src"
         :title="title"
         class="pf__frame"
@@ -41,10 +43,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RotateCw, TriangleAlert } from 'lucide-vue-next'
 import { BButton, BSpinner } from '@/ui'
-import { frameGeometry, type DeviceKind, type PreviewTarget } from './preview'
+import { frameGeometry, frameMessage, type DeviceKind, type FrameConnection, type PreviewTarget } from './preview'
 import { usePreviewLink } from './previewLink'
 
 const props = defineProps<{
@@ -59,10 +61,32 @@ const props = defineProps<{
   lazy?: boolean
 }>()
 
+const emit = defineEmits<{
+  /** What the page says of its connection (null: no page, or a new one that hasn't said yet). */
+  connection: [state: FrameConnection | null]
+}>()
+
 const geo = computed(() => frameGeometry(props.device, props.width))
 const { src, error, retry } = usePreviewLink(() => props.target)
 const loaded = ref(false)
-watch(src, () => { loaded.value = false })
+watch(src, () => {
+  loaded.value = false
+  emit('connection', null)
+})
+
+// What the page in this frame posts (client/src/lib/previewBridge.ts): only this frame's.
+const frameEl = ref<HTMLIFrameElement>()
+function onMessage (ev: MessageEvent) {
+  const own = frameEl.value?.contentWindow
+  if (!own || ev.source !== own) return
+  const message = frameMessage(ev.data)
+  if (message?.kind === 'connection') emit('connection', message.state)
+}
+onMounted(() => window.addEventListener('message', onMessage))
+onBeforeUnmount(() => {
+  window.removeEventListener('message', onMessage)
+  emit('connection', null)
+})
 </script>
 
 <style>

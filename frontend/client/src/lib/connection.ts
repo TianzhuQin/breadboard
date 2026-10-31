@@ -8,7 +8,7 @@ import { CONNECTION_EVENT } from '@human-nature-lab/breadboard-core'
  * - 'reconnecting': wait, and say so: an answer given now would wait for the connection, and arrive
  *   late or not at all
  * - 'watching': nothing, and say why: the page is a researcher's preview of a player whose own page
- *   is connected, or of a computer player, which only watches
+ *   is connected, of one another preview stands in for, or of a computer player, which only watches
  * - 'stopped': nothing more on this page (the session is over, or another page has the seat)
  */
 export type LinkState = 'open' | 'reconnecting' | 'watching' | 'stopped'
@@ -46,13 +46,26 @@ export function computerPlayer (): boolean {
 }
 
 /**
- * The base of components whose controls send answers: `link` follows the page's connection, and
- * `canSend` says whether they may send now. Use it as `LinkAware.extend({ ... })`.
+ * While a researcher's preview only watches, why, as the server says (Breadboard.watchingBy): the
+ * player's own page holds the seat ('page'), another preview of them does ('preview': it stands in
+ * for them, perhaps in another researcher's console), or the computer plays it ('computer'). Null
+ * otherwise. A preview that watched another preview's stand-in said their own page was connected.
+ */
+export function watchingBy (): string | null {
+  const bb = breadboard()
+  return bb && typeof bb.watchingBy === 'string' ? bb.watchingBy : null
+}
+
+/**
+ * The base of components whose controls send answers: `link` follows the page's connection (and
+ * `watchedBy`, while it only watches, why: see watchingBy), and `canSend` says whether they may send
+ * now. Use it as `LinkAware.extend({ ... })`.
  */
 export const LinkAware = Vue.extend({
   data () {
     return {
       link: linkState() as LinkState,
+      watchedBy: watchingBy(),
       // stops following the connection; set once following it (removing a listener that isn't
       // there would remove another one)
       unwatchLink: null as null | (() => void),
@@ -66,7 +79,10 @@ export const LinkAware = Vue.extend({
   created () {
     const bb = breadboard()
     if (!bb || typeof bb.on !== 'function') return
-    const handler = () => { this.link = stateOf(bb) }
+    const handler = () => {
+      this.link = stateOf(bb)
+      this.watchedBy = watchingBy()
+    }
     bb.on(CONNECTION_EVENT, handler)
     this.unwatchLink = () => bb.off(CONNECTION_EVENT, handler)
   },

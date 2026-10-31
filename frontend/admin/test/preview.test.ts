@@ -5,7 +5,7 @@ import {
   DEVICES, FIRST_LOOK_MAX_MS, TILE_WIDTHS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, PLAYER_LIST_WIDTH, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
   isComputerPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth, ownPageConnected, previewMemory,
   previewPageUrl, previewRole, quickPick, seatText, seatWord, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
-  awayText,
+  awayText, frameMessage, watchesAnotherPreview,
 } from '../src/pages/preview/preview'
 import { fetchPreviewToken } from '../src/pages/preview/previewLink'
 import { HttpError } from '../src/lib/http'
@@ -140,6 +140,47 @@ describe('who a player is', () => {
       expect(awayText(taken, opts))
         .toBe('Away: you are standing in, and the computer plays their seat; it gives it back when they return if the steps say so.')
     }
+  })
+
+  // Two consoles previewing someone away: one preview stands in, and the other only watches. The
+  // session's data says only that a preview stands in, so the console that only watched said "Away:
+  // you are standing in" around a page that said their own page was connected. Its page says why it
+  // watches (client/src/lib/previewBridge.ts), and the console says another preview stands in.
+  it('says that another preview, perhaps another console\'s, stands in when this one only watches', () => {
+    const away = P('p2', { _system: { connected: false, preview: true } })
+    const another = { anotherPreview: true }
+    expect(awayText(away, { gameStarted: true, takeoverSeconds: 45, ...another }))
+      .toBe('Away: another preview (perhaps another console’s) stands in; the computer takes over their seat after 45 s away.')
+    expect(awayText(away, { gameStarted: false, ...another }))
+      .toBe('Away: another preview (perhaps another console’s) stands in, but they count as away, so a waiting room doesn’t count them.')
+    expect(awayText(away, { gameStarted: true, takeoverSeconds: null, ...another }))
+      .toBe('Away: another preview (perhaps another console’s) stands in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.')
+    const taken = P('p3', { ai: 1, _system: { connected: false, preview: true } })
+    expect(awayText(taken, { gameStarted: true, returnToHuman: true, ...another }))
+      .toBe('Away: another preview (perhaps another console’s) stands in, and the computer plays their seat until their own page is back.')
+    // nobody said otherwise: this preview stands in
+    expect(awayText(away, { gameStarted: true, takeoverSeconds: 45, anotherPreview: false }))
+      .toBe('Away: you are standing in; the computer takes over their seat after 45 s away.')
+  })
+
+  it('takes only what a preview\'s page may say of its connection, and tells when another preview holds the seat', () => {
+    expect(frameMessage({ bbPreview: 'connection', connection: 'watching', watchingBy: 'preview' }))
+      .toEqual({ kind: 'connection', state: { connection: 'watching', watchingBy: 'preview' } })
+    expect(frameMessage({ bbPreview: 'connection', connection: 'open', watchingBy: null }))
+      .toEqual({ kind: 'connection', state: { connection: 'open', watchingBy: null } })
+    // an unknown reason is no reason
+    expect(frameMessage({ bbPreview: 'connection', connection: 'watching', watchingBy: '<b>me</b>' }))
+      .toEqual({ kind: 'connection', state: { connection: 'watching', watchingBy: null } })
+    for (const data of [null, 'watching', 42, {}, { bbPreview: 'connection' }, { bbPreview: 'connection', connection: 'hijacked' },
+      { bbPreview: 'connection', connection: 7 }, { connection: 'watching', watchingBy: 'preview' }, { bbPreview: 'other' }]) {
+      expect(frameMessage(data)).toBeNull()
+    }
+    expect(watchesAnotherPreview({ connection: 'watching', watchingBy: 'preview' })).toBe(true)
+    expect(watchesAnotherPreview({ connection: 'watching', watchingBy: 'page' })).toBe(false)
+    expect(watchesAnotherPreview({ connection: 'watching', watchingBy: null })).toBe(false)
+    expect(watchesAnotherPreview({ connection: 'open', watchingBy: 'preview' })).toBe(false)
+    expect(watchesAnotherPreview(null)).toBe(false)
+    expect(watchesAnotherPreview(undefined)).toBe(false)
   })
 
   it('searches by id, or by "test" and "ai"', () => {
@@ -856,6 +897,79 @@ describe('PreviewPage', () => {
       expect(tile('p3').find('.pt__tag.is-away').exists()).toBe(false)
       expect(tile('p3').find('.pt__note').exists()).toBe(false)
       expect(http.get).toHaveBeenCalledWith('/autopilot')
+    } finally {
+      w.unmount()
+      http.get.mockReset()
+    }
+  })
+
+  /** The page in this frame posts to the console, as a preview's page does (client/src/lib/previewBridge.ts). */
+  async function framePosts (frame: Element, data: any, source: any = (frame as HTMLIFrameElement).contentWindow) {
+    window.dispatchEvent(new MessageEvent('message', { data, source }))
+    await flushPromises()
+  }
+
+  // Two consoles preview someone who left: one preview stands in for them, the other only watches.
+  // The data says only that a preview stands in, so the console that only watched tagged its tile
+  // Away, with "you are standing in", around a page that said their own page was connected.
+  it('says on the tile of someone away when another preview, perhaps another console\'s, stands in and this one only watches', async () => {
+    addPlayer('p2', { _system: { connected: false, preview: true } })
+    await settle()
+    store.admin.instance = { ...store.admin.instance, hasStarted: true }
+    http.get.mockImplementation(autopilotTakingOver(true))
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p2']
+    const w = await mountPage()
+    try {
+      await settle()
+      const frame = w.find('.pt iframe').element
+      // its page stands in for them: as before
+      await framePosts(frame, { bbPreview: 'connection', connection: 'open', watchingBy: null })
+      expect(w.find('.pt__tag.is-away').text()).toBe('Away')
+      expect(w.find('.pt__note').text()).toBe('Away: you are standing in; the computer takes over their seat after 45 s away.')
+      // another preview took the seat: this one only watches
+      await framePosts(frame, { bbPreview: 'connection', connection: 'watching', watchingBy: 'preview' })
+      expect(w.find('.pt__tag.is-away').exists()).toBe(false)
+      const tag = w.find('.pt__tag.is-text')
+      expect(tag.text()).toBe('Watching')
+      expect(tag.attributes('title')).toBe('Watching: another preview of this player (perhaps another console’s) stands in for them, so you see their screen but can’t answer here')
+      expect(w.find('.pt__note').text()).toBe('Away: another preview (perhaps another console’s) stands in; the computer takes over their seat after 45 s away.')
+      // (nor in a tooltip)
+      expect(w.find('.pt').html()).not.toContain('you are standing in')
+      expect(w.find('.pt').html()).not.toContain('own page is connected')
+      // what doesn't come from the tile's own page, or isn't what a page says, changes nothing
+      await framePosts(frame, { bbPreview: 'connection', connection: 'open', watchingBy: null }, window)
+      await framePosts(frame, { bbPreview: 'connection', connection: 'hijacked' })
+      expect(w.find('.pt__tag.is-text').text()).toBe('Watching')
+      // the other preview went, and this one stands in again
+      await framePosts(frame, { bbPreview: 'connection', connection: 'open', watchingBy: null })
+      expect(w.find('.pt__tag.is-away').text()).toBe('Away')
+      expect(w.find('.pt__note').text()).toBe('Away: you are standing in; the computer takes over their seat after 45 s away.')
+    } finally {
+      w.unmount()
+      http.get.mockReset()
+    }
+  })
+
+  it('says full size, too, that another preview stands in while the page there only watches', async () => {
+    addPlayer('p2', { _system: { connected: false, preview: true } })
+    await settle()
+    store.admin.instance = { ...store.admin.instance, hasStarted: true }
+    http.get.mockImplementation(autopilotTakingOver(true))
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p2']
+    const w = await mountPage()
+    try {
+      await settle()
+      await w.find('button.pt__cover').trigger('click')
+      await settle()
+      const subtitle = () => document.body.querySelector('.b-dialog__subtitle')!.textContent
+      expect(subtitle()).toBe('Away: you are standing in; the computer takes over their seat after 45 s away. Clicks here are real choices for this player, and are recorded.')
+      await framePosts(document.body.querySelector('.pfx iframe')!, { bbPreview: 'connection', connection: 'watching', watchingBy: 'preview' })
+      expect(subtitle()).toBe('Away: another preview (perhaps another console’s) stands in; the computer takes over their seat after 45 s away. You see their screen here, but can’t answer for them.')
+      // its page watching their own page, back: as the data says
+      await framePosts(document.body.querySelector('.pfx iframe')!, { bbPreview: 'connection', connection: 'watching', watchingBy: 'page' })
+      expect(subtitle()).toBe('Away: you are standing in; the computer takes over their seat after 45 s away. Clicks here are real choices for this player, and are recorded.')
     } finally {
       w.unmount()
       http.get.mockReset()

@@ -72,8 +72,17 @@ public class Client extends Model {
   // What a page that took the seat by asking is told it counts as from then on, the time to give as
   // its socket's bbPage (Connection.claimSeat; frontend/core, breadboard.ts).
   static final String PAGE_CLAIM = "bbPage";
-  private static final ObjectNode WATCHING = Json.newObject().put("bbWatching", true);
   private static final ObjectNode NOT_WATCHING = Json.newObject().put("bbWatching", false);
+  /**
+   * Why a researcher's preview only watches, as it is told ({"bbWatching": true, "by": …}, see
+   * Connection.watchBecause): the participant's own page holds the seat, another preview of theirs
+   * holds it (standing in for them while they are away: perhaps another researcher's, in another
+   * console), or the computer plays it. The page says which (frontend/core, Breadboard.watchingBy):
+   * a preview that watched another console's stand-in said the player's own page was connected.
+   */
+  static final String BY_PAGE = "page";
+  static final String BY_PREVIEW = "preview";
+  static final String BY_COMPUTER = "computer";
 
   /**
    * A page that pings (every 5 s) and has sent nothing for this long is out of touch: its network has
@@ -116,6 +125,9 @@ public class Client extends Model {
     private volatile long quietUntil;
     // The text of the full view written last; null once any other frame has been written since.
     private String lastView;
+    // Why it only watches, as it was told last (BY_PAGE, BY_PREVIEW or BY_COMPUTER); null while it
+    // holds the seat, and before it was told (under the Client's seatLock).
+    private String watchingBy;
 
     public Connection(WebSocket.In<JsonNode> in, ThrottledWebSocketOut out, boolean preview) {
       this(in, out, preview, 0L, false);
@@ -240,6 +252,26 @@ public class Client extends Model {
       out.write(frame);
     }
 
+    /**
+     * It only watches, because of {@code by} (BY_PAGE, BY_PREVIEW or BY_COMPUTER): it is told so
+     * ({"bbWatching": true, "by": …}), unless that is what it was told last.
+     */
+    void watchBecause(String by) {
+      if (by.equals(watchingBy)) {
+        return;
+      }
+      watchingBy = by;
+      ObjectNode frame = Json.newObject();
+      frame.put("bbWatching", true);
+      frame.put("by", by);
+      writeAside(frame);
+    }
+
+    /** Why it only watches, as it was told last; null while it holds the seat. */
+    public String watchingBy() {
+      return watchingBy;
+    }
+
     /** Write a frame that changes nothing on the page's screen (e.g. the answer to a ping). */
     public synchronized void writeAside(JsonNode frame) {
       if (isOpen() && out != null) {
@@ -361,6 +393,8 @@ public class Client extends Model {
     this.seat = holder;
     this.in = holder.in;
     this.out = holder.out;
+    // (it no longer only watches, if it did)
+    holder.watchingBy = null;
     if (!holder.preview) {
       ownPageHeld = true;
       if (holder.takesSeat) {
@@ -372,20 +406,21 @@ public class Client extends Model {
 
   /**
    * Another socket for this participant. It takes the seat, unless it is a researcher's preview and
-   * the participant's own page holds it: a preview never displaces them, and watches instead ({"bbWatching":
-   * true}, then everything their page gets). Whoever held the seat before: when it was another open
-   * page of the participant, or a preview replaced by a preview, it is told ({"bbClosed": "replaced"})
-   * and closed, so it doesn't reconnect and take the seat back, as two tabs used to, for ever; a
-   * preview that held it for a participant who comes back watches from now on ({"bbWatching": true});
-   * a socket that had closed already is just left. Nor does a page of the participant's take the
-   * seat from one of theirs that was loaded after it, unless they asked for it there ("Use it here"):
-   * it is an older tab reconnecting by itself (its connection had dropped), and the newer page they
-   * opened meanwhile, which they are looking at, keeps the seat. The older page is told so and
-   * closed instead (Arrival.REFUSED). A page that took the seat by asking counts as opened last from
-   * then on (Connection.claimSeat), so the other page, reconnecting by itself, is refused in turn.
-   * Any socket of a computer player only watches what the computer
-   * does. A preview that takes the seat of someone whose own page has held it only stands in for
-   * them (see presence).
+   * the participant's own page holds it: a preview never displaces them, and watches instead
+   * ({"bbWatching": true, "by": "page"}, then everything their page gets). Whoever held the seat
+   * before: when it was another open page of the participant, or a preview replaced by a preview, it
+   * is told ({"bbClosed": "replaced"}) and closed, so it doesn't reconnect and take the seat back, as
+   * two tabs used to, for ever; a preview that held it for a participant who comes back watches from
+   * now on ({"bbWatching": true, "by": "page"}); a socket that had closed already is just left. Nor
+   * does a page of the participant's take the seat from one of theirs that was loaded after it,
+   * unless they asked for it there ("Use it here"): it is an older tab reconnecting by itself (its
+   * connection had dropped), and the newer page they opened meanwhile, which they are looking at,
+   * keeps the seat. The older page is told so and closed instead (Arrival.REFUSED). A page that took
+   * the seat by asking counts as opened last from then on (Connection.claimSeat), so the other page,
+   * reconnecting by itself, is refused in turn. Any socket of a computer player only watches what the
+   * computer does. A preview that takes the seat of someone whose own page has held it only stands in
+   * for them (see presence). Each preview watching is told why, again whenever that changes (see
+   * watchedBy).
    */
   public Arrival connect(Connection incoming) {
     synchronized (seatLock) {
@@ -395,6 +430,7 @@ public class Client extends Model {
       Connection previous = seat;
       if (previous == null || previous == incoming || !previous.isOpen()) {
         take(incoming);
+        tellWatchers();
         return Arrival.SEATED;
       }
       if (incoming.preview && !previous.preview) {
@@ -406,9 +442,11 @@ public class Client extends Model {
       }
       take(incoming);
       if (previous.preview && !incoming.preview) {
-        // (it may have stood in for them: it only watches again)
-        previous.writeAside(WATCHING);
+        // (it may have stood in for them: it only watches again, as the other previews watching do,
+        // their own page now)
+        previous.watchBecause(BY_PAGE);
         watchers.add(previous);
+        tellWatchers();
         return Arrival.PREVIEW_WATCHES;
       }
       previous.close(REPLACED);
@@ -418,9 +456,38 @@ public class Client extends Model {
 
   // (under seatLock) Told first, before any of the player's frames reach it.
   private Arrival watch(Connection incoming) {
-    incoming.writeAside(WATCHING);
+    incoming.watchBecause(watchedBy());
     watchers.add(incoming);
     return Arrival.WATCHING;
+  }
+
+  /**
+   * (under seatLock) Why a preview watches now: the computer plays the seat (BY_COMPUTER), the
+   * participant's own page holds it (BY_PAGE), or a preview does (BY_PREVIEW: it stands in for them,
+   * perhaps from another researcher's console). Null when nobody holds it.
+   */
+  private String watchedBy() {
+    if (computer) {
+      return BY_COMPUTER;
+    }
+    Connection holder = seat;
+    if (holder == null || !holder.isOpen()) {
+      return null;
+    }
+    return holder.preview ? BY_PREVIEW : BY_PAGE;
+  }
+
+  // (under seatLock) The seat changed hands: each preview watching is told why it watches now, when
+  // that has changed (one went on saying that the participant's own page was connected while another
+  // preview stood in for them).
+  private void tellWatchers() {
+    String by = watchedBy();
+    if (by == null) {
+      return;
+    }
+    for (Connection watcher : watchers) {
+      watcher.watchBecause(by);
+    }
   }
 
   /**
@@ -444,8 +511,9 @@ public class Client extends Model {
    * count, as a preview's always did, until their own page comes back; but it only stands in
    * (Presence.AWAY): they have left all the same, so the computer takes their seat after the usual
    * wait, and a waiting room no longer counts them. It used to count as them being back, and nobody
-   * played the seat for as long as the preview stayed open. Null when the seat is held again, no
-   * open preview watches, or the seat is a computer player's.
+   * played the seat for as long as the preview stayed open. The other previews watching are told
+   * that a preview holds the seat now ({"bbWatching": true, "by": "preview"}). Null when the seat is
+   * held again, no open preview watches, or the seat is a computer player's.
    */
   public Connection seatAWatcher() {
     synchronized (seatLock) {
@@ -458,6 +526,7 @@ public class Client extends Model {
           watchers.remove(i);
           take(watcher);
           watcher.writeAside(NOT_WATCHING);
+          tellWatchers();
           return watcher;
         }
       }

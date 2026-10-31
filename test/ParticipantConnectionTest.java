@@ -1170,6 +1170,68 @@ public class ParticipantConnectionTest extends BaseTest {
         }
     }
 
+    /** Why this preview was told it only watches, each time it was ({"bbWatching": true, "by": …}), in order. */
+    private static List<String> whyWatching(Page preview) {
+        List<String> why = new ArrayList<>();
+        for (JsonNode f : preview.frames) if (WATCHING.matches(f)) why.add(f.path("by").asText());
+        return why;
+    }
+
+    // Two consoles preview someone who leaves: one preview stands in, and the other only watches. That
+    // one was told nothing more, so its page went on saying that the player's own page was connected,
+    // and its console that it stood in.
+    @Test
+    public void aPreviewThatOnlyWatchesIsToldWhyAgainWhenTheSeatChangesHands() throws Throwable {
+        Page participant = connect("p1");
+        Page first = connect("p1", true);
+        Page second = connect("p1", true);
+        assertEquals(Arrays.asList("page"), whyWatching(first));
+        assertEquals(Arrays.asList("page"), whyWatching(second));
+
+        // Their page goes: the preview that came last stands in, and the other watches it.
+        participant.hangUp();
+        assertEquals(1, second.count(NOT_WATCHING));
+        assertSame(second.out, client("p1").out);
+        assertEquals(0, first.count(NOT_WATCHING));
+        assertEquals(Arrays.asList("page", "preview"), whyWatching(first));
+        assertEquals("preview", client("p1").watchers().get(0).watchingBy());
+        // what the one watching sends still doesn't act for them; the stand-in's does
+        CustomEvents customEvents = new CustomEvents();
+        bus().on("CustomEvent", customEvents);
+        try {
+            first.send("CustomEvent", "eventName", "from-the-one-watching");
+            assertEquals(0, customEvents.heard.size());
+            second.send("CustomEvent", "eventName", "from-the-stand-in");
+            assertEquals(1, customEvents.heard.size());
+        } finally {
+            bus().off("CustomEvent", customEvents);
+        }
+
+        // Their page comes back: both watch it, and are told so.
+        Page back = connect("p1");
+        assertEquals(Arrays.asList("page", "preview", "page"), whyWatching(first));
+        assertEquals(Arrays.asList("page", "page"), whyWatching(second));
+        assertSame(back.out, client("p1").out);
+
+        // It goes again: the stand-in is the preview that came to watch last, and the other is told.
+        back.hangUp();
+        assertEquals(2, second.count(NOT_WATCHING));
+        assertEquals(Arrays.asList("page", "preview", "page", "preview"), whyWatching(first));
+
+        // The stand-in goes: the one that watched takes the seat, and stands in from now on.
+        second.hangUp();
+        assertEquals(1, first.count(NOT_WATCHING));
+        assertSame(first.out, client("p1").out);
+        assertTrue(client("p1").watchers().isEmpty());
+        assertEquals(Boolean.FALSE, system("p1").get("connected"));
+        assertEquals(Boolean.TRUE, system("p1").get("preview"));
+        // and a preview opened now takes it, as before: the one before is told it was replaced
+        Page third = connect("p1", true);
+        assertSame(third.out, client("p1").out);
+        assertEquals(1, first.count(REPLACED));
+        assertTrue(whyWatching(third).isEmpty());
+    }
+
     @Test
     public void aWatchedParticipantWhoLeavesIsHandedToTheComputerAndThePreviewCanStillChooseForThem() throws Throwable {
         Page participant = connect("p1");
@@ -1244,6 +1306,7 @@ public class ParticipantConnectionTest extends BaseTest {
         try {
             Page preview = connect(id, true);
             assertTrue("told first", WATCHING.matches(preview.frames.get(0)));
+            assertEquals("and why", "computer", preview.frames.get(0).path("by").asText());
             assertEquals("then the computer's view", 1, preview.count(VIEW));
             assertFalse(preview.closed);
             assertEquals("the computer still plays it", 1, engine().eval("bot.ai"));

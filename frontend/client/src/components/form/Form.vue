@@ -33,7 +33,7 @@
         <v-divider />
         <!-- Sent while the connection is down, a page of answers would arrive late, or never: it waits.
              A preview that only watches the player answers nothing for them. -->
-        <LinkNote :link="link" class="mt-3" />
+        <LinkNote :link="link" :by="watchedBy" class="mt-3" />
         <v-layout class="tutorial-foo mt-2">
           <v-btn v-if="form.pages.length > 1" @click="prev" :disabled="!form.location.index || isBusy || !canSend" :loading="isBusy && dir === 'prev'">
             <v-icon>mdi-chevron-left</v-icon> {{ texts.previous }}
