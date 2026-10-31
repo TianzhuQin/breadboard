@@ -294,10 +294,18 @@ describe('event feed', () => {
     expect(describeEvent('myEvent')).toBe('')
   })
 
-  it('says a preview\'s sign-in is a researcher\'s, and names computer players as the other pages do', () => {
+  it('says a preview\'s sign-in and connections are a researcher\'s, and names computer players as the other pages do', () => {
     expect(describeEvent('clientLogIn', { clientId: '_6', preview: 'true' })).toBe('A researcher’s preview signed in as AI 6')
     expect(describeEvent('clientLogIn', { clientId: 't1', preview: true })).toBe('A researcher’s preview signed in as t1')
     expect(describeEvent('clientLogIn', { clientId: 'p1' })).toBe('Someone signed in')
+    // so are the connections a preview that plays a test player's seat causes: not a participant coming and going
+    expect(describeEvent('clientConnected', { clientId: 'tester1', preview: 'true' })).toBe('A researcher’s preview connected as tester1')
+    expect(describeEvent('clientDisconnected', { clientId: 'tester2', preview: true })).toBe('A researcher’s preview of tester2 disconnected')
+    expect(describeEvent('clientDisconnected', { preview: true })).toBe('A researcher’s preview disconnected')
+    expect(describeEvent('clientConnected', { clientId: 'p1' })).toBe('A participant connected')
+    expect(describeEvent('clientDisconnected', { clientId: 'p1', preview: false })).toBe('A participant lost connection')
+    // (only those three: an experiment's own event that happens to carry preview = true keeps its words)
+    expect(describeEvent('aiTakeover', { clientId: 'p1', preview: true })).toMatch(/took over/)
     expect(summarizeData({ player: '_4', choice: 'Blue', playerId: 'p2' }).shown).toEqual([['player', 'AI 4 (_4)'], ['choice', 'Blue'], ['playerId', 'p2']])
     expect(formatDataValue('clientId', '_12')).toBe('AI 12 (_12)')
     // other data keeps its values as recorded

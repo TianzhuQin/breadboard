@@ -276,8 +276,8 @@ lists it under **Recent sessions**, the experiment's five newest. Its **Resume**
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
 how many people are here and the countdown. **Events** lists what the session records, newest
-first, as it happens, with what the well-known ones mean (a researcher's preview signing in says
-so); click one to see its data. When the experiment's scripts report an error, a card at the top
+first, as it happens, with what the well-known ones mean (a researcher's preview signing in,
+connecting or disconnecting says so); click one to see its data. When the experiment's scripts report an error, a card at the top
 says what went wrong in plain words and on which line of which step (click it to open the step at
 that line); **Full error** has the rest, Breadboard's own code included. When the engine runs
 another experiment than the one you work on (the autopilot's, say), the card names it, and the

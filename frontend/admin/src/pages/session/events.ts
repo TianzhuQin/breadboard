@@ -209,6 +209,16 @@ const KNOWN: Record<string, string> = {
   sessiontoolong: 'The game ran longer than the longest session allowed, so it was ended',
 }
 
+/**
+ * What a researcher's preview did, for the events it causes (recorded with preview = true), by the
+ * player it plays (`who`: '' when the data doesn't say).
+ */
+const PREVIEW_WORDS = new Map<string, (who: string) => string>([
+  ['clientlogin', who => who ? `A researcher’s preview signed in as ${who}` : 'A researcher’s preview signed in'],
+  ['clientconnected', who => who ? `A researcher’s preview connected as ${who}` : 'A researcher’s preview connected'],
+  ['clientdisconnected', who => who ? `A researcher’s preview of ${who} disconnected` : 'A researcher’s preview disconnected'],
+])
+
 /** "RoundStep, line 72": a failure's step, and its line (its own `line`, or the "line 72: …" its error starts with). */
 function failurePlace (data: Record<string, unknown>): string {
   const step = typeof data.step === 'string' ? data.step.trim() : ''
@@ -247,15 +257,17 @@ function withData (n: string, data: Record<string, unknown>): string {
 
 /**
  * A plain-words line for well-known events; '' for the experiment's own. With the event's `data`, a
- * researcher's preview signing in as a player (recorded with preview = true) says so, and a failure
- * names its step and line.
+ * researcher's preview signing in, connecting or disconnecting as a player (recorded with preview =
+ * true) says so, and a failure names its step and line.
  */
 export function describeEvent (name: string, data?: Record<string, unknown> | null): string {
   const n = (name || '').toLowerCase()
-  if (n === 'clientlogin' && data && (data.preview === true || data.preview === 'true')) {
+  // (a preview that plays a test player's seat connects as them: it isn't a participant coming or going)
+  const preview = PREVIEW_WORDS.get(n)
+  if (preview && data && (data.preview === true || data.preview === 'true')) {
     const id = data.clientId
     const who = typeof id === 'string' && id ? aiName(id) ?? id : ''
-    return who ? `A researcher’s preview signed in as ${who}` : 'A researcher’s preview signed in'
+    return preview(who)
   }
   const said = data ? withData(n, data) : ''
   if (said) return said
