@@ -349,8 +349,10 @@ public final class Autopilot {
       // starts again. (Not a session called off before its game started.)
       tooLongInARow = 0;
     }
-    if (own && !e.settings.continuous) {
-      // That was its one session; the watchdog leaves it at that.
+    if (own && !e.settings.continuous && isAutopilotsSession(instance.id)) {
+      // That was its one session; the watchdog leaves it at that. (Not one a researcher opened by
+      // hand, which is theirs: its own one session is still to come, and opens after the pause. Such a
+      // session used to count as its one session, and was called its session once it had finished.)
       setHalt(e.settings.experimentId, pausedBecause, "Its session \"" + instance.name
           + "\" has finished, and opening the next session (continuous) is off");
       Logger.info("Autopilot: session " + instance.name + " finished; continuous is off, not opening another");
@@ -363,9 +365,10 @@ public final class Autopilot {
           + ", so no next session is scheduled");
       return;
     }
-    // Its own session finished (continuous), or another experiment's did and the engine is free again:
-    // either way the autopilot's turn, after the pause it is set to keep between sessions (unless the
-    // researcher whose session it was has their experiment still loaded: see openWhenDue).
+    // Its own session finished (continuous), or one a researcher opened by hand, or another experiment's
+    // did and the engine is free again: either way the autopilot's turn, after the pause it is set to
+    // keep between sessions (unless the researcher whose session it was has another experiment loaded
+    // now: see openWhenDue).
     int delay = e.settings.nextSessionDelaySeconds;
     String why = own ? "session " + instance.name + " finished" : "session " + instance.name + " of another experiment finished";
     Logger.info("Autopilot: " + why + "; opening the next one in " + delay + " s");

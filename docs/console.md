@@ -342,9 +342,11 @@ it, or anything that reloads the engine (creating or resuming another session, r
 another experiment doesn't, and neither does a **Reload engine** that carries its session on (by the
 account that saved its settings: see [Reloading the engine](#reloading-the-engine)). The console says
 so before you do it. Ending a session you opened by hand doesn't pause it, even one of its experiment
-or the test session: the autopilot then opens its next session as usual. A paused autopilot opens no
-session, so its links lead nowhere until you press **Resume** on this page. After its one session
-with **Open the next session when one finishes** off, the button reads **Open another session**.
+or the test session: the autopilot then opens its next session as usual. With **Open the next
+session when one finishes** off, such a session isn't its one session either. A paused autopilot
+opens no session, so its links lead nowhere until you press **Resume** on this page. After its one
+session with **Open the next session when one finishes** off, the button reads **Open another
+session**.
 Both work when the server's settings file (`conf/local.conf`) is in charge too, and a pause
 survives a server restart.
 

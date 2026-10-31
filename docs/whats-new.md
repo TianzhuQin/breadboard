@@ -107,9 +107,9 @@ study URL.
   that reloads the engine (launching or resuming another session, reloading). Selecting another
   experiment, to edit it, doesn't: the autopilot's session keeps running. Nor does ending a session a
   researcher opened by hand, even one of its experiment: the autopilot then opens its next session
-  as usual. Press **Resume** on the
-  Autopilot page to let it open sessions again; after a run with **continuous** off, the button
-  reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
+  as usual (with **continuous** off, such a session isn't its one session either). Press **Resume**
+  on the Autopilot page to let it open sessions again; after a run with **continuous** off, the
+  button reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
   is in charge too, and a pause survives a server restart.
 - While a researcher has another experiment loaded and a console open, the autopilot leaves the
   engine to them and opens its session once they close the console.

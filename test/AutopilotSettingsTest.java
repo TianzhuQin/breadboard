@@ -563,13 +563,21 @@ public class AutopilotSettingsTest extends BaseTest {
         s.put("continuous", false);
         post(user, s);
         awaitOpens(opened, 4);   // saving with it on asks again (no session of it is open)
+        // A session of its experiment that a researcher opened by hand finishes: that wasn't its one
+        // session, which opens after the pause. (It used to be counted as its one session, and called so.)
+        Autopilot.sessionFinished(ExperimentInstance.findById(session.id));
+        awaitOpens(opened, 5);
+        assertEquals("session first finished", opened.get(4));
+        assertFalse(json(get(user)).get("status").get("done").asBoolean());
+        // Its own session finishes.
+        itsSession(session);
         Autopilot.sessionFinished(ExperimentInstance.findById(session.id));
         Thread.sleep(300);
-        assertEquals(4, opened.size());
+        assertEquals(5, opened.size());
         // That was its one session: the periodic check leaves it at that, and says why.
         watchdog();
         Thread.sleep(100);
-        assertEquals(4, opened.size());
+        assertEquals(5, opened.size());
         assertTrue(json(get(user)).get("status").get("problem").asText().contains("has finished"));
     }
 
