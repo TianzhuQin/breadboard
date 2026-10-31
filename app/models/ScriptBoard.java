@@ -1668,11 +1668,20 @@ public class ScriptBoard extends UntypedActor {
   /**
    * The autopilot's launch took this participant out of the game because its waiting room was full:
    * maxPlayers were seated, the first to arrive, and they came after (groovy/autopilot.groovy). Their
-   * page is told so now, with how to join the next session (sessionFullScreen), and closed, the
-   * previews watching it too; their going is recorded (clientDisconnected), and so is the event
-   * sessionFull. A page of theirs that comes back gets that screen again (their session is over for
-   * them: Client.end). They used to be seated however many were there already. Someone the experiment
-   * had already given an end of their own (e.g. a completion code) keeps it.
+   * page is told so, with how to join the next session (sessionFullScreen), and closed, the previews
+   * watching it too; their going is recorded (clientDisconnected), and so is the event sessionFull. A
+   * page of theirs that comes back gets that screen again (their session is over for them:
+   * Client.end). They used to be seated however many were there already. Someone the experiment had
+   * already given an end of their own (e.g. a completion code) keeps it.
+   *
+   * <p>Their end is settled here, before the game starts, so a page of theirs that comes back from
+   * now on gets it (addClient). Their sockets are closed and their going recorded a moment later, on
+   * a thread of its own (closeTurnedAway): launch() calls this holding the waiting room's monitor,
+   * and recording takes their Client's record lock, which a page of theirs holds while it announces a
+   * connection change to that same waiting room (bb:connection, autopilot.onConnection). Done here, a
+   * page of theirs that connected, reconnected or closed just as the countdown ended deadlocked the
+   * engine: the game never started, everyone stayed on "Starting in…", and every later connection
+   * change in the session waited too.
    */
   public static void sessionFullAtStart(String clientId) {
     Client client = clientId == null ? null : clients.get(clientId);
@@ -1691,8 +1700,30 @@ public class ScriptBoard extends UntypedActor {
       data.put("clientId", clientId);
       eventTracker.track("sessionFull", data);
     }
-    client.disconnect(screen);
-    recordConnection(client, false);
+    closeTurnedAway(client, screen);
+  }
+
+  /**
+   * The rest of sessionFullAtStart, on a thread of its own, which holds no lock of the waiting room's:
+   * {@code client}'s sockets get their end {@code screen} and are closed, and their going is recorded,
+   * once no page of theirs is recording a connection change any more (see recordConnection). Not
+   * recorded once the engine runs another game, whose data isn't theirs.
+   */
+  private static void closeTurnedAway(final Client client, final ObjectNode screen) {
+    Thread thread = new Thread(new Runnable() {
+      public void run() {
+        try {
+          client.disconnect(screen);
+          if (clients.get(client.id) == client) {
+            recordConnection(client, false);
+          }
+        } catch (Throwable t) {
+          Logger.error("Could not close the page of " + client.id + ", whom a full session turned away", t);
+        }
+      }
+    }, "breadboard-session-full");
+    thread.setDaemon(true);
+    thread.start();
   }
 
   /**

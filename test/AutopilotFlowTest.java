@@ -12,6 +12,8 @@ import play.mvc.WebSocket;
 import security.ParticipantAuth;
 
 import javax.script.ScriptEngine;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -20,6 +22,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
 import static play.test.Helpers.*;
@@ -42,9 +46,17 @@ public class AutopilotFlowTest extends BaseTest {
         Thread.sleep(300);   // let a launch that is under way finish before the tables are emptied
         for (AdminSocketsTest.Tab t : tabs) t.close();
         ((EventTracker) scriptBoardField("eventTracker").get(null)).setExperimentInstance(null);
-        try {
-            engine().eval("autopilot.stop(); timers.cancel(); null");
-        } catch (Exception ignored) {}
+        // (waited for a few seconds at most: after a test that found the engine's threads deadlocked,
+        // the waiting room's monitor is never free again, and the rest of the suite still runs)
+        final ScriptEngine engine = engine();
+        Thread stop = new Thread(() -> {
+            try {
+                if (engine != null) engine.eval("autopilot.stop(); timers.cancel(); null");
+            } catch (Exception ignored) {}
+        }, "test-cleanup");
+        stop.setDaemon(true);
+        stop.start();
+        stop.join(5000);
         Map<String, Client> clients = (Map<String, Client>) scriptBoardField("clients").get(null);
         for (Client c : clients.values()) c.disconnect();
         clients.clear();
@@ -92,6 +104,16 @@ public class AutopilotFlowTest extends BaseTest {
             Thread.sleep(25);
         }
         fail("Timed out waiting for " + what);
+    }
+
+    /** Whether {@code condition} holds within {@code ms}. */
+    private static boolean within(long ms, Callable<Boolean> condition) throws Exception {
+        long until = System.currentTimeMillis() + ms;
+        while (System.currentTimeMillis() < until) {
+            if (Boolean.TRUE.equals(condition.call())) return true;
+            Thread.sleep(25);
+        }
+        return Boolean.TRUE.equals(condition.call());
     }
 
     private User user(String prefix) {
@@ -237,6 +259,144 @@ public class AutopilotFlowTest extends BaseTest {
         Result link = route(fakeRequest(GET, "/play/" + experiment.id + "/login")
             .withCookies(new Http.Cookie("bb_seat_" + experiment.id, session.id + "/f-3", null, null, null, false, false)));
         assertFalse("not sent back to the seat that only says it is full", contentAsString(link).contains("already taking part"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Client client(String id) throws Exception {
+        return ((Map<String, Client>) scriptBoardField("clients").get(null)).get(id);
+    }
+
+    /** A participant's record lock (Client.recordLock), which ScriptBoard.recordConnection holds as it records. */
+    private static Object recordLockOf(Client client) throws Exception {
+        java.lang.reflect.Method lock = Client.class.getDeclaredMethod("recordLock");
+        lock.setAccessible(true);
+        return lock.invoke(client);
+    }
+
+    /** The last clientConnected or clientDisconnected of this participant in the session, or null. */
+    private static String lastConnectionEvent(ExperimentInstance session, String clientId) {
+        String last = null;
+        for (Event e : Event.find.where().eq("experimentInstance.id", session.id)
+                .in("name", "clientConnected", "clientDisconnected").orderBy("id asc").findList()) {
+            if (clientId.equals(value(e, "clientId"))) last = e.name;
+        }
+        return last;
+    }
+
+    /** The threads the JVM finds deadlocked, with where each waits, or null when none are. */
+    private static String deadlocked() {
+        long[] ids = ManagementFactory.getThreadMXBean().findDeadlockedThreads();
+        if (ids == null) return null;
+        StringBuilder b = new StringBuilder();
+        for (ThreadInfo info : ManagementFactory.getThreadMXBean().getThreadInfo(ids, true, true)) {
+            b.append("\n\"").append(info.getThreadName()).append("\" waits for ").append(info.getLockName())
+                .append(", held by \"").append(info.getLockOwnerName()).append("\"");
+            for (StackTraceElement e : info.getStackTrace()) {
+                String line = e.toString();
+                if (line.contains("models.") || line.contains("Autopilot")) b.append("\n    at ").append(line);
+            }
+        }
+        return b.toString();
+    }
+
+    @Test
+    public void aFullRoomStartsWhileAPageOfSomeoneItTurnsAwayIsRecordingAConnectionChange() throws Exception {
+        final User researcher = user("fullrecord");
+        final Experiment experiment = experimentOf(researcher, "Full room, a page recording");
+        assertEquals(OK, status(post(researcher, settings(experiment, 2, 2, 1))));
+        final ExperimentInstance session = openSession(experiment);
+        connect(experiment, session, "r-1");
+        Thread.sleep(10);
+        connect(experiment, session, "r-2");
+        Thread.sleep(10);
+        final Page third = connect(experiment, session, "r-3");
+
+        // As the countdown ends, a page of the one the full room turns away records a connection change
+        // (it reconnected, closed, or fell silent): it holds their record lock as it does, then tells the
+        // waiting room. The start used to wait for that lock, holding the waiting room's monitor, which
+        // the page then waited for: neither ever went on, and the game never started.
+        boolean started;
+        synchronized (recordLockOf(client("r-3"))) {
+            started = within(10000, () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted));
+        }
+        assertTrue("the game started without waiting for the turned-away page's record", started);
+        assertNotNull(engineValue("g.getVertex('r-1')"));
+        assertNotNull(engineValue("g.getVertex('r-2')"));
+        assertNull(engineValue("g.getVertex('r-3')"));
+        assertEquals(1, events(session, "sessionFull").size());
+        // Their page is told and closed, and their going is recorded (the Prolific check of who took
+        // part reads the last of these), once their page's own record is done.
+        await("their page closed", () -> third.closed);
+        assertEquals("sessionFull", third.lastPlayer().get("ended").asText());
+        await("their going recorded", () -> "clientDisconnected".equals(lastConnectionEvent(session, "r-3")));
+        assertNull(deadlocked());
+    }
+
+    @Test
+    public void aFullRoomStartsWhileThePageOfSomeoneItTurnsAwayReconnectsAsTheCountdownEnds() throws Exception {
+        final User researcher = user("fullflaky");
+        final Experiment experiment = experimentOf(researcher, "Full room, a flaky page");
+        assertEquals(OK, status(post(researcher, settings(experiment, 2, 2, 1))));
+        Long previous = null;
+        for (int round = 1; round <= 2; round++) {
+            final Long before = previous;
+            await("session " + round, () -> {
+                ExperimentInstance open = Autopilot.openInstance(experiment.id);
+                return open != null && !open.id.equals(before) && engineValue("autopilot.room?.maxPlayers") != null;
+            });
+            final ExperimentInstance session = Autopilot.openInstance(experiment.id);
+            previous = session.id;
+            final String third = "f" + round + "-3";
+            connect(experiment, session, "f" + round + "-1");
+            Thread.sleep(5);
+            connect(experiment, session, "f" + round + "-2");
+            final long countdownBegan = System.currentTimeMillis();
+            Thread.sleep(5);
+            connect(experiment, session, third);
+
+            // The page of the one it turns away (a phone on a weak connection) reconnects over and over,
+            // from just before the 1 s countdown ends until after the game has started.
+            final AtomicInteger reconnects = new AtomicInteger();
+            final AtomicReference<Throwable> failed = new AtomicReference<>();
+            Thread flaky = new Thread(() -> {
+                try {
+                    while (System.currentTimeMillis() < countdownBegan + 850) Thread.sleep(1);
+                    while (System.currentTimeMillis() < countdownBegan + 1600) {
+                        connect(experiment, session, third);
+                        reconnects.incrementAndGet();
+                    }
+                } catch (Throwable t) {
+                    failed.set(t);
+                }
+            }, "test-flaky-page");
+            flaky.setDaemon(true);
+            flaky.start();
+            flaky.join(10000);
+            String stuck = deadlocked();
+            assertNull("round " + round + ": threads deadlocked:" + stuck, stuck);
+            assertFalse("round " + round + ": the page's reconnecting never ended", flaky.isAlive());
+            assertNull(failed.get());
+            assertTrue(reconnects.get() > 0);
+
+            await("round " + round + "'s game", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted));
+            assertEquals("2", value(events(session, "autopilotStart").get(0), "players"));
+            assertEquals(1, events(session, "sessionFull").size());
+            assertNull(engineValue("g.getVertex('" + third + "')"));
+            // A page of theirs that comes back now is told the session is full, and their going is recorded.
+            Page back = connect(experiment, session, third);
+            assertEquals("sessionFull", back.lastPlayer().get("ended").asText());
+            await("their going recorded", () -> {
+                for (Event e : events(session, "clientDisconnected")) {
+                    if (third.equals(value(e, "clientId"))) return true;
+                }
+                return false;
+            });
+            if (round < 2) {
+                // The game ends; the autopilot opens the next session.
+                engine().eval("gameListener.finish(); null");
+                await("round " + round + "'s end", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+            }
+        }
     }
 
     // ---- whose session it is -----------------------------------------------------------------------

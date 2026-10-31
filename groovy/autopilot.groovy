@@ -56,6 +56,11 @@ class Autopilot {
                    // comes back, even after the engine was rebuilt (ScriptBoard.leftOutAtStart)
   def sessionFull  // closure, given the id of someone launch() takes out as the room is full: their page
                    // is told so now, and when it comes back (ScriptBoard.sessionFullAtStart)
+  // A connection change reaches onConnection while ScriptBoard.recordConnection holds that
+  // participant's record lock (bb:connection). So nothing called while this object's monitor is held
+  // (launch, and the closures above) may wait to record someone's connection: their page's change
+  // would wait for the monitor, and the two for each other for good. (sessionFullAtStart records it
+  // on a thread of its own.)
   // Which vertices are participants. AI players added with g.addAI have ids starting with "_".
   Closure isParticipant = { v -> !v.id.toString().startsWith("_") }
   // With replaceDisconnected, someone away at the start for less than this (or replace.afterSeconds,
