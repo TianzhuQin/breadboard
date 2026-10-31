@@ -191,10 +191,11 @@ export async function confirmEngineRebuild (opts: { title: string, action: strin
   return askRebuild(opts, use)
 }
 
-function askRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string }, use: { who: string, pausesAutopilot: boolean }): Promise<boolean> {
+function askRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string, ask?: string }, use: { who: string, pausesAutopilot: boolean }): Promise<boolean> {
   return confirm({
     title: opts.title,
-    message: `${use.who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
+    message: (opts.ask ? `${opts.ask}\n\n` : '') +
+      `${use.who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
       (opts.detail ? ` ${opts.detail}` : '') +
       (use.pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : ''),
     confirmLabel: opts.confirmLabel || 'Continue anyway',
@@ -208,10 +209,14 @@ function askRebuild (opts: { title: string, action: string, confirmLabel?: strin
  * this console works on, and the server leaves the engine and that session alone
  * (ScriptBoard.sessionKeptBySelection): nothing to ask. Otherwise the engine loads the selected
  * experiment's steps, and this asks as confirmEngineRebuild does (at once true when nobody uses it).
+ * With `ask` (why to switch, for a switch the researcher didn't choose in the switcher, e.g. to open
+ * a step of another experiment), it always asks, saying that first.
  */
-export async function confirmSwitch (opts: { title: string, action: string, confirmLabel?: string }): Promise<boolean> {
+export async function confirmSwitch (opts: { title: string, action: string, confirmLabel?: string, ask?: string }): Promise<boolean> {
   const use = await engineUse()
-  if (use.endsSession || !use.who) return true
+  if (use.endsSession || !use.who) {
+    return opts.ask ? confirm({ title: opts.title, message: opts.ask, confirmLabel: opts.confirmLabel || 'Switch' }) : true
+  }
   return askRebuild(opts, use)
 }
 

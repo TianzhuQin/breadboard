@@ -859,6 +859,31 @@ describe('SessionPage', () => {
     w.unmount()
   })
 
+  it('links to the step in the experiment the engine runs, and names that experiment when it isn\'t the one worked on', async () => {
+    const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: two for class: Script12\n  at Script12.groovy:23'
+    store2.admin.output = [{ id: 7, kind: 'error', text, source: 'initStep', step: 'InitStep', at: Date.now() }]
+    const engine = (experimentId: number, experimentName: string) =>
+      ({ experimentId, experimentName, sessionId: 4, sessionName: 'Autopilot · 1', owner: 'me@lab.org', gameStarted: false, stepsChanged: false, autopilotSession: true })
+    store2.admin.user = { email: 'me@lab.org', experiments: [], currentScript: '', engine: engine(12, 'Exp') }
+    routerPush.mockClear()
+    const w = await mountPage()
+    try {
+      // the experiment worked on (12, "Exp")
+      expect(w.find('.live-err__title').text()).toMatch(/^The experiment's scripts reported an error/)
+      await w.find('button.eng-err__place').trigger('click')
+      expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '23', experiment: '12' } })
+      // the autopilot's, while this console works on another: its InitStep, not this one's
+      store2.admin.user = { ...store2.admin.user, engine: engine(13, 'Game A') }
+      await nextTick()
+      expect(w.find('.live-err__title').text()).toMatch(/^The scripts of “Game A” reported an error/)
+      await w.find('button.eng-err__place').trigger('click')
+      expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '23', experiment: '13' } })
+    } finally {
+      store2.admin.user = null
+      w.unmount()
+    }
+  })
+
   it('offers "start anyway" when only the session\'s log shows the start', async () => {
     // the autopilot's start (or one that threw after logging its start) seen in the feed
     store2.admin.engineReloadedAt = Date.now() - 60000

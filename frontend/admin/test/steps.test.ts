@@ -858,6 +858,108 @@ describe('opening a step at a line', () => {
     expect(stepNamed(drafts, '')).toBe(null)
     expect(stepAt('RoundStep', 71)).toEqual({ path: '/steps', query: { step: 'RoundStep', line: '71' } })
     expect(stepAt('RoundStep', null)).toEqual({ path: '/steps', query: { step: 'RoundStep' } })
+    // with the experiment it is in, when that is known
+    expect(stepAt('InitStep', 23, 8)).toEqual({ path: '/steps', query: { step: 'InitStep', line: '23', experiment: '8' } })
+    expect(stepAt('InitStep', 23, null)).toEqual({ path: '/steps', query: { step: 'InitStep', line: '23' } })
+  })
+
+  it('asks to switch to the experiment a step is in, instead of opening the selected experiment\'s step of that name', async () => {
+    const mine = [{ id: 1, name: 'InitStep', source: 'initStep = 1' }, { id: 2, name: 'RoundStep', source: 'roundStep = "Trust game"' }]
+    const theirs = [{ id: 21, name: 'InitStep', source: 'initStep = 2' }, { id: 22, name: 'RoundStep', source: 'roundStep = "Game A"\nx = 1' }]
+    const userBefore = admin.user
+    admin.user = { ...admin.user, experiments: [{ id: 7, name: 'Trust game' }, { id: 8, name: 'Game A' }] }
+    admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps: mine }
+    get.mockImplementation(async (url: string) => url === '/steps/8' ? { steps: theirs } : url === '/steps/7' ? { steps: mine } : {})
+    actions.selectExperiment.mockImplementation(async (id: number) => {
+      admin.experiment = { id, name: 'Game A', fileMode: false, steps: theirs }
+      return { experiment: admin.experiment }
+    })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }] })
+    router.push('/steps?step=RoundStep&line=2&experiment=8')
+    await router.isReady()
+    const stubs = { BCodeEditor: { props: ['modelValue'], template: '<textarea class="code-stub" :value="modelValue" />' } }
+    const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs } })
+    const code = () => (w.find('textarea.code-stub').element as HTMLTextAreaElement).value
+    try {
+      await flushPromises()
+      // asked first, and this experiment's RoundStep isn't opened meanwhile
+      expect(confirmState.open).toBe(true)
+      expect(confirmState.req).toMatchObject({ title: 'Switch to “Game A” to open RoundStep?', confirmLabel: 'Switch to “Game A”' })
+      expect(confirmState.req!.message).toBe('RoundStep, line 2, is a step of “Game A”. You are working on “Trust game”.')
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      expect(code()).toBe('initStep = 1')
+      expect(router.currentRoute.value.query).toEqual({})
+      settleConfirm(true)
+      await flushPromises()
+      expect(actions.selectExperiment).toHaveBeenCalledWith(8)
+      expect(w.find('.steps__title').text()).toBe('RoundStep')
+      expect(code()).toBe('roundStep = "Game A"\nx = 1')
+      expect(toasts.some(t => t.title === 'Switched to “Game A”')).toBe(true)
+
+      // turned down: nothing is switched or opened
+      actions.selectExperiment.mockClear()
+      await router.push('/steps?step=InitStep&line=1&experiment=7')
+      await flushPromises()
+      expect(confirmState.open).toBe(true)
+      settleConfirm(false)
+      await flushPromises()
+      expect(actions.selectExperiment).not.toHaveBeenCalled()
+      expect(admin.experiment.id).toBe(8)
+      expect(w.find('.steps__title').text()).toBe('RoundStep')
+
+      // an experiment that is gone: said, nothing asked
+      toasts.splice(0, toasts.length)
+      await router.push('/steps?step=InitStep&experiment=99')
+      await flushPromises()
+      expect(confirmState.open).toBe(false)
+      expect(toasts.some(t => t.title === '“InitStep” can’t be opened')).toBe(true)
+
+      // a step of the experiment worked on: opened at once
+      await router.push('/steps?step=InitStep&line=1&experiment=8')
+      await flushPromises()
+      expect(confirmState.open).toBe(false)
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      expect(code()).toBe('initStep = 2')
+    } finally {
+      settleConfirm(false)
+      get.mockReset()
+      actions.selectExperiment.mockReset()
+      admin.user = userBefore
+      w.unmount()
+    }
+  })
+
+  it('says why when the switch to the step\'s experiment doesn\'t go through, and opens nothing', async () => {
+    const mine = [{ id: 1, name: 'InitStep', source: 'initStep = 1' }, { id: 2, name: 'RoundStep', source: 'roundStep = 1' }]
+    const userBefore = admin.user
+    admin.user = { ...admin.user, experiments: [{ id: 7, name: 'Trust game' }, { id: 8, name: 'Game A' }] }
+    admin.experiment = { id: 7, name: 'Trust game', fileMode: false, steps: mine }
+    get.mockImplementation(async (url: string) => url === '/steps/7' ? { steps: mine } : {})
+    actions.selectExperiment.mockImplementation(async () => {
+      admin.requestError = { request: 'SelectExperiment', text: 'You can\'t switch now.', at: Date.now() }
+      return null
+    })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/steps', component: StepsPage }] })
+    router.push('/steps?step=RoundStep&line=2&experiment=8')
+    await router.isReady()
+    const w = mount(defineComponent({ render: () => h(RouterView) }), { global: { plugins: [router], stubs: { BCodeEditor: { template: '<textarea class="code-stub" />' } } } })
+    try {
+      await flushPromises()
+      toasts.splice(0, toasts.length)
+      settleConfirm(true)
+      await flushPromises()
+      expect(toasts.some(t => t.title === 'Couldn’t switch to “Game A”' && t.detail === 'You can\'t switch now.')).toBe(true)
+      expect(w.find('.steps__title').text()).toBe('InitStep')
+      // (not asked again)
+      expect(confirmState.open).toBe(false)
+    } finally {
+      settleConfirm(false)
+      get.mockReset()
+      actions.selectExperiment.mockReset()
+      admin.requestError = null
+      admin.user = userBefore
+      w.unmount()
+    }
   })
 
   it('opens the step an error names, and says so when there is none', async () => {

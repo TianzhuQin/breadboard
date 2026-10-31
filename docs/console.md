@@ -223,7 +223,9 @@ how many people are here and the countdown. **Events** lists what the session re
 first, as it happens, with what the well-known ones mean (a researcher's preview signing in says
 so); click one to see its data. When the experiment's scripts report an error, a card at the top
 says what went wrong in plain words and on which line of which step (click it to open the step at
-that line); **Full error** has the rest, Breadboard's own code included.
+that line); **Full error** has the rest, Breadboard's own code included. When the engine runs
+another experiment than the one you work on (the autopilot's, say), the card names it, and the
+Steps page asks to switch to it before opening the step.
 
 Under **Links for participants**, **This session** works while this session runs. **Whichever
 session is open** leads to this experiment's open session whose game hasn't started, so it can be
@@ -351,8 +353,9 @@ survives a server restart.
 **A mistake in a step pauses it too.** When the steps of a session it opens don't load (a typo, a
 name that isn't defined), the autopilot stops that session before anyone can join, records
 `stepsFailedToLoad` in it, and pauses. This page then says which step and line failed and what
-went wrong, in the words the Steps page uses, with a link that opens the step at that line. Fix the
-step, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
+went wrong, in the words the Steps page uses, with a link that opens the step at that line (when
+you are working on another experiment, the link names the autopilot's, and the Steps page asks to
+switch to it first). Fix the step, then press **Resume**. While the autopilot runs an experiment, its Steps page says so: the
 next session it opens uses what you save there.
 
 **A step that fails during the game.** When a step's code throws while the game runs (on a timer,

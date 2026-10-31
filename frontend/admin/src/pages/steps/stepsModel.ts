@@ -83,10 +83,16 @@ export function stepNamed<T extends { name: string, savedName?: string | null }>
   return drafts.find(d => nameOf(d).toLowerCase() === lower || formatName(nameOf(d)).toLowerCase() === lower) || null
 }
 
-/** Where the Steps page opens a step at a line: "/steps?step=RoundStep&line=71". */
-export function stepAt (step: string, line?: number | null): { path: string, query: Record<string, string> } {
+/**
+ * Where the Steps page opens a step at a line: "/steps?step=RoundStep&line=71&experiment=4", with the
+ * experiment the step belongs to when it is known (an engine error is in the experiment the engine
+ * runs, a pause in the autopilot's), which needn't be the one the console works on: the page then
+ * asks to switch to it, rather than open a step of the same name in the selected experiment.
+ */
+export function stepAt (step: string, line?: number | null, experimentId?: number | null): { path: string, query: Record<string, string> } {
   const query: Record<string, string> = { step }
   if (line != null && Number.isInteger(line) && line > 0) query.line = String(line)
+  if (experimentId != null && Number.isInteger(experimentId) && experimentId > 0) query.experiment = String(experimentId)
   return { path: '/steps', query }
 }
 

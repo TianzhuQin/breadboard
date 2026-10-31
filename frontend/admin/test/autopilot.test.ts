@@ -525,8 +525,26 @@ describe('Autopilot page', () => {
     expect(box.find('.apst__problem-text').text()).not.toContain('No such property')
     const link = box.find('a.apst__open-step')
     expect(link.text()).toBe('Open InitStep at line 24')
-    expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24')
+    // (the step of the autopilot's experiment: the Steps page asks to switch when it is another one)
+    expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24&experiment=12')
     w.unmount()
+  })
+
+  it('names the autopilot\'s experiment in the link to the failing step when the console works on another one', async () => {
+    const failed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 23: No such property: two), so that session was stopped before anyone could join. Fix the step on the Steps page first. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    // (this console works on "Public goods", id 12)
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 13 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 13, experimentName: 'Trust', instance: null, links: null, problem: failed },
+    }))
+    const w = await mountPage()
+    try {
+      const link = w.find('a.apst__open-step')
+      expect(link.text()).toBe('Open InitStep of “Trust” at line 23')
+      expect(link.attributes('href')).toBe('/steps?step=InitStep&line=23&experiment=13')
+    } finally {
+      w.unmount()
+    }
   })
 
   it('lists what its session recorded before the page opened, and what arrives live, in its recent activity', async () => {

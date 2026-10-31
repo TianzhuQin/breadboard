@@ -49,8 +49,11 @@
         <!-- paused by a mistake in a step: what went wrong, explained as on the Steps page, and the way there -->
         <template v-if="failure">
           <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" />
-          <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line)">
-            Open {{ failure.step }}{{ failure.line ? ` at line ${failure.line}` : '' }} <ArrowRight :size="14" aria-hidden="true" />
+          <!-- (a step of the autopilot's experiment, which needn't be the one this console works on: named then,
+               and the Steps page asks to switch to it) -->
+          <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line, status.experimentId)">
+            Open {{ failure.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ failure.line ? ` at line ${failure.line}` : '' }}
+            <ArrowRight :size="14" aria-hidden="true" />
           </RouterLink>
         </template>
       </div>
@@ -130,6 +133,7 @@ import LocalOnlyNote from '../session/LocalOnlyNote.vue'
 import EngineError from '../console/EngineError.vue'
 import { describeEngineSession, haltOf, pauseFailure, pausedLine, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
 import { stepAt } from '../steps/stepsModel'
+import { admin } from '@/store/admin'
 
 const props = defineProps<{
   state: AutopilotState
@@ -165,6 +169,8 @@ const kind = computed(() => problemKind(props.state))
 const halt = computed(() => haltOf(props.state))
 /** paused by a mistake in a step: which one, where, and what went wrong */
 const failure = computed(() => kind.value === 'paused' ? pauseFailure(status.value.problem) : null)
+/** the autopilot runs another experiment than the one this console works on */
+const elsewhere = computed(() => status.value.experimentId != null && status.value.experimentId !== admin.experiment?.id)
 
 const badge = computed<{ tone: 'success' | 'warning' | 'neutral', label: string, pulse: boolean }>(() => {
   if (halt.value === 'paused') return { tone: 'warning', label: 'Paused', pulse: false }

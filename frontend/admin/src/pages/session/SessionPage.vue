@@ -18,16 +18,17 @@
       <CircleAlert class="live-err__icon" :size="18" aria-hidden="true" />
       <div class="live-err__body">
         <p id="live-err-title" class="live-err__title">
-          The experiment's scripts reported an error
+          {{ errorExperiment.elsewhere && errorExperiment.name ? `The scripts of “${errorExperiment.name}” reported an error` : 'The experiment\'s scripts reported an error' }}
           <span class="live-err__time">at {{ clock(latestError.at) }}</span>
         </p>
-        <!-- "Line 71 of RoundStep", which opens that step at that line, when the server names the step -->
+        <!-- "Line 71 of RoundStep", which opens that step at that line, when the server names the step (in the
+             experiment the engine runs, which the Steps page asks to switch to when it isn't the one worked on) -->
         <EngineError
           class="live-err__text"
           :error="latestError.text"
           :own-name="latestError.step || 'a step'"
           :from-line="latestError.step ? 1 : null"
-          @goto="(line: number) => latestError?.step && router.push(stepAt(latestError.step, line))"
+          @goto="(line: number) => latestError?.step && router.push(stepAt(latestError.step, line, errorExperiment.id))"
         />
       </div>
       <div class="live-err__actions">
@@ -384,6 +385,16 @@ const latestError = computed(() => {
     if (e.kind === 'error' && !isResearcherRun(e.source)) return e.id > dismissedErrorId.value ? e : null
   }
   return null
+})
+
+/**
+ * The experiment the error is in: the one the engine runs (errors from before it last reloaded aren't
+ * shown), which can be another than the one this console works on, e.g. the autopilot's.
+ */
+const errorExperiment = computed(() => {
+  const e = admin.user?.engine
+  const id = e?.experimentId ?? null
+  return { id, name: e?.experimentName ?? null, elsewhere: id !== null && id !== admin.experiment?.id }
 })
 
 function clock (at: number) {

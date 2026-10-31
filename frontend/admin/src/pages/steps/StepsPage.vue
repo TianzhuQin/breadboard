@@ -272,7 +272,7 @@ import {
 } from '@/ui'
 import BCodeEditor from '@/ui/BCodeEditor.vue'
 import { actions, admin, ensureConnected, fileStepsWait, reloadBlocked, runBlocked } from '@/store/admin'
-import { confirmEngineRebuild, reloadKeeps } from '@/store/engineGuard'
+import { confirmEngineRebuild, confirmSwitch, reloadKeeps, switchedNote } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
 import { autopilotRunsSession, useAutopilotStatus } from '../session/autopilot'
@@ -435,11 +435,79 @@ function goto (line: number, column?: number) {
   if (v) goToLine(v, line, column)
 }
 
-// ---- opened at a step's line (/steps?step=RoundStep&line=71) ------------------------------------
+// ---- opened at a step's line (/steps?step=RoundStep&line=71&experiment=4) -----------------------
 // An engine error elsewhere ("Line 71 of RoundStep" on Live session, a pause on the Autopilot page)
-// links here, to that step with that line selected.
+// links here, to that step with that line selected. The link names the experiment the step belongs
+// to (the engine's, the autopilot's), which can be another than the one this console works on: every
+// experiment has an InitStep, and a copy has all its steps' names. Then the page asks to switch to it
+// first, and opens the step once it shows that experiment's steps.
 
 const route = useRoute()
+/** The step the route asked for, until it is open (or the researcher chose not to switch to its experiment). */
+const wanted = ref<{ experiment: number | null, step: string, line: number | null } | null>(null)
+let askingToSwitch = false
+
+watch(() => route.query.step, (step) => {
+  if (typeof step !== 'string' || !step) return
+  const n = Number(route.query.line)
+  const e = Number(route.query.experiment)
+  wanted.value = { experiment: Number.isInteger(e) && e > 0 ? e : null, step, line: Number.isInteger(n) && n > 0 ? n : null }
+  // (once: coming back to the page, or a refresh, doesn't jump there again)
+  void router.replace({ query: {} })
+}, { immediate: true })
+
+function followWanted () {
+  const want = wanted.value
+  if (!want) return
+  if (want.experiment !== null && want.experiment !== admin.experiment?.id) {
+    if (!askingToSwitch) void switchToOpen(want)
+    return
+  }
+  if (!bucket.value?.loaded) return
+  wanted.value = null
+  void openAt(want.step, want.line)
+}
+watch(() => [wanted.value, admin.experiment?.id, bucket.value?.loaded], followWanted, { immediate: true })
+
+/** The step asked for is in another experiment: switch to it (asked first), then it opens. */
+async function switchToOpen (want: { experiment: number | null, step: string, line: number | null }) {
+  const target = (admin.user?.experiments || []).find(e => e.id === want.experiment)
+  if (!target) {
+    wanted.value = null
+    notify.info(`“${want.step}” can’t be opened`, 'The experiment it belongs to is no longer on this server.')
+    return
+  }
+  askingToSwitch = true
+  try {
+    const here = admin.experiment ? ` You are working on “${admin.experiment.name}”.` : ''
+    const ok = await confirmSwitch({
+      title: `Switch to “${target.name}” to open ${want.step}?`,
+      action: 'Switching experiments',
+      confirmLabel: `Switch to “${target.name}”`,
+      ask: `${want.step}${want.line ? `, line ${want.line},` : ''} is a step of “${target.name}”.${here}`,
+    })
+    if (wanted.value !== want) return
+    if (!ok || !ensureConnected()) {
+      wanted.value = null
+      return
+    }
+    const asked = Date.now()
+    await actions.selectExperiment(target.id)
+    if (admin.experiment?.id !== target.id) {
+      if (wanted.value === want) wanted.value = null
+      const refusal = admin.requestError
+      notify.warning(`Couldn’t switch to “${target.name}”`, refusal && refusal.request === 'SelectExperiment' && refusal.at >= asked
+        ? refusal.text : 'The server didn’t confirm the switch. Choose the experiment at the top left to try again.')
+      return
+    }
+    // (the watch above opens the step once this experiment's steps have loaded)
+    notify.success(`Switched to “${target.name}”`, switchedNote() || undefined)
+  } finally {
+    askingToSwitch = false
+    // another step asked for while this was asked
+    if (wanted.value && wanted.value !== want) followWanted()
+  }
+}
 
 async function openAt (name: string, line: number | null) {
   const b = bucket.value
@@ -462,14 +530,6 @@ async function openAt (name: string, line: number | null) {
     await new Promise(resolve => setTimeout(resolve, 50))
   }
 }
-
-watch(() => [route.query.step, bucket.value?.loaded] as const, ([step, loaded]) => {
-  if (typeof step !== 'string' || !step || !loaded) return
-  const n = Number(route.query.line)
-  // (once: coming back to the page, or a refresh, doesn't jump there again)
-  void router.replace({ query: {} })
-  void openAt(step, Number.isInteger(n) && n > 0 ? n : null)
-}, { immediate: true })
 
 // ---- naming (new steps get an inline name, and their template follows it, DL-5) ---------------
 

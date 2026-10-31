@@ -13,7 +13,7 @@ vi.mock('@/lib/http', async (orig) => {
 
 import { http, HttpError } from '@/lib/http'
 import { admin, actions, adoptUid, boot, connection, graph, logout, __receive } from '../src/store/admin'
-import { confirmEngineRebuild } from '../src/store/engineGuard'
+import { confirmEngineRebuild, confirmSwitch } from '../src/store/engineGuard'
 import { confirmState, settleConfirm } from '../src/ui/confirm'
 import { toasts } from '../src/ui/toast'
 
@@ -215,6 +215,46 @@ describe('asking before an engine rebuild', () => {
     expect(confirmState.req!.message).toContain('2 players are in the network')
     expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
     expect(confirmState.req!.message).toContain('disconnected')
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+    graph.clear()
+    await tick()
+  })
+
+  it('asks before a switch the researcher didn\'t choose in the switcher, saying why first, and what it rebuilds under whom', async () => {
+    const ask = 'InitStep, line 23, is a step of “Game A”. You are working on “Game B”.'
+    const opts = { title: 'Switch to “Game A” to open InitStep?', action: 'Switching experiments', confirmLabel: 'Switch to “Game A”', ask }
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    graph.clear()
+
+    // nobody uses the engine: asked all the same, as a plain question
+    get.mockResolvedValue({ status: { on: false, instance: null } })
+    let answer = confirmSwitch(opts)
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req).toMatchObject({ title: opts.title, message: ask, confirmLabel: 'Switch to “Game A”' })
+    expect(confirmState.req!.danger).toBeFalsy()
+    settleConfirm(true)
+    expect(await answer).toBe(true)
+    // (without a reason to give, as from the switcher: not asked)
+    expect(await confirmSwitch({ title: 'Switch?', action: 'Switching experiments' })).toBe(true)
+    expect(confirmState.open).toBe(false)
+
+    // a session is live in the engine: the switch leaves it alone, so only the reason is said
+    get.mockResolvedValue({ status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+    answer = confirmSwitch(opts)
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req!.message).toBe(ask)
+    settleConfirm(false)
+    expect(await answer).toBe(false)
+    expect(await confirmSwitch({ title: 'Switch?', action: 'Switching experiments' })).toBe(true)
+
+    // the switch rebuilds the engine under people in its network: the reason, then the warning
+    __receive({ action: 'addNode', id: 'p1' })
+    get.mockRejectedValue(new TypeError('Failed to fetch'))
+    answer = confirmSwitch(opts)
+    await vi.waitFor(() => expect(confirmState.open).toBe(true))
+    expect(confirmState.req).toMatchObject({ danger: true, confirmLabel: 'Switch to “Game A”' })
+    expect(confirmState.req!.message).toMatch(/^InitStep, line 23, is a step of “Game A”\. You are working on “Game B”\.\n\n1 player is in the network right now, perhaps in another researcher's session\.\n\nSwitching experiments restarts the script engine/)
     settleConfirm(false)
     expect(await answer).toBe(false)
     graph.clear()
