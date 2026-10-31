@@ -108,13 +108,15 @@ study URL.
 - If another experiment's session is running when you turn it on, the autopilot waits for that
   session to end; the page also offers to end it there and then.
 - Ending the autopilot's session from the console pauses the autopilot: stopping it, or anything
-  that reloads the engine (launching or resuming another session, reloading). Selecting another
-  experiment, to edit it, doesn't: the autopilot's session keeps running. Nor does ending a session a
-  researcher opened by hand, even one of its experiment: the autopilot then opens its next session
-  as usual (with **continuous** off, such a session isn't its one session either). Press **Resume**
-  on the Autopilot page to let it open sessions again; after a run with **continuous** off, the
-  button reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
-  is in charge too, and a pause survives a server restart.
+  that reloads the engine and ends it (launching or resuming another session, a reload from an
+  account other than the one that saved its settings). Selecting another experiment, to edit it,
+  doesn't: the autopilot's session keeps running, and so it does through a reload from the account
+  that saved its settings, which carries it on. Nor does ending a session a researcher opened by
+  hand, even one of its experiment: the autopilot then opens its next session as usual (with
+  **continuous** off, such a session isn't its one session either). Press **Resume** on the
+  Autopilot page to let it open sessions again; after a run with **continuous** off, the button
+  reads **Open another session**. Both work when the server's settings file (`conf/local.conf`) is
+  in charge too, and a pause survives a server restart.
 - A session of its experiment that a researcher opens by hand isn't the autopilot's: the Autopilot
   page names it and who opened it, the links lead to it while it takes participants, and the
   autopilot opens none of its own until it has ended. **Resume** or a save hands it to the autopilot.
@@ -161,24 +163,24 @@ People who come back after a session was given up get its "could not start" noti
 to `onCancel` too.
 
 The server opens a session at startup. Participants enter through `/play/{e}/login` or
-`/play/{e}/prolific?...` and wait in the waiting room. While no session takes participants (a game is
-under way, a full room counts down, or the next session is about to open) and the autopilot opens the
-next one by itself (it is on, continuous, and neither paused nor done), these links show a page that
-says so and loads itself again every few seconds, which then goes into the session; they used to
-say "No session is open right now" and to try again later (Prolific participants: to return the
+`/play/{e}/prolific?...` and wait in the waiting room. While no session takes participants (a game
+is under way, a full room counts down, or the next session is about to open) and the autopilot opens
+the next one by itself (it is on, continuous, and neither paused nor done), these links show a page
+that says so and loads itself again every few seconds, which then goes into the session; they used
+to say "No session is open right now" and to try again later (Prolific participants: to return the
 study), which they still do while the autopilot is off, paused or done, or while something keeps it
 from opening the next session (another experiment's session in the engine, the disk almost full, a
 problem the Autopilot page shows; a session of its experiment opened by hand isn't one: during its
-game they wait for the autopilot's next session too). Someone whose connection
-drops there counts as gone only after `departureGraceSeconds`, so a moment's drop neither starts the
-wait again nor gets the session given up. The game starts by itself. People who left before the
-start get no seat, and are told so if they come back (see below). With `maxPlayers`, at most that
-many are seated, the first to arrive: once that many are here (or away for a moment, keeping their
-seat) the countdown begins, and the study's links send nobody more to the session; anyone else there
-as the game starts is taken out of the network and told the session is full, with how to join the
-next one (`player.ended = "sessionFull"`, and a `sessionFull` event). They used to be seated however
-many were there. With `replaceDisconnected`, someone away for less than a minute (or `afterSeconds`,
-if that is longer) keeps their seat, which the computer plays until they are back; without it nobody
+game they wait for the autopilot's next session too). Someone whose connection drops there counts as
+gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor gets
+the session given up. The game starts by itself. People who left before the start get no seat, and
+are told so if they come back (see below). With `maxPlayers`, at most that many are seated, the
+first to arrive: once that many are here (or away for a moment, keeping their seat) the countdown
+begins, and the study's links send nobody more to the session; anyone else there as the game starts
+is taken out of the network and told the session is full, with how to join the next one
+(`player.ended = "sessionFull"`, and a `sessionFull` event). They used to be seated however many
+were there. With `replaceDisconnected`, someone away for less than a minute (or `afterSeconds`, if
+that is longer) keeps their seat, which the computer plays until they are back; without it nobody
 would play that seat, so they get none either. Someone who drops out mid-game is played by the
 computer after the grace period. A new session opens when the game finishes. Waiting-room settings
 saved in the console replace the steps' own even for people who are already waiting: the limits
