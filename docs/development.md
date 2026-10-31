@@ -249,12 +249,14 @@ new push cancels the run still going for the same branch or pull request.
    that is full), with what Java said about it in `logs/jvm-pid<N>.log` and how to give it more:
    its `-Xmx` in `JAVA_OPTS`, which wins over `breadboard.memory` (this needs a `javac`, in
    `JAVA8_HOME`, `JAVA_HOME` or on the PATH, to build the Java agent that fills the heap; without
-   one it says that it skips this), that it doesn't start again one that ran out of memory while
-   starting, and says how to give it more (the `-Xmx` given to `breadboard.sh`), and on macOS that
-   the computer is kept awake while the server runs. It fails if the server logs an error. With
-   `--db` it starts on a copy of an older release's database instead (and checks that it was backed
-   up first); when that database already has accounts, it only checks that the server starts and
-   serves its pages. CI runs the Windows zip through `bin/smoke-dist.ps1`.
+   one it says that it skips this), that it doesn't start again one that stopped by itself when,
+   while it waited to, another program took the port or Breadboard was started from its folder
+   (which `logs/application.log` says too), nor one that ran out of memory while starting, and says
+   how to give it more (the `-Xmx` given to `breadboard.sh`), and on macOS that the computer is kept
+   awake while the server runs. It fails if the server logs an error. With `--db` it starts on a
+   copy of an older release's database instead (and checks that it was backed up first); when that
+   database already has accounts, it only checks that the server starts and serves its pages. CI
+   runs the Windows zip through `bin/smoke-dist.ps1`.
 6. Commit, tag and publish (the platform zips can be taken from CI's `breadboard-release`
    artifact):
 

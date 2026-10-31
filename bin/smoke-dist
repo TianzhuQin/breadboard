@@ -12,8 +12,10 @@
 # and that keep-running doesn't start again a server that can't start, but does start again one
 # that ran out of memory while nobody read its window (when there is a javac, for the Java agent
 # that fills the heap), with what Java said about it in logs/jvm-pid<N>.log and how to give it more
-# (the -Xmx in JAVA_OPTS, which wins over breadboard.memory), and doesn't start again one that ran
-# out of memory while starting (saying how to give it more: the -Xmx given to breadboard.sh). A
+# (the -Xmx in JAVA_OPTS, which wins over breadboard.memory), doesn't start again one that stopped by
+# itself when, while it waited to, another program took the port or Breadboard was started from its
+# folder (which logs/application.log says too), and doesn't start again one that ran out of memory
+# while starting (saying how to give it more: the -Xmx given to breadboard.sh). A
 # release that carries its own Java (bin/bundle-java) is started on that Java. On macOS, the
 # computer must be kept awake while the server runs.
 #
@@ -53,6 +55,7 @@ WORK="$(mktemp -d)"
 SERVER=""
 cleanup () {
   [ -z "${HOLDER:-}" ] || kill "$HOLDER" 2>/dev/null || true
+  [ -z "${STANDIN:-}" ] || kill "$STANDIN" 2>/dev/null || true
   # (the window nobody reads, at the end: once it is gone, what waits for it goes on)
   [ -z "${READER:-}" ] || kill "$READER" 2>/dev/null || true
   if [ -n "$SERVER" ] && kill -0 "$SERVER" 2>/dev/null; then
@@ -633,6 +636,88 @@ EOF
 else
   echo "skip a server that runs out of memory with nobody reading its window: no javac here to build the agent that fills the heap"
 fi
+
+# With keep running on, a server that stopped by itself (here it is killed) isn't started again when,
+# while the launcher waits to, another program takes the port (the server would only fail to start),
+# or Breadboard is started from this folder meanwhile (here a stand-in for one: a process named in
+# RUNNING_PID whose command line ends as the server's does). The launcher says why in its window, and
+# in logs/application.log as its last note there, after the one that said it would start it again.
+# keep_running WINDOW: a launcher with keep running on, in the background, once its server answers
+keep_running () {
+  (cd "$APP" && BREADBOARD_KEEP_RUNNING=1 exec ./breadboard.sh -Dhttp.port="$PORT") > "$1" 2>&1 < /dev/null &
+  SERVER=$!
+  for _ in $(seq 1 180); do
+    kill -0 "$SERVER" 2>/dev/null || fail "the launcher stopped while starting: $(cat "$1")"
+    [ "$(health)" = 200 ] && [ -n "$(running_pid)" ] && return 0
+    sleep 1
+  done
+  fail "the server did not answer within 180 s"
+}
+# Kills the server's Java (kill -9, as the system does when memory runs low) and waits until it is
+# gone, and with it its hold on the port.
+kill_java () {
+  local java
+  java="$(running_pid)"
+  kill -KILL "$java"
+  for _ in $(seq 1 50); do
+    kill -0 "$java" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  fail "the server's Java (process $java) was still there 5 s after kill -9"
+}
+# Whether the launcher ended within 60 s; ENDED is its exit status.
+launcher_ended () {
+  for _ in $(seq 1 60); do
+    kill -0 "$SERVER" 2>/dev/null || break
+    sleep 1
+  done
+  ! kill -0 "$SERVER" 2>/dev/null || return 1
+  ENDED=0
+  wait "$SERVER" || ENDED=$?
+  SERVER=""
+}
+# The launcher's last note in logs/application.log
+last_note () {
+  awk '/ - from breadboard\.sh in launcher *$/ { note = ""; inside = 1; next }
+    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] .* - \[[A-Z]*\] - from / { inside = 0; next }
+    inside { note = note $0 "\n" }
+    END { printf "%s", note }' "$APP/logs/application.log"
+}
+keep_running "$WORK/port-taken-meanwhile.log"
+kill_java
+hold_port 127.0.0.1 || fail "couldn't hold port $PORT while the launcher waited to start the server again"
+if ! launcher_ended; then
+  let_port_go
+  fail "the launcher went on although another program took the port while it waited to start the server again: $(cat "$WORK/port-taken-meanwhile.log")"
+fi
+let_port_go
+NOTE="$(last_note)"
+[ "$ENDED" = 137 ] \
+  && grep -q "Starting it again in 5 seconds" "$WORK/port-taken-meanwhile.log" \
+  && grep -qF "Breadboard is not started again. Another program is using port $PORT." "$WORK/port-taken-meanwhile.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/port-taken-meanwhile.log" \
+  && grep -qF "Breadboard is not started again. Another program is using port $PORT." <<< "$NOTE" \
+  || fail "killed, with its port taken while the launcher waited to start it again, the server was started again, or that it wasn't isn't in the window and last in logs/application.log (exit code $ENDED): $(cat "$WORK/port-taken-meanwhile.log") / $NOTE"
+pass "a server whose port another program took while the launcher waited to start it again isn't started again, and logs/application.log says why"
+keep_running "$WORK/started-meanwhile.log"
+kill_java
+python3 -c 'import time; time.sleep(300)' launcher.Main "$(cd "$APP" && pwd -P)" &
+STANDIN=$!
+printf '%s\n' "$STANDIN" > "$APP/RUNNING_PID"
+if ! launcher_ended; then
+  fail "the launcher went on although Breadboard was started from its folder while it waited to start the server again: $(cat "$WORK/started-meanwhile.log")"
+fi
+kill "$STANDIN" 2>/dev/null || true
+wait "$STANDIN" 2>/dev/null || true
+rm -f "$APP/RUNNING_PID"
+NOTE="$(last_note)"
+[ "$ENDED" = 137 ] \
+  && grep -qF "Breadboard was started from this folder meanwhile (process $STANDIN): leaving it to that one." "$WORK/started-meanwhile.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/started-meanwhile.log" \
+  && grep -qF "Breadboard was started from this folder meanwhile (process $STANDIN): leaving it to that one." <<< "$NOTE" \
+  || fail "killed, while Breadboard was started from its folder as the launcher waited to start it again, the server was started again, or that it wasn't isn't in the window and last in logs/application.log (exit code $ENDED): $(cat "$WORK/started-meanwhile.log") / $NOTE"
+STANDIN=""
+pass "a server is left to a Breadboard started from its folder while the launcher waited to start it again, and logs/application.log says so"
 
 # A server that runs out of memory while it starts isn't started again either (it would only run out
 # again), and the launcher says how to give it more: here with the -Xmx given to breadboard.sh, which

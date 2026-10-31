@@ -717,7 +717,7 @@ while :; do
     exit "$CODE"
   fi
   if running_here; then
-    say "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one."
+    note "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one."
     exit "$CODE"
   fi
   # (another program may have taken the port meanwhile: the server would only fail to start)
