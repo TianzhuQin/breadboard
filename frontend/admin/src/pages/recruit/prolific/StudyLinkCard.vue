@@ -38,11 +38,12 @@
           has ended. Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as
           soon as it opens.
         </span>
+        <!-- (that researcher may be the one reading this: the server names them only in words) -->
         <span v-else-if="waiting">
-          Another researcher has the script engine, which every researcher on this server shares, loaded with another
-          experiment, so the autopilot opens its next session once they have closed their console (the
-          <RouterLink to="/autopilot">Autopilot</RouterLink> page says who). Until then, the link shows a page that waits
-          for the autopilot’s session and takes newcomers in as soon as it opens.
+          The script engine, which every researcher on this server shares, has another experiment loaded for a
+          researcher whose console is open (the <RouterLink to="/autopilot">Autopilot</RouterLink> page says who). The
+          autopilot opens its next session once they close the console. Until then, the link shows a page that waits for
+          the autopilot’s session and takes newcomers in as soon as it opens.
         </span>
         <span v-else>
           The autopilot opens the next session in a moment; until then, the link shows a page that waits for it and

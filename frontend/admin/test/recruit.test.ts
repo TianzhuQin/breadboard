@@ -384,7 +384,7 @@ describe('Prolific helpers', () => {
     expect(note()).toMatch(/^Another experiment’s session, “Session #4”, is running on the script engine/)
     // for a researcher who has the engine loaded with another experiment
     await w.setProps({ waiting: { session: null } })
-    expect(note()).toBe('Another researcher has the script engine, which every researcher on this server shares, loaded with another experiment, so the autopilot opens its next session once they have closed their console (the Autopilot page says who). Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as soon as it opens.')
+    expect(note()).toBe('The script engine, which every researcher on this server shares, has another experiment loaded for a researcher whose console is open (the Autopilot page says who). The autopilot opens its next session once they close the console. Until then, the link shows a page that waits for the autopilot’s session and takes newcomers in as soon as it opens.')
     expect(note()).not.toContain('in a moment')
     await w.setProps({ waiting: null })
     // a session open to newcomers
