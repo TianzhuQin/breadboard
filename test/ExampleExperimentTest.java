@@ -197,7 +197,7 @@ public class ExampleExperimentTest extends BaseTest {
             + "  def v = g.addPlayer('zh-1')\n"
             + "  v._system.connected = true\n"
             + "  autopilot.onConnection('zh-1', true)\n"
-            + "  assert v.text == '<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。人数达到 3–8 人后，实验就会开始。</p><p>请保持这个页面打开。</p>'\n"
+            + "  assert v.text == '<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。至少 3 人到齐后，实验就会开始（最多 8 人）。</p><p>请保持这个页面打开。</p>'\n"
             + "  assert v._system.autopilot.state == 'waiting'\n"
             + "}");
     }

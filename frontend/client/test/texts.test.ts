@@ -115,7 +115,7 @@ describe('the participant page in Chinese', () => {
     fakeBreadboard('zho')
     const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 1, min: 3, max: 8 } } } } })
     expect(w.find('.bb-waiting__title').text()).toBe('正在等待其他人')
-    expect(w.find('.bb-waiting__count').text()).toBe('已有 1 人到达。人数达到 3–8 人后，实验就会开始。')
+    expect(w.find('.bb-waiting__count').text()).toBe('已有 1 人到达。至少 3 人到齐后，实验就会开始（最多 8 人）。')
     expect(w.find('.bb-waiting__count strong').text()).toBe('1')
     expect(w.find('.bb-waiting__note').text()).toBe('请保持这个页面打开。实验开始时，页面会自动切换。')
     expect(w.find('.bb-waiting__bar').attributes('aria-label')).toBe('3 人中已到 1 人')
@@ -127,6 +127,18 @@ describe('the participant page in Chinese', () => {
     expect(starting.find('.bb-waiting__sr').text()).toBe('5 秒后开始')
     expect(document.title).toContain('马上开始 ·')
     starting.destroy()
+  })
+
+  it('says how many people the session needs as one number when it takes no more, or has no maximum', () => {
+    fakeBreadboard('zho')
+    const count = (autopilot: any) => mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', ...autopilot } } } } })
+      .find('.bb-waiting__count').text()
+    // not "3–3"
+    expect(count({ here: 1, min: 3, max: 3 })).toBe('已有 1 人到达。3 人到齐后，实验就会开始。')
+    expect(count({ here: 1, min: 3 })).toBe('已有 1 人到达。3 人到齐后，实验就会开始。')
+    fakeBreadboard('eng')
+    expect(count({ here: 0, min: 1, max: 4 })).toBe('0 people are here. The session starts when at least 1 person is here (up to 4 can take part).')
+    expect(count({ here: 1, min: 2 })).toBe('1 person is here. The session starts when 2 people are here.')
   })
 
   it('names the network and its ties in Chinese, and says the participant is in', () => {
@@ -280,7 +292,7 @@ describe('the participant page in English', () => {
   it('is as it was for a session in English, or in a language Breadboard has no words in', async () => {
     fakeBreadboard('spa')
     const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 1, min: 3, max: 8 } } } } })
-    expect(w.find('.bb-waiting__count').text()).toBe('1 person is here. The session starts when 3–8 people are here.')
+    expect(w.find('.bb-waiting__count').text()).toBe('1 person is here. The session starts when at least 3 people are here (up to 8 can take part).')
     expect(w.find('.bb-waiting__note').text()).toBe('Please keep this page open. It will change by itself when the session starts.')
     expect(isRequired('age')('')).toBe('age is required')
   })

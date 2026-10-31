@@ -74,15 +74,14 @@ export default Vue.extend({
     here (): number { return this.info.here || 0 },
     min (): number { return this.info.min || 0 },
     max (): number | null { return this.info.max || null },
-    target (): string {
-      return this.max && this.max !== this.min ? `${this.min}–${this.max}` : String(this.min)
-    },
-    maxIsOne (): boolean { return (this.max || this.min) === 1 },
-    // "2 people are here. The session starts when 3–8 people are here.", with the 2 in bold
+    // "2 people are here. The session starts when at least 3 people are here (up to 8 can take part).",
+    // with the 2 in bold: the least and the most it takes, not a range ("3–8"), which read as either
     countParts (): { text: string, param?: string }[] {
       let then: string
       if (!this.enough) {
-        then = t('waiting.startsWhen', { target: this.target, n: this.maxIsOne ? 1 : 2 })
+        then = this.max && this.max !== this.min
+          ? t('waiting.startsWhen', { min: this.min, max: this.max, n: this.min })
+          : t('waiting.startsWhenMin', { min: this.min, n: this.min })
       } else {
         const orMax = !!this.max && this.here < this.max
         const timed = this.startsIn != null && this.startsIn > 0

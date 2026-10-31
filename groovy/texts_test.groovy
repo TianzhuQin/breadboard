@@ -51,8 +51,33 @@ test("the autopilot's waiting room says how many are here in the session's langu
   def chinese = pilot('tx-zh-')
   chinese.waitingRoom([minPlayers: 3, maxPlayers: 8, waitSeconds: 60])
   def w = arrive(chinese, 'tx-zh-1')
-  assert w.text == "<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。人数达到 3–8 人后，实验就会开始。</p><p>请保持这个页面打开。</p>"
+  assert w.text == "<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。至少 3 人到齐后，实验就会开始（最多 8 人）。</p><p>请保持这个页面打开。</p>"
   chinese.stop()
+}
+
+test("the waiting room names the least and the most people it takes, not a range that reads as either") {
+  chose("eng")
+  def ranged = pilot('tx-mm-')
+  ranged.waitingRoom([minPlayers: 3, maxPlayers: 8, waitSeconds: 60])
+  def v = arrive(ranged, 'tx-mm-1')
+  assert v.text == "<h3>Waiting for other participants</h3><p>1 joined so far. The session starts when at least 3 people are here " +
+      "(up to 8 can take part).</p><p>Please keep this page open.</p>"
+  ranged.stop()
+
+  // as many as it takes: one number, where it said "3–3"
+  chose("zho")
+  def exact = pilot('tx-ex-')
+  exact.waitingRoom([minPlayers: 3, maxPlayers: 3, waitSeconds: 60])
+  def w = arrive(exact, 'tx-ex-1')
+  assert w.text == "<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。3 人到齐后，实验就会开始。</p><p>请保持这个页面打开。</p>"
+  exact.stop()
+
+  chose("eng")
+  def one = pilot('tx-one-')
+  one.waitingRoom([minPlayers: 1, maxPlayers: 4, waitSeconds: 60])
+  assert one.room.waitingText(0, 1, 4) == "<h3>Waiting for other participants</h3><p>0 joined so far. The session starts when at least " +
+      "1 person is here (up to 4 can take part).</p><p>Please keep this page open.</p>"
+  one.stop()
 }
 
 test("the countdown before the start is in the session's language") {
