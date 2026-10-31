@@ -408,13 +408,13 @@ and the **Participant links**: the **Sign-in link** (`/play/<experiment id>/logi
 **Prolific link**. They always lead to the session open at the moment, so the same links keep
 working from one session to the next. While none takes participants (its game is under way, its full
 waiting room counts down, or the next one is about to open), they show a page that says a session is
-in progress and the next one opens when it ends; it checks again every few seconds and takes people
-in once a session opens (Prolific participants read that they can keep it open, or return the study
-if they can't wait). When the autopilot is off, paused or done, doesn't open the next session by
-itself (**Open the next session when one finishes** is off), or something keeps it from opening the
-next session (another experiment's session is running, a researcher has another experiment loaded,
-the disk is almost full, or another problem shown at the top of this page), they say that no session
-is open.
+in progress and the next one opens when it ends (or, just before the next one opens, that it opens
+in a moment); it checks again every few seconds and takes people in once a session opens (Prolific
+participants read that they can keep it open, or return the study if they can't wait). When the
+autopilot is off, paused or done, doesn't open the next session by itself (**Open the next session
+when one finishes** is off), or something keeps it from opening the next session (another
+experiment's session is running, a researcher has another experiment loaded, the disk is almost
+full, or another problem shown at the top of this page), they say that no session is open.
 
 A session of its experiment that someone opened by hand isn't the autopilot's: **Open session**
 shows it, with who opened it and whether it takes participants (with **Watch it live** when it is
