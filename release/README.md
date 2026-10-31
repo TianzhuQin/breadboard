@@ -47,10 +47,10 @@ say), its window says why, and so does `logs/start-errors.log`.
 While the server runs, a Mac or a Windows computer doesn't go to sleep by itself. On Linux, started
 in a desktop session (not over SSH or as a service), the launcher asks systemd (and on GNOME the
 desktop too) to keep the computer awake; if the computer still suspends (some desktops do, such as
-Cinnamon on Linux Mint), turn off automatic suspend in the power settings. For a long study, keep a laptop plugged in with its lid open: with
-the lid closed, it sleeps anyway. On a Mac, also turn on **Prevent automatic sleeping … when the
-display is off** (System Settings → Battery → Options; on a Mac mini or iMac, System Settings →
-Energy).
+Cinnamon on Linux Mint), turn off automatic suspend in the power settings. For a long study, keep a
+laptop plugged in with its lid open: with the lid closed, it sleeps anyway. On a Mac, also turn on
+**Prevent automatic sleeping … when the display is off** (System Settings → Battery → Options; on a
+Mac mini or iMac, System Settings → Energy).
 
 Another port: put the line `http.port=8080` in `conf/local.conf` (see below), and every start uses
 it, a double-click too. To use one just once, start it in Terminal: type `sh` and a space, drag

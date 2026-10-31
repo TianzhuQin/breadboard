@@ -56,6 +56,10 @@ class Autopilot {
                    // comes back, even after the engine was rebuilt (ScriptBoard.leftOutAtStart)
   def sessionFull  // closure, given the id of someone launch() takes out as the room is full: their page
                    // is told so now, and when it comes back (ScriptBoard.sessionFullAtStart)
+  // closures: Breadboard's own words to participants, in the language of the session's texts
+  // (util.groovy's bbText and bbSentences); English when not given
+  def texts = { String key, Map params = [:] -> models.SystemTexts.text(null, key, params) }
+  def sentences = { String... parts -> models.SystemTexts.sentences(null, parts) }
   // A connection change reaches onConnection while ScriptBoard.recordConnection holds that
   // participant's record lock (bb:connection). So nothing called while this object's monitor is held
   // (launch, and the closures above) may wait to record someone's connection: their page's change
@@ -127,7 +131,9 @@ class Autopilot {
       departureGraceSeconds: opts.departureGraceSeconds == null ? 15 : opts.departureGraceSeconds,
       waitingText     : opts.containsKey("waitingText") ? opts.waitingText : { here, min, max ->
         def target = max ? "${min}–${max}" : "${min}"
-        "<h3>Waiting for other participants</h3><p>${here} joined so far. The session starts when ${target} people are here.</p><p>Please keep this page open.</p>"
+        // (in the language of the session's texts, as the page's own waiting screen, BBWaiting)
+        String count = sentences(texts('waiting.joinedSoFar', [n: here]), texts('waiting.startsWhen', [target: target, n: max ?: min]))
+        "<h3>${texts('waiting.otherParticipants')}</h3><p>${count}</p><p>${texts('waiting.keepPageOpen')}</p>"
       },
       onStart         : opts.onStart,
       onCancel        : opts.onCancel,
@@ -353,7 +359,7 @@ class Autopilot {
 
   private void countdown(Vertex v, int seconds, int here) {
     status(v, [state: "starting", seconds: seconds, here: here, min: room.minPlayers, max: room.maxPlayers])
-    v.text = "<h3>Starting in ${seconds} seconds…</h3>".toString()
+    v.text = "<h3>${texts('waiting.countdown', [n: seconds])}</h3>".toString()
   }
 
   synchronized def launch() {
@@ -459,7 +465,8 @@ class Autopilot {
   // waitingText: null the text is the experiment's, and left to onCancel.
   private void runCancel(List<Vertex> players) {
     if (room.onCancel == null || room.waitingText != null) {
-      players.each { it.text = "<h3>Not enough participants joined</h3><p>Thank you for waiting. This session could not start.</p>" }
+      String notEnough = "<h3>${texts('waiting.notEnoughTitle')}</h3><p>${texts('waiting.notEnough')}</p>".toString()
+      players.each { it.text = notEnough }
     }
     if (room.onCancel != null) room.onCancel(players)
   }
@@ -610,6 +617,7 @@ class Autopilot {
 }
 
 autopilot = new Autopilot(g: g, a: a, gameListener: gameListener, eventTracker: eventTracker,
+    texts: bbText, sentences: bbSentences,
     startGame: { models.ScriptBoard.processScript("initStep.start()", null, "autopilot") },
     startFailed: { String failed -> gameListener.gameStartFailed(failed) },
     leftOut: { String clientId -> models.ScriptBoard.leftOutAtStart(clientId) },

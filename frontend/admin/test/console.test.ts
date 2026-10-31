@@ -277,6 +277,40 @@ describe('engine errors', () => {
     expect(e.places.map(p => p.kind)).toEqual(['own', 'library', 'other'])
   })
 
+  it('finds a failing step\'s own line in its innermost script, also when a newer step started it', () => {
+    // FinishStep (Script680: steps load in name order) fails at its line 5; RoundStep (Script684) started it at line 82
+    const raw = 'Caught error: IllegalStateException: FinishStep fails\n  at Script680.groovy:5\n  at step.groovy:64\n  at step.groovy:-1\n' +
+      '  at Script684.groovy:82\n  at step.groovy:200\n  at step.groovy:160\n  at actions.groovy:330\n  at timer.groovy:76\n'
+    const e = parseGroovyError(raw, { inStep: true })
+    expect(e.title).toBe('FinishStep fails')
+    expect(e.places.filter(p => p.kind !== 'library')).toEqual([
+      { file: 'Script680.groovy', line: 5, kind: 'own' },
+      { file: 'Script684.groovy', line: 82, kind: 'other' },
+    ])
+    // every line of the step's own script, innermost first (a closure inside its run), and its own line when
+    // one of Breadboard's files threw
+    const inner = parseGroovyError('Caught error: MissingPropertyException: No such property: scroe for class: Script680\n' +
+      '  at Script680.groovy:9\n  at Script680.groovy:5\n  at step.groovy:64\n  at Script684.groovy:82', { inStep: true })
+    expect(inner.places.filter(p => p.kind === 'own').map(p => p.line)).toEqual([9, 5])
+    const lib = parseGroovyError('Caught error: IllegalStateException: They are already connected.\n  at edge_edits.groovy:108\n' +
+      '  at Script680.groovy:7\n  at step.groovy:64\n  at Script684.groovy:82', { inStep: true })
+    expect(lib.places[0]).toEqual({ file: 'Script680.groovy', line: 7, kind: 'own' })
+    // InitStep failing at its line 47, started by the OnJoinStep (its line 5) in the script the server runs for a
+    // newcomer, onJoinStep.start("c1"), the newest; and started by the waiting room's initStep.start() (as sent)
+    const join = parseGroovyError('Caught error: ScriptException: javax.script.ScriptException: java.lang.IllegalStateException: InitStep fails\n' +
+      '  at Script201.groovy:47\n  at step.groovy:64\n  at step.groovy:-1\n  at Script202.groovy:5\n  at Script205.groovy:1\n', { inStep: true })
+    expect(join.places.filter(p => p.kind !== 'library')).toEqual([
+      { file: 'Script201.groovy', line: 47, kind: 'own' },
+      { file: 'Script202.groovy', line: 5, kind: 'other' },
+      { file: 'Script205.groovy', line: 1, kind: 'other' },
+    ])
+    const room = parseGroovyError('Caught error: IllegalStateException: InitStep fails\n  at Script243.groovy:47\n  at step.groovy:64\n' +
+      '  at step.groovy:-1\n  at Script249.groovy:1\n  at autopilot.groovy:621\n  at autopilot.groovy:-1\n  at autopilot.groovy:420\n', { inStep: true })
+    expect(room.places[0]).toEqual({ file: 'Script243.groovy', line: 47, kind: 'own' })
+    // a script run from the console is still the newest one
+    expect(parseGroovyError(raw).places[0]).toEqual({ file: 'Script684.groovy', line: 82, kind: 'own' })
+  })
+
   it('keeps a frame without a line (a closure in Breadboard\'s own code) out of the message, as the others', () => {
     const raw = 'Caught error: MissingPropertyException: No such property: roundNoteText for class: Script53\n at Script53.groovy:76\n at step.groovy:200\n at step.groovy:-1\n at step.groovy:160'
     const e = parseGroovyError(raw)

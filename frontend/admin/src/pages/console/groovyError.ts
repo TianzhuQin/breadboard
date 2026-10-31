@@ -9,6 +9,14 @@
  * Breadboard's own files keep their names (graph.groovy …); a script typed in the console or a
  * step is compiled as "Script<N>.groovy", numbered in the order the engine compiled them. So the
  * highest number is the script that was just run.
+ *
+ * Not so for an error in a step's own code, which the server names ("step"): the steps were compiled
+ * as they loaded, in name order, and what started the step during the game can be newer: RoundStep,
+ * whose finishStep.start() runs FinishStep, an OnJoinStep that starts InitStep, and the scripts the
+ * server runs to start the game (initStep.start(), for the waiting room or Start) or the OnJoinStep
+ * for a newcomer (onJoinStep.start("p1")), newer than every step. The step's own place is the
+ * innermost script of the trace, the first one listed, as the server's briefError takes it for the
+ * data and the Autopilot page (ParseOptions.inStep).
  */
 
 export type PlaceKind = 'own' | 'library' | 'other'
@@ -16,8 +24,12 @@ export interface ErrorPlace {
   file: string
   line: number
   column?: number
-  /** own: the script that was run; library: one of Breadboard's files; other: an earlier script or a step. */
+  /** own: the script that was run (or the step whose code failed); library: one of Breadboard's files; other: an earlier script or a step. */
   kind: PlaceKind
+}
+export interface ParseOptions {
+  /** The error happened in a step's own code, which the server named: its place is the innermost script, not the newest (see above). */
+  inStep?: boolean
 }
 export interface GroovyError {
   /** The Java/Groovy exception name, e.g. MissingPropertyException ('' when there is none). */
@@ -44,7 +56,7 @@ function scriptNumber (file: string): number | null {
   return m ? Number(m[1]) : null
 }
 
-export function parseGroovyError (raw: string): GroovyError {
+export function parseGroovyError (raw: string, opts: ParseOptions = {}): GroovyError {
   const text = String(raw || '').replace(/^\s*Caught error:\s*/, '').trim()
   const lines = text.split('\n')
   const frames: { file: string, line: number }[] = []
@@ -79,13 +91,19 @@ export function parseGroovyError (raw: string): GroovyError {
     if (!places.some(p => p.file === f.file && p.line === f.line)) places.push(f)
   }
 
-  // The newest Script<N> is the script that was run (see above).
-  const mentioned = [...places.map(p => p.file), ...(message.match(/\bScript\d+\b/g) || [])]
-  const numbers = mentioned.map(scriptNumber).filter((n): n is number => n !== null)
-  const newest = numbers.length ? Math.max(...numbers) : null
+  // The script the error is about (see above): the newest Script<N>, the script that was run, or for a
+  // step's own code the innermost one, the first listed.
+  let own: number | null
+  if (opts.inStep) {
+    own = places.map(p => scriptNumber(p.file)).find((n): n is number => n !== null) ?? null
+  } else {
+    const mentioned = [...places.map(p => p.file), ...(message.match(/\bScript\d+\b/g) || [])]
+    const numbers = mentioned.map(scriptNumber).filter((n): n is number => n !== null)
+    own = numbers.length ? Math.max(...numbers) : null
+  }
   const kinded: ErrorPlace[] = places.map(p => {
     const n = scriptNumber(p.file)
-    return { ...p, kind: n === null ? 'library' : n === newest ? 'own' : 'other' }
+    return { ...p, kind: n === null ? 'library' : n === own ? 'own' : 'other' }
   })
   // the run's own line first, then Breadboard's files, then the rest
   const order: Record<PlaceKind, number> = { own: 0, library: 1, other: 2 }

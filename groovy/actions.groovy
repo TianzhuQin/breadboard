@@ -8,6 +8,9 @@ class PlayerActions {
   def ai = new PlayerAI(playerActions: this)
 
   def eventTracker
+  // closure: Breadboard's own words to participants, in the language of the session's texts
+  // (util.groovy's bbText); English when not given
+  def texts = { String key, Map params = [:] -> models.SystemTexts.text(null, key, params) }
   def idleTime
   def warnTime
   def dropTime
@@ -63,7 +66,7 @@ class PlayerActions {
             type          : "time",
             elapsed       : 0,
             duration      : Math.round(time2 * 1000),
-            timerText     : "You will be dropped in: ",
+            timerText     : texts("timer.dropped"),
             direction     : "down",
             currencyAmount: "0",
             appearance    : "warning",
@@ -225,8 +228,8 @@ class PlayerActions {
 
         def choiceMap = [:]
 
-        // Name
-        choiceMap.name = (c.name) ? c.name : "Option " + i
+        // Name: one the steps leave out is "Option 1", "Option 2", … in the session's language
+        choiceMap.name = (c.name) ? c.name : texts("choice.option", [n: i])
 
         // Class
         if (c.class)
@@ -601,7 +604,7 @@ class PlayerAI {
   }
 }
 
-a = new PlayerActions(eventTracker: eventTracker)
+a = new PlayerActions(eventTracker: eventTracker, texts: bbText)
 
 def makeChoice(String uid) {
   a.choose(uid)

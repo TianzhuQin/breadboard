@@ -878,6 +878,36 @@ describe('SessionPage', () => {
     w.unmount()
   })
 
+  it('names the line in the failing step\'s own code when another step started it, not the line that started it', async () => {
+    // The network game's FinishStep failing at its line 5, started by RoundStep's finishStep.start() at line 82
+    // (what the server sends). Steps load in name order: FinishStep is Script680, RoundStep the newer Script684.
+    const text = 'Caught error: IllegalStateException: FinishStep fails\n  at Script680.groovy:5\n  at step.groovy:64\n' +
+      '  at step.groovy:-1\n  at Script684.groovy:82\n  at step.groovy:200\n  at step.groovy:160\n  at actions.groovy:330\n' +
+      '  at actions.groovy:580\n  at actions.groovy:465\n  at actions.groovy:-1\n  at actions.groovy:550\n  at timer.groovy:76\n'
+    store2.admin.output = [{ id: 8, kind: 'error', text, source: 'finishStep', step: 'finishStep', at: Date.now() }]
+    routerPush.mockClear()
+    const w = await mountPage()
+    const card = w.find('.live-err')
+    expect(card.findAll('.eng-err__places li').map(li => li.text()))
+      .toEqual(['Line 5 of finishStep', 'Script684.groovy, line 82 an earlier script or a step'])
+    await card.find('button.eng-err__place').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith({ path: '/steps', query: { step: 'finishStep', line: '5' } })
+    // InitStep failing at its line 47, started by the OnJoinStep (its line 5) in the script the server runs for a
+    // newcomer, onJoinStep.start("c1"), the newest script (as the server sends it)
+    store2.admin.output = [{
+      id: 9, kind: 'error', source: 'OnJoinStep', step: 'InitStep', at: Date.now(),
+      text: 'Caught error: ScriptException: javax.script.ScriptException: java.lang.IllegalStateException: InitStep fails\n' +
+        '  at Script201.groovy:47\n  at step.groovy:64\n  at step.groovy:-1\n  at Script202.groovy:5\n  at Script205.groovy:1\n',
+    }]
+    await nextTick()
+    expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual([
+      'Line 47 of InitStep', 'Script202.groovy, line 5 an earlier script or a step', 'Script205.groovy, line 1 an earlier script or a step',
+    ])
+    await w.find('.live-err button.eng-err__place').trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '47' } })
+    w.unmount()
+  })
+
   it('links to the step in the experiment the engine runs, and names that experiment when it isn\'t the one worked on', async () => {
     const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: two for class: Script12\n  at Script12.groovy:23'
     store2.admin.output = [{ id: 7, kind: 'error', text, source: 'initStep', step: 'InitStep', at: Date.now() }]

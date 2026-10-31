@@ -1,6 +1,8 @@
 <script lang="ts" setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { PlayerData, participantToken } from '@human-nature-lab/breadboard-core'
+// (its words in the language of the session's texts)
+import { t, tParts } from '../../lib/texts'
 
 const props = defineProps<{
   player: PlayerData
@@ -207,6 +209,8 @@ async function submit () {
 function leaveWithoutIt () {
   leave(Date.now())
 }
+
+const noteParts = computed(() => tParts('finish.ifNothing', { url: submitUrl.value }))
 </script>
 
 <template>
@@ -220,36 +224,25 @@ function leaveWithoutIt () {
       <div v-if="player.text" class="bb-finish__text bb-prose" v-html="player.text" />
       <div v-if="data.message" class="bb-finish__text bb-prose" v-html="data.message" />
       <div class="bb-finish__code">
-        <span class="bb-finish__label">Your completion code</span>
+        <span class="bb-finish__label">{{ t('finish.codeLabel') }}</span>
         <code>{{ data.completionCode }}</code>
       </div>
       <label v-if="!data.noFeedback" class="bb-finish__feedback">
-        <span class="bb-finish__label">Comments for the researcher (optional)</span>
+        <span class="bb-finish__label">{{ t('finish.commentLabel') }}</span>
         <textarea v-model="feedback" rows="3" />
       </label>
-      <p v-if="state === 'refused'" class="bb-finish__failed" role="alert">
-        Your comment couldn’t be saved, so the researcher won’t get it this way. Try again, or copy it and
-        send it to the researcher through Prolific’s messages.
-      </p>
+      <p v-if="state === 'refused'" class="bb-finish__failed" role="alert">{{ t('finish.refused') }}</p>
       <!-- (the server may have it in these two: nothing here says it is lost) -->
-      <p v-else-if="state === 'lost'" class="bb-finish__failed" role="alert">
-        Your comment may not have reached the researcher: the server couldn’t be reached, or didn’t confirm
-        it. Try again, or copy it and send it to the researcher through Prolific’s messages.
-      </p>
-      <p v-else-if="state === 'unconfirmed'" class="bb-finish__failed" role="alert">
-        Your comment hasn’t been confirmed yet: the server hasn’t answered. This page goes on to Prolific
-        by itself once the server has saved it. You can also try again, or copy your comment and send it
-        to the researcher through Prolific’s messages.
-      </p>
+      <p v-else-if="state === 'lost'" class="bb-finish__failed" role="alert">{{ t('finish.lost') }}</p>
+      <p v-else-if="state === 'unconfirmed'" class="bb-finish__failed" role="alert">{{ t('finish.unconfirmed') }}</p>
       <button type="button" class="bb-finish__btn" :disabled="busy" @click="submit">
-        {{ state === 'saving' ? 'Saving your comment…' : state === 'leaving' ? 'Returning to Prolific…' : notSaved ? 'Try again' : 'Finish and return to Prolific' }}
+        {{ t(state === 'saving' ? 'finish.saving' : state === 'leaving' ? 'finish.leaving' : notSaved ? 'finish.tryAgain' : 'finish.submit') }}
       </button>
       <button v-if="notSaved" type="button" class="bb-finish__btn bb-finish__btn--quiet" @click="leaveWithoutIt">
-        {{ state === 'unconfirmed' ? 'Return to Prolific without waiting' : 'Return to Prolific without it' }}
+        {{ t(state === 'unconfirmed' ? 'finish.withoutWaiting' : 'finish.withoutIt') }}
       </button>
-      <p class="bb-finish__note">
-        If nothing happens, open <a :href="submitUrl">{{ submitUrl }}</a>, or enter the code above on Prolific.
-      </p>
+      <!-- "If nothing happens, open <the link>, or enter the code above on Prolific." -->
+      <p class="bb-finish__note"><template v-for="(part, i) in noteParts"><a v-if="part.param" :key="i" :href="submitUrl">{{ part.text }}</a><template v-else>{{ part.text }}</template></template></p>
     </div>
   </div>
 </template>

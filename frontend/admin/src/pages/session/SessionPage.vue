@@ -13,12 +13,14 @@
           <span class="live-err__time">at {{ clock(latestError.at) }}</span>
         </p>
         <!-- "Line 71 of RoundStep", which opens that step at that line, when the server names the step (in the
-             experiment the engine runs, which the Steps page asks to switch to when it isn't the one worked on) -->
+             experiment the engine runs, which the Steps page asks to switch to when it isn't the one worked on):
+             the line in that step's own code, also when another step started it (in-step) -->
         <EngineError
           class="live-err__text"
           :error="latestError.text"
           :own-name="latestError.step || 'a step'"
           :from-line="latestError.step ? 1 : null"
+          :in-step="!!latestError.step"
           @goto="(line: number) => latestError?.step && router.push(stepAt(latestError.step, line, errorExperiment.id))"
         />
       </div>

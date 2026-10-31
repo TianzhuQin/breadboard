@@ -53,7 +53,8 @@ public class ClientLogin extends Controller {
 
       // TODO: make password a groovy closure to allow for hash functions or custom passwords
       if (!ScriptBoard.checkPassword(password)) {
-        return "Invalid user or password";
+        // (the key of the words, which the sign-in page shows in the session's language)
+        return "signIn.wrongPassword";
       }
       return null;
     }
@@ -64,23 +65,32 @@ public class ClientLogin extends Controller {
       // Say so before anyone types their ID in (e.g. a participant sent here after a restart).
       return ok(notRunning(experimentId, experimentInstanceId));
     }
-    return ok(clientLogin.render(experimentId, experimentInstanceId, Form.form(CLogin.class)));
+    return ok(signInPage(experimentId, experimentInstanceId, Form.form(CLogin.class)));
+  }
+
+  /**
+   * The sign-in page, in the language of the session's texts (SessionLanguage), as everything
+   * Breadboard itself says to the session's participants (SystemTexts). Its errors are the keys of
+   * their words (signIn.*).
+   */
+  static play.api.templates.Html signInPage(String experimentId, String experimentInstanceId, Form<CLogin> form) {
+    return clientLogin.render(experimentId, experimentInstanceId, form, SystemTexts.page(SessionLanguage.of(experimentInstanceId)));
+  }
+
+  /** A page with a heading and a message, both texts of conf/i18n, in the language {@code lang} (a session's texts'). */
+  static play.api.templates.Html message(String lang, String titleKey, String messageKey) {
+    return participantMessage.render(SystemTexts.text(lang, titleKey), SystemTexts.text(lang, messageKey), SystemTexts.htmlLang(lang));
   }
 
   /**
    * The page for a session that isn't running: it finished, or the engine no longer runs it (the
    * server restarted, or the researcher moved the engine to another session). A study's own link
    * (e.g. /play/{experimentId}/login, or the one on Prolific) leads to whichever session is open.
+   * In the language of that session's texts ({@code lang}).
    */
-  static play.api.templates.Html notRunning() {
-    return participantMessage.render(NOT_RUNNING[0], NOT_RUNNING[1]);
+  static play.api.templates.Html notRunning(String lang) {
+    return message(lang, "notRunning.pageTitle", "notRunning.page");
   }
-
-  /** The heading and words of that page (also sent to pages left open, ClientController.notRunningScreen). */
-  public static final String[] NOT_RUNNING = {"This session isn't running right now",
-      "It has finished, or was interrupted (for example by a server restart). If you were given a "
-      + "link to the study, open it again to join the session that is open now; otherwise, please "
-      + "contact the researcher."};
 
   /** The heading and words of the Mechanical Turk page for a game that isn't running (amtError). */
   public static final String[] AMT_NOT_RUNNING = {"This game isn't running",
@@ -100,28 +110,38 @@ public class ClientLogin extends Controller {
    */
   static play.api.templates.Html notRunning(String experimentId, String experimentInstanceId, String clientId) {
     if (!sessionExists(experimentId, experimentInstanceId)) {
-      return invalidLink();
+      // (in the language of the experiment's sessions, if it has any)
+      return invalidLink(SessionLanguage.ofExperiment(experimentId));
     }
+    String lang = SessionLanguage.of(experimentInstanceId);
     if (ScriptBoard.interruptedByRestart(experimentInstanceId)) {
       boolean prolific = clientId != null && ScriptBoard.enteredFromProlific(Long.valueOf(experimentInstanceId), clientId);
-      return participantMessage.render(ScriptBoard.SERVER_STOPPED_TITLE, ScriptBoard.serverStoppedText(prolific));
+      return participantMessage.render(SystemTexts.text(lang, "end.title"), ScriptBoard.serverStoppedText(prolific, lang),
+          SystemTexts.htmlLang(lang));
     }
-    return notRunning();
+    return notRunning(lang);
   }
 
-  /** invalidLink(), for Global's not-found handler. */
-  public static play.api.templates.Html invalidLinkPage() {
-    return invalidLink();
+  /**
+   * invalidLink(), for Global's not-found handler: a participant's link that leads nowhere (cut off,
+   * e.g. by a chat app, or mistyped), in the language of what it names, as that study's other pages
+   * are. That is the language of the session {@code experimentInstanceId} when it is one of the
+   * experiment {@code experimentId}'s; else of the experiment's most recent session (as its pages
+   * between sessions); else English. Either id may be null (the link names none). It was always in
+   * English: in a study in Chinese, the one participant page that wasn't.
+   */
+  public static play.api.templates.Html invalidLinkPage(String experimentId, String experimentInstanceId) {
+    if (experimentId == null) {
+      return invalidLink(null);
+    }
+    String lang = experimentInstanceId != null && sessionExists(experimentId, experimentInstanceId)
+        ? SessionLanguage.of(experimentInstanceId) : SessionLanguage.ofExperiment(experimentId);
+    return invalidLink(lang);
   }
 
-  static play.api.templates.Html invalidLink() {
-    return participantMessage.render(INVALID_LINK[0], INVALID_LINK[1]);
+  static play.api.templates.Html invalidLink(String lang) {
+    return message(lang, "link.invalidTitle", "link.invalid");
   }
-
-  /** The heading and words of that page. */
-  public static final String[] INVALID_LINK = {"This link isn't valid",
-      "There is no study session at this address. Please check that you opened the whole link you "
-      + "were given, or contact the researcher."};
 
   /** Whether the experiment has a session with this id. */
   static boolean sessionExists(String experimentId, String experimentInstanceId) {
@@ -248,31 +268,32 @@ public class ClientLogin extends Controller {
 
     if (loginForm.hasErrors()) {
       Logger.debug("loginForm.hasErrors()");
-      return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+      return badRequest(signInPage(experimentId, experimentInstanceId, loginForm));
     } else {
       Logger.debug("! loginForm.hasErrors()");
       // (Pasted ids often bring a space along: " p1 " would be another seat that looks like p1.)
       String clientId = loginForm.get().id == null ? null : loginForm.get().id.trim();
+      // (the errors are the keys of their words, which the page shows in the session's language)
       if (clientId == null || clientId.isEmpty()) {
-        loginForm.reject("Please enter your ID.");
-        return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+        loginForm.reject("signIn.enterId");
+        return badRequest(signInPage(experimentId, experimentInstanceId, loginForm));
       }
       if (clientId.length() > 64) {
         // (the data's columns hold 255 characters; an id this long is a pasted mistake anyway)
-        loginForm.reject("This ID is too long. Please use the ID you were given (at most 64 characters).");
-        return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+        loginForm.reject("signIn.idTooLong");
+        return badRequest(signInPage(experimentId, experimentInstanceId, loginForm));
       }
       if (Client.isComputer(clientId)) {
         // Ids starting with "_" are the computer players' (g.addAI makes _1, _2, ...): signing in as
         // one took over its seat.
-        loginForm.reject("This ID is reserved. Please use the ID you were given.");
-        return badRequest(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+        loginForm.reject("signIn.idReserved");
+        return badRequest(signInPage(experimentId, experimentInstanceId, loginForm));
       }
       if (isTestSession(experimentInstanceId)) {
         // The test session (0) has no seats for participants: it only exists while the engine has the
         // experiment loaded, and a seat token for it used to open the game of whatever session ran.
-        loginForm.reject("This session isn't running right now. Please check the link you were given.");
-        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+        loginForm.reject("signIn.testSession");
+        return forbidden(signInPage(experimentId, experimentInstanceId, loginForm));
       }
       if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
         // The engine runs another session (or none, since a restart): this one's game is not there
@@ -284,14 +305,12 @@ public class ClientLogin extends Controller {
         return redirect(routes.ClientController.index(experimentId, experimentInstanceId, clientId, null).url());
       }
       if (closedToNewcomers(experimentInstanceId, clientId)) {
-        return forbidden(participantMessage.render("The session has already started",
-            "This session began before you arrived, so it can't take anyone new. Please contact the researcher."));
+        return forbidden(message(SessionLanguage.of(experimentInstanceId), "started.title", "started.signIn"));
       }
       String token = ParticipantAuth.claim(experimentInstanceId, clientId);
       if (token == null) {
-        loginForm.reject("This ID is already in use. If it is yours, open the study in the browser "
-            + "where you first signed in; otherwise, check the ID you were given.");
-        return forbidden(clientLogin.render(experimentId, experimentInstanceId, loginForm));
+        loginForm.reject("signIn.idInUse");
+        return forbidden(signInPage(experimentId, experimentInstanceId, loginForm));
       }
       return enterGame(experimentId, experimentInstanceId, clientId, token, null);
     }
@@ -312,9 +331,10 @@ public class ClientLogin extends Controller {
     String pid = request().getQueryString("PROLIFIC_PID");
     String studyId = request().getQueryString("STUDY_ID");
     String sessionId = request().getQueryString("SESSION_ID");
+    // (the language of the session's texts, which Breadboard's own words here follow)
+    String lang = SessionLanguage.of(experimentInstanceId);
     if (pid == null || pid.trim().isEmpty()) {
-      return badRequest(participantMessage.render("Missing Prolific ID",
-          "This link must be opened from Prolific. Please return to Prolific and start the study again."));
+      return badRequest(message(lang, "prolific.missingIdTitle", "prolific.missingId"));
     }
     pid = pid.trim();
     ExperimentInstance instance = null;
@@ -331,27 +351,23 @@ public class ClientLogin extends Controller {
     }
     // Someone who already took part (e.g. back for their code after a server restart, which forgets
     // seats and end screens) gets the code again: not a seat in this session, nor "return the study".
-    play.api.templates.Html takenPart = takenPartPage(experimentId, pid);
+    play.api.templates.Html takenPart = takenPartPage(experimentId, pid, lang);
     if (takenPart != null) {
       return ok(takenPart);
     }
     if (!running) {
-      return ok(participantMessage.render("This study is not running",
-          "There is no session running at the moment. Please return the study on Prolific."));
+      return ok(message(lang, "prolific.notRunningTitle", "prolific.notRunning"));
     }
     if (!ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
       // The engine runs another session (or none since a restart): this one's game is not there to join.
-      return ok(participantMessage.render("This study is not running",
-          "There is no session running at the moment. Please return the study on Prolific."));
+      return ok(message(lang, "prolific.notRunningTitle", "prolific.notRunning"));
     }
     if (closedToNewcomers(experimentInstanceId, clientId)) {
-      return ok(participantMessage.render("The session has already started",
-          "This session began before you arrived. Please return the study on Prolific."));
+      return ok(message(lang, "started.title", "started.prolific"));
     }
     String token = ParticipantAuth.claim(experimentInstanceId, clientId);
     if (token == null) {
-      return forbidden(participantMessage.render("Already joined",
-          "You have already joined this study in another browser or tab. Please continue there."));
+      return forbidden(message(lang, "prolific.joinedTitle", "prolific.joined"));
     }
     Recruitment.prolificEntry(clientId, pid, studyId, sessionId);
     java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
@@ -397,7 +413,7 @@ public class ClientLogin extends Controller {
         // Asked, not sent straight back: a researcher trying the study in several tabs of one
         // browser would otherwise land in the first tab's seat every time, and the tabs fight over it.
         return ok(participantSeat.render(clientId, routes.ClientController.index(experimentId, instanceId, clientId, null).url(),
-            "/play/" + urlEncode(experimentId) + "/login?another=1"));
+            "/play/" + urlEncode(experimentId) + "/login?another=1", SystemTexts.page(SessionLanguage.of(instanceId))));
       }
     }
     if (another) {
@@ -410,15 +426,17 @@ public class ClientLogin extends Controller {
       open = Autopilot.openInstance(Long.valueOf(experimentId));
     } catch (NumberFormatException ignored) {}
     if (experiment == null) {
-      return notFound(invalidLink());
+      return notFound(invalidLink(null));
     }
     if (open == null) {
       boolean prolific = "prolific".equals(entry);
+      // No session leads anywhere yet: the language of the experiment's most recent session's texts.
+      String lang = SessionLanguage.ofExperiment(experiment.id);
       if (prolific) {
         // Someone who already took part is given their code again, not asked to return the study.
         // (With a session open, prolificEntry checks, after the redirect below.)
         String pid = request().getQueryString("PROLIFIC_PID");
-        play.api.templates.Html takenPart = pid == null ? null : takenPartPage(experimentId, pid.trim());
+        play.api.templates.Html takenPart = pid == null ? null : takenPartPage(experimentId, pid.trim(), lang);
         if (takenPart != null) {
           return ok(takenPart);
         }
@@ -433,11 +451,9 @@ public class ClientLogin extends Controller {
       }
       if (prolific) {
         // A Prolific study's places are timed: waiting makes no sense, returning lets someone else in.
-        return ok(participantMessage.render("No session is open right now",
-            "There is no session taking participants at the moment. Please return the study on Prolific."));
+        return ok(message(lang, "noSession.title", "noSession.prolific"));
       }
-      return ok(participantMessage.render("No session is open right now",
-          "There is no session taking participants at the moment. Please try again in a few minutes, or contact the researcher."));
+      return ok(message(lang, "noSession.title", "noSession.text"));
     }
     return redirect("/game/" + experimentId + "/" + open.id + "/" + entry + query);
   }
@@ -455,13 +471,12 @@ public class ClientLogin extends Controller {
    */
   static Result holding(Long experimentId, boolean prolific) {
     boolean underWay = Autopilot.sessionUnderWay(experimentId);
-    String title = underWay ? "A session is in progress" : "The next session opens soon";
-    String opens = underWay ? "The next one opens as soon as it has ended, and this page takes you into it by itself"
-        : "It opens in a moment, and this page takes you into it by itself";
-    String message = opens + (prolific ? ", so you can keep it open. If you can't wait, please return the study on Prolific."
-        : ": please keep it open.");
+    // (in the language of the session it leads to, not open yet: the experiment's most recent one's)
+    SystemTexts.Page texts = SystemTexts.page(SessionLanguage.ofExperiment(experimentId));
+    String title = texts.t(underWay ? "holding.underWayTitle" : "holding.soonTitle");
+    String message = texts.t((underWay ? "holding.underWay" : "holding.soon") + (prolific ? "Prolific" : ""));
     response().setHeader("Cache-Control", "no-store");
-    return ok(participantHolding.render(title, message, HOLDING_RETRY_SECONDS));
+    return ok(participantHolding.render(title, message, HOLDING_RETRY_SECONDS, texts));
   }
 
   private static final String PLAY_COOKIE = "bb_seat_";
@@ -613,7 +628,7 @@ public class ClientLogin extends Controller {
    * Recruitment.prolificCompletion): their completion code, if one was recorded, and the way back to
    * Prolific, as the participant page's own end card has. Null when they haven't: they may join.
    */
-  private static play.api.templates.Html takenPartPage(String experimentId, String pid) {
+  private static play.api.templates.Html takenPartPage(String experimentId, String pid, String lang) {
     Recruitment.Completion completion;
     try {
       completion = Recruitment.prolificCompletion(Long.valueOf(experimentId), pid);
@@ -625,7 +640,7 @@ public class ClientLogin extends Controller {
     }
     String prolific = completion.completionCode == null ? "https://app.prolific.com/"
         : "https://app.prolific.com/submissions/complete?cc=" + urlEncode(completion.completionCode);
-    return participantTakenPart.render(completion.completionCode, prolific);
+    return participantTakenPart.render(completion.completionCode, prolific, SystemTexts.page(lang));
   }
 
   private static String urlEncode(String s) {

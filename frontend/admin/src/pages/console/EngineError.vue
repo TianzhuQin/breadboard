@@ -43,10 +43,12 @@ const props = withDefaults(defineProps<{
   fromLine?: number | null
   /** What "own" refers to in words, e.g. "your script" or "this step". */
   ownName?: string
-}>(), { fromLine: null, ownName: 'the script' })
+  /** The error happened in a step's own code, which the server named: its line is in that step's code (parseGroovyError). */
+  inStep?: boolean
+}>(), { fromLine: null, ownName: 'the script', inStep: false })
 const emit = defineEmits<{ goto: [line: number, column?: number] }>()
 
-const parsed = computed(() => parseGroovyError(props.error))
+const parsed = computed(() => parseGroovyError(props.error, { inStep: props.inStep }))
 // Breadboard's own files (step.groovy, actions.groovy …) are no place a researcher can change: they
 // are under Full error only
 const places = computed(() => parsed.value.places.filter(p => p.kind !== 'library').slice(0, 6))

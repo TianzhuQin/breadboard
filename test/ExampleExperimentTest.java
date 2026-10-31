@@ -31,6 +31,11 @@ public class ExampleExperimentTest extends BaseTest {
             this.language = language;
         }
 
+        /** As ContentFetcher's: Breadboard's own words in the engine follow it (util.groovy's bbText). */
+        public String languageCode() {
+            return language;
+        }
+
         public String get(String name, Object... parameters) throws java.io.IOException {
             String html = FileUtils.readFileToString(new File(EXAMPLE, "Content/" + name + ".html")).trim();
             for (int i = 0; i < parameters.length; i++) {
@@ -169,6 +174,26 @@ public class ExampleExperimentTest extends BaseTest {
             + "  }\n"
             + "  poll()\n"
             + "}", 20000);
+    }
+
+    @Test
+    public void withItsLanguageSetToChineseItsWaitingRoomSpeaksChinese() throws Exception {
+        // the example's language launch parameter: Breadboard's own words in the engine follow it too
+        harness = new ScriptTestHarness(false);
+        ExampleTexts texts = new ExampleTexts();
+        harness.put("c", texts);
+        harness.put("minPlayers", 3);
+        harness.put("language", "zho");
+        for (String name : stepNames()) {
+            harness.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
+        }
+        harness.runSync("{ ->\n"
+            + "  def v = g.addPlayer('zh-1')\n"
+            + "  v._system.connected = true\n"
+            + "  autopilot.onConnection('zh-1', true)\n"
+            + "  assert v.text == '<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。人数达到 3–8 人后，实验就会开始。</p><p>请保持这个页面打开。</p>'\n"
+            + "  assert v._system.autopilot.state == 'waiting'\n"
+            + "}");
     }
 
     @Test

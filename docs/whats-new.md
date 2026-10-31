@@ -45,6 +45,18 @@ that carries a running session on opens it to them before it closes their pages,
 those who held a seat get back in by themselves as they reconnect (they used to be told the game
 began before they arrived), and records `engineReloaded` in it.
 
+From the moment a rebuild of the engine begins (a reload, a new session, a Resume, selecting an
+experiment or a session), the engine being replaced does nothing more in the game: a choice, a tie
+edit or any other message a participant's page sends finds nothing to act on (a choice or tie edit
+from the console waits for the new engine), code of its game that still runs (a task of its timers
+under way) starts no game, finishes no session and reports no failure (one is only logged, not
+recorded as `stepFailed`), its waiting room leaves nobody out, its network reaches no page or
+console, and its `eventTracker` records nothing more: each engine has its own, which records into
+the session until the engine is replaced. So nothing of the old game comes after `engineReloaded`.
+When a researcher stops the session, the engine's `eventTracker` stops before `sessionStopped` is
+recorded, and the stopped game, should a choice made as it stopped play it on, doesn't finish the
+session.
+
 ## What participants receive about others
 
 Set from experiment scripts:
@@ -79,8 +91,7 @@ than made in (and counted against) the new turn.
 The answer (`bb:edge-edit-result`) says whether the edit was accepted (`ok`). It also says whether
 the network changed (`applied`), which is false when `onEdit` only collects it, and true when
 `onEdit` makes the change itself (the network game example does, to record a cut as a `TieCut`
-event of its own). Every edit,
-accepted or not, is logged as an `edgeEdit` event naming the actor.
+event of its own). Every edit, accepted or not, is logged as an `edgeEdit` event naming the actor.
 
 Scopes `amongNeighbors` and `visible` concern ties among a participant's neighbors. Turn those ties
 on with `g.setVisibility("egoTies")`. Under the default visibility the page cannot tell which
@@ -109,6 +120,57 @@ A version that is there but empty is given as it is: participants see nothing, a
 warns. With no language chosen, `c.get` gives a text's first version, as before. A language
 `c.setDefaultLanguage` doesn't know is named in the server's log, and texts are then given in the
 language each was first written in.
+
+**Breadboard's own words follow `c.setDefaultLanguage`.** What Breadboard itself says to participants
+is in the language the steps chose for the session's texts: in Chinese for `zho`, and in English for
+any other language, or none, as before. That is the sign-in page and its errors, "You're already taking
+part", the participant page's loading and idle notes, `BBWaiting` and the waiting room's own text, the
+countdown and "Not enough participants joined", `BBGame`'s network heading and counts, `BBNetwork`'s
+hints, confirmations, list of changes, answers and stand-in names ("参与者A" for "Person A", "你" for
+"You"), `ConnectionStatus`'s and the choices' notes and buttons, `FinishProlific`, the built-in form's
+and tutorial's buttons and checks, the engine's refusals of tie changes, its labels for choices left
+unnamed, its idle drop timer and the ready-up sequence's default words, every end screen and notice
+the server sends, and the pages before and between sessions (the holding page, "No session is open
+right now", "You have already taken part in this study", "Missing Prolific ID"). A study written in
+Chinese used to show its participants English around its own texts.
+
+- The language is the session's: set it where the steps load, e.g. InitStep outside `run`, as the
+  network game example does from its `language` launch parameter, and each session can have its own.
+  The server records it with the session once its steps have loaded (`content_language` in
+  `experiment_instances`), and again when the steps choose another while it runs (from a step, or the
+  Script console); it never asks the engine. Steps that fail to load before choosing one (an InitStep
+  that doesn't compile) leave the session's language as it was. A new session takes people a moment
+  before its steps have loaded: until then it has the experiment's most recent session's language, so
+  the study's link doesn't show its sign-in page in English meanwhile. The pages people see before a
+  session opens, or between two, use the language of the session they lead to, or else the
+  experiment's most recent session's; with none, English. So does the page for a participant link
+  that was cut off or mistyped ("This link isn't valid"): the language of the session it still names,
+  or else of its experiment's most recent session.
+- The participant page gets it with its state (`/state`'s `language`) and, as it connects and whenever
+  it changes, over its socket (`{"bbLanguage": "zho"}`): `Breadboard.language` is the code (null when
+  none was chosen), and Breadboard emits `bb:language` (`LANGUAGE_EVENT`) with it when it changes. The
+  page's `lang` attribute follows (`zh-CN` or `en`).
+- The words are in `conf/i18n/eng.json` and `conf/i18n/zho.json`, which the server and the participant
+  page both read (`models.SystemTexts`, `frontend/client/src/lib/texts.ts`): `{name}` is filled in, and
+  a text with `one` and `other` forms is chosen by its number `{n}`. In Groovy, `bbText(key, [name:
+  value])` gives one in the session's language.
+- `BBGame`'s `networkTitle`, and `BBNetwork`'s `egoLabel` and `ariaLabel`, are null by default, which
+  stands for the built-in words in the session's language; a page that sets them keeps its own, also
+  an empty one (no heading, or no label on the participant).
+- `ReadyUpSequence`'s texts (`pendingContent`, `readyContent`, `readyButtonContent`, `timerContent`,
+  `waitingContent`) are Breadboard's own words by default; an experiment that gives its own, as
+  options or by setting `content` or `contentKey` in them, keeps them.
+- A choice given to `a.add` without a `name` is labelled by its place, in the session's language:
+  "Option 1", "Option 2", … as before, or "选项 1", "选项 2", … for `zho`.
+- A refusal of a tie change is told to the participant in their language and recorded in English
+  (`edgeEdit`'s `reason`), as before; a reason the experiment gives (`validate`, a candidate's
+  `reason`) is its own. A researcher's edit is refused in English.
+- In English stay: the console, the notes a researcher's preview adds (`Watching only…`), Mechanical
+  Turk's pages and `FinishMturk`, the experimental waiting room (`waitingRoom`, `WaitingRoom`) and
+  groups, and the previous AngularJS participant page: experiments that still use it keep English
+  system texts. The "Not in the game" screen the server sends a preview of someone who isn't in the
+  game (`notInGame`) is in the session's language, as the end screens are, although only researchers
+  see it.
 
 ## Running without anyone at the admin console (autopilot)
 
@@ -229,8 +291,8 @@ New experiments start with a redesigned page (`conf/defaults/default-client-html
   - Every possible change is also listed under the picture, for keyboards, screen readers and
     crowded networks. The list is folded away until opened, and opens by itself when people are
     drawn too small to tap.
-  - Neighbors without a name are called "Person A", "Person B", ... so every change can be put in
-    words.
+  - Neighbors without a name are called "Person A", "Person B", ... ("参与者A" in a session in
+    Chinese), so every change can be put in words.
   - Options, passed through `BBGame`'s `network-props`:
 
     | Option | Meaning |
@@ -240,7 +302,7 @@ New experiments start with a redesigned page (`conf/defaults/default-client-html
     | `nodeBadge` | A small tag under the label |
     | `nodeColor` | Fill colour |
     | `nodeRadius` | Size of each person |
-    | `egoLabel` | Label on the participant (default "You") |
+    | `egoLabel` | Label on the participant (default "You", or "你" in a session in Chinese) |
     | `showMoveList` | Offer the changes as a list too (default on) |
     | `editable` | Keep room for editing from the start, so the picture doesn't shrink when a later round allows it |
 
@@ -516,7 +578,8 @@ restarts the running session.
   `sessionStalled` (its game had nothing left to do after a step failed: `step`, `error`) and
   `sessionTooLong` (`minutes`, `limit`).
 - **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
-  researcher), in a session that a reload of the engine carries on.
+  researcher), in a session that a reload of the engine carries on. Everything of the game before it
+  is recorded before it, and nothing after.
 - **Tie edits:** `edgeEdit`, which records the actor.
 - **Prolific:** `prolificEntry`, `prolificComplete`, and `participantComment` (`player`, `text`):
   what a participant wrote under "Comments for the researcher" on the finish screen, kept in their

@@ -126,7 +126,8 @@ length of rounds are launch parameters, so they change on the Parameters page, a
 participants read is on the Content page, to reword or translate. Picks, scores and cut ties are
 recorded as `ColourPick`, `RoundResult` and `TieCut` events. Its texts are written in English: when
 your default language is another, that language is added next to English, and participants read it
-(the `language` launch parameter), each text in English until it is translated. With `prolificCode`
+(the `language` launch parameter), each text in English until it is translated; with `zho`,
+Breadboard's own words to them are in Chinese too (see [Content](#content)). With `prolificCode`
 set, participants who came from Prolific are given that completion code at the end (see
 [Recruiting participants](#recruiting-participants)). Open a session (or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
@@ -169,6 +170,24 @@ another. Edit in **Visual** or **HTML**; **Preview** shows the text as participa
 saves this text, and the button at the top right saves every changed text (Ctrl+S). The **⋯** menu
 has **Rename** (F2), **Discard changes** and **Delete text…**. After a rename, scripts that use the
 old name need the new one.
+
+Breadboard's own words to participants follow the same language: the sign-in page, the waiting room,
+the network's hints, confirmations and list of changes, the notes about the connection, the end
+screens, the Prolific finish screen, and the pages before and between sessions ("You have already
+taken part in this study", "No session is open right now", the page that waits for the next session,
+"This session is full"). They are in Chinese when the steps choose `zho`, and in English for any
+other language, or none; those two are the languages Breadboard has its own words in. The server
+keeps the language with each session as its steps load, so a page shown before a session opens (or
+between two) is in the language of the session it leads to, or else of the experiment's most recent
+session, and in English while the experiment has had none. A participant link that was cut off or
+mistyped ("This link isn't valid") follows the session or experiment it still names in the same way.
+In English stay the console, the notes a researcher's preview adds (**Watching only**), Mechanical
+Turk's pages, experiments that still use the previous AngularJS participant page, and the data (an
+`edgeEdit` event's `reason`, for one). The "Not in the game" screen in the preview of someone who
+isn't in the game is in the session's language, as the end screens are, while the note under its
+tile is the console's, in English. The example sets the language from its `language` launch
+parameter: with `zho`, and its texts translated on this page, its participants read Chinese from the
+sign-in page to the end, but for the names of its colours (Blue, Orange), which are in its steps.
 
 ### Parameters
 
@@ -246,9 +265,13 @@ starts it. If a session is running, the button reads **Stop it and create**.
 | Button | Shown when | What it does |
 |---|---|---|
 | **Start the game** | The session runs and its game hasn't started | Runs `initStep.start()`: everyone waiting is let in and the experiment begins. Later arrivals are turned away, and a waiting room is cut short. Once started, it does nothing more until the engine is reloaded. |
-| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (someone who was given a completion code keeps it on screen), and nothing more is recorded in it. Stopping the autopilot's session pauses the autopilot. |
-| **Resume session** | The session is stopped | Restarts the experiment's scripts with the session's launch parameters: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
+| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (someone who was given a completion code keeps it on screen), and nothing more is recorded in it, not even a choice made as it stops. Its game can't finish it afterwards, so it can be resumed. Stopping the autopilot's session pauses the autopilot. |
+| **Resume session** | The session was stopped by another researcher, the autopilot or a restart of the server (one you stop yourself is no longer shown here: see below) | Restarts the experiment's scripts with the session's launch parameters: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
 | **Download data** | The session has finished | Its events as CSV. A finished session can't be resumed; start a new one. |
+
+A session you stop yourself is no longer the one shown: the page says **No session is open** and
+lists it under **Recent sessions**, the experiment's five newest. Its **Resume** there, or on
+**Sessions & data**, takes it up again; the confirmation's button reads **Resume session**.
 
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
@@ -326,7 +349,12 @@ settings: it runs as your account, and goes on running it), and a game under way
 from the beginning: its game counts as not started, so **Start the game** (or its waiting room) runs
 InitStep again. The pages of those who held a seat get back in by themselves as they reconnect, and
 it takes newcomers as before its game. Its data records an `engineReloaded` event, with `restarted`
-(whether a game was under way) and `by`, as a Resume records `sessionResumed`. Before such a reload,
+(whether a game was under way) and `by`, as a Resume records `sessionResumed`. Everything the game
+before it did is recorded before that event, and nothing of it after: while the engine restarts
+(about half a second), a choice or tie change a participant makes doesn't count (their page shows
+the restarted game once it is back), and one you make from the console waits for the restart and
+is answered by the restarted game, where the choice is usually no longer on offer. A step of the
+old game that fails as it is replaced isn't reported as the restarted game's. Before such a reload,
 the console asks while that session's game is in progress or anyone is connected to it, and says
 that the game starts again from the beginning and that the people in it rejoin by themselves.
 Creating a session and resuming one restart the engine too, and so does switching experiments while
@@ -380,13 +408,13 @@ and the **Participant links**: the **Sign-in link** (`/play/<experiment id>/logi
 **Prolific link**. They always lead to the session open at the moment, so the same links keep
 working from one session to the next. While none takes participants (its game is under way, its full
 waiting room counts down, or the next one is about to open), they show a page that says a session is
-in progress and the next one opens when it ends; it checks again every few seconds and takes people
-in once a session opens (Prolific participants read that they can keep it open, or return the study
-if they can't wait). When the autopilot is off, paused or done, doesn't open the next session by
-itself (**Open the next session when one finishes** is off), or something keeps it from opening the
-next session (another experiment's session is running, a researcher has another experiment loaded,
-the disk is almost full, or another problem shown at the top of this page), they say that no session
-is open.
+in progress and the next one opens when it ends (or, just before the next one opens, that it opens
+in a moment); it checks again every few seconds and takes people in once a session opens (Prolific
+participants read that they can keep it open, or return the study if they can't wait). When the
+autopilot is off, paused or done, doesn't open the next session by itself (**Open the next session
+when one finishes** is off), or something keeps it from opening the next session (another
+experiment's session is running, a researcher has another experiment loaded, the disk is almost
+full, or another problem shown at the top of this page), they say that no session is open.
 
 A session of its experiment that someone opened by hand isn't the autopilot's: **Open session**
 shows it, with who opened it and whether it takes participants (with **Watch it live** when it is
@@ -475,6 +503,12 @@ experiment loaded, a problem on the Autopilot page): the link then says that no 
 asks Prolific participants to return the study, so pause recruiting meanwhile.
 **Try it as a test participant** opens it with a made-up Prolific ID, taking a seat like a real
 participant.
+
+**Release places on Prolific in batches.** Once a session's game has started, the people Prolific
+sends can only wait for the next session, and those who can't wait return the study. So publish no
+more places at a time than one session takes (the example's `networkSize`, 8 by default, or the
+Autopilot page's **Maximum players** when its waiting room is used), and the next batch once those
+people are playing and the next session is open.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
 recorded in a `prolificEntry` event. To send participants back to Prolific with your completion

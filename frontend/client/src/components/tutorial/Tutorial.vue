@@ -18,12 +18,12 @@
 
     <div class="tutorial-foo" v-if="tutorial">
       <v-btn @click="prev" :disabled="!tutorial.index">
-        <v-icon>mdi-chevron-left</v-icon> Previous
+        <v-icon>mdi-chevron-left</v-icon> {{ texts.previous }}
       </v-btn>
       <v-btn @click="next" v-if="tutorial.index < tutorial.maxSteps - 1">
-        Next <v-icon>mdi-chevron-right</v-icon>
+        {{ texts.next }} <v-icon>mdi-chevron-right</v-icon>
       </v-btn>
-      <v-btn @click="next" v-else>Done</v-btn>
+      <v-btn @click="next" v-else>{{ texts.done }}</v-btn>
     </div>
   </component>
 </template>
@@ -32,6 +32,7 @@
   import Vue from 'vue'
   import { TutorialState } from './tutorial.types'
   import { PlayerData } from '@human-nature-lab/breadboard-core'
+  import { t } from '../../lib/texts'
 
   export default Vue.extend({
     name: 'Tutorial',
@@ -45,6 +46,10 @@
       }
     },
     computed: {
+      // its buttons' words, in the language of the session's texts (lib/texts)
+      texts (): Record<string, string> {
+        return { previous: t('form.previous'), next: t('form.next'), done: t('form.done') }
+      },
       tutorial (): TutorialState | null {
         return this.player ? this.player[this.stateKey] : null
       },

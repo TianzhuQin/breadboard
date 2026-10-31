@@ -22,7 +22,7 @@ see [install.md](install.md).
 | Path | What |
 |---|---|
 | `app/` | The server: controllers, actors, models (the script engine, sessions, autopilot), security, response filters, and the Play views that load the front end. |
-| `conf/` | `routes`, the settings files (below), the database scripts in `evolutions/default/`, and the default participant page files in `defaults/`. |
+| `conf/` | `routes`, the settings files (below), the database scripts in `evolutions/default/`, the default participant page files in `defaults/`, and Breadboard's own words to participants in `i18n/` (one file per language, which the participant page reads too). |
 | `groovy/` | The script engine's own Groovy scripts, loaded each time the engine is built, and their tests (`*_test.groovy`). |
 | `test/` | The server's JUnit tests; `test/data/` holds experiment exports from older versions for the import tests. |
 | `frontend/` | The front end, a pnpm workspace (below). |

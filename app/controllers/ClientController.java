@@ -52,39 +52,36 @@ public class ClientController extends Controller
               ? amtError.render() : ClientLogin.notRunning(experimentId, experimentInstanceId, clientId));
         }
 
+        // Breadboard's own words here are in the language of the session's texts (SessionLanguage).
+        String lang = SessionLanguage.of(experimentInstanceId);
+
         // A signed invitation link claims the seat, then redirects to the plain page URL so the
         // signature doesn't linger in the address bar or browser history.
         String invite = request().getQueryString("invite");
         if (invite != null) {
           boolean amt = experimentInstance.getHit() != null;
           if (!ParticipantAuth.verifyInvite(experimentInstanceId, clientId, invite)) {
-            return forbidden(amt ? amtError.render() : participantMessage.render("This link isn't valid",
-                "This invitation link isn't valid. Please check the link you were given, or contact the researcher."));
+            return forbidden(amt ? amtError.render() : ClientLogin.message(lang, "link.invalidTitle", "link.invalidInvite"));
           }
           if (!amt && !ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
             // As at sign-in: a session the engine doesn't run (e.g. since a restart) takes no one.
-            return ok(ClientLogin.notRunning());
+            return ok(ClientLogin.notRunning(lang));
           }
           if (ClientLogin.closedToNewcomers(experimentInstanceId, clientId)) {
-            return ok(amt ? amtGameStarted.render() : participantMessage.render("The session has already started",
-                "This session began before you arrived, so it takes no one new. Please contact the researcher."));
+            return ok(amt ? amtGameStarted.render() : ClientLogin.message(lang, "started.title", "started.invite"));
           }
           String token = ParticipantAuth.claim(experimentInstanceId, clientId);
           if (token == null) {
             Form<ClientLogin.CLogin> form = Form.form(ClientLogin.CLogin.class);
-            form.reject("This invitation link has already been used.");
-            return forbidden(clientLogin.render(experimentId, experimentInstanceId, form));
+            form.reject("signIn.inviteUsed");
+            return forbidden(ClientLogin.signInPage(experimentId, experimentInstanceId, form));
           }
           return ClientLogin.enterGame(experimentId, experimentInstanceId, clientId, token, connectionSpeed);
         }
 
         // The page itself carries nothing private; /state and the websocket check the token.
         String assetsRoot = play.Play.application().configuration().getString("breadboard.assetsRoot", "/assets");
-        if (assetsRoot != null) {
-            return ok(client.render(assetsRoot));
-        } else {
-            return ok(client.render(""));
-        }
+        return ok(client.render(assetsRoot == null ? "" : assetsRoot, SystemTexts.page(lang)));
     }
 
     /**
@@ -153,6 +150,9 @@ public class ClientController extends Controller
         result.put("experimentInstanceId", experimentInstanceId);
         result.put("clientGraph", getClientGraph(experimentId));
         result.put("clientHtml", getClientHtml(experimentId));
+        // The language of the session's texts (null: none chosen), which Breadboard's own words on the
+        // page follow (frontend/core: Breadboard.language).
+        result.put("language", SessionLanguage.of(experimentInstanceId));
         String socketUrl = routes.ClientController.connectClient(experimentId, experimentInstanceId, clientId)
             .webSocketURL(request(), play.Play.application().configuration().getString("breadboard.wsUrl", "").contains("wss://"));
         if (!ParticipantAuth.presentedViaCookie(request())) {
@@ -400,16 +400,19 @@ public class ClientController extends Controller
         try {
             instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
         } catch (NumberFormatException ignored) {}
+        // (in the language of the session's texts, as everything Breadboard itself tells its participants)
+        String lang = SessionLanguage.of(experimentInstanceId);
         if (instance != null && instance.getHit() != null) {
+            // (Mechanical Turk's words are English)
             words = ClientLogin.AMT_NOT_RUNNING;
         } else if (!ClientLogin.sessionExists(experimentId, experimentInstanceId)) {
-            words = ClientLogin.INVALID_LINK;
+            words = new String[]{SystemTexts.html(lang, "link.invalidTitle"), SystemTexts.html(lang, "link.invalid")};
         } else if (ScriptBoard.interruptedByRestart(experimentInstanceId)) {
             ObjectNode frame = Json.newObject();
-            frame.put("sessionOver", ScriptBoard.serverStoppedScreen(ScriptBoard.enteredFromProlific(instance.id, clientId)));
+            frame.put("sessionOver", ScriptBoard.serverStoppedScreen(ScriptBoard.enteredFromProlific(instance.id, clientId), lang));
             return frame;
         } else {
-            words = ClientLogin.NOT_RUNNING;
+            words = new String[]{SystemTexts.html(lang, "notRunning.pageTitle"), SystemTexts.html(lang, "notRunning.page")};
         }
         ObjectNode frame = Json.newObject();
         ObjectNode player = frame.putObject("sessionOver").putObject("player");
