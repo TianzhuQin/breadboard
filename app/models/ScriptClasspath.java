@@ -24,9 +24,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * looks for a script of that name. Breadboard's own scripts make it ask for about 17,700 classes and
  * 6,700 resources that don't exist, and each miss looked in every jar (about 110 in a release):
  * seconds of every engine rebuild, that is of every session's start. The classpath doesn't change
- * while the server runs, so a name missing once is missing for good, and asking again is cheap. The
- * scripts' own classes are never asked here: each engine's loader has them, and answers for them
- * before it asks this one.
+ * while the server runs, so a name missing once is missing for good, and asking again is cheap. A
+ * script's own class can be asked for here before a script defines it, and is then remembered as
+ * missing. That does no harm: once it is defined, the engine's own loader answers for it before it
+ * asks this one.
  *
  * <p>Some names are new with every engine: those made up from the names the engine gives its
  * scripts (see {@link #madeUpForAScript}). They are never on the classpath, so they aren't asked
