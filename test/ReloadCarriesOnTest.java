@@ -549,6 +549,13 @@ public class ReloadCarriesOnTest extends BaseTest {
         assertTrue(pick.id > reloaded.get(0).id);
         assertEquals("c1", value(pick, "player"));
         assertEquals("1", value(pick, "round"));
+
+        // Code of the old game that still runs (a task of its timers under way) shows nobody anything:
+        // its network reaches no console or page any more. It used to show the consoles its c1 as the
+        // new game's.
+        int frames = game.tab.frames.size();
+        oldC1.setProperty("text", "Round 2 of the old game");
+        assertEquals(0, game.tab.countSince(frames, f -> f.toString().contains("Round 2 of the old game")));
     }
 
     @Test

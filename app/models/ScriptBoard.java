@@ -898,6 +898,16 @@ public class ScriptBoard extends UntypedActor {
       processScript("g.empty()", null, null);
       // Reset the timers
       processScript("timers.cancel()", null, null);
+      // Its emptied network reaches no page and no console any more (the listener goes on to the new
+      // one): code of the old game that still runs (a task of its timers under way) used to show its
+      // players' old screens to the pages of the new game, which have the same ids.
+      if (graphInterface != null && graphChangedListener != null) {
+        try {
+          graphInterface.removeListener(graphChangedListener);
+        } catch (Exception e) {
+          Logger.warn("Could not take the replaced engine's network off the pages and consoles: " + e);
+        }
+      }
       // Cancel any pending AMT lifecycle timers from a previous session so they don't
       // fire against the rebuilt engine or outlive it (MEMORY_LEAKS.md L6).
       cancelAmtTimers();
