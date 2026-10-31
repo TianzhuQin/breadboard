@@ -1728,13 +1728,14 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * What someone gets whom a full waiting room left out at the start (sessionFullAtStart). When the
-   * autopilot opens the experiment's next session by itself, it says so: a link to the study's
-   * sign-in link, whose page waits for the next session and takes them in (ClientLogin.toOpenSession),
-   * or, for a {@code prolific} participant, to open the study again from Prolific; otherwise to
-   * contact the researcher, or to return the study.
+   * autopilot opens the experiment's next session by itself, and nothing keeps it from doing so
+   * (Autopilot.opensNextSoon), it says so: a link to the study's sign-in link, whose page waits for
+   * the next session and takes them in (ClientLogin.toOpenSession), or, for a {@code prolific}
+   * participant, to open the study again from Prolific; otherwise to contact the researcher, or to
+   * return the study.
    */
   static ObjectNode sessionFullScreen(boolean prolific, Long experimentId) {
-    boolean next = experimentId != null && Autopilot.opensNextBySelf(experimentId);
+    boolean next = experimentId != null && Autopilot.opensNextSoon(experimentId);
     String what;
     if (prolific) {
       what = next ? "The next session opens as soon as this one has ended: open the study again from Prolific to join "

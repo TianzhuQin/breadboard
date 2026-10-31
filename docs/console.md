@@ -333,7 +333,9 @@ none takes participants (its game is under way, its full waiting room counts dow
 about to open), they show a page that says a session is in progress and the next one opens when it
 ends; it checks again every few seconds and takes people in once a session opens (Prolific
 participants read that they can keep it open, or return the study if they can't wait). When the
-autopilot is off, paused or done, they say that no session is open.
+autopilot is off, paused or done, or something keeps it from opening the next session (another
+experiment's session is running, a researcher has another experiment loaded, the disk is almost
+full, or another problem shown at the top of this page), they say that no session is open.
 
 **What pauses it.** Ending the autopilot's session from the console pauses the autopilot: stopping
 it, or anything that reloads the engine (creating or resuming another session, reloading); selecting

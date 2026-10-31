@@ -68,6 +68,19 @@ public class AutopilotFlowTest extends BaseTest {
             setAutopilot(name, null);
         }
         setAutopilot("nextOpenAt", 0L);
+        setAutopilot("freeDiskBytes", REAL_FREE_DISK);
+    }
+
+    // How much room the database's disk has, as the server tells it (tests pretend it is almost full).
+    private static final Object REAL_FREE_DISK;
+    static {
+        try {
+            Field f = Autopilot.class.getDeclaredField("freeDiskBytes");
+            f.setAccessible(true);
+            REAL_FREE_DISK = f.get(null);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // ---- helpers ----------------------------------------------------------------------------------
@@ -557,6 +570,95 @@ public class AutopilotFlowTest extends BaseTest {
         Ebean.createSqlUpdate("update autopilot_settings set continuous = true, enabled = false").execute();
         String off = page(login);
         assertTrue(off, off.contains("No session is open right now"));
+    }
+
+    private static boolean selected(User user, Experiment experiment) {
+        Experiment selection = User.findByEmail(user.email).selectedExperiment;
+        return selection != null && experiment.id.equals(selection.id);
+    }
+
+    /** The autopilot's periodic check, now. */
+    private static void watchdog() throws Exception {
+        java.lang.reflect.Method check = Autopilot.class.getDeclaredMethod("watchdog");
+        check.setAccessible(true);
+        check.invoke(null);
+    }
+
+    private static String fullScreenText(boolean prolific, Long experimentId) throws Exception {
+        java.lang.reflect.Method screen = ScriptBoard.class.getDeclaredMethod("sessionFullScreen", boolean.class, Long.class);
+        screen.setAccessible(true);
+        return ((JsonNode) screen.invoke(null, prolific, experimentId)).get("player").get("text").asText();
+    }
+
+    private static void assertNoSessionOpen(String experimentLink, String prolificLink) {
+        String text = page(experimentLink);
+        assertTrue(text, text.contains("No session is open right now"));
+        assertTrue(text, text.contains("Please try again in a few minutes, or contact the researcher."));
+        assertFalse("a promise the autopilot can't keep: " + text, text.contains("in a moment") || text.contains("in progress"));
+        assertFalse(text, text.contains("http-equiv=\"refresh\""));
+        String forProlific = page(prolificLink);
+        assertTrue(forProlific, forProlific.contains("There is no session taking participants at the moment. Please return the study on Prolific."));
+    }
+
+    @Test
+    public void theStudyLinkPromisesNoSessionWhileSomethingKeepsTheAutopilotFromOpeningOne() throws Throwable {
+        final User researcher = user("heldup");
+        final Experiment experiment = experimentOf(researcher, "Held up");
+        final Experiment other = experimentOf(researcher, "Someone else's");
+        String login = "/play/" + experiment.id + "/login";
+        String prolific = "/play/" + experiment.id + "/prolific?PROLIFIC_PID=HELD1&STUDY_ID=S&SESSION_ID=X";
+
+        // Another experiment's session holds the engine when the autopilot is turned on: it waits for
+        // that session to end, which may take any time.
+        final AdminSocketsTest.Tab tab = console(researcher);
+        tab.send("SelectExperiment", "experimentId", other.id);
+        await("the selection", () -> selected(researcher, other) && other.id.equals(scriptBoardField("engineExperimentId").get(null)));
+        tab.send("LaunchGame", "name", "Pilot B", "parameters", Json.newObject());
+        await("Pilot B", () -> sessions(other).size() == 1 && sessions(other).get(0).status == ExperimentInstance.Status.RUNNING);
+        ObjectNode s = settings(experiment, 1, 1, 0);
+        s.put("nextSessionDelaySeconds", 600);
+        assertEquals(OK, status(post(researcher, s)));
+        await("waiting for it", () -> autopilotStatus(researcher).get("problem").asText().startsWith("Another session is running"));
+        assertNoSessionOpen(login, prolific);
+
+        // That session is stopped, but its researcher has their experiment loaded and a console open:
+        // the autopilot leaves the engine to them.
+        final ExperimentInstance pilot = sessions(other).get(0);
+        tab.send("StopGame", "id", pilot.id);
+        await("Pilot B stopped", () -> ExperimentInstance.findById(pilot.id).status == ExperimentInstance.Status.STOPPED);
+        watchdog();
+        assertTrue(autopilotStatus(researcher).get("problem").asText(), autopilotStatus(researcher).get("problem").asText()
+            .contains("is loaded in the engine for " + researcher.email));
+        assertNoSessionOpen(login, prolific);
+
+        // Their console closes: the autopilot opens its session, and the link leads there.
+        tab.close();
+        await("the engine left to the autopilot", () -> autopilotStatus(researcher).get("problem").isNull());
+        watchdog();
+        final ExperimentInstance session = openSession(experiment);
+        assertEquals(SEE_OTHER, status(route(fakeRequest(GET, login))));
+        connect(experiment, session, "held-1");
+        await("the game", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted));
+        assertTrue(page(login).contains("A session is in progress"));
+        assertTrue(fullScreenText(false, experiment.id).contains("Join the next session"));
+
+        // The disk where the database is kept is almost full: no next session opens until there is
+        // room, so the link no longer says one does, nor does the screen of someone a full room turns away.
+        setAutopilot("freeDiskBytes", new java.util.function.Supplier<Long>() {
+            public Long get() { return 10L * 1024 * 1024; }
+        });
+        assertNoSessionOpen(login, prolific);
+        String plain = fullScreenText(false, experiment.id);
+        assertFalse(plain, plain.contains("href"));
+        assertTrue(plain, plain.contains("contact the researcher"));
+        assertTrue(fullScreenText(true, experiment.id).contains("Please return the study on Prolific"));
+        setAutopilot("freeDiskBytes", REAL_FREE_DISK);
+        String again = page(login);
+        assertTrue(again, again.contains("A session is in progress") && again.contains("http-equiv=\"refresh\""));
+
+        // A problem the Autopilot page shows (here: the last session it opened reported an error).
+        setAutopilot("lastProblem", "The last session it opened reported an error: something");
+        assertNoSessionOpen(login, prolific);
     }
 
     @Test

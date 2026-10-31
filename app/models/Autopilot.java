@@ -1289,8 +1289,7 @@ public final class Autopilot {
 
   /**
    * Whether the autopilot opens this experiment's next session by itself: it is on for it, opens the
-   * next one when one finishes (continuous), and is neither paused nor done. What participants who
-   * find no session open are told depends on it (ClientLogin.toOpenSession, ScriptBoard.sessionFullScreen).
+   * next one when one finishes (continuous), and is neither paused nor done. See opensNextSoon.
    */
   public static boolean opensNextBySelf(Long experimentId) {
     if (experimentId == null) {
@@ -1304,6 +1303,51 @@ public final class Autopilot {
       Logger.debug("Autopilot: could not read its settings: " + ex);
       return false;
     }
+  }
+
+  /**
+   * Whether this experiment's next session opens by itself, and soon: the autopilot opens it by itself
+   * (opensNextBySelf), and nothing keeps it from doing so (nextSessionHeldUp), so it opens once the
+   * session under way has ended (its game, or a full room counting down), or when the pause between
+   * sessions is over. What participants who find no session open are told depends on it: the study's
+   * links then wait for that session (ClientLogin.toOpenSession), and someone a full room turns away
+   * is told to join it (ScriptBoard.sessionFullScreen). Otherwise they say that no session is open.
+   * (The links used to promise one "in a moment" whenever the autopilot opened sessions by itself,
+   * also while something kept it from opening any, as the Autopilot page said meanwhile: the disk
+   * almost full, another experiment's session in the engine.)
+   */
+  public static boolean opensNextSoon(Long experimentId) {
+    return opensNextBySelf(experimentId) && nextSessionHeldUp(experimentId) == null;
+  }
+
+  /**
+   * What keeps the autopilot from opening this experiment's next session, or null when nothing does:
+   * a problem the Autopilot page shows (status.problem: another experiment's session holds the
+   * engine, a researcher has another experiment loaded in it, there is no admin account to open
+   * sessions as, the last session it opened reported an error, ...; or it is off, paused or done), or
+   * the disk being almost full (diskFull, which the page shows once it has tried to open one). Never
+   * throws: what can't be told keeps it from promising a session too.
+   */
+  static String nextSessionHeldUp(Long experimentId) {
+    Effective e;
+    Problem problem;
+    try {
+      e = effective();
+    } catch (Exception ex) {
+      Logger.debug("Autopilot: could not read its settings: " + ex);
+      return "its settings can't be read";
+    }
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    if (!e.isOn() || experimentId == null || !experimentId.equals(e.settings.experimentId)) {
+      return "it doesn't run this experiment";
+    }
+    try {
+      problem = problem(e, Experiment.findById(experimentId), otherLiveSession(experimentId));
+    } catch (Exception ex) {
+      Logger.debug("Autopilot: could not tell whether anything keeps it from opening a session: " + ex);
+      return "that can't be told";
+    }
+    return problem != null ? problem.text : diskFull();
   }
 
   /** Whether the engine runs a live session of this experiment now (its game, or its waiting room). */

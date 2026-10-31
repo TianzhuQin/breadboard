@@ -422,10 +422,12 @@ public class ClientLogin extends Controller {
           return ok(takenPart);
         }
       }
-      if (Autopilot.opensNextBySelf(experiment.id)) {
+      if (Autopilot.opensNextSoon(experiment.id)) {
         // The autopilot opens the next session by itself, within seconds of the one under way (its
         // game, or a full room counting down) ending: a page that waits for it, asking again by
-        // itself, rather than one that turned people away until they tried again by hand.
+        // itself, rather than one that turned people away until they tried again by hand. Not while
+        // something keeps it from opening one (the disk almost full, another experiment's session
+        // in the engine): the page promised one "in a moment" then, for as long as that lasted.
         return holding(experiment.id, prolific);
       }
       if (prolific) {
@@ -444,10 +446,11 @@ public class ClientLogin extends Controller {
 
   /**
    * The page for someone who opens the study's link while the autopilot has no session open but opens
-   * the next by itself (between sessions, during a game, or while a full room counts down): it says a
-   * session is in progress (or opens in a moment) and the next opens when it ends, and loads the same
-   * link again every few seconds, which goes into the session once one is open. A {@code prolific}
-   * participant may keep it open, or return the study if they can't wait.
+   * the next by itself, and nothing keeps it from doing so (Autopilot.opensNextSoon: between sessions,
+   * during a game, or while a full room counts down): it says a session is in progress (or opens in a
+   * moment) and the next opens when it ends, and loads the same link again every few seconds, which
+   * goes into the session once one is open. A {@code prolific} participant may keep it open, or
+   * return the study if they can't wait.
    */
   static Result holding(Long experimentId, boolean prolific) {
     boolean underWay = Autopilot.sessionUnderWay(experimentId);
