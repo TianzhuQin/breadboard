@@ -154,7 +154,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 - pandas：`pd.to_datetime(df.event_date, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`
 - R：`as.POSIXct(sub(":(\\d{3})Z$", ".\\1", df$event_date), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
 
-数据值按原样写进 CSV：值里的逗号、引号和换行按 CSV 的规矩放在引号里，不会弄乱文件，但不会为表格软件做任何改动。如果参与者可能输入以 `=`、`+`、`-`、`@` 开头的内容，用表格软件打开时请按文本导入，否则可能被当成公式。更多见 [console.md](console.md#data)。
+数据值按记录的原样写进 CSV（含逗号、引号或换行的值，按 CSV 的规则加上引号，不会弄乱各列），不会为表格软件做任何改动。如果参与者可能输入以 `=`、`+`、`-`、`@` 开头的内容，用表格软件打开时请按文本导入，否则可能被当成公式。更多见 [console.md](console.md#data)。
 
 ## 放到服务器上
 
