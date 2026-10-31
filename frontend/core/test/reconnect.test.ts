@@ -363,6 +363,32 @@ describe('a page whose study was opened in another tab or window', () => {
     expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbTake=1')
   })
 
+  // The server tells the participant's own page from one a researcher opened by the token it asks with
+  // (ClientController.getState): it counts only the participant's pages for theirs, and any page,
+  // previews included, for the researcher's (the previous console's Testing panel opens one without
+  // ?preview=1, signed in by the researcher's cookie). Told that only the participant's counted, two
+  // such pages on screen took the seat from each other every 20 s.
+  /** The token header of each seat check the page made */
+  const seatCheckTokens = (fetch: any) => fetch.mock.calls.filter((c: any[]) => c[0] === 'state?seat=1')
+    .map((c: any[]) => (c[1] && c[1].headers && c[1].headers['X-Breadboard-Token']) || null)
+
+  it('asks with the participant\'s token, so the server counts only their own pages', async () => {
+    localStorage.setItem('breadboard-token:' + PAGE, JSON.stringify({ token: 'tok', until: Date.now() + 60 * 60 * 1000 }))
+    const { fetch } = await replacedPage([200, { seatHeld: true }])
+    await vi.advanceTimersByTimeAsync(40000)
+    await settle()
+    expect(seatCheckTokens(fetch)).toEqual(['tok', 'tok'])
+  })
+
+  it('asks with no token when a researcher opened it, and stays elsewhere for as long as a page holds the seat', async () => {
+    const { page, fetch } = await replacedPage([200, { seatHeld: true }])
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    await settle()
+    expect(seatCheckTokens(fetch)).toEqual(new Array(15).fill(null))
+    expect(FakeSocket.all.length).toBe(1)
+    expect(page.Breadboard.connection).toBe('elsewhere')
+  })
+
   it('takes the seat back only once it is on screen', async () => {
     const { fetch } = await replacedPage([200, { seatHeld: false }])
     setVisibility('hidden')

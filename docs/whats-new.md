@@ -317,10 +317,13 @@ playing, and a waiting room doesn't count them.
   says when it was loaded, in the server's time, as it connects (its state's `loadedAt`, as `bbPage`
   in the socket's address). **Use it here** asks for the seat (`bbTake=1`) and gets it, from a newer
   page too. A page that has lost the seat asks `/state?seat=1`, which answers `{"seatHeld": true}`
-  while an open page of the participant's own holds it. `clientConnected` and `clientDisconnected`
-  are recorded only when the participant comes or goes, not each time a page takes over;
-  `bb:connection` is emitted whenever a page takes the seat, so scripts may hear `connected: true`
-  for someone who is connected already.
+  while an open page of the participant's own holds it. A page a researcher opened without
+  `?preview=1` (the previous console's Testing panel, signed in by the researcher's cookie) is told
+  whether any page holds it, a preview included: it takes the seat back by itself only once nobody
+  has it, never from another page. `clientConnected` and `clientDisconnected` are recorded only when
+  the participant comes or goes, not each time a page takes over; `bb:connection` is emitted
+  whenever a page takes the seat, so scripts may hear `connected: true` for someone who is connected
+  already.
 - **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds
   after, and gets `{"pong": <the server's time in ms>}`, from which it reckons the server's time (see
   below). A page that has pinged and then sends

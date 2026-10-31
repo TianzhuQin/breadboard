@@ -30,7 +30,10 @@ const PING = JSON.stringify({ action: 'Ping' })
 // participant's other pages in this browser as it goes (a BroadcastChannel per seat), and they ask
 // the server whether a page of theirs still holds it: at once (after RELEASED_CHECK_MS, by when a
 // reload of that page has taken the seat again), and every SEAT_CHECK_MS while they are on screen
-// (a page in another browser, or one that crashed, tells nobody).
+// (a page in another browser, or one that crashed, tells nobody). The server tells the participant's
+// page by its token (see requestState); a page a researcher opened without ?preview=1 (the previous
+// console's Testing panel, signed in by their cookie) is told whether any page holds the seat, a
+// preview included, so it never takes the seat from another page (ClientController.getState).
 const SEAT_CHECK_MS = 20 * 1000
 const RELEASED_CHECK_MS = 2 * 1000
 const SEAT_CHECK_TIMEOUT_MS = 10 * 1000
@@ -884,9 +887,10 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /**
    * While 'elsewhere' and on screen: ask the server whether a page of the participant's still holds
-   * the seat, and take it back if none does (the other page was closed, or lost its connection for
-   * good). Not while the page is in the background: a page nobody looks at would keep the seat from
-   * the computer, which takes it after the usual wait; the page asks again as it comes on screen.
+   * the seat (any page, when a researcher opened this one: see SEAT_CHECK_MS), and take it back if
+   * none does (the other page was closed, or lost its connection for good). Not while the page is in
+   * the background: a page nobody looks at would keep the seat from the computer, which takes it after
+   * the usual wait; the page asks again as it comes on screen.
    */
   private async checkSeatFree () {
     if (!this.replaced || this.ended || this.checkingSeatFree || !onScreen()) return

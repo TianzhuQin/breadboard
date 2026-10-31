@@ -14,6 +14,7 @@ import play.mvc.Http;
 import play.mvc.Result;
 import play.mvc.WebSocket;
 import security.ParticipantAuth;
+import security.PreviewTokens;
 
 import javax.script.ScriptEngine;
 import java.lang.reflect.Field;
@@ -46,6 +47,7 @@ public class ParticipantConnectionTest extends BaseTest {
 
     private final List<AdminSocketsTest.Tab> tabs = new ArrayList<>();
     private AdminSocketsTest.Tab console;
+    private User researcher;
     private Experiment experiment;
     private ExperimentInstance session;
     private long silenceLimit;
@@ -56,6 +58,7 @@ public class ParticipantConnectionTest extends BaseTest {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
         User user = createUser("conn-" + UUID.randomUUID() + "@test.org", "conn", "secret-1", lang);
+        researcher = user;
         experiment = createExperiment("Connections");
         user.ownedExperiments.add(experiment);
         user.saveManyToManyAssociations("ownedExperiments");
@@ -85,6 +88,7 @@ public class ParticipantConnectionTest extends BaseTest {
         clients.clear();
         ((Set<?>) field("endedPages").get(null)).clear();
         ParticipantAuth.reset();
+        PreviewTokens.reset();
         Recruitment.reset();
         ((EventTracker) field("eventTracker").get(null)).setExperimentInstance(null);
     }
@@ -398,10 +402,60 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(UNAUTHORIZED, status(stranger));
     }
 
+    @Test
+    public void aResearchersPageThatLostTheSeatCountsAnyPageThatHoldsIt() throws Throwable {
+        // The previous console's Testing panel opens a participant's page without ?preview=1, signed in
+        // by the researcher's cookie, and the console's Preview page opens one with a preview token.
+        // Such a page that another one took the seat from takes it back by itself only once no page
+        // holds it. It used to be told the seat was free whenever a preview held it, so it took the seat
+        // from the console's preview within 20 s, and two of them took it from each other every 20 s.
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        String previewToken = PreviewTokens.issue(researcher.email, experiment.id.toString(), session.id.toString(), "p1").token;
+        handshake("p1", token, "bbPage=1000").hangUp();
+        // They have left. A page of the Testing panel stands in, and the console's preview takes the
+        // seat from it.
+        Page testingPanel = connect("p1", true);
+        Page preview = connect("p1", true);
+        assertEquals(1, testingPanel.count(REPLACED));
+        assertTrue("the preview holds it", seatHeld("p1", null, researcher.uid));
+        assertTrue(seatHeld("p1", previewToken, null));
+        // The participant's own page counts only theirs, also when it is signed in as the researcher
+        // too: it takes the seat, and the preview watches.
+        assertFalse(seatHeld("p1", token, null));
+        assertFalse(seatHeld("p1", token, researcher.uid));
+        // Another page of the Testing panel takes the seat from the preview: held all the same.
+        Page another = connect("p1", true);
+        assertEquals(1, preview.count(REPLACED));
+        assertTrue(seatHeld("p1", null, researcher.uid));
+        // Their own page comes back and holds it, and goes again: the page that watched stands in.
+        Page own = handshake("p1", token, "bbPage=2000");
+        assertEquals(1, another.count(WATCHING));
+        assertTrue(seatHeld("p1", null, researcher.uid));
+        assertTrue(seatHeld("p1", token, null));
+        own.hangUp();
+        assertEquals(1, another.count(NOT_WATCHING));
+        assertTrue(seatHeld("p1", null, researcher.uid));
+        assertFalse(seatHeld("p1", token, null));
+        // Nobody holds it.
+        another.hangUp();
+        assertFalse(seatHeld("p1", null, researcher.uid));
+        assertFalse(seatHeld("p1", previewToken, null));
+    }
+
     /** What /state?seat=1 answers the participant's page: whether a page of theirs holds the seat. */
     private boolean seatHeld(String clientId, String token) {
-        Result result = route(fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/" + clientId + "/state?seat=1")
-            .withHeader(ParticipantAuth.HEADER, token));
+        return seatHeld(clientId, token, null);
+    }
+
+    /**
+     * What /state?seat=1 answers a page that presents this token, signed in as the researcher with this
+     * uid (either null: none).
+     */
+    private boolean seatHeld(String clientId, String token, String researcherUid) {
+        play.test.FakeRequest request = fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/" + clientId + "/state?seat=1");
+        if (token != null) request = request.withHeader(ParticipantAuth.HEADER, token);
+        if (researcherUid != null) request = request.withSession("uid", researcherUid);
+        Result result = route(request);
         assertEquals(OK, status(result));
         JsonNode answer = Json.parse(contentAsString(result));
         assertEquals("that, and nothing else", 1, answer.size());

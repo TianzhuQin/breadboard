@@ -115,6 +115,14 @@ public class ClientController extends Controller
         return uid != null && User.findByUID(uid) != null;
     }
 
+    /**
+     * Whether the request presents the participant's own seat token: it comes from their page, not a
+     * researcher's (a preview token, or the researcher's sign-in), whatever else it carries.
+     */
+    static boolean presentsSeatToken(String experimentInstanceId, String clientId) {
+        return ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId));
+    }
+
     public static Result getState(String experimentId, String experimentInstanceId, String clientId, String connectionSpeed){
         // A preview runs in an opaque origin (see PREVIEW_SANDBOX), so its request for this is
         // cross-origin. Any origin may read the answer, but never with credentials: a page elsewhere
@@ -128,10 +136,12 @@ public class ClientController extends Controller
             return unauthorized(error);
         }
         if (request().getQueryString(SEAT_QUERY) != null) {
-            // A page of the participant's that another one took the seat from asks whether that one
-            // still holds it: once it has gone, the page takes the seat back (frontend/core).
+            // A page that another one took the seat from asks whether a page still holds it: once none
+            // does, it takes the seat back (frontend/core). The participant's own page counts only
+            // theirs; a researcher's page, any (ScriptBoard.seatHeld).
             ObjectNode seat = Json.newObject();
-            seat.put("seatHeld", ScriptBoard.seatHeldByTheirPage(experimentId, experimentInstanceId, clientId));
+            seat.put("seatHeld", ScriptBoard.seatHeld(experimentId, experimentInstanceId, clientId,
+                !presentsSeatToken(experimentInstanceId, clientId)));
             return ok(seat);
         }
         // Only what the page needs. This used to echo every request header back to page
@@ -325,8 +335,7 @@ public class ClientController extends Controller
         // thread without access to the request.
         final boolean authorized = isAuthorized(experimentId, experimentInstanceId, clientId);
         // A researcher looking through the player's eyes, not the participant: the data says so.
-        final boolean byResearcher = authorized && !ParticipantAuth.verify(experimentInstanceId, clientId,
-            ParticipantAuth.presentedToken(request(), experimentInstanceId));
+        final boolean byResearcher = authorized && !presentsSeatToken(experimentInstanceId, clientId);
         // When the page was loaded (its /state's loadedAt), and whether the participant asked for the
         // seat there ("Use it here"): see Client.Connection.
         final long pageLoadedAt = wholeNumberOrZero(request().getQueryString(PAGE_LOADED_QUERY));

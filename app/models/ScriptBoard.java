@@ -1550,12 +1550,18 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
-   * Whether an open page of the participant's own holds their seat in this session now (not a
-   * researcher's preview: a page of theirs would take the seat from it). A page of theirs that
-   * another one took the seat from asks (ClientController.getState): once the other one has gone, it
-   * takes the seat back. A socket that has fallen silent counts until it is closed (closeSilentPages).
+   * Whether a page holds the participant's seat in this session now, as the page that asks counts it
+   * (ClientController.getState). A page that another one took the seat from asks: once none holds it,
+   * it takes the seat back by itself (frontend/core). For the participant's own page
+   * ({@code byResearcher} false), only an open page of theirs counts, not a researcher's preview: a
+   * page of theirs would take the seat from it. For a researcher's page (a preview, or the previous
+   * console's Testing panel, signed in by the researcher's cookie), any open socket in the seat counts,
+   * a preview's too: it never takes the seat from another page. It used to count only the
+   * participant's own, so such a page took the seat from a preview within 20 s, and two of them on
+   * screen took it from each other every 20 s, for ever. A socket that has fallen silent counts until
+   * it is closed (closeSilentPages).
    */
-  public static boolean seatHeldByTheirPage(String experimentId, String instanceId, String clientId) {
+  public static boolean seatHeld(String experimentId, String instanceId, String clientId, boolean byResearcher) {
     Client client = clientId == null ? null : clients.get(clientId);
     ExperimentInstance seat = client == null ? null : client.experimentInstance;
     if (seat == null || seat.id == null || !seat.id.toString().equals(instanceId)) {
@@ -1564,7 +1570,7 @@ public class ScriptBoard extends UntypedActor {
     if (seat.experiment != null && seat.experiment.id != null && !seat.experiment.id.toString().equals(experimentId)) {
       return false;
     }
-    return client.presence() == Client.Presence.HERE;
+    return byResearcher ? client.seatOpen() : client.presence() == Client.Presence.HERE;
   }
 
   /**
