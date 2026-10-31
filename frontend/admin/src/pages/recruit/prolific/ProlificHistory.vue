@@ -77,7 +77,7 @@ import CopyButton from '../CopyButton.vue'
 import ErrorNote from '../ErrorNote.vue'
 import { formatMoney } from '../mturk/lib'
 import { formatDateTime, parseServerTime, statusMeta } from '../../sessions/sessionData'
-import { groupBySession, loadProlificRecords, prolificBonusLines, type ProlificRecord } from './prolific'
+import { groupBySession, loadProlificRecords, prolificBonusLines, prolificFinished, type ProlificRecord } from './prolific'
 
 /**
  * Every session's Prolific participants, from the sessions' data (GET /experiment/:id/prolific): the
@@ -129,7 +129,7 @@ watch(() => [admin.instance?.id, admin.instance?.status, prolificNews.value], lo
 onBeforeUnmount(() => clearTimeout(soon))
 
 const groups = computed(() => groupBySession(records.value))
-const finished = computed(() => records.value.filter(r => r.completed || r.finishedWithoutCode).length)
+const finished = computed(() => records.value.filter(prolificFinished).length)
 const noCode = computed(() => records.value.filter(r => r.finishedWithoutCode && !r.completed).length)
 const bonusLines = computed(() => prolificBonusLines(records.value))
 // Prolific pays in the study's currency, so no currency sign here

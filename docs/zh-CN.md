@@ -97,7 +97,7 @@ if (p._system?.recruitment?.source == "prolific") {
 }
 ```
 
-参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场；**From Prolific in every session** 按场次列出这个实验所有场次从 Prolific 来的人（最新的一场在最上面）：什么时候加入的、有没有完成、完成码和奖金，它的 **Copy bonus list** 会复制所有场次的奖金名单。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
+参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场；**From Prolific in every session** 按场次列出这个实验所有场次从 Prolific 来的人（最新的一场在最上面）：什么时候加入的、有没有完成、完成码和奖金，它的 **Copy bonus list** 会复制所有场次的奖金名单。游戏结束时没拿到完成码的人（比如例子实验的 `prolificCode` 还空着的时候），在两个列表里都算完成，标成 **No code**。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 
 ## 导出数据
 

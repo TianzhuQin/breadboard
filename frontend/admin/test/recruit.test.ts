@@ -41,7 +41,7 @@ vi.mock('@/store/admin', async () => {
 })
 
 import { http, HttpError } from '@/lib/http'
-import { admin as realAdmin, connection, connectionState, nextMessage } from '@/store/admin'
+import { admin as realAdmin, connection, connectionState, graph, nextMessage } from '@/store/admin'
 import {
   assignmentsCsv, bonusFromAnswers, bonusTotal, buildRequirement, csvCell, describeError, describeRequirement, hitCounts, mapPool,
   MASTERS_ID, newRequirement, parseAnnotation, parseAnswers, parseIntegerList, parseMoney, parseWorkerIds, toCsv, validateRequirement,
@@ -51,7 +51,10 @@ import { FORM_KEY, defaultHitForm, hitFormBody, loadHitForm, readSchedules, vali
 import { bonusToken, newRequestToken, TOKEN_RE } from '@/pages/recruit/mturk/bonusTokens'
 import { toasts } from '@/ui/toast'
 import { toRow } from '@/pages/recruit/mturk/rows'
-import { completionSnippet, groupBySession, prolificBonusLines, prolificPlayers, prolificRecordsOf, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
+import {
+  completionSnippet, groupBySession, playersWithoutCode, prolificBonusLines, prolificFinished, prolificPlayers, prolificRecordsOf,
+  prolificStudyUrl, prolificTarget, groovyString,
+} from '@/pages/recruit/prolific/prolific'
 import BonusDialog from '@/pages/recruit/mturk/BonusDialog.vue'
 import CreateHitTab from '@/pages/recruit/mturk/CreateHitTab.vue'
 import RecruitPage from '@/pages/recruit/RecruitPage.vue'
@@ -798,6 +801,76 @@ describe('Prolific participants of every session', () => {
     await w.findAll('button').find(b => b.text().includes('Try again'))!.trigger('click')
     await flushPromises()
     expect(w.text()).toContain('5 joined · 3 finished')
+    w.unmount()
+  })
+})
+
+describe('Prolific participants of this session', () => {
+  const node = (id: string, recruitment: any, connected?: boolean) =>
+    ({ id, data: { _system: { recruitment: { source: 'prolific', ...recruitment }, ...(connected === undefined ? {} : { connected }) } } })
+  const noCode = (id: number, player: string) =>
+    ({ id, name: 'noCompletionCode', datetime: '2026-10-31 01:41:00,0', eventData: [{ name: 'player', value: player }] })
+
+  beforeEach(() => {
+    admin.experiment = { id: 1, name: 'Game A', parameters: [], instances: [] }
+    admin.instance = null
+    admin.events = []
+    graph.nodes.clear()
+  })
+
+  it('reads who finished without a code from the session\'s events, recorded and pushed', () => {
+    const ids = playersWithoutCode(
+      [noCode(1, 'pp-a'), { id: 2, name: 'prolificEntry', datetime: '', eventData: [{ name: 'clientId', value: 'pp-x' }] }, null as any, { id: 3, name: 'noCompletionCode', datetime: '', eventData: null } as any],
+      [{ name: 'noCompletionCode', datetime: '', data: { player: 'pp-b' } }, { name: 'stepFailed', datetime: '', data: { player: 'pp-y' } }, { name: 'noCompletionCode', datetime: '', data: {} }],
+    )
+    expect([...ids].sort()).toEqual(['pp-a', 'pp-b'])
+    expect(playersWithoutCode(null, undefined).size).toBe(0)
+    const players = prolificPlayers([node('pp-a', { prolificPid: 'PID-A' }), node('pp-c', { prolificPid: 'PID-C', completed: true, completionCode: 'C1' })], new Set(['pp-a', 'pp-c']))
+    // (someone given a code finished with it, whatever else was recorded)
+    expect(players.map(p => [p.playerId, p.completed, p.finishedWithoutCode, prolificFinished(p)])).toEqual([['pp-a', false, true, true], ['pp-c', true, false, true]])
+    expect(prolificPlayers([node('pp-a', {})])[0].finishedWithoutCode).toBe(false)
+  })
+
+  it('shows those the game ended for without a code as finished, as the list of every session does, and nobody as playing once the session has ended', async () => {
+    const ProlificPlayers = (await import('@/pages/recruit/prolific/ProlificPlayers.vue')).default
+    // two from Prolific played Game A's session to its end; its prolificCode was empty
+    graph.nodes.set('pp-c4', node('pp-c4', { prolificPid: '5f00aa11bb22cc33dd44ee01' }, true))
+    graph.nodes.set('pp-d9', node('pp-d9', { prolificPid: '5f00aa11bb22cc33dd44ee02' }, true))
+    graph.version.value++
+    admin.instance = { id: 4, name: 'Autopilot 4', status: 'RUNNING', hasStarted: true, events: [noCode(40, 'pp-c4')], hits: [] }
+    const w = mount(ProlificPlayers, { props: { hasSession: true } })
+    const sum = () => w.find('.pl-players__sum').text().replace(/\s+/g, ' ')
+    const badges = () => w.findAll('.pl-players__row').map(r => r.find('.b-badge').text())
+    expect(sum()).toBe('2 joined · 1 finished (1 without a code)')
+    expect(badges()).toEqual(['No code', 'Playing'])
+    // the other one's, pushed as it was recorded
+    admin.events = [{ id: 41, experimentInstanceId: 4, name: 'noCompletionCode', datetime: '2026-10-31T01:41:00.100Z', data: { player: 'pp-d9' } }]
+    await flushPromises()
+    expect(sum()).toBe('2 joined · 2 finished (2 without a code)')
+    expect(badges()).toEqual(['No code', 'No code'])
+    expect(w.find('.pl-players__row .b-badge').attributes('title')).toBe('The game ended for them, but no completion code was set')
+
+    // the list of every session counts them the same way, from the sessions' data
+    vi.mocked(http.get).mockReset()
+    const seat = (player: string, pid: string) => ({ sessionId: 4, sessionName: 'Autopilot 4', sessionStatus: 'FINISHED', player, prolificPid: pid, studyId: 's', prolificSessionId: 'x', joinedAt: null, completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: true })
+    vi.mocked(http.get).mockResolvedValue({ participants: [seat('pp-c4', '5f00aa11bb22cc33dd44ee01'), seat('pp-d9', '5f00aa11bb22cc33dd44ee02')] })
+    const ProlificHistory = (await import('@/pages/recruit/prolific/ProlificHistory.vue')).default
+    const every = mount(ProlificHistory, { props: { experimentId: 1 } })
+    await flushPromises()
+    expect(every.find('.pl-players__sum').text().replace(/\s+/g, ' ')).toBe('2 joined · 2 finished (2 without a code) · in 1 session')
+    every.unmount()
+
+    // someone who neither finished nor left: playing while the session runs (away when their page is gone) ...
+    graph.nodes.set('pp-e2', node('pp-e2', { prolificPid: '5f00aa11bb22cc33dd44ee03' }, false))
+    graph.version.value++
+    await flushPromises()
+    expect(sum()).toBe('3 joined · 2 finished (2 without a code)')
+    expect(badges()).toEqual(['No code', 'No code', 'Away'])
+    // ... and not finished once it has ended, not playing on
+    admin.instance = { ...admin.instance, status: 'FINISHED' }
+    await flushPromises()
+    expect(badges()).toEqual(['No code', 'No code', 'Not finished'])
+    expect(w.text()).not.toContain('Playing')
     w.unmount()
   })
 })

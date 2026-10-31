@@ -10,7 +10,8 @@
 
     <template v-else>
       <p class="pl-players__sum" aria-live="polite">
-        <strong>{{ players.length }}</strong> joined · <strong>{{ finished }}</strong> finished
+        <strong>{{ players.length }}</strong> joined · <strong>{{ finished }}</strong> finished<template v-if="noCode">
+          ({{ noCode }} without a code)</template>
       </p>
       <ul class="pl-players">
         <li v-for="p in players" :key="p.playerId" class="pl-players__row">
@@ -19,6 +20,9 @@
             <span class="rc-sub">Player {{ p.playerId }}<template v-if="p.bonus != null"> · bonus {{ money(p.bonus) }}</template></span>
           </div>
           <BBadge v-if="p.completed" tone="success" :title="p.completionCode ? `Code ${p.completionCode}` : undefined">Finished</BBadge>
+          <BBadge v-else-if="p.finishedWithoutCode" tone="warning" title="The game ended for them, but no completion code was set">No code</BBadge>
+          <!-- (the session has ended: nobody plays any more) -->
+          <BBadge v-else-if="!live" tone="neutral">Not finished</BBadge>
           <BBadge v-else-if="p.connected === false" tone="warning">Away</BBadge>
           <BBadge v-else tone="info">Playing</BBadge>
         </li>
@@ -35,18 +39,23 @@
 import { computed } from 'vue'
 import { Users } from 'lucide-vue-next'
 import { BBadge } from '@/ui'
-import { graph } from '@/store/admin'
+import { admin, graph } from '@/store/admin'
 import CopyButton from '../CopyButton.vue'
 import { formatMoney } from '../mturk/lib'
-import { prolificBonusLines, prolificPlayers } from './prolific'
+import { playersWithoutCode, prolificBonusLines, prolificFinished, prolificPlayers } from './prolific'
 
 defineProps<{ hasSession: boolean }>()
 
+// Who the session recorded as finished without a completion code (noCompletionCode), as the list of
+// every session beside this one reads its data: they finished, as it says, rather than play on.
+const withoutCode = computed(() => playersWithoutCode(admin.instance?.events, admin.events))
+const live = computed(() => admin.instance?.status === 'RUNNING' || admin.instance?.status === 'TESTING')
 const players = computed(() => {
   void graph.version.value
-  return prolificPlayers(graph.nodes.values())
+  return prolificPlayers(graph.nodes.values(), withoutCode.value)
 })
-const finished = computed(() => players.value.filter(p => p.completed).length)
+const finished = computed(() => players.value.filter(prolificFinished).length)
+const noCode = computed(() => players.value.filter(p => p.finishedWithoutCode).length)
 const bonusLines = computed(() => prolificBonusLines(players.value))
 // Prolific pays in the study's currency, so no currency sign here
 const money = (n: number) => formatMoney(n).replace(/^\$/, '')

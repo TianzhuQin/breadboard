@@ -435,7 +435,9 @@ finished, with **Copy bonus list** for Prolific's bulk bonus. Each completion is
 experiment, newest first, from the sessions' data, so a session the autopilot has moved on from can
 still be paid: when each person joined, whether they finished, their code and bonus, and **Copy
 bonus list** for all of them (someone paid in two sessions gets one line with both amounts added
-up).
+up). Both lists count someone the game ended for without a completion code as finished, marked
+**No code** (the example records a `noCompletionCode` event for them while its `prolificCode` is
+empty).
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game

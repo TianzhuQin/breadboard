@@ -1,6 +1,7 @@
 /** Prolific helpers: the study URL, the test link and the participants seen in the live session. */
 import { groovyLiteral } from '@/pages/console/snippets'
 import { http } from '@/lib/http'
+import type { EventItem, LiveEvent } from '@/store/types'
 import { bonusTotal, moneyString } from '../mturk/lib'
 
 /** Prolific's placeholder syntax; Prolific swaps these for each participant's ids. */
@@ -55,10 +56,16 @@ export interface ProlificPlayer {
   completionCode: string
   bonus: number | null
   connected: boolean | null
+  /** the game ended for them without a completion code (a noCompletionCode event; see playersWithoutCode) */
+  finishedWithoutCode: boolean
 }
 
-/** Players of the live session who came from Prolific (player._system.recruitment.source). */
-export function prolificPlayers (nodes: Iterable<{ id: string, data: Record<string, any> }>): ProlificPlayer[] {
+/**
+ * Players of the live session who came from Prolific (player._system.recruitment.source).
+ * `withoutCode` are the players the session recorded as finished without a completion code
+ * (playersWithoutCode).
+ */
+export function prolificPlayers (nodes: Iterable<{ id: string, data: Record<string, any> }>, withoutCode: ReadonlySet<string> = new Set()): ProlificPlayer[] {
   const out: ProlificPlayer[] = []
   for (const n of nodes) {
     const sys = n.data?._system
@@ -74,9 +81,39 @@ export function prolificPlayers (nodes: Iterable<{ id: string, data: Record<stri
       completionCode: String(rec.completionCode ?? ''),
       bonus: Number.isFinite(bonus) && bonus > 0 ? bonus : null,
       connected: typeof sys.connected === 'boolean' ? sys.connected : null,
+      finishedWithoutCode: !rec.completed && withoutCode.has(String(n.id)),
     })
   }
   return out.sort((a, b) => a.prolificPid.localeCompare(b.prolificPid))
+}
+
+/**
+ * The players a session recorded as finished without a completion code: its noCompletionCode events
+ * (`player`), which the network game example records while its prolificCode parameter is empty. From
+ * what the console has of the session's events: those its User JSON carries (`recorded`, eventData)
+ * and those pushed since (`live`, data).
+ */
+export function playersWithoutCode (
+  recorded: ReadonlyArray<EventItem | null | undefined> | null | undefined,
+  live: ReadonlyArray<LiveEvent | null | undefined> | null | undefined,
+): Set<string> {
+  const ids = new Set<string>()
+  const add = (player: unknown) => { if (player != null && player !== '') ids.add(String(player)) }
+  for (const e of recorded || []) {
+    if (e && e.name === 'noCompletionCode') add((e.eventData || []).find(d => d && d.name === 'player')?.value)
+  }
+  for (const e of live || []) {
+    if (e && e.name === 'noCompletionCode') add(e.data?.player)
+  }
+  return ids
+}
+
+/**
+ * Whether a Prolific participant counts as finished: they were given a completion code, or the game
+ * ended for them without one. Both of the Recruitment page's lists count them so.
+ */
+export function prolificFinished (p: { completed: boolean, finishedWithoutCode: boolean }): boolean {
+  return p.completed || p.finishedWithoutCode
 }
 
 /**
@@ -171,7 +208,7 @@ export function groupBySession (records: ProlificRecord[]): ProlificSessionGroup
     }
     g.records.push(r)
     g.joined++
-    if (r.completed || r.finishedWithoutCode) g.finished++
+    if (prolificFinished(r)) g.finished++
   }
   return [...groups.values()]
 }
