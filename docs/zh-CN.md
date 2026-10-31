@@ -54,7 +54,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 - 在 **Content** 页面顶部的语言栏（**Language**）点 **Chinese**（`zho`），写上译文（可以先点 **Copy from English**，再改成中文），保存后参与者就看到中文。
 - 还没翻译的文字，参与者看到的仍是英文，所以可以一段一段地翻译。
-- 参与者读哪种语言，由启动参数 `language` 决定，默认是你的 Default language。在 **Parameters** 页把它的 **Default** 改成 `eng`，参与者就都看英文。注意：**New session** 会照上一场填好启动参数，不会自动换成新的 Default。所以自己新建一场时，要在 `language` 下点 **Use default**，确认是 `eng`，再点 **Create session**。
+- 参与者读哪种语言，由启动参数 `language` 决定，默认是你的 Default language。要让参与者看英文，在 **Parameters** 页把 `language` 的 **Default** 改成 `eng`，自动运行以后开的场次就用英文。自己新建一场时要注意：**New session** 会照上一场填好启动参数，不会自动换成新的 Default，所以要在 `language` 下点 **Use default**，确认是 `eng`，再点 **Create session**。
 
 实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 
