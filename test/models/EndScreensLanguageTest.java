@@ -29,13 +29,13 @@ public class EndScreensLanguageTest {
         assertEquals("<h3>本场实验已结束</h3><p>因为研究出了问题，本场实验不得不停止。感谢你的参与。现在可以关闭这个页面；如果有任何问题，"
             + "请联系研究者。</p>", text(ScriptBoard.problemScreen(false, "zho")));
         assertTrue(text(ScriptBoard.problemScreen(true, "zho")).contains("你可以稍后从 Prolific 重新打开这项研究"));
-        assertEquals("<h3>本场实验已结束</h3><p>研究的服务器停止或重启了，所以本场实验结束了。你可以过几分钟从 Prolific 重新打开这项研究，"
+        assertEquals("<h3>本场实验已结束</h3><p>实验服务器停止或重启了，本场实验因此结束。你可以过几分钟从 Prolific 重新打开这项研究，"
             + "加入那时开放的一场。如果没有开放的场次，请在 Prolific 上退回这项研究；如果有任何问题，请在 Prolific 上给研究者发消息。</p>",
             text(ScriptBoard.serverStoppedScreen(true, "zho")));
         assertTrue(text(ScriptBoard.serverStoppedScreen(false, "zho")).contains("如果你收到过这项研究的链接，可以过几分钟再打开它"));
         assertEquals("<h3>实验在你不在时开始了</h3><p>实验开始时你的连接断了，所以实验没有等你就开始了，现在也不能再加入。"
             + "请在 Prolific 上退回这项研究，然后就可以关闭这个页面了。</p>", text(ScriptBoard.missedStartScreen(true, "zho")));
-        assertEquals("<h3>本场实验人数已满</h3><p>本场实验已经按人数上限开始了，没法再让你加入。现在可以关闭这个页面。如果有任何问题，"
+        assertEquals("<h3>本场实验人数已满</h3><p>本场实验人数已满，已经开始了，无法再让你加入。现在可以关闭这个页面。如果有任何问题，"
             + "请联系研究者。</p>", text(ScriptBoard.sessionFullScreen(false, null, "zho")));
         assertTrue(text(ScriptBoard.sessionFullScreen(true, null, "zho")).contains("请在 Prolific 上退回这项研究"));
         assertEquals("<h3>不在游戏里</h3><p>&lt;p1&gt; 现在不在本场的游戏里，所以没有可以显示的内容。预览不会把人加进游戏：参与者要从自己的页面加入。"
