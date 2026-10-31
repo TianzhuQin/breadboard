@@ -107,12 +107,18 @@ public class GameListener {
   /**
    * The game came to its end (a step's finish(), a waiting room giving up): its session is marked
    * finished, and the autopilot and the consoles hear of it. Not by a game whose engine a rebuild is
-   * replacing: its waiting room giving up as the engine was rebuilt finished the session the new one
-   * carries on.
+   * replacing (its waiting room giving up as the engine was rebuilt finished the session the new one
+   * carries on), nor in a session that was stopped: its game played on to its end by code that
+   * outlived the Stop (a participant's choice made as it ran, a task of its timers) finished it, so it
+   * could no longer be resumed.
    */
   public void finish() {
     if (this.engine != null && !ScriptBoard.inService(this.engine)) {
       play.Logger.info("The game of an engine that is being replaced came to its end; its session goes on in the new one");
+      return;
+    }
+    if (this.experimentInstance != null && this.experimentInstance.status == ExperimentInstance.Status.STOPPED) {
+      play.Logger.info("The game of session " + this.experimentInstance.id + ", which was stopped, came to its end; it stays stopped");
       return;
     }
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {

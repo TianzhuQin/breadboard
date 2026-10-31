@@ -848,6 +848,18 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  /**
+   * The game of the engine in service has ended (a researcher's Stop): its own tracker records
+   * nothing more, so nothing it still does lands after the event that ends it (a participant's choice
+   * made meanwhile, a task of its timers under way). Recording would only start again in a new engine.
+   */
+  private static void retireEngineTracker() {
+    Serving now = serving;
+    if (now != null) {
+      now.tracker.retire();
+    }
+  }
+
   /** Whether this engine is the one in service: built, and no rebuild of it has begun. */
   static boolean inService(ScriptEngine candidate) {
     Serving now = serving;
@@ -868,9 +880,10 @@ public class ScriptBoard extends UntypedActor {
     return failed;
   }
 
-  // Called at points of a rebuild of the engine, with their names: "cleaning" (it is about to empty
-  // the game of the engine it replaces) and "released" (it has let go of that engine's classes,
-  // EngineCleanup). A field only so tests can act in between, as a participant might.
+  // Called at points of a change of the engine, with their names: "cleaning" (a rebuild is about to
+  // empty the game of the engine it replaces), "released" (it has let go of that engine's classes,
+  // EngineCleanup) and "stopping" (a researcher's Stop has recorded sessionStopped, and is about to
+  // end the participants). A field only so tests can act in between, as a participant might.
   static volatile java.util.function.Consumer<String> changeHook = null;
 
   private static void changeStage(String stage) {
@@ -946,7 +959,7 @@ public class ScriptBoard extends UntypedActor {
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("results", results);
 
     // Its own tracker, which records into the session the server's records into, until the engine is
-    // replaced (retireEngine).
+    // replaced or its game ends (retireEngine, retireEngineTracker).
     EventTracker ownTracker = eventTracker.forEngine();
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("eventTracker", ownTracker);
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("gameListener", gameListener);
@@ -2480,9 +2493,13 @@ public class ScriptBoard extends UntypedActor {
                 engine.getBindings(ScriptContext.ENGINE_SCOPE).remove(p.name);
             }
           }
+          // Nothing its game still does is recorded after sessionStopped: a participant's choice made
+          // while this runs (their page holds the seat until endParticipants), a task of its timers.
+          retireEngineTracker();
           LinkedHashMap<Object, Object> stopped = new LinkedHashMap<Object, Object>();
           stopped.put("by", breadboardMessage.user.email);
           trackEvent("sessionStopped", stopped);
+          changeStage("stopping");
           // The computer players off before the timers stop, as a rebuild does: while they are on, a
           // pick asked for afterwards starts a timer of its own, so a takeover as the participants'
           // pages close (autopilot.handleDeparture) played the stopped game on, and its finish() made

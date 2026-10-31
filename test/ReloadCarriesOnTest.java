@@ -728,4 +728,29 @@ public class ReloadCarriesOnTest extends BaseTest {
         engine().eval("eventTracker.track('Leftover', [:]); null");
         assertEquals(1, events(game.session, "Leftover").size());
     }
+
+    @Test
+    public void choicesMadeWhileStopRunsAreNotRecordedAfterItAndTheStoppedGameCannotFinishTheSession() throws Exception {
+        final Rounds game = new Rounds(user("stop"), "Picks during a stop");
+        // Both pick once Stop has recorded sessionStopped, while their pages still hold their seats.
+        // Their picks and the next round's start used to be recorded after it.
+        final AtomicBoolean ran = atStage("stopping", 5000, () -> {
+            game.c1.send("MakeChoice", "choiceUID", game.uid1);
+            game.c2.send("MakeChoice", "choiceUID", game.uid2);
+        });
+        game.tab.send("StopGame", "id", game.session.id);
+        await("stopped", () -> ExperimentInstance.findById(game.session.id).status == ExperimentInstance.Status.STOPPED
+            && game.c1.closed && game.c2.closed);
+        settled();
+        assertTrue(ran.get());
+        assertTrue(actorFailures.toString(), actorFailures.isEmpty());
+        List<Event> stopped = events(game.session, "sessionStopped");
+        assertEquals(1, stopped.size());
+        assertEquals(Collections.emptyList(), recordedAfter(game.session, stopped.get(0)));
+
+        // Its game played on to its end, by code of it that outlived the Stop (a task of its timers under
+        // way, say), doesn't finish the session: it stays stopped, so it can be resumed.
+        engine().eval("roundStep.finish(); null");
+        assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(game.session.id).status);
+    }
 }

@@ -52,6 +52,9 @@ from the console waits for the new engine), its steps start, finish and fail not
 only logged, not recorded as `stepFailed`), its waiting room starts nothing and leaves nobody out,
 and its `eventTracker` records nothing more: each engine has its own, which records into the
 session until the engine is replaced. So nothing of the old game comes after `engineReloaded`.
+When a researcher stops the session, the engine's `eventTracker` stops before `sessionStopped` is
+recorded, and the stopped game, should a choice made as it stopped play it on, doesn't finish the
+session.
 
 ## What participants receive about others
 
