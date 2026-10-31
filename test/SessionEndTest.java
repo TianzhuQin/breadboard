@@ -11,6 +11,9 @@ import play.mvc.WebSocket;
 import security.ParticipantAuth;
 
 import javax.script.ScriptEngine;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +22,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.junit.Assert.*;
@@ -61,6 +66,10 @@ public class SessionEndTest extends BaseTest {
         ((Set<?>) field("endedPages").get(null)).clear();
         ParticipantAuth.reset();
         Recruitment.reset();
+        // (a server's stop's mark lasts as long as the process, which a real stop ends; how sessions
+        // ended is kept by their id)
+        ((Map<?, ?>) field("endingSessions").get(null)).clear();
+        ((Map<?, ?>) field("sessionEnds").get(null)).clear();
         ((EventTracker) field("eventTracker").get(null)).setExperimentInstance(null);
         try {
             engine().eval("autopilot.stop(); timers.cancel(); null");
@@ -213,6 +222,107 @@ public class SessionEndTest extends BaseTest {
         assertEquals("stopped", ended(connect("p1").frames.get(0)));
     }
 
+    // ---- the locks of a session's end -------------------------------------------------------------
+
+    /** The graph's structureLock (groovy/graph.groovy): held while a player or a tie is added or removed. */
+    private static Object structureLock() throws Exception {
+        Object g = engine().get("g");
+        Field f = g.getClass().getDeclaredField("structureLock");
+        f.setAccessible(true);
+        return f.get(g);
+    }
+
+    /**
+     * Whether a thread ending a participant (ScriptBoard.endParticipant) comes to wait for this lock
+     * within 30 seconds, as the caller holds it.
+     */
+    private static boolean endingWaitsFor(Object lock, ThreadMXBean threads) throws InterruptedException {
+        long until = System.currentTimeMillis() + 30000;
+        while (System.currentTimeMillis() < until) {
+            for (ThreadInfo info : threads.getThreadInfo(threads.getAllThreadIds(), Integer.MAX_VALUE)) {
+                if (info == null || info.getThreadState() != Thread.State.BLOCKED || info.getLockInfo() == null
+                    || info.getLockInfo().getIdentityHashCode() != System.identityHashCode(lock)) {
+                    continue;
+                }
+                for (StackTraceElement frame : info.getStackTrace()) {
+                    if (frame.getClassName().equals(ScriptBoard.class.getName()) && frame.getMethodName().equals("endParticipant")) {
+                        return true;
+                    }
+                }
+            }
+            Thread.sleep(10);
+        }
+        return false;
+    }
+
+    private static String describe(ThreadMXBean threads, long[] ids) {
+        StringBuilder sb = new StringBuilder();
+        for (ThreadInfo info : threads.getThreadInfo(ids, Integer.MAX_VALUE)) {
+            if (info == null) continue;
+            sb.append('"').append(info.getThreadName()).append("\" waits for ").append(info.getLockName())
+                .append(" held by \"").append(info.getLockOwnerName()).append("\"\n");
+            StackTraceElement[] stack = info.getStackTrace();
+            for (int i = 0; i < Math.min(30, stack.length); i++) sb.append("    at ").append(stack[i]).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * A Stop that comes while the game adds a tie. The tie is added under the graph's structureLock,
+     * and the graph's listeners update the two players' pages there and then (Client.updateGraph, under
+     * each one's Client monitor). The Stop looks each participant up in the graph (under structureLock)
+     * as it ends them: it used to do that holding their Client's monitor, so the two waited for each
+     * other for good, the engine's actor holding the engine lock, and every later Stop, launch, reload
+     * or selection hung until the server was restarted.
+     */
+    @Test
+    public void aStopThatComesWhileATieIsAddedEndsTheSessionWithoutADeadlock() throws Throwable {
+        Page first = connect("p1");
+        Page second = connect("p2");
+        final Object structureLock = structureLock();
+        final ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        final AtomicBoolean holding = new AtomicBoolean();
+        final AtomicBoolean stopWaited = new AtomicBoolean();
+        final AtomicReference<Throwable> failed = new AtomicReference<>();
+        Thread game = new Thread(() -> {
+            try {
+                synchronized (structureLock) {
+                    holding.set(true);
+                    // (until the Stop, ending a participant, wants the lock)
+                    stopWaited.set(endingWaitsFor(structureLock, threads));
+                    engine().eval("g.addEdge(g.getVertex('p1'), g.getVertex('p2')); null");
+                }
+            } catch (Throwable t) {
+                failed.set(t);
+            }
+        }, "session-end-test-game");
+        game.setDaemon(true);
+        game.start();
+        await("the game holds the lock", holding::get);
+        console.send("StopGame", "id", session.id);
+        long until = System.currentTimeMillis() + 45000;
+        while (game.isAlive() || !first.closed || !second.closed) {
+            long[] deadlocked = threads.findMonitorDeadlockedThreads();
+            if (deadlocked != null) {
+                fail("Deadlocked:\n" + describe(threads, deadlocked));
+            }
+            if (System.currentTimeMillis() > until) {
+                fail("The Stop didn't finish:\n" + describe(threads, new long[]{game.getId()}));
+            }
+            Thread.sleep(25);
+        }
+        assertNull(String.valueOf(failed.get()), failed.get());
+        assertTrue("the Stop waited for the graph's lock as it ended a participant", stopWaited.get());
+        assertNull(threads.findMonitorDeadlockedThreads());
+        assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(session.id).status);
+        assertEquals(first.frames.toString(), "stopped", ended(first.last()));
+        assertEquals(second.frames.toString(), "stopped", ended(second.last()));
+        assertEquals("the tie was added", Boolean.TRUE, engine().eval("g.hasEdge(g.getVertex('p1'), g.getVertex('p2'))"));
+        // and the engine answers the next request: its actor no longer holds the engine lock
+        ExperimentInstance next = launchSession(console, "After");
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(next.id).status);
+    }
+
     // ---- a researcher's Stop ----------------------------------------------------------------------
 
     @Test
@@ -321,6 +431,113 @@ public class SessionEndTest extends BaseTest {
         toldItWasStopped(pages);
     }
 
+    // ---- someone away when a rebuild carried the session on, back after its end -------------------
+
+    /** Until the change of the engine under way (a reload, a selection) is over: it holds the engine lock throughout. */
+    private static void afterTheEngineChange() throws Exception {
+        synchronized (field("REBUILD_LOCK").get(null)) {
+            // (nothing: the change has let go of the lock)
+        }
+    }
+
+    private static String text(JsonNode frame) {
+        return frame == null ? "" : frame.path("player").path("text").asText();
+    }
+
+    private static String code(JsonNode frame) {
+        return frame == null ? "" : frame.path("player").path("_system").path("recruitment").path("completionCode").asText();
+    }
+
+    /**
+     * bob (p1), carl (p2) and dana (p3) wait for the others; the experiment has given dana a completion
+     * code. carl and dana close their tabs. Then {@code rebuild} rebuilds the engine, carrying the
+     * session on, and bob's page comes back to it (returned).
+     */
+    private Page awayAsARebuildCarriesTheSessionOn(Callable<Void> rebuild) throws Throwable {
+        Page bob = connect("p1");
+        Page carl = connect("p2");
+        Page dana = connect("p3");
+        engine().eval("g.V.each { it.text = '<p>Waiting for the others</p>' }; def v = g.getVertex('p3'); "
+            + "recruitment.registerProlific(v); recruitment.completeProlific(v, [completionCode: 'C0DE42']); "
+            + "v.text = '<p>Thank you</p>'; null");
+        assertEquals("Waiting for the others", text(carl.lastPlayer()).replaceAll("<[^>]*>", ""));
+        assertEquals("C0DE42", code(dana.lastPlayer()));
+        carl.hangUp();
+        dana.hangUp();
+        rebuild.call();
+        await("rebuilt", () -> bob.closed && client("p1") == null);
+        afterTheEngineChange();
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertEquals("it carried on: nobody was told it ended", "", ended(bob.lastPlayer()));
+        Page back = connect("p1");
+        assertFalse(back.closed);
+        return back;
+    }
+
+    private Page awayAsAReloadCarriesTheSessionOn() throws Throwable {
+        return awayAsARebuildCarriesTheSessionOn(() -> {
+            console.send("ReloadEngine");
+            return null;
+        });
+    }
+
+    /** carl comes back: what his page gets first. dana gets her code back, whatever the end. */
+    private JsonNode whenCarlComesBack() throws Throwable {
+        assertEquals("C0DE42", code(connect("p3").frames.get(0)));
+        Page carl = connect("p2");
+        JsonNode first = carl.frames.get(0);
+        assertFalse(first.toString(), first.toString().contains("Waiting for the others"));
+        return first;
+    }
+
+    @Test
+    public void someoneAwayWhenAReloadCarriedTheSessionOnIsToldItWasStoppedWhenTheyComeBack() throws Throwable {
+        Page bob = awayAsAReloadCarriesTheSessionOn();
+        console.send("StopGame", "id", session.id);
+        await("bob told", () -> bob.closed);
+        assertEquals("stopped", ended(bob.last()));
+        // carl's page used to be given the waiting room as the rebuild left it: a session that looked
+        // live, whose buttons did nothing
+        JsonNode carl = whenCarlComesBack();
+        assertEquals(carl.toString(), "stopped", ended(carl));
+        assertTrue(text(carl), text(carl).contains("The researcher stopped this session"));
+        // Someone who never took part is told only that it has ended.
+        JsonNode stranger = connect("p9").frames.get(0);
+        assertEquals(stranger.toString(), "", ended(stranger));
+        assertTrue(text(stranger), text(stranger).contains("This session has ended"));
+    }
+
+    @Test
+    public void someoneAwayWhenTheRunningSessionWasSelectedAgainIsToldItEndedWhenItFinishedByItself() throws Throwable {
+        Page bob = awayAsARebuildCarriesTheSessionOn(() -> {
+            console.send("SelectInstance", "id", session.id);
+            return null;
+        });
+        // The game comes to its end by itself: its last step's finish(). Nobody's page is told anything
+        // by the server; the experiment shows its own end to those in the game.
+        engine().eval("g.getVertex('p1').text = '<p>The end</p>'; stepFactory.createStep('Last').finish(); null");
+        await("finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        assertFalse(bob.closed);
+        JsonNode carl = whenCarlComesBack();
+        assertTrue(carl.toString(), carl.path("player").path("finished").asBoolean());
+        assertTrue(text(carl), text(carl).contains("This session has ended"));
+    }
+
+    @Test
+    public void someoneAwayWhenAReloadCarriedTheSessionOnGetsTheServersStopScreenWhenTheyComeBack() throws Throwable {
+        // carl came from Prolific
+        java.util.LinkedHashMap<Object, Object> entry = new java.util.LinkedHashMap<>();
+        entry.put("clientId", "p2");
+        ScriptBoard.trackEvent("prolificEntry", entry);
+        Page bob = awayAsAReloadCarriesTheSessionOn();
+        assertEquals(session.id, ServerStop.endLiveSession());
+        assertTrue(bob.closed);
+        assertEquals("serverStopped", ended(bob.last()));
+        JsonNode carl = whenCarlComesBack();
+        assertEquals(carl.toString(), "serverStopped", ended(carl));
+        assertTrue(text(carl), text(carl).contains("open the study again from Prolific"));
+    }
+
     @Test
     public void aReloadThatCarriesTheSessionOnTellsNobodyItEnded() throws Throwable {
         Page participant = connect("p1");
@@ -332,5 +549,158 @@ public class SessionEndTest extends BaseTest {
         Page back = connect("p1");
         assertFalse(back.closed);
         assertNotNull(engine().eval("g.getVertex('p1')"));
+    }
+
+    // ---- a resumed session: how it ended before no longer stands ----------------------------------
+
+    /** The autopilot's launch, as it leaves out someone who has been away too long (as in ParticipantConnectionTest). */
+    private void leftOutAtStart(String clientId) throws Exception {
+        engine().eval("g.removePlayer('" + clientId + "'); null");
+        ScriptBoard.leftOutAtStart(clientId);
+        ExperimentInstance.findById(session.id).setHasStarted(Boolean.TRUE);
+    }
+
+    /** The console resumes the stopped session: until it runs again in the new engine. */
+    private void resume() throws Throwable {
+        afterTheEngineChange();
+        final ScriptEngine before = engine();
+        console.send("SelectInstance", "id", session.id);
+        await("resumed", () -> engine() != before
+            && ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.RUNNING);
+        afterTheEngineChange();
+    }
+
+    /**
+     * bob (p1) and carl (p2) wait, and a Stop tells them the session was stopped. It is resumed, and
+     * bob's page comes back to the new run and waits again; carl's doesn't. Then bob closes his tab,
+     * and a Reload engine carries the session on.
+     */
+    private void stoppedResumedThenAwayAtAReload() throws Throwable {
+        Page bob = connect("p1");
+        Page carl = connect("p2");
+        engine().eval("g.V.each { it.text = '<p>Waiting for the others</p>' }; null");
+        console.send("StopGame", "id", session.id);
+        await("both told", () -> bob.closed && carl.closed);
+        assertEquals("stopped", ended(bob.last()));
+        assertEquals("stopped", ended(carl.last()));
+        resume();
+        Page bobAgain = connect("p1");
+        assertFalse(bobAgain.closed);
+        engine().eval("g.V.each { it.text = '<p>Waiting again</p>' }; null");
+        assertEquals("Waiting again", text(bobAgain.lastPlayer()).replaceAll("<[^>]*>", ""));
+        bobAgain.hangUp();
+        final ScriptEngine beforeReload = engine();
+        console.send("ReloadEngine");
+        await("reloaded", () -> engine() != beforeReload);
+        afterTheEngineChange();
+        assertEquals("it carried on", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+    }
+
+    @Test
+    public void whoeverIsAwayWhenAResumedSessionEndsWithTheServerGetsTheServersStopScreenNotTheEarlierStop() throws Throwable {
+        // carl came from Prolific
+        java.util.LinkedHashMap<Object, Object> entry = new java.util.LinkedHashMap<>();
+        entry.put("clientId", "p2");
+        ScriptBoard.trackEvent("prolificEntry", entry);
+        stoppedResumedThenAwayAtAReload();
+        assertEquals(session.id, ServerStop.endLiveSession());
+        // Both used to be given the screen of the Stop before the Resume: "The researcher stopped this
+        // session. If they start it again, open the link you were given once more."
+        for (String away : new String[]{"p1", "p2"}) {
+            JsonNode back = connect(away).frames.get(0);
+            assertEquals(back.toString(), "serverStopped", ended(back));
+            assertTrue(text(back), text(back).contains("server was stopped"));
+        }
+        // in the words for Prolific to carl
+        assertTrue(text(connect("p2").frames.get(0)).contains("open the study again from Prolific"));
+        assertFalse(text(connect("p1").frames.get(0)).contains("Prolific"));
+    }
+
+    @Test
+    public void whoeverIsAwayWhenTheAutopilotsGuardEndsAResumedSessionGetsItsScreenNotTheEarlierStop() throws Throwable {
+        stoppedResumedThenAwayAtAReload();
+        // The autopilot's guard for the longest session ends it (Autopilot.endTooLong), through
+        // ScriptBoard.endForGuard, called here without the autopilot's settings and clock.
+        java.lang.reflect.Method guard = ScriptBoard.class.getDeclaredMethod("endForGuard", Long.class, String.class,
+            java.util.LinkedHashMap.class, ObjectNode.class, boolean.class, Callable.class);
+        guard.setAccessible(true);
+        java.lang.reflect.Method outOfTime = ScriptBoard.class.getDeclaredMethod("outOfTimeScreen");
+        outOfTime.setAccessible(true);
+        Callable<Boolean> stillWanted = () -> true;
+        assertEquals(Boolean.TRUE, guard.invoke(null, session.id, "sessionTooLong", new java.util.LinkedHashMap<Object, Object>(),
+            outOfTime.invoke(null), true, stillWanted));
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
+        // (it is how the session ended for its participants: the Stop's screen from before the Resume
+        // used to come first)
+        for (String away : new String[]{"p1", "p2"}) {
+            JsonNode back = connect(away).frames.get(0);
+            assertEquals(back.toString(), "outOfTime", ended(back));
+            assertTrue(text(back), text(back).contains("ran out of time"));
+        }
+    }
+
+    @Test
+    public void whoeverIsAwayWhenAResumedSessionFinishesByItselfIsToldItEnded() throws Throwable {
+        stoppedResumedThenAwayAtAReload();
+        engine().eval("stepFactory.createStep('Last').finish(); null");
+        await("finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        // (the Stop's screen from before the Resume, too, which said the researcher had stopped it)
+        for (String away : new String[]{"p1", "p2"}) {
+            JsonNode back = connect(away).frames.get(0);
+            assertEquals(back.toString(), "", ended(back));
+            assertTrue(text(back), text(back).contains("This session has ended"));
+        }
+    }
+
+    @Test
+    public void whoeverIsntBackWhenAResumedSessionEndsIsToldHowItEndedThisTime() throws Throwable {
+        // bob (p1) and carl (p2) wait, the experiment has given erin (p4) a completion code, and dana
+        // (p3) was away too long as the game started, which went ahead without her.
+        Page bob = connect("p1");
+        Page carl = connect("p2");
+        Page dana = connect("p3");
+        Page erin = connect("p4");
+        engine().eval("def v = g.getVertex('p4'); recruitment.registerProlific(v); "
+            + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
+        dana.hangUp();
+        leftOutAtStart("p3");
+        console.send("StopGame", "id", session.id);
+        await("told", () -> bob.closed && carl.closed && erin.closed);
+        afterTheEngineChange();
+        assertEquals("stopped", ended(connect("p2").frames.get(0)));
+        assertEquals("missedStart", ended(connect("p3").frames.get(0)));
+        resume();
+        // Only bob comes back to the new run, and the server's stop ends it.
+        Page bobAgain = connect("p1");
+        assertFalse(bobAgain.closed);
+        assertEquals(session.id, ServerStop.endLiveSession());
+        assertEquals("serverStopped", ended(bobAgain.last()));
+        // carl's page used to be given the Stop's screen from before the Resume, and dana's that the
+        // session started without her, though it started again from the beginning.
+        for (String away : new String[]{"p2", "p3"}) {
+            JsonNode back = connect(away).frames.get(0);
+            assertEquals(back.toString(), "serverStopped", ended(back));
+        }
+        // Her own end stays hers: the code.
+        assertEquals("C0DE42", code(connect("p4").frames.get(0)));
+    }
+
+    @Test
+    public void theRunningSessionSelectedAgainKeepsTheScreenOfSomeoneTheGameStartedWithout() throws Throwable {
+        // Not a Resume: the session never ended, and the screen that tells dana (p3) the game went ahead
+        // without her is hers, kept by the rebuild (keptAtRebuild) and by the session's end.
+        Page bob = connect("p1");
+        Page dana = connect("p3");
+        dana.hangUp();
+        leftOutAtStart("p3");
+        console.send("SelectInstance", "id", session.id);
+        await("rebuilt", () -> bob.closed && client("p1") == null);
+        afterTheEngineChange();
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        console.send("StopGame", "id", session.id);
+        await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
+        afterTheEngineChange();
+        JsonNode back = connect("p3").frames.get(0);
+        assertEquals(back.toString(), "missedStart", ended(back));
     }
 }

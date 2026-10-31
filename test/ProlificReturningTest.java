@@ -113,8 +113,13 @@ public class ProlificReturningTest extends BaseTest {
     }
 
     /**
-     * The session's connection events all in one millisecond, as back-to-back ones often are: their
-     * order is then the order they were recorded in, which their ids give (see conf/ebean.properties).
+     * The session's connection events all in one millisecond, as back-to-back ones often are, on every
+     * run: what these tests find doesn't hang on whether two of them happened to share one. Within it,
+     * the order is that of their ids, which follow the order they were recorded in
+     * (conf/ebean.properties). That order is DataExportTest's to guard
+     * (eventsOfTheSameMillisecondComeOutInTheOrderTheyWereRecorded): ids given out the wrong way round,
+     * as before that fix, swapped a pair here only when it straddled the point where H2's hash order of
+     * a batch of ids wraps around (…, 40, 21, …), so this class would catch that only now and then.
      */
     private static void inOneMillisecond(ExperimentInstance session) {
         com.avaje.ebean.Ebean.createSqlUpdate("update events set datetime = :t where experiment_instance_id = :session"
@@ -280,7 +285,8 @@ public class ProlificReturningTest extends BaseTest {
         assertEquals(SEE_OTHER, status(enter("PIDLEFT")));
         connection(seat(left, "PIDLEFT"), true);
         connection(seat(left, "PIDLEFT"), false);
-        // (back to back they often share a millisecond: a CI run failed here when they did)
+        // (in one millisecond, as back-to-back events often are: a CI run failed here when they were,
+        // with their ids the wrong way round; see inOneMillisecond)
         inOneMillisecond(left);
         finishGame(left);
         // ... and the autopilot gave up waiting for enough people in the next: its game never started.

@@ -24,12 +24,16 @@ see [docs/install.md](docs/install.md#upgrading).
   for uptime monitors.
 - A stop that hangs ends after 20 seconds, and the database is always closed properly at the end of
   a stop, so nothing committed in its last moments is lost.
+- Stopping the server ends the running session's game first (nothing plays on behind its
+  participants), and their pages say what to do: open the study's link again in a few minutes, or,
+  for Prolific participants, open the study again from Prolific or return it.
 - The launchers work behind a proxy set in `http_proxy` (common in China), accept `JAVA8_HOME` as
   the folder Finder shows for a JDK, say when the port is taken (and by Breadboard itself, if so),
   and no longer hold participants up when the server's window stops taking output (a click in a
   Windows console, Ctrl+S in a terminal). The Windows launcher refuses to run from inside the zip.
 - On a new server, the first account can be created from another computer (or through a proxy) only
-  with the setup code the server prints in its window and log.
+  with the setup code the server prints in its window and log. It can be created as soon as the
+  server answers; the setup page waits by itself while the server is still starting.
 - Automatic backups of the database while the server runs: every day and before an upgrade, the
   newest 14 kept in `backups/`. Settings → Backups lists them, backs up on request and downloads
   them; [docs/install.md](docs/install.md#backups) says how to go back to one.
@@ -56,6 +60,9 @@ see [docs/install.md](docs/install.md#upgrading).
 - Sessions that were running when the server stopped are marked Stopped when it starts again, with
   a `sessionInterrupted` event, and the autopilot opens the next one; participants' pages stop
   reconnecting and say the session isn't running. Resume starts a stopped session's game again.
+- A resumed session's steps load with its launch parameters, as do those of a session that a reload
+  of the engine carries on: a waiting room sized by them no longer falls back to the experiment's
+  defaults.
 - Prolific participants who already took part are shown their completion code again instead of
   being given a second seat, also after a restart.
 - The autopilot opens no new session while the disk that holds the database is almost full.
@@ -79,9 +86,16 @@ see [docs/install.md](docs/install.md#upgrading).
 - People away for a moment as the game starts keep their seat (the computer plays it until they are
   back); someone away longer sees that the session went ahead without them. A drop of a few seconds
   in the waiting room no longer restarts the wait.
+- However a session ends (Stop, a new session or a reload that replaces it, the autopilot, the
+  server's stop), every participant's page shows how it ended and stops reconnecting, also a page
+  that comes back later after missing a reload of the engine: never a game that no longer answers.
+  A completion code on screen stays. Ending a session never holds up the engine, even as the game
+  changes the network.
 - A researcher's preview of a participant only watches: their own page is never disturbed, and if
   they leave, the computer takes over as usual. Previews of the test players a researcher creates
-  still play them.
+  still play them. In a real session, a preview of someone who isn't in the game says "Not in the
+  game" and adds nobody, and a preview never counts as a participant being there, also after a
+  Resume or a reload of the engine.
 - The study's shared link asks a browser that already has a seat whether to continue as that person
   or join as someone else, so a study can be tried in several tabs of one browser.
 - Identical updates are no longer sent again, which helps weak connections keep up.
@@ -98,6 +112,7 @@ see [docs/install.md](docs/install.md#upgrading).
   previous console too).
 - Sessions & data: **Download all data**, every listed session's events in one file, each row with
   its session and launch parameters.
+- Events recorded in the same millisecond keep their order in the data; they could swap places.
 - The console says where computers on the same network reach the server, wherever it shows
   participant links while it was opened at localhost (links that work on this computer only).
 - Help in the menu under your email: the console's guide, the Chinese quick start, troubleshooting.

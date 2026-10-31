@@ -17,8 +17,16 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
 
   // Held while a player or a tie is added or removed. TinkerGraph keeps them in plain HashMaps, and
   // participants join on their own socket threads: two joining at the same moment could lose one of
-  // them for good. The listeners these changes call (the consoles' and the pages' updates) take no
-  // lock that anyone holds while waiting for this one.
+  // them for good.
+  //
+  // The lock order, kept by all of the server's code: this lock first, a participant's Client after
+  // it (the monitor of models.Client, which its updateGraph, showTo and end hold, and
+  // ScriptBoard.endParticipant). A change made under this lock calls the graph's listeners right
+  // there, on the same thread: the consoles' updates and, with event-based updates
+  // (breadboard.clientUpdateRate=0), the pages of the players it touches (Client.updateGraph). So
+  // nothing may wait for this lock while it holds a Client's monitor, or a socket's, which those
+  // listeners take too: a player is looked up first (getPlayer below, ScriptBoard.playerVertex), and
+  // the monitor taken after. Blueprints' TinkerGraph and EventGraph take no lock of their own.
   private final Object structureLock = new Object()
 
   public BreadboardGraph(baseGraph, eventTracker) {
