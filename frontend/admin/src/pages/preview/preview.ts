@@ -163,10 +163,13 @@ export function autoPicked<T extends PlayerLike> (players: readonly T[]): T[] {
  * When the first look at a session is taken: once its network has been quiet this long. The server
  * sends each player before their properties (testmode among them), so a look taken while the
  * network comes in, as on a direct load of the page or a reload, found no test players, or only
- * some of them.
+ * some of them. A page that opens on a network quiet this long already takes it at once.
  */
 export const FIRST_LOOK_QUIET_MS = 300
-/** …or this long after the first players were seen, at the latest, in a network that keeps changing. */
+/**
+ * …or this long after the first players were seen, at the latest, in a network that keeps changing.
+ * A network sent this long before the page opened has come in: the look is taken at once.
+ */
 export const FIRST_LOOK_MAX_MS = 2000
 
 // ---- addresses --------------------------------------------------------------------------------

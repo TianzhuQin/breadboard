@@ -351,6 +351,59 @@ describe('PreviewPage', () => {
     }
   })
 
+  // Opened from the sidebar, the page finds the network in already. The look still waited
+  // FIRST_LOOK_QUIET_MS, so "Choose whose page to see" showed first (and the list stayed open above
+  // the previews on a phone).
+  it('shows the test players at once when the page opens on a network that has come in', async () => {
+    addPlayer('p1')
+    addPlayer('t1', { testmode: true })
+    await settle()
+    // quiet since, as long as the look would wait
+    await new Promise(r => setTimeout(r, FIRST_LOOK_QUIET_MS))
+    const w = await mountPage()
+    try {
+      expect(previewMemory.ids).toEqual(['t1'])
+      expect(w.findAll('.pt')).toHaveLength(1)
+      expect(w.text()).not.toContain('Choose whose page to see')
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('shows the test players at once in a game that never stops changing, when its network came in a while before', async () => {
+    addPlayer('t1', { testmode: true })
+    addPlayer('p2', { _system: { connected: true } })
+    await settle()
+    // sent when the console connected, longer ago than the first look ever waits …
+    store.graph.clearedAt = Date.now() - FIRST_LOOK_MAX_MS
+    // … and changing all the time since
+    const tick = () => store.graph.apply({ action: 'nodePropertyChanged', id: 'p2', key: 'clock', value: Date.now() })
+    tick()
+    const ticker = setInterval(tick, 50)
+    const w = await mountPage()
+    try {
+      expect(previewMemory.ids).toEqual(['t1'])
+    } finally {
+      clearInterval(ticker)
+      w.unmount()
+    }
+  })
+
+  it('waits for a network sent just as the page opens, which may still be coming in', async () => {
+    // (the server sends it again when the console connects: a reload, say)
+    store.graph.clear()
+    addPlayer('p1')
+    addPlayer('t1', { testmode: true })
+    const w = await mountPage()
+    try {
+      expect(previewMemory.ids).toEqual([])
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1'])
+    } finally {
+      w.unmount()
+    }
+  })
+
   it('takes the first look when the first test players appear, and only once', async () => {
     addPlayer('p1')
     await settle()
@@ -375,9 +428,9 @@ describe('PreviewPage', () => {
   })
 
   it('leaves the first look to the researcher once they have chosen', async () => {
+    // (sent as the page opens, so the look waits for the network to be quiet)
     addPlayer('p1')
     addPlayer('t1', { testmode: true })
-    await settle()
     const w = await mountPage()
     try {
       // ticked before the network had been quiet long enough
@@ -437,7 +490,8 @@ describe('PreviewPage', () => {
 
   // On a narrow screen the list sits above the previews. Once the first look has chosen players it
   // folds away, so the previews come first. (It stayed open: the first look comes a moment after the
-  // page opens, and the list was folded only when the page opened with previews chosen.)
+  // page opens on a direct load, and the list was folded only when the page opened with previews
+  // chosen.)
   it('folds the list away on a narrow screen once the first look has chosen players', async () => {
     vi.stubGlobal('matchMedia', (q: string) => ({ matches: q === '(max-width: 900px)', media: q, addEventListener () {}, removeEventListener () {} }))
     const mounted: any[] = []
@@ -455,11 +509,16 @@ describe('PreviewPage', () => {
       expect(expanded).toBe(w.find('.pv__side').classes().includes('is-collapsed') ? 'false' : 'true')
       return expanded === 'false'
     }
-    try {
+    // the server sends the network as the page opens (a direct load, or a reload)
+    const sendNetwork = () => {
+      store.graph.clear()
       addPlayer('t1', { testmode: true })
       addPlayer('t2', { testmode: true })
       addPlayer('p3')
-      await settle()
+    }
+    const fresh = () => Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false })
+    try {
+      sendNetwork()
       const w = await open()
       expect(folded(w)).toBe(false)
       await firstLook()
@@ -473,27 +532,36 @@ describe('PreviewPage', () => {
       expect(folded(w1)).toBe(true)
       close(w1)
 
-      // a list the researcher has closed and opened again meanwhile stays as they left it
-      Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false })
+      // opened (from the sidebar, say) on a network that has come in: the look and the fold at once
+      fresh()
       const w2 = await open()
-      await w2.find('.pv__side-toggle').trigger('click')
-      expect(folded(w2)).toBe(true)
-      await w2.find('.pv__side-toggle').trigger('click')
-      expect(folded(w2)).toBe(false)
-      await firstLook()
       expect(previewMemory.ids).toEqual(['t1', 't2'])
-      expect(folded(w2)).toBe(false)
+      expect(folded(w2)).toBe(true)
       close(w2)
 
-      // from the player panel: folded at once, under that player's full-size view
-      Object.assign(previewMemory, { instanceId: null, ids: [], autoPicked: false })
-      route.query = { player: 'p3' }
+      // a list the researcher has closed and opened again meanwhile stays as they left it
+      fresh()
+      sendNetwork()
       const w3 = await open()
-      expect(previewMemory.ids).toEqual(['p3'])
+      await w3.find('.pv__side-toggle').trigger('click')
       expect(folded(w3)).toBe(true)
+      await w3.find('.pv__side-toggle').trigger('click')
+      expect(folded(w3)).toBe(false)
+      await firstLook()
+      expect(previewMemory.ids).toEqual(['t1', 't2'])
+      expect(folded(w3)).toBe(false)
+      close(w3)
+
+      // from the player panel: folded at once, under that player's full-size view
+      fresh()
+      sendNetwork()
+      route.query = { player: 'p3' }
+      const w4 = await open()
+      expect(previewMemory.ids).toEqual(['p3'])
+      expect(folded(w4)).toBe(true)
       await firstLook()
       expect([...previewMemory.ids].sort()).toEqual(['p3', 't1', 't2'])
-      expect(folded(w3)).toBe(true)
+      expect(folded(w4)).toBe(true)
     } finally {
       for (const w of mounted) w.unmount()
       vi.unstubAllGlobals()

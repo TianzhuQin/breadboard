@@ -431,13 +431,17 @@ async function openTab (id: string) {
 
 // A new session starts from a clean slate. The first look at it shows its test players, as the old
 // Testing panel did (but not those whose seat is connected: see autoPicked), however the page was
-// reached. It waits until the network has come in (FIRST_LOOK_QUIET_MS): the server sends each
-// player before their properties, so a look taken at the first players seen found no test players
-// on a direct load or a reload. A session without test players gets its first look when the first
-// ones appear. Whatever the researcher chooses first (a tick, a quick pick, Clear) is the first look;
-// a player opened from the player panel isn't (the test players are shown beside them).
+// reached. It is taken once the network has come in: the server sends each player before their
+// properties, so a look taken at the first players seen found no test players on a direct load or a
+// reload. There it waits until the network has been quiet a moment (FIRST_LOOK_QUIET_MS), but when
+// the page opens on a network that came in before (from the sidebar, say), it is taken at once.
+// A session without test players gets its first look when the first ones appear. Whatever the
+// researcher chooses first (a tick, a quick pick, Clear) is the first look; a player opened from the
+// player panel isn't (the test players are shown beside them).
 let firstLookTimer: ReturnType<typeof setTimeout> | null = null
 let firstPlayersAt = 0
+/** The watch below hasn't run yet: what it first finds was there when the page opened. */
+let opening = true
 function cancelFirstLook () {
   if (firstLookTimer) clearTimeout(firstLookTimer)
   firstLookTimer = null
@@ -460,6 +464,8 @@ function takeFirstLook () {
   foldPicker()
 }
 watch(() => [inst.value?.id, graph.version.value] as const, ([id]) => {
+  const opened = opening
+  opening = false
   if (id == null) return
   if (memory.instanceId !== id) {
     memory.instanceId = id
@@ -470,11 +476,18 @@ watch(() => [inst.value?.id, graph.version.value] as const, ([id]) => {
     cancelFirstLook()
   }
   if (memory.autoPicked || !players.value.length) return
-  // each change of the network puts the look off a little, but not for longer than FIRST_LOOK_MAX_MS
   const now = Date.now()
   if (!firstPlayersAt) firstPlayersAt = now
   if (firstLookTimer) clearTimeout(firstLookTimer)
-  firstLookTimer = setTimeout(takeFirstLook, Math.max(0, Math.min(FIRST_LOOK_QUIET_MS, firstPlayersAt + FIRST_LOOK_MAX_MS - now)))
+  firstLookTimer = null
+  // Each change of the network puts the look off until it has been quiet a moment, but not for
+  // longer than FIRST_LOOK_MAX_MS. A network sent longer ago than that when the page opened had come
+  // in by then, though it may never be quiet in a game.
+  const wait = opened && now - graph.clearedAt >= FIRST_LOOK_MAX_MS
+    ? 0
+    : Math.min(FIRST_LOOK_QUIET_MS - (now - graph.changedAt), firstPlayersAt + FIRST_LOOK_MAX_MS - now)
+  if (wait > 0) firstLookTimer = setTimeout(takeFirstLook, wait)
+  else takeFirstLook()
 }, { immediate: true })
 onBeforeUnmount(cancelFirstLook)
 
