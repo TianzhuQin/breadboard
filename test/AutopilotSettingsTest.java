@@ -75,6 +75,23 @@ public class AutopilotSettingsTest extends BaseTest {
         Field builtFor = ScriptBoard.class.getDeclaredField("engineBuiltFor");
         builtFor.setAccessible(true);
         builtFor.set(null, null);
+        // Nor is an earlier test's session the autopilot's.
+        for (String name : new String[]{"ownSession", "openedSession"}) {
+            Field f = Autopilot.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(null, null);
+        }
+    }
+
+    /**
+     * The autopilot's own session, as when the engine actor has carried out its launch
+     * (Autopilot.launchCarriedOut): a researcher who ends it pauses the autopilot. (Ending a session
+     * a researcher opened by hand doesn't.)
+     */
+    private static void itsSession(ExperimentInstance instance) throws Exception {
+        java.lang.reflect.Method m = Autopilot.class.getDeclaredMethod("launchCarriedOut", Long.class);
+        m.setAccessible(true);
+        m.invoke(null, instance.id);
     }
 
     /** As a restart does: paused and done are gone from memory (the database keeps them). */
@@ -546,13 +563,21 @@ public class AutopilotSettingsTest extends BaseTest {
         s.put("continuous", false);
         post(user, s);
         awaitOpens(opened, 4);   // saving with it on asks again (no session of it is open)
+        // A session of its experiment that a researcher opened by hand finishes: that wasn't its one
+        // session, which opens after the pause. (It used to be counted as its one session, and called so.)
+        Autopilot.sessionFinished(ExperimentInstance.findById(session.id));
+        awaitOpens(opened, 5);
+        assertEquals("session first finished", opened.get(4));
+        assertFalse(json(get(user)).get("status").get("done").asBoolean());
+        // Its own session finishes.
+        itsSession(session);
         Autopilot.sessionFinished(ExperimentInstance.findById(session.id));
         Thread.sleep(300);
-        assertEquals(4, opened.size());
+        assertEquals(5, opened.size());
         // That was its one session: the periodic check leaves it at that, and says why.
         watchdog();
         Thread.sleep(100);
-        assertEquals(4, opened.size());
+        assertEquals(5, opened.size());
         assertTrue(json(get(user)).get("status").get("problem").asText().contains("has finished"));
     }
 
@@ -618,6 +643,7 @@ public class AutopilotSettingsTest extends BaseTest {
 
         // A researcher stopped its session: paused until the next save.
         ExperimentInstance ours = live("ours", experiment);
+        itsSession(ours);
         runInEngine(ours, user);
         ours.status = ExperimentInstance.Status.STOPPED;
         ours.save();
@@ -662,6 +688,7 @@ public class AutopilotSettingsTest extends BaseTest {
 
         // Paused by a researcher: a session that finishes then schedules nothing, and none is shown as due.
         ExperimentInstance ours = live("ours", experiment);
+        itsSession(ours);
         stoppedBy(ExperimentInstance.findById(ours.id), user);
         Autopilot.sessionFinished(ExperimentInstance.findById(ours.id));
         assertEquals(0L, due.get(null));
@@ -726,6 +753,7 @@ public class AutopilotSettingsTest extends BaseTest {
 
         // A researcher stopped its session: paused, and kept.
         ExperimentInstance ours = live("ours", experiment);
+        itsSession(ours);
         stoppedBy(ExperimentInstance.findById(ours.id), user);
         assertNotNull(AutopilotSettings.loadHalt());
 

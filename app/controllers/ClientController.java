@@ -49,7 +49,7 @@ public class ClientController extends Controller
         if (!returning && (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING)) {
           // Mechanical Turk workers are asked to return the HIT; everyone else gets the general notice.
           return ok(experimentInstance != null && experimentInstance.getHit() != null
-              ? amtError.render() : ClientLogin.notRunning(experimentId, experimentInstanceId));
+              ? amtError.render() : ClientLogin.notRunning(experimentId, experimentInstanceId, clientId));
         }
 
         // A signed invitation link claims the seat, then redirects to the plain page URL so the
@@ -374,7 +374,8 @@ public class ClientController extends Controller
     private static void refuse(String experimentId, String experimentInstanceId, String clientId, WebSocket.Out<JsonNode> out) {
         Logger.debug("Refused websocket for client " + clientId + " in instance " + experimentInstanceId + ": no valid token");
         try {
-            out.write(ScriptBoard.runsSession(experimentId, experimentInstanceId) ? signInAgain() : notRunningScreen(experimentId, experimentInstanceId));
+            out.write(ScriptBoard.runsSession(experimentId, experimentInstanceId) ? signInAgain()
+                : notRunningScreen(experimentId, experimentInstanceId, clientId));
         } catch (RuntimeException e) {
             // (then closed without a word, as before)
             Logger.debug("Could not tell client " + clientId + " why its websocket was refused: " + e);
@@ -386,12 +387,14 @@ public class ClientController extends Controller
     /**
      * The last screen of a page whose session the engine doesn't run (any more), with the words a
      * reload of the page shows (index: the notice for a Mechanical Turk HIT, for a session that
-     * doesn't exist, or ClientLogin.notRunning()), marked finished and ended like the screens of
-     * sessions that have ended. Under "sessionOver", not "player": pages from before 3.1 (and the
-     * AngularJS client) render every player frame, and a completion code on their screen would be
-     * replaced; they ignore this and go on retrying quietly, as they did.
+     * doesn't exist, for one a restart of the server cut short (ScriptBoard.serverStoppedScreen, in
+     * the words for Prolific to {@code clientId} if they came from there), or ClientLogin.notRunning()),
+     * marked finished and ended like the screens of sessions that have ended. Under "sessionOver", not
+     * "player": pages from before 3.1 (and the AngularJS client) render every player frame, and a
+     * completion code on their screen would be replaced; they ignore this and go on retrying quietly,
+     * as they did.
      */
-    static ObjectNode notRunningScreen(String experimentId, String experimentInstanceId) {
+    static ObjectNode notRunningScreen(String experimentId, String experimentInstanceId, String clientId) {
         String[] words;
         ExperimentInstance instance = null;
         try {
@@ -401,6 +404,10 @@ public class ClientController extends Controller
             words = ClientLogin.AMT_NOT_RUNNING;
         } else if (!ClientLogin.sessionExists(experimentId, experimentInstanceId)) {
             words = ClientLogin.INVALID_LINK;
+        } else if (ScriptBoard.interruptedByRestart(experimentInstanceId)) {
+            ObjectNode frame = Json.newObject();
+            frame.put("sessionOver", ScriptBoard.serverStoppedScreen(ScriptBoard.enteredFromProlific(instance.id, clientId)));
+            return frame;
         } else {
             words = ClientLogin.NOT_RUNNING;
         }

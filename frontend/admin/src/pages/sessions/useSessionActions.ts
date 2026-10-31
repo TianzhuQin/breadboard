@@ -94,7 +94,7 @@ export function useSessionActions () {
     if (!connected()) return false
     // Stopping the autopilot's session pauses the autopilot (the server's Autopilot.sessionStopped).
     // The sessions listed here are the selected experiment's.
-    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: s.id, experimentId: admin.experiment?.id }, admin.user?.engine?.sessionId)
+    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: s.id })
     const ok = await confirm({
       title: `Stop “${s.name}”?`,
       message: (admin.instance?.id === s.id

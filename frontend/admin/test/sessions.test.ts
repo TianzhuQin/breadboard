@@ -514,6 +514,27 @@ describe('useSessionActions', () => {
     }
   })
 
+  it('does not say that stopping a session of its experiment opened by hand pauses the autopilot', async () => {
+    // The engine runs "pilot 2", which a researcher opened by hand: not the autopilot's (status.instance
+    // names its own alone), so the server doesn't pause it when that session is stopped.
+    httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
+      ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: null } }
+      : null)
+    store.admin.user = { engine: { experimentId: 5, experimentName: 'Trust game', sessionId: 2, sessionName: 'pilot 2', owner: 'r@lab.org' } }
+    store.actions.stopInstance.mockImplementationOnce(async () => {
+      store.admin.experiment.instances[1].status = 'STOPPED'
+      return { user: {} }
+    })
+    try {
+      expect(await actionsApi.stop(store.admin.experiment.instances[1])).toBe(true)
+      expect(ui.confirm.mock.calls[0][0].message).not.toMatch(/autopilot/i)
+      expect(ui.notify.success).toHaveBeenCalledWith('Stopped “pilot 2”', expect.not.stringMatching(/autopilot/i))
+    } finally {
+      httpMod.http.get.mockReset()
+      store.admin.user = null
+    }
+  })
+
   it('refuses to queue session changes while disconnected', async () => {
     store.connectionState.value = 'retrying'
     expect(await actionsApi.stop(store.admin.experiment.instances[1])).toBe(false)

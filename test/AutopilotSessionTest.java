@@ -53,7 +53,7 @@ public class AutopilotSessionTest extends BaseTest {
         Field launch = Autopilot.class.getDeclaredField("launchRequestedAt");
         launch.setAccessible(true);
         launch.set(null, 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession"}) {
             Field f2 = Autopilot.class.getDeclaredField(name);
             f2.setAccessible(true);
             f2.set(null, null);
@@ -266,6 +266,13 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals(1, failed.size());
         assertEquals("finishStep", value(failed.get(0), "step"));
         assertTrue(value(failed.get(0), "error"), value(failed.get(0), "error").startsWith("line 3: No such property: roundz"));
+        // and that the autopilot ended the session for it: where, and what went wrong there
+        List<Event> ended = events(session, "sessionFailed");
+        assertEquals(1, ended.size());
+        assertEquals("finishStep", value(ended.get(0), "step"));
+        assertEquals("3", value(ended.get(0), "line"));
+        assertTrue(value(ended.get(0), "error"), value(ended.get(0), "error").startsWith("No such property: roundz"));
+        assertTrue("after the failure", ended.get(0).id > failed.get(0).id);
         assertNull("the link leads nowhere now", Autopilot.openInstance(experiment.id));
 
         // Not even the watchdog opens another until Resume
@@ -334,14 +341,15 @@ public class AutopilotSessionTest extends BaseTest {
         final ExperimentInstance session = sessions(experiment).get(0);
 
         tab.send("RunGame");
-        // As processScript tells of an error, from the step: the Live session page shows it.
+        // As processScript tells of an error, from the step, which it names: the Live session page shows it.
         await("the error on the console", () -> tab.count(f -> f.has("error") && f.has("source")
             && "finishStep".equals(f.get("source").asText()) && f.get("error").asText().startsWith("Caught error: ")
-            && f.get("error").asText().contains("roundz")) == 1);
+            && f.get("error").asText().contains("roundz") && "finishStep".equals(f.path("step").asText())) == 1);
         await("the event", () -> events(session, "stepFailed").size() == 1);
         Thread.sleep(500);
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
         assertFalse(state(researcher).get("status").get("paused").asBoolean());
+        assertEquals(0, events(session, "sessionFailed").size());
     }
 
     private static ExperimentInstance named(Experiment experiment, String name) {
@@ -349,6 +357,38 @@ public class AutopilotSessionTest extends BaseTest {
             if (name.equals(i.name)) return i;
         }
         return null;
+    }
+
+    @Test
+    public void anErrorAStepGivesAsItLoadsOrRunsNamesThatStep() throws Exception {
+        final User researcher = user("named");
+        final Experiment experiment = createExperiment("Names its step");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { }");
+        // valid Groovy, but "five" is not defined: it fails as the step loads
+        createStep(experiment, "RoundStep", "SEATS = 2\nROUNDS = five");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(researcher.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", experiment.id);
+        await("the error of the step that didn't load", () -> tab.count(f -> f.has("error")
+            && f.get("error").asText().contains("five")) == 1);
+        JsonNode loading = tab.first(f -> f.has("error") && f.get("error").asText().contains("five"));
+        assertEquals("Steps", loading.get("source").asText());
+        assertEquals("RoundStep", loading.get("step").asText());
+
+        // A script typed in the Script console names no step, unless a step's own code fails in it.
+        tab.send("SendScript", "script", "undefinedName + 1");
+        await("its error", () -> tab.count(f -> f.has("error") && f.get("error").asText().contains("undefinedName")) == 1);
+        assertFalse(tab.first(f -> f.has("error") && f.get("error").asText().contains("undefinedName")).has("step"));
+        tab.send("SendScript", "script", "probe = stepFactory.createStep('Probe'); probe.run = { missingName + 1 }; probe.start()");
+        await("the step's error", () -> tab.count(f -> f.has("error") && f.get("error").asText().contains("missingName")) == 1);
+        assertEquals("Probe", tab.first(f -> f.has("error") && f.get("error").asText().contains("missingName")).get("step").asText());
     }
 
     /** A console tab of the user's, logged in, with the experiment selected. */
@@ -391,7 +431,16 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(byHand.id).status);
         JsonNode status = state(researcher).get("status");
         assertTrue(status.toString(), status.get("paused").asBoolean());
-        assertEquals("still paused for the launch", pausedFor, status.get("problem").asText());
+        // (what follows the reason names the session opened by hand, which now runs its game)
+        assertEquals("still paused for the launch", pauseReason(pausedFor), pauseReason(status.get("problem").asText()));
+        assertTrue(status.toString(), status.get("problem").asText().endsWith(" Meanwhile \"by hand\", a session of this experiment that "
+            + researcher.email + " opened by hand, is running. Resume hands it to the autopilot."));
+    }
+
+    /** Why the autopilot paused, without what follows about a session opened by hand ("Meanwhile ..."). */
+    private static String pauseReason(String problem) {
+        int meanwhile = problem.indexOf(" Meanwhile ");
+        return meanwhile < 0 ? problem : problem.substring(0, meanwhile);
     }
 
     @Test
@@ -503,6 +552,9 @@ public class AutopilotSessionTest extends BaseTest {
             && f.get("error").asText().contains("roundStepp")));
         assertEquals("OnJoinStep", tab.first(f -> f.has("error") && f.get("error").asText().contains("roundStepp"))
             .get("source").asText());
+        // (and names the step that failed: the OnJoinStep ran InitStep's code)
+        assertEquals("InitStep", tab.first(f -> f.has("error") && f.get("error").asText().contains("roundStepp"))
+            .get("step").asText());
 
         tab.send("SendScript", "script", "initStep.done = { }");
         await("fixed", () -> tab.count(f -> f.has("request") && "SendScript".equals(f.get("request").asText())
@@ -1333,7 +1385,7 @@ public class AutopilotSessionTest extends BaseTest {
         Thread.sleep(500);
         assertEquals("one session", 1, sessions(experiment).size());
         final ExperimentInstance first = sessions(experiment).get(0);
-        assertTrue(first.name, first.name.startsWith("Autopilot · "));
+        assertTrue(first.name, first.name.matches("Autopilot\u00a0· \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\u00a0UTC"));
         await("the console's waiting room over the experiment's own",
             () -> Integer.valueOf(3).equals(engineValue("autopilot.room?.minPlayers")));
         assertEquals(true, engineValue("autopilot.room.onCancel != null"));

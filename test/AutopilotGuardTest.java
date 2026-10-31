@@ -40,11 +40,14 @@ public class AutopilotGuardTest extends BaseTest {
     private final List<AdminSocketsTest.Tab> tabs = new ArrayList<>();
     // how far the autopilot's clock is ahead of the real one
     private volatile long ahead = 0L;
+    // what schedules the check at the longest session (Autopilot.runAt), put back after each test
+    private Object runAt;
 
     @Before
     public void guardsOnTheirTestClock() throws Exception {
         setStatic("clock", (LongSupplier) () -> System.currentTimeMillis() + ahead);
         setStatic("stallMs", 300L);
+        runAt = getStatic("runAt");
     }
 
     @After
@@ -61,7 +64,7 @@ public class AutopilotGuardTest extends BaseTest {
             engine().eval("autopilot.stop(); timers.cancel(); null");
         } catch (Exception ignored) {}
         setStatic("launchRequestedAt", 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "notice", "quietSession", "endingTooLong"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession", "notice", "quietSession", "endingTooLong"}) {
             setStatic(name, null);
         }
         setStatic("nextOpenAt", 0L);
@@ -70,6 +73,8 @@ public class AutopilotGuardTest extends BaseTest {
         setStatic("stallMs", 60000L);
         setStatic("guardWaitMs", 5000L);
         setStatic("clock", (LongSupplier) System::currentTimeMillis);
+        setStatic("runAt", runAt);
+        setStatic("limitCheckAt", 0L);
     }
 
     private static void setStatic(String name, Object value) throws Exception {
@@ -357,6 +362,8 @@ public class AutopilotGuardTest extends BaseTest {
         // The second came from Prolific, and the experiment has given them their completion code.
         engine().eval("def v = g.getVertex('tl-2'); recruitment.registerProlific(v); "
             + "recruitment.completeProlific(v, [completionCode: 'C0DE42']); null");
+        // Someone else came from Prolific, and isn't connected as the session ends.
+        prolificEntry("tl-9");
 
         // Within the limit nothing happens.
         watchdog();
@@ -380,8 +387,13 @@ public class AutopilotGuardTest extends BaseTest {
         // told the session is over all the same (so it stops reconnecting), in the way that keeps its own end
         assertEquals("outOfTime", second.last().get("sessionOver").get("player").get("ended").asText());
         assertTrue(second.closed);
-        // and so do the pages that come back to it
+        assertTrue(first.last().toString(), first.last().get("player").get("text").asText().contains("You can close this page"));
+        // and so do the pages that come back to it, in the words for Prolific to someone who came from there
         assertEquals("outOfTime", endedScreen(session, "tl-1").get("player").get("ended").asText());
+        JsonNode prolific = endedScreen(session, "tl-9").get("player");
+        assertEquals("outOfTime", prolific.get("ended").asText());
+        assertTrue(prolific.toString(), prolific.get("text").asText().contains("It ran out of time.")
+            && prolific.get("text").asText().contains("please message the researcher on Prolific about your submission"));
         assertEquals("C0DE42", endedScreen(session, "tl-2").get("player").get("_system").get("recruitment")
             .get("completionCode").asText());
         // The game is frozen: no computer player picks, no timer runs.
@@ -404,6 +416,54 @@ public class AutopilotGuardTest extends BaseTest {
         s.put("maxSessionMinutes", 90);
         assertEquals(OK, status(post(researcher, s)));
         assertTrue(autopilotStatus(researcher).get("notice").isNull());
+    }
+
+    private static long gameStartedAt(ExperimentInstance session) throws Exception {
+        java.lang.reflect.Method m = ScriptBoard.class.getDeclaredMethod("gameStartedAt", Long.class);
+        m.setAccessible(true);
+        return (Long) m.invoke(null, session.id);
+    }
+
+    @Test
+    public void theGameIsEndedWhenItReachesTheLongestSessionNotAtTheNextCheck() throws Throwable {
+        // (the checks the autopilot would schedule, run here when the test says)
+        final List<Long> due = new CopyOnWriteArrayList<>();
+        final List<Runnable> checks = new CopyOnWriteArrayList<>();
+        setStatic("runAt", (java.util.function.BiConsumer<Long, Runnable>) (at, task) -> {
+            due.add(at);
+            checks.add(task);
+        });
+        final User researcher = user("onthedot");
+        final Experiment experiment = createExperiment("Ends on the dot");
+        createStep(experiment, "InitStep", WAITS_FOR_A_CHOICE);
+        own(researcher, experiment);
+        assertEquals(OK, status(post(researcher, settings(experiment, 2, 2, 1))));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        joins(experiment, session, "dot-1");
+        joins(experiment, session, "dot-2");
+        await("the start", () -> Boolean.TRUE.equals(ExperimentInstance.findById(session.id).hasStarted)
+            && gameStartedAt(session) > 0L);
+        final long started = gameStartedAt(session);
+
+        // 45 s in: nothing to end yet, but the limit comes before the next periodic check, 30 s on.
+        ahead = started + 45000L - System.currentTimeMillis();
+        watchdog();
+        assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
+        assertEquals("a check at the limit", 1, due.size());
+        assertEquals(started + 60000L, (long) due.get(0));
+        watchdog();
+        assertEquals("one at a time", 1, due.size());
+
+        // The check runs at the limit: the game is ended then, after the minute it may run.
+        ahead = started + 60000L - System.currentTimeMillis();
+        checks.get(0).run();
+        await("the session to be finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
+        List<Event> tooLong = events(session, "sessionTooLong");
+        assertEquals(1, tooLong.size());
+        assertEquals("1", value(tooLong.get(0), "minutes"));
+        assertEquals("1", value(tooLong.get(0), "limit"));
+        assertEquals("Session \"" + session.name + "\" was ended after 1 minute, the longest a session may run. "
+            + "Its participants were told that the session ran out of time.", autopilotStatus(researcher).get("notice").asText());
     }
 
     @Test
@@ -1122,5 +1182,57 @@ public class AutopilotGuardTest extends BaseTest {
             && sessions(experiment).get(0).status == ExperimentInstance.Status.STOPPED
             && autopilotStatus(researcher).get("paused").asBoolean());
         assertEquals(Boolean.FALSE, engineValue("a.ai.isOn"));
+    }
+
+    // ---- what participants are told ---------------------------------------------------------------
+
+    /** Someone entered the session from Prolific (ClientLogin.prolificEntry records it so). */
+    private static void prolificEntry(String clientId) {
+        java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
+        data.put("clientId", clientId);
+        data.put("prolificPid", "PID-" + clientId);
+        data.put("studyId", "STUDY");
+        data.put("sessionId", "SESSION");
+        ScriptBoard.trackEvent("prolificEntry", data);
+        Recruitment.prolificEntry(clientId, "PID-" + clientId, "STUDY", "SESSION");
+    }
+
+    // InitStep's done starts a step that doesn't exist (a typo on its line 4): the start of the game throws.
+    private static final String FAILS_TO_START = "initStep = stepFactory.createStep('InitStep')\n"
+        + "initStep.run = { }\n"
+        + "initStep.done = {\n"
+        + "  roundStepp.start()\n"
+        + "}";
+
+    @Test
+    public void aFailureThatStallsTheGameTellsItsParticipantsWhatToDoInTheWordsForProlific() throws Throwable {
+        final User researcher = user("stalls");
+        final Experiment experiment = createExperiment("Stalls at the start");
+        createStep(experiment, "InitStep", FAILS_TO_START);
+        own(researcher, experiment);
+        assertEquals(OK, status(post(researcher, settings(experiment, 2, 2, null))));
+        final ExperimentInstance session = nextSession(experiment, 1);
+        Page plain = joins(experiment, session, "st-1");
+        prolificEntry("st-2");
+        prolificEntry("st-9");
+        Page prolific = joins(experiment, session, "st-2");
+        await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED
+            && plain.closed && prolific.closed);
+
+        assertTrue(autopilotStatus(researcher).get("paused").asBoolean());
+
+        JsonNode toPlain = plain.lastPlayer().get("player");
+        assertEquals("problem", toPlain.get("ended").asText());
+        assertTrue(toPlain.toString(), toPlain.get("text").asText().contains("You can close this page"));
+        JsonNode toProlific = prolific.lastPlayer().get("player");
+        assertEquals("problem", toProlific.get("ended").asText());
+        String text = toProlific.get("text").asText();
+        assertTrue(text, text.contains("It had to stop because of a problem with the study."));
+        assertTrue(text, text.contains("You can open the study again from Prolific later"));
+        assertTrue(text, text.contains("please return the study on Prolific"));
+        // and to someone from Prolific whose page comes back to it later
+        assertTrue(endedScreen(session, "st-9").toString(),
+            endedScreen(session, "st-9").get("player").get("text").asText().contains("return the study on Prolific"));
+        assertTrue(endedScreen(session, "st-1").get("player").get("text").asText().contains("You can close this page"));
     }
 }

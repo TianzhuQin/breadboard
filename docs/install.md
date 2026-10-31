@@ -378,9 +378,11 @@ nothing about experiments or participants.
 **A restart ends running sessions.** The game state of a session lives in the server's memory,
 so stopping the server ends any session in progress. When it starts again, such a session is
 marked Stopped, with a `sessionInterrupted` event in its data; **Resume** (Sessions & data) starts
-its game again from the beginning, as for a session a researcher stopped. Participants who come
-back are told the session isn't running, and are asked to open the study's link again: with the
-autopilot on, that link leads to the session it opens after the restart. Restart between sessions.
+its game again from the beginning, as for a session a researcher stopped. Participants whose page
+comes back to it, also after a crash, are told the session ended because the server was stopped or
+restarted, as a normal stop tells them, and that they can open the study's link again (those from
+Prolific: open the study again from Prolific, or return it): with the autopilot on, that link leads
+to the session it opens after the restart. Restart between sessions.
 
 ## Backups
 
@@ -487,9 +489,9 @@ delete `RUNNING_PID` after checking that no server is running.
 **The console can't connect** (its top bar keeps saying "Reconnecting…"): a proxy in front of
 Breadboard doesn't pass websockets. See the nginx settings above.
 
-**Participants see "This session isn't running right now"**: the session finished, the server
-restarted, or the console moved the engine to another session. Open a new session, or turn the
-autopilot on, and give participants the study's link again.
+**Participants see "This session isn't running right now"**: the session finished or was stopped,
+or the console moved the engine to another session (one a restart cut short says so instead). Open a
+new session, or turn the autopilot on, and give participants the study's link again.
 
 **A forgotten password**: stop the server and start it once with the account's email:
 

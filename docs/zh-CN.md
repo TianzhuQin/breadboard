@@ -67,19 +67,23 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 |---|---|---|
 | **Run this experiment unattended** | 关 | 总开关。在 **Experiment** 里选要运行的实验。 |
 | **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场。 |
-| **Longest session** | 120 分钟 | 从游戏开始算起。游戏超过这个时间就会被结束：参与者看到这一场时间已用完（已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionTooLong` 事件，过了暂停时间再开下一场，Autopilot 页会写明是哪一场。连续 3 场都超时，自动运行就暂停。留空表示不限。新的设置默认 120 分钟；用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。 |
+| **Longest session** | 120 分钟 | 从游戏开始算起。游戏一到这个时间就会被结束：参与者看到这一场时间已用完（从 Prolific 来的人会被告知在 Prolific 上给你发消息，说明自己的提交；已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionTooLong` 事件，过了暂停时间再开下一场，Autopilot 页会写明是哪一场。连续 3 场都超时，自动运行就暂停。留空表示不限。新的设置默认 120 分钟；用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。 |
 | **Start the game automatically when enough people are here** | 开 | 等待室：先到的人看到等待页面。 |
-| **Minimum players** / **Maximum players** | 2 / 不限 | 到了最少人数就可以开始；到了最多人数，马上开始倒计时。 |
+| **Minimum players** / **Maximum players** | 2 / 不限 | 到了最少人数就可以开始。最多人数是真正的上限：人数一到（暂时掉线、还保留座位的人也算），马上开始倒计时，链接也不再把新来的人带进这一场；游戏开始时还多出来的人（按到达先后，晚到的）会看到这一场已满，并知道怎么参加下一场。 |
 | **Wait for more people** | 60 秒 | 最少人数到齐后，再等迟到的人多久。 |
 | **Give up after** | 不限 | 从第一个人到达算起。到时人数还不够，这一场取消，并告诉等待的人。 |
 | **Countdown** | 5 秒 | 开始前参与者看到的倒计时。 |
 | **Let the computer play for people who leave** | 开 | 有人中途关掉页面，过了 **Take over after**（30 秒）由电脑替他玩。勾选 **Give the seat back when they return**，他回来后可以接着玩。 |
 
-页面顶部显示当前状态、开放中的那一场（**Watch it live** 可以去看），以及给参与者的 **Sign-in link** 和 **Prolific link**。这两个链接总是指向当时开放的那一场，所以一直用同一个就行。
+这一页的等待室和电脑接管设置，只用在自动运行自己开的场次上（还有你点 **Resume** 或保存设置时交给它的、这个实验正开着的那一场）。你在 Live session 自己开的场次（包括测试场次）用步骤里写的设置，也不会标成 **Opened by Autopilot**。
 
-**暂停与继续**：如果你在控制台里结束了自动运行的那一场（停止它，或做了会重新加载引擎的事，比如新建或恢复另一场、**Reload engine**；切换实验不会），自动运行就会暂停，控制台会先提醒你。暂停时它不开新场，所以除非你自己为这个实验开了一场，链接都进不去。回到 Autopilot 页点 **Resume** 继续。如果关掉了 **Open the next session when one finishes**，一场结束后按钮会变成 **Open another session**。暂停状态在服务器重启后仍然保留。
+页面顶部显示当前状态、开放中的那一场（**Watch it live** 可以去看），以及给参与者的 **Sign-in link** 和 **Prolific link**。这两个链接总是指向当时开放的那一场，所以一直用同一个就行。没有一场在接收参与者时（游戏正在进行、等待室已满正在倒计时，或者下一场马上要开），打开链接的人会看到一个等待页：上面说有一场正在进行，结束后就开下一场；这个页面每隔几秒自己刷新一次，下一场一开就自动进入（从 Prolific 来的人还会看到：可以一直开着这个页面，等不及的话就退回研究）。自动运行关着、暂停、已经结束，或者没有打开 **Open the next session when one finishes** 时，或者有什么让它开不了下一场时（引擎里正跑着别的实验的场次、有研究者在引擎里载入了别的实验、磁盘快满了，或者 Autopilot 页顶部显示的别的问题），链接仍然显示 "No session is open right now"。
 
-**游戏中步骤出错**：游戏进行中步骤代码出错时（在计时器上、有人做出选择后，或在 OnJoinStep、OnLeaveStep 里），每个打开的控制台都会在 Output 面板显示错误，这一场会记下一条 `stepFailed` 事件，写明是哪个步骤、哪一行。如果这个错误让下一步没能开始（一步的 start 顺利跑完才算开始了），游戏就卡住了：自动运行自己的那一场（包括你点 **Resume** 或保存设置时开着的、它这个实验的那一场）会被停掉，参与者看到这一场因为研究出了问题不得不停止（已经拿到完成码的人仍然看到完成码），自动运行暂停，Autopilot 页会写明是哪个步骤、哪一行；没有设等待室时，游戏开始前 OnJoinStep 出错也算卡住。如果下一轮已经开始，错误只记录和显示，游戏继续。自动运行自己的那一场里一旦记下了步骤出错，如果游戏有一分钟什么都不再等（没有人有选项，没有步骤或计时器在等时间，没有参与者还没填完的表单或别的在等的输入；聊天不算，在聊天里写的话不会让游戏往下走），这一场也会这样被停掉（记一条 `sessionStalled` 事件），自动运行暂停。你手动运行的场次不会被结束：由 **Start the game**、等待室或 OnJoinStep 开始、却没能开始的游戏会被撤回，新来的人又能进来，改好步骤后 **Start the game** 可以再用；实验代码在计时器上或有人做出选择后开始的游戏，只有 InitStep 本身出错时才撤回。在自动运行自己的那一场里点 **Start the game** 却没能开始，也会停掉这一场并暂停自动运行，因为它的等待室不会再开始游戏。
+有人手动为这个实验开的场次不算自动运行的，Autopilot 页顶部会写明是哪一场、是谁开的。这一场还在接收参与者时，链接会带人进去；它结束之前，自动运行不会自己另开一场；它的游戏开始后，链接像上面说的那样显示等待页，等自动运行开下一场。点 **Resume** 或 **Open another session**，或者保存设置，都会把这一场交给自动运行。
+
+**暂停与继续**：如果你在控制台里结束了自动运行的那一场（停止它，或做了会重新加载引擎的事，比如新建或恢复另一场、**Reload engine**；切换实验不会），自动运行就会暂停，控制台会先提醒你。结束你自己开的场次（包括这个实验的场次和测试场次）不会让它暂停，之后它照常开下一场；关掉 **Open the next session when one finishes** 时，这样的场次也不算它的那一场。暂停时它不开新场，所以除非你自己为这个实验开了一场，链接都进不去。回到 Autopilot 页点 **Resume** 继续。如果关掉了 **Open the next session when one finishes**，一场结束后按钮会变成 **Open another session**。暂停状态在服务器重启后仍然保留。
+
+**游戏中步骤出错**：游戏进行中步骤代码出错时（在计时器上、有人做出选择后，或在 OnJoinStep、OnLeaveStep 里），每个打开的控制台都会在 Output 面板显示错误，这一场会记下一条 `stepFailed` 事件，写明是哪个步骤、哪一行。如果这个错误让下一步没能开始（一步的 start 顺利跑完才算开始了），游戏就卡住了：自动运行自己的那一场（包括你点 **Resume** 或保存设置时开着的、它这个实验的那一场）会被停掉，参与者看到这一场因为研究出了问题不得不停止（从 Prolific 来的人还会看到：可以稍后从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionFailed` 事件（写明步骤 `step`、行号 `line` 和错误 `error`），自动运行暂停，Autopilot 页会写明是哪个步骤、哪一行；没有设等待室时，游戏开始前 OnJoinStep 出错也算卡住。如果下一轮已经开始，错误只记录和显示，游戏继续。自动运行自己的那一场里一旦记下了步骤出错，如果游戏有一分钟什么都不再等（没有人有选项，没有步骤或计时器在等时间，没有参与者还没填完的表单或别的在等的输入；聊天不算，在聊天里写的话不会让游戏往下走），这一场也会这样被停掉（记一条 `sessionStalled` 事件），自动运行暂停。你手动运行的场次不会被结束：由 **Start the game**、等待室或 OnJoinStep 开始、却没能开始的游戏会被撤回，新来的人又能进来，改好步骤后 **Start the game** 可以再用；实验代码在计时器上或有人做出选择后开始的游戏，只有 InitStep 本身出错时才撤回。在自动运行自己的那一场里点 **Start the game** 却没能开始，也会停掉这一场并暂停自动运行，因为它的等待室不会再开始游戏。
 
 整台服务器只有一个脚本引擎，控制台和自动运行共用。自动运行的时候，你仍然可以切换到别的实验去修改它：切换不会影响正在进行的那一场，那个实验的 Build 页面（Steps、Content、Parameters 等）和 **Sessions & data** 都照常可用。要运行或测试别的实验，先停止自动运行的那一场（自动运行会因此暂停），或者为那个实验新建一场（控制台会先提醒你，再结束自动运行的那一场）；用完后回到 Autopilot 页点 **Resume**。更多见 [console.md](console.md#running-sessions-with-nobody-at-the-console)。
 
@@ -87,7 +91,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行。
 2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 里选择用 URL 参数记录 Prolific ID，链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。
-3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，参与者会看到 "No session is open right now"。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
+3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，如果自动运行开着、会自己开下一场，而且没有什么让它开不了，参与者会看到一个等待页，下一场一开就自动进入（他们也可以选择退回研究）；否则会看到 "No session is open right now"。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
 4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。**同一个人不会参加两次**：在这个实验里已经参加过的人（拿到过完成码，或者游戏结束时还在场）再打开 Prolific 链接，会看到 "You have already taken part in this study" 和他的完成码，不会被安排进新的一场（服务器重启后也一样）；场次被停止或因重启中断的人可以再加入。这个检查按整个实验算：如果要在 Prolific 上用同一批人做新一期，就复制一个实验。自己测试时请用 **Try it as a test participant**，它每次都会生成新的 Prolific ID。
 5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回。然后在 **When a participant finishes** 的 **Your completion code** 里填上这个码，用 **Copy code** 复制生成的代码，放进实验步骤里参与者结束的地方（比如最后一步）。它的核心是这一行（把 `C1A2B3C4` 换成你的完成码）：
 
@@ -95,7 +99,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 recruitment.completeProlific(player, [completionCode: "C1A2B3C4"])
 ```
 
-参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
+参与者会看到完成码和一个 **Finish** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。等待室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 
 ## 导出数据
 
@@ -123,11 +127,11 @@ breadboard.example.org {
 
 ## 常见问题
 
-**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次：参与者的页面会说明这一场因为研究服务器停止或重启而结束，并告诉他们几分钟后可以重新打开研究链接，加入那时开着的一场（从 Prolific 来的人：从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码）。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者会被告知这一场没有在运行，并被请求重新打开研究链接；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
+**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次：参与者的页面会说明这一场因为研究服务器停止或重启而结束，并告诉他们几分钟后可以重新打开研究链接，加入那时开着的一场（从 Prolific 来的人：从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码）。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者（服务器崩溃后也一样）会看到这一场因为服务器停止或重启而结束，并被请求重新打开研究链接（从 Prolific 来的人：从 Prolific 重新打开，或者退回研究）；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
 
 **启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`，用找到的第一个 Java 8。`JAVA8_HOME` 可以是 JDK 的文件夹、它的 `bin` 文件夹，或者 Mac 的 Finder 里看到的 JDK 文件夹（比如 `zulu-8.jdk`）；如果那里没有 Java 8，启动脚本会提示 "JAVA8_HOME is …, which has no Java 8; ignoring it"，然后接着找别的。
 
-**参与者看到 "This session isn't running right now"**：这一场已经结束，或服务器重启过，或控制台把引擎换到了另一场。新开一场，或打开自动运行，再把研究链接发给参与者。
+**参与者看到 "This session isn't running right now"**：这一场已经结束或被停止，或控制台把引擎换到了另一场（被服务器重启打断的那一场会直接说是服务器停止或重启了）。新开一场，或打开自动运行，再把研究链接发给参与者。
 
 **忘记了登录密码怎么办？** 先停止服务器，再用这个账号的邮箱启动一次：`./breadboard.sh -Dbreadboard.resetPassword=你的邮箱`（Windows 上是 `breadboard.bat -Dbreadboard.resetPassword=你的邮箱`）。服务器会在它的窗口里打印一个新密码（不会写进日志），并让这个账号在所有浏览器里退出。用新密码登录后，在 **Settings** 里改成你自己的密码，以后正常启动、不要再带这个参数。登录时邮箱不区分大小写；同一个账号可以同时在几个浏览器里登录（比如笔记本和实验室的电脑）。
 

@@ -220,15 +220,15 @@ describe('reading the server\'s answer', () => {
   it('knows when stopping a session pauses the autopilot', () => {
     const ap = (status: any, settings: any = { enabled: true, experimentId: 12 }) => normalizeState({ source: 'admin', settings, status })
     const own = { id: 4, name: 'auto 1', status: 'RUNNING' }
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(true)
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 5, experimentId: 12 })).toBe(false)
-    // a test session the engine runs is left out of status.instance
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7, experimentId: 12 }, 7)).toBe(true)
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7, experimentId: 13 }, 7)).toBe(false)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 4 })).toBe(true)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 5 })).toBe(false)
+    // a session of its experiment opened by hand, or the test session, isn't the autopilot's: the
+    // server pauses it for neither (status.instance is the autopilot's own session alone)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7 })).toBe(false)
     // off, already paused, or no answer: nothing to say
-    expect(stopPausesAutopilot(ap({ on: false, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(false)
-    expect(stopPausesAutopilot(ap({ on: true, paused: true, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(false)
-    expect(stopPausesAutopilot(null, { id: 4, experimentId: 12 })).toBe(false)
+    expect(stopPausesAutopilot(ap({ on: false, experimentId: 12, instance: own }), { id: 4 })).toBe(false)
+    expect(stopPausesAutopilot(ap({ on: true, paused: true, experimentId: 12, instance: own }), { id: 4 })).toBe(false)
+    expect(stopPausesAutopilot(null, { id: 4 })).toBe(false)
   })
 })
 

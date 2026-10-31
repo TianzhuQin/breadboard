@@ -37,7 +37,10 @@ autopilot, the AMT timer, or the experiment's own code calling `initStep.start()
 OnJoinStep that starts the game once enough people are in). Code that only mentions
 `initStep.start()`, such as that OnJoinStep while the steps load, starts nothing. Reloading the
 engine, resuming a session or selecting its experiment again forgets the game, so the session then
-takes people again (newcomers and those who held a seat) until its game is started again.
+takes people again (newcomers and those who held a seat) until its game is started again. A reload
+that carries a running session on opens it to them before it closes their pages, so the pages of
+those who held a seat get back in by themselves as they reconnect (they used to be told the game
+began before they arrived), and records `engineReloaded` in it.
 
 ## What participants receive about others
 
@@ -102,10 +105,15 @@ study URL.
   session to end; the page also offers to end it there and then.
 - Ending the autopilot's session from the console pauses the autopilot: stopping it, or anything
   that reloads the engine (launching or resuming another session, reloading). Selecting another
-  experiment, to edit it, doesn't: the autopilot's session keeps running. Press **Resume** on the
-  Autopilot page to let it open sessions again; after a run with **continuous** off, the button
-  reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
+  experiment, to edit it, doesn't: the autopilot's session keeps running. Nor does ending a session a
+  researcher opened by hand, even one of its experiment: the autopilot then opens its next session
+  as usual (with **continuous** off, such a session isn't its one session either). Press **Resume**
+  on the Autopilot page to let it open sessions again; after a run with **continuous** off, the
+  button reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
   is in charge too, and a pause survives a server restart.
+- A session of its experiment that a researcher opens by hand isn't the autopilot's: the Autopilot
+  page names it and who opened it, the links lead to it while it takes participants, and the
+  autopilot opens none of its own until it has ended. **Resume** or a save hands it to the autopilot.
 - While a researcher has another experiment loaded and a console open, the autopilot leaves the
   engine to them and opens its session once they close the console.
 - While it is on, it opens a session whenever the script engine runs none. The engine is shared
@@ -130,7 +138,7 @@ In the experiment's steps:
 
 ```groovy
 autopilot.waitingRoom([
-  minPlayers: 15, maxPlayers: 25,
+  minPlayers: 15, maxPlayers: 25,   // at most 25 play: the first 25 to arrive
   waitSeconds: 120,        // once minPlayers are here, wait this long for more
   maxWaitSeconds: 900,     // give up if minPlayers never arrive
   countdownSeconds: 10,
@@ -149,15 +157,28 @@ People who come back after a session was given up get its "could not start" noti
 to `onCancel` too.
 
 The server opens a session at startup. Participants enter through `/play/{e}/login` or
-`/play/{e}/prolific?...` and wait in the waiting room. Someone whose connection drops there counts
-as gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor
-gets the session given up. The game starts by itself. People who left before the start get no
-seat, and are told so if they come back (see below). With `replaceDisconnected`, someone away for
-less than a minute (or `afterSeconds`, if that is longer) keeps their seat, which the computer plays
-until they are back; without it nobody would play that seat, so they get none either.
-Someone who drops out mid-game is played by the computer after the grace period. A new session
-opens when the game finishes. Waiting-room settings saved in the console replace the steps' own
-even for people who are already waiting: the limits count from the first arrival.
+`/play/{e}/prolific?...` and wait in the waiting room. While no session takes participants (a game is
+under way, a full room counts down, or the next session is about to open) and the autopilot opens the
+next one by itself (it is on, continuous, and neither paused nor done), these links show a page that
+says so and loads itself again every few seconds, which then goes into the session; they used to
+say "No session is open right now" and to try again later (Prolific participants: to return the
+study), which they still do while the autopilot is off, paused or done, or while something keeps it
+from opening the next session (another experiment's session in the engine, the disk almost full, a
+problem the Autopilot page shows; a session of its experiment opened by hand isn't one: during its
+game they wait for the autopilot's next session too). Someone whose connection
+drops there counts as gone only after `departureGraceSeconds`, so a moment's drop neither starts the
+wait again nor gets the session given up. The game starts by itself. People who left before the
+start get no seat, and are told so if they come back (see below). With `maxPlayers`, at most that
+many are seated, the first to arrive: once that many are here (or away for a moment, keeping their
+seat) the countdown begins, and the study's links send nobody more to the session; anyone else there
+as the game starts is taken out of the network and told the session is full, with how to join the
+next one (`player.ended = "sessionFull"`, and a `sessionFull` event). They used to be seated however
+many were there. With `replaceDisconnected`, someone away for less than a minute (or `afterSeconds`,
+if that is longer) keeps their seat, which the computer plays until they are back; without it nobody
+would play that seat, so they get none either. Someone who drops out mid-game is played by the
+computer after the grace period. A new session opens when the game finishes. Waiting-room settings
+saved in the console replace the steps' own even for people who are already waiting: the limits
+count from the first arrival.
 
 ## The participant page
 
@@ -459,6 +480,15 @@ restarts the running session.
   ids follow that order now; they were given out twenty at a time, in an order of the database's
   own, so such events could come out the wrong way round.
 - **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
-  `missedStart` (someone its start left out), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+  `missedStart` (someone its start left out), `sessionFull` (someone a full room left out, with
+  `clientId`), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+- **How the autopilot ended its session:** `sessionFailed` (a step failure stalled its game: `step`,
+  `line`, `error`; the `stepFailed` before it doesn't say whether the failure stalled the game),
+  `sessionStalled` (its game had nothing left to do after a step failed: `step`, `error`) and
+  `sessionTooLong` (`minutes`, `limit`).
+- **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
+  researcher), in a session that a reload of the engine carries on.
 - **Tie edits:** `edgeEdit`, which records the actor.
-- **Prolific entry:** `prolificEntry`.
+- **Prolific:** `prolificEntry`, `prolificComplete`, and `participantComment` (`player`, `text`):
+  what a participant wrote under "Comments for the researcher" on the finish screen, kept in their
+  session's data even after its game has ended. It used to be sent to the game, which ignored it.

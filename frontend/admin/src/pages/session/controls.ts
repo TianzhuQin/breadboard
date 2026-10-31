@@ -88,7 +88,7 @@ export async function stopSession (inst: Instance) {
   try {
     // Stopping the autopilot's session pauses the autopilot (the server's Autopilot.sessionStopped).
     // The session shown here is the selected experiment's.
-    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: inst.id, experimentId: admin.experiment?.id }, admin.user?.engine?.sessionId)
+    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: inst.id })
     const ok = await confirm({
       title: `Stop “${inst.name}”?`,
       message: [

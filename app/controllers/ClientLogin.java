@@ -88,7 +88,24 @@ public class ClientLogin extends Controller {
 
   /** notRunning(), or, for a session that doesn't exist at all (a mistyped or cut-off link), invalidLink(). */
   static play.api.templates.Html notRunning(String experimentId, String experimentInstanceId) {
-    return sessionExists(experimentId, experimentInstanceId) ? notRunning() : invalidLink();
+    return notRunning(experimentId, experimentInstanceId, null);
+  }
+
+  /**
+   * As notRunning(experimentId, experimentInstanceId), but for a session a restart of the server cut
+   * short (ScriptBoard.interruptedByRestart), the page that says the server stopped, as its pages are
+   * told when they come back (ClientController.notRunningScreen): in the words for Prolific when
+   * {@code clientId} entered it from there (null: someone not known, as on the sign-in page).
+   */
+  static play.api.templates.Html notRunning(String experimentId, String experimentInstanceId, String clientId) {
+    if (!sessionExists(experimentId, experimentInstanceId)) {
+      return invalidLink();
+    }
+    if (ScriptBoard.interruptedByRestart(experimentInstanceId)) {
+      boolean prolific = clientId != null && ScriptBoard.enteredFromProlific(Long.valueOf(experimentInstanceId), clientId);
+      return participantMessage.render(ScriptBoard.SERVER_STOPPED_TITLE, ScriptBoard.serverStoppedText(prolific));
+    }
+    return notRunning();
   }
 
   /** invalidLink(), for Global's not-found handler. */
@@ -364,13 +381,15 @@ public class ClientLogin extends Controller {
     // "Join as someone else" (participantSeat): a new seat, whatever this browser has already.
     boolean another = "login".equals(entry) && "1".equals(request().getQueryString("another"));
     // Coming back to a session this browser has a seat in, while the engine still runs it (its game
-    // may have started, so it is no longer open to newcomers).
+    // may have started, so it is no longer open to newcomers). Not to a seat its game left out (the
+    // room was full, or it started without them), which only says so: they are someone new for the
+    // next session.
     Http.Cookie back = request().cookie(PLAY_COOKIE + experimentId);
     if (!another && back != null && back.value() != null && back.value().contains("/")) {
       String instanceId = back.value().substring(0, back.value().indexOf('/'));
       String clientId = urlDecode(back.value().substring(back.value().indexOf('/') + 1));
       if (!clientId.isEmpty() && ScriptBoard.runsSession(experimentId, instanceId)
-          && ParticipantAuth.isClaimed(instanceId, clientId)) {
+          && ParticipantAuth.isClaimed(instanceId, clientId) && !ScriptBoard.leftOutOf(instanceId, clientId)) {
         if ("prolific".equals(entry)) {
           return redirect("/game/" + experimentId + "/" + instanceId + "/prolific" + query);
         }
@@ -393,7 +412,8 @@ public class ClientLogin extends Controller {
       return notFound(invalidLink());
     }
     if (open == null) {
-      if ("prolific".equals(entry)) {
+      boolean prolific = "prolific".equals(entry);
+      if (prolific) {
         // Someone who already took part is given their code again, not asked to return the study.
         // (With a session open, prolificEntry checks, after the redirect below.)
         String pid = request().getQueryString("PROLIFIC_PID");
@@ -401,6 +421,16 @@ public class ClientLogin extends Controller {
         if (takenPart != null) {
           return ok(takenPart);
         }
+      }
+      if (Autopilot.opensNextSoon(experiment.id)) {
+        // The autopilot opens the next session by itself, within seconds of the one under way (its
+        // game, or a full room counting down) ending: a page that waits for it, asking again by
+        // itself, rather than one that turned people away until they tried again by hand. Not while
+        // something keeps it from opening one (the disk almost full, another experiment's session
+        // in the engine): the page promised one "in a moment" then, for as long as that lasted.
+        return holding(experiment.id, prolific);
+      }
+      if (prolific) {
         // A Prolific study's places are timed: waiting makes no sense, returning lets someone else in.
         return ok(participantMessage.render("No session is open right now",
             "There is no session taking participants at the moment. Please return the study on Prolific."));
@@ -411,7 +441,83 @@ public class ClientLogin extends Controller {
     return redirect("/game/" + experimentId + "/" + open.id + "/" + entry + query);
   }
 
+  /** How often (seconds) the holding page asks again whether a session is open. */
+  static final int HOLDING_RETRY_SECONDS = 4;
+
+  /**
+   * The page for someone who opens the study's link while the autopilot has no session open but opens
+   * the next by itself, and nothing keeps it from doing so (Autopilot.opensNextSoon: between sessions,
+   * during a game, or while a full room counts down): it says a session is in progress (or opens in a
+   * moment) and the next opens when it ends, and loads the same link again every few seconds, which
+   * goes into the session once one is open. A {@code prolific} participant may keep it open, or
+   * return the study if they can't wait.
+   */
+  static Result holding(Long experimentId, boolean prolific) {
+    boolean underWay = Autopilot.sessionUnderWay(experimentId);
+    String title = underWay ? "A session is in progress" : "The next session opens soon";
+    String opens = underWay ? "The next one opens as soon as it has ended, and this page takes you into it by itself"
+        : "It opens in a moment, and this page takes you into it by itself";
+    String message = opens + (prolific ? ", so you can keep it open. If you can't wait, please return the study on Prolific."
+        : ": please keep it open.");
+    response().setHeader("Cache-Control", "no-store");
+    return ok(participantHolding.render(title, message, HOLDING_RETRY_SECONDS));
+  }
+
   private static final String PLAY_COOKIE = "bb_seat_";
+
+  /** The longest comment kept (characters); a longer one is cut there. */
+  static final int COMMENT_LIMIT = 10000;
+
+  /**
+   * A participant's comment for the researcher, from the Prolific finish screen's "Comments for the
+   * researcher": {@code POST /game/{experimentId}/{instanceId}/{clientId}/comment} with
+   * {@code {"text": "..."}} as JSON (no form: a page of another site can't send this) and the seat's
+   * token (its cookie, or the X-Breadboard-Token header). Recorded in that participant's own session
+   * as participantComment (player, text), whatever the engine runs now: the screen comes once their
+   * game is over, and the autopilot may have opened the next session since. It used to go to the
+   * engine as a message nothing listened to, and was lost. Only the seat's own token counts, not a
+   * researcher's preview. Answers 204 (also for an empty comment, which records nothing), 403 without
+   * the seat's token, 400 without a text, 404 for a session that isn't this experiment's.
+   */
+  public static Result comment(String experimentId, String experimentInstanceId, String clientId) {
+    if (!ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId))) {
+      return forbidden(commentRefused("This page can't send comments for this participant."));
+    }
+    JsonNode body = request().body().asJson();
+    JsonNode text = body == null ? null : body.get("text");
+    if (text == null || !text.isTextual()) {
+      return badRequest(commentRefused("Send {\"text\": \"...\"} as JSON."));
+    }
+    ExperimentInstance instance = null;
+    if (sessionExists(experimentId, experimentInstanceId)) {
+      instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+    }
+    if (instance == null) {
+      return notFound(commentRefused("There is no such session."));
+    }
+    String comment = text.textValue().trim();
+    if (comment.isEmpty()) {
+      return noContent();
+    }
+    if (comment.length() > COMMENT_LIMIT) {
+      // (not between the two halves of a character outside the BMP, such as an emoji)
+      int end = Character.isHighSurrogate(comment.charAt(COMMENT_LIMIT - 1)) ? COMMENT_LIMIT - 1 : COMMENT_LIMIT;
+      comment = comment.substring(0, end);
+    }
+    java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
+    data.put("player", clientId);
+    data.put("text", comment);
+    if (EventTracker.record(instance, "participantComment", data) == null) {
+      return internalServerError(commentRefused("The comment could not be saved."));
+    }
+    return noContent();
+  }
+
+  private static com.fasterxml.jackson.databind.node.ObjectNode commentRefused(String why) {
+    com.fasterxml.jackson.databind.node.ObjectNode error = play.libs.Json.newObject();
+    error.put("error", why);
+    return error;
+  }
 
   /**
    * The page for a Prolific participant who already took part in this experiment (see

@@ -56,6 +56,48 @@ public class LongEventValuesTest extends BaseTest {
         return tracker;
     }
 
+    /** Whether the server's log said, at info level, that it widens the column. */
+    private static boolean announced(ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> log) {
+        for (ch.qos.logback.classic.spi.ILoggingEvent e : log.list) {
+            if (e.getLevel() == ch.qos.logback.classic.Level.INFO && e.getFormattedMessage().startsWith("Widening event_data.value")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Test
+    public void wideningIsSaidInTheLogOnlyWhenTheTableHasRows() {
+        ch.qos.logback.classic.Logger application = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("application");
+        ch.qos.logback.classic.Level level = application.getLevel();
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> log =
+            new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        log.start();
+        application.addAppender(log);
+        application.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            // Tables just made (a new database: no events yet): widened without a word at info level.
+            assertEquals(0, EventData.find.findRowCount());
+            narrowTheColumn();
+            Global.widenEventValues();
+            assertEquals(EventTracker.VALUE_LIMIT, valueColumn().getInteger("max_length").intValue());
+            assertFalse("announced on tables just made", announced(log));
+
+            // A database with events: it says so, as on a large one it takes a while.
+            ExperimentInstance instance = createInstance("Has events", createExperiment("Has events"));
+            LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+            data.put("note", "short");
+            trackerFor(instance).track("Noted", data);
+            narrowTheColumn();
+            Global.widenEventValues();
+            assertEquals(EventTracker.VALUE_LIMIT, valueColumn().getInteger("max_length").intValue());
+            assertTrue(announced(log));
+        } finally {
+            application.setLevel(level);
+            application.detachAppender(log);
+        }
+    }
+
     @Test
     public void theColumnHoldsLongValuesFromTheStart() {
         SqlRow column = valueColumn();

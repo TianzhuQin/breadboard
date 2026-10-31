@@ -223,6 +223,7 @@ public class Global extends GlobalSettings {
       Logger.warn("Could not add the index on event data names (looking up returning Prolific participants is slower without it): " + e.getMessage());
     }
     addLongestSession();
+    uncacheSessionIds();
 
     markInterruptedSessions();
 
@@ -305,6 +306,38 @@ public class Global extends GlobalSettings {
   }
 
   /**
+   * Session ids follow on after a crash. H2 hands out a sequence's numbers 32 at a time (its cache)
+   * and writes down only where each batch ends, so after a server was killed (a crash, a power cut,
+   * kill -9) the next session's id jumped by up to 32: sessions 21 to 51 seemed to be missing from
+   * Sessions & data. The sequence of session ids keeps no numbers in memory (a cache of 1: each is
+   * written as it is handed out), going on from the last one handed out, or from the highest id when
+   * that is higher. H2 1.3 can't change a sequence's cache (its ALTER SEQUENCE has no CACHE), so the
+   * sequence is made again: once, nothing where its cache is 1 already. One found missing, as after a
+   * stop between the two steps, is made. Only on H2 (every configuration Breadboard has).
+   */
+  static void uncacheSessionIds() {
+    try {
+      if (!Play.application().configuration().getString("db.default.driver", "").contains("h2")) {
+        return;
+      }
+      SqlRow sequence = Ebean.createSqlQuery("select current_value as current_value, cache as cache_size "
+          + "from information_schema.sequences where lower(sequence_name) = 'experiment_instances_seq'").findUnique();
+      if (sequence != null && Long.valueOf(1L).equals(sequence.getLong("cache_size"))) {
+        return;
+      }
+      Long current = sequence == null ? null : sequence.getLong("current_value");
+      Long highest = Ebean.createSqlQuery("select max(id) as max_id from experiment_instances").findUnique().getLong("max_id");
+      long next = Math.max(current == null ? 0L : current, highest == null ? 0L : highest) + 1;
+      if (sequence != null) {
+        Ebean.createSqlUpdate("drop sequence experiment_instances_seq").execute();
+      }
+      Ebean.createSqlUpdate("create sequence experiment_instances_seq start with " + next + " cache 1").execute();
+    } catch (Exception e) {
+      Logger.warn("Could not make session ids follow on after a crash (a crash may then skip some): " + e.getMessage());
+    }
+  }
+
+  /**
    * Sessions that were running when the server stopped (a restart, a crash, a power cut) can't go
    * on: their game lived in the server's memory. They are marked stopped, with a sessionInterrupted
    * event, so the console shows them as stopped (Resume starts their game again, as for a session a
@@ -382,7 +415,8 @@ public class Global extends GlobalSettings {
    * characters (1 MiB), for databases built from the evolutions and older ones alike. Changed only
    * while it is shorter, since H2 copies the table to change a column; and not while the disk lacks
    * room for that copy (tried again at the next start; until then EventTracker keeps long values cut
-   * short).
+   * short). Said in the log only when the table has rows: on tables just made (a new database) it takes
+   * no time, and the line read as if something were wrong.
    */
   static void widenEventValues() {
     try {
@@ -403,8 +437,13 @@ public class Global extends GlobalSettings {
             + "Event values longer than " + length + " characters are kept cut short until it has.");
         return;
       }
-      Logger.info("Widening event_data.value to keep event values of up to " + EventTracker.VALUE_LIMIT
-          + " characters (once; on a large database this takes a while)");
+      String widening = "Widening event_data.value to keep event values of up to " + EventTracker.VALUE_LIMIT
+          + " characters (once; on a large database this takes a while)";
+      if (Ebean.createSqlQuery("select 1 as one from event_data limit 1").findUnique() == null) {
+        Logger.debug(widening);
+      } else {
+        Logger.info(widening);
+      }
       Ebean.createSqlUpdate("alter table event_data alter column value varchar(" + EventTracker.VALUE_LIMIT + ")").execute();
     } catch (Exception e) {
       Logger.warn("Could not widen event_data.value; event values longer than 255 characters are kept cut short: " + e.getMessage());

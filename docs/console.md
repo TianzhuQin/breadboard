@@ -275,24 +275,29 @@ change the live session.
 **Reload engine** (in the top bar's Engine menu, or on the Steps page) restarts the experiment's
 scripts from its saved steps. The engine is shared by every researcher on the server, so everyone
 in the network is disconnected and the network is emptied, whoever's session they are in. Your own
-running session carries on, with its launch parameters: it takes people again, newcomers and those
-who held a seat, and its game counts as not started, so **Start the game** runs InitStep again.
-Creating a session and resuming one restart the engine too, and so does switching experiments while
-no session is running. While anyone is using it, the console says who before doing any of these, and
-whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
-it would end that session.
+running session carries on, with its launch parameters (so does the autopilot's, when you saved its
+settings: it goes on running it), and a game under way in it starts again from the beginning: its
+game counts as not started, so **Start the game** (or its waiting room) runs InitStep again. The
+pages of those who held a seat get back in by themselves as they reconnect, and it takes newcomers
+as before its game. Its data records an `engineReloaded` event, with `restarted` (whether a game
+was under way) and `by`, as a Resume records `sessionResumed`. Creating a session and resuming one
+restart the engine too, and so does switching experiments while no session is running. While anyone
+is using it, the console says who before doing any of these, and whether it pauses the autopilot.
+While another experiment's session is running, a reload is refused: it would end that session.
 
 ## Running sessions with nobody at the console
 
 The Autopilot page lets an experiment run by itself: Breadboard opens a session, lets people in
 through a fixed link, starts the game once enough have arrived, and opens the next session when one
-ends. Saved settings are kept in the database and take effect at once. While the autopilot runs an
-experiment, the waiting room and the takeover of seats, each when switched on here, replace the
-experiment's own `autopilot.waitingRoom(…)` and `autopilot.replaceDisconnected(…)` calls; callbacks
-such as `onCancel` are kept from the experiment's call. Switched off, the experiment's own calls
-apply; the page shows them, and when the steps set no waiting room it says that sessions will then
-wait for someone to press Start the game. Set up for the first time, the page suggests the
-experiment you're working on and leaves to its steps whatever they already set.
+ends. Saved settings are kept in the database and take effect at once. In the sessions the
+autopilot opens (and one of its experiment that **Resume** or a save hands it), the waiting room and
+the takeover of seats, each when switched on here, replace the experiment's own
+`autopilot.waitingRoom(…)` and `autopilot.replaceDisconnected(…)` calls; callbacks such as
+`onCancel` are kept from the experiment's call. A session you open by hand, the test session
+included, runs with the steps' own, and isn't marked **Opened by Autopilot**. Switched off, the
+experiment's own calls apply; the page shows them, and when the steps set no waiting room it says
+that sessions will then wait for someone to press Start the game. Set up for the first time, the
+page suggests the experiment you're working on and leaves to its steps whatever they already set.
 
 | Setting | Suggested | |
 |---|---|---|
@@ -302,7 +307,7 @@ experiment you're working on and leaves to its steps whatever they already set.
 | **Longest session** | 120 minutes | Counted from the start of the game. A game that runs longer is ended (see below). Empty: no limit. New settings start at 120 minutes; settings saved with an older release keep no limit until you set one. |
 | **Use the waiting room set here** | on (off when the steps set one) | The waiting room: people who arrive early see a waiting page, and the game starts by itself. |
 | **Minimum players** | 2 | The game can start once this many people are here. |
-| **Maximum players** | none | When this many are here, the countdown starts at once. |
+| **Maximum players** | none | At most this many play, the first to arrive. When this many are here (or away for a moment, keeping their seat), the countdown starts at once and the links send nobody more; anyone else there as the game starts is told the session is full and how to join the next one (a `sessionFull` event). |
 | **Wait for more people** | 60 seconds | Once the minimum is here, how long to wait for latecomers. |
 | **Give up after** | never | Counted from the first arrival. If the minimum isn't reached by then, the session is called off and everyone waiting is told. |
 | **Countdown** | 5 seconds | Participants see "Starting in … seconds" before the game begins. |
@@ -322,13 +327,31 @@ after asking), then press **Resume** here when you are done.
 The top of the page shows the autopilot's state, its **Open session** (with **Watch it live**),
 recent activity, any problem that keeps it from opening sessions, and the **Participant links**:
 the **Sign-in link** (`/play/<experiment id>/login`) and the **Prolific link**. They always lead to
-the session open at the moment, so the same links keep working from one session to the next.
+the session open at the moment, so the same links keep working from one session to the next. While
+none takes participants (its game is under way, its full waiting room counts down, or the next one is
+about to open), they show a page that says a session is in progress and the next one opens when it
+ends; it checks again every few seconds and takes people in once a session opens (Prolific
+participants read that they can keep it open, or return the study if they can't wait). When the
+autopilot is off, paused or done, doesn't open the next session by itself (**Open the next session
+when one finishes** is off), or something keeps it from opening the next session (another
+experiment's session is running, a researcher has another experiment loaded, the disk is almost
+full, or another problem shown at the top of this page), they say that no session is open.
+
+A session of its experiment that someone opened by hand isn't the autopilot's: the top of the page
+names it and who opened it. The links lead to it while it takes participants, and the autopilot
+opens none of its own until it has ended; during its game they wait for the autopilot's next session
+as above. **Resume**, **Open another session** or a save hands that session to the autopilot.
 
 **What pauses it.** Ending the autopilot's session from the console pauses the autopilot: stopping
 it, or anything that reloads the engine (creating or resuming another session, reloading); selecting
-another experiment doesn't. The console says so before you do it. A paused autopilot opens no
-session, so its links lead nowhere until you press **Resume** on this page. After its one session
-with **Open the next session when one finishes** off, the button reads **Open another session**.
+another experiment doesn't, and neither does a **Reload engine** that carries its session on (by the
+account that saved its settings: see [Reloading the engine](#reloading-the-engine)). The console says
+so before you do it. Ending a session you opened by hand doesn't pause it, even one of its experiment
+or the test session: the autopilot then opens its next session as usual. With **Open the next
+session when one finishes** off, such a session isn't its one session either. A paused autopilot
+opens no session, so unless you open one of its experiment by hand, its links lead nowhere until you
+press **Resume** on this page. After its one session with **Open the next session when one
+finishes** off, the button reads **Open another session**.
 Both work when the server's settings file (`conf/local.conf`) is in charge too, and a pause
 survives a server restart.
 
@@ -344,21 +367,24 @@ panel, and the session records a `stepFailed` event naming the step and the line
 *stalls* the game when it kept the next step from getting going; a step gets going when its start
 finishes without an error. In the autopilot's own session (also one of its experiment that was open
 when you pressed **Resume** or saved its settings), a failure that stalls ends the session, telling
-its participants that it had to stop because of a problem with the study (someone who was given a
-completion code keeps it on screen), and pauses the autopilot, and this page names the step and
-line; so does an OnJoinStep that fails before the game starts when no waiting room is set. A failure
-that doesn't stall, such as a typo after the next round has started, is only recorded and shown, and
-the game goes on. In a session you run by hand nothing is ended. When **Start the game**, the
-waiting room or the OnJoinStep started a game that didn't get going, the start is taken back, so
-newcomers can join and **Start the game** works again once you fix the step; a start the experiment
-makes on a timer or after a choice is taken back only if InitStep itself fails, and otherwise the
-game counts as started. In the autopilot's own session, a **Start the game** that didn't get going
-ends the session and pauses the autopilot, as its waiting room's start does: once Start is pressed,
-its waiting room no longer starts the game.
+its participants that it had to stop because of a problem with the study (those who came from
+Prolific, that they can open the study again from Prolific later or return it; someone who was given
+a completion code keeps it on screen), records a `sessionFailed` event (`step`, `line`, `error`),
+and pauses the autopilot, and this page names the step and line; so does an OnJoinStep that fails
+before the game starts when no waiting room is set. A failure that doesn't stall, such as a typo
+after the next round has started, is only recorded and shown, and the game goes on. In a session you
+run by hand nothing is ended. When **Start the game**, the waiting room or the OnJoinStep started a
+game that didn't get going, the start is taken back, so newcomers can join and **Start the game**
+works again once you fix the step; a start the experiment makes on a timer or after a choice is
+taken back only if InitStep itself fails, and otherwise the game counts as started. In the
+autopilot's own session, a **Start the game** that didn't get going ends the session and pauses the
+autopilot, as its waiting room's start does: once Start is pressed, its waiting room no longer
+starts the game.
 
-**Games that never end.** The autopilot's own session is also ended when its game runs longer than
-**Longest session**, whatever keeps it going: its participants are told the session ran out of time
-(someone who was given a completion code keeps it on screen), the session is finished with a
+**Games that never end.** The autopilot's own session is also ended when its game has run for
+**Longest session**, at that moment, whatever keeps it going: its participants are told the session
+ran out of time (those who came from Prolific are asked to message you there about their submission;
+someone who was given a completion code keeps it on screen), the session is finished with a
 `sessionTooLong` event (`minutes`, `limit`), and the next one opens after the pause. This page says
 which session it was until you save or press **Resume**. After three such sessions in a row the
 autopilot pauses instead; a game that comes to its end starts the count again. And once a step has
@@ -383,15 +409,21 @@ one for Mechanical Turk.
 Prolific, choose to record Prolific IDs with URL parameters, and leave the parts like
 `{{%PROLIFIC_PID%}}` as they are. The link leads to this experiment's open session whose game
 hasn't started, and the page says which one that is now, or warns that participants would see
-"No session is open right now". **Try it as a test participant** opens it with a made-up Prolific
-ID, taking a seat like a real participant.
+"No session is open right now" (while the autopilot opens the next session by itself, they see a
+page that waits for it instead: see [above](#running-sessions-with-nobody-at-the-console)).
+**Try it as a test participant** opens it with a made-up Prolific ID, taking a seat like a real
+participant.
 
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
 recorded in a `prolificEntry` event. **When a participant finishes** builds the line for your last
 step from your completion code, `recruitment.completeProlific(player, [completionCode: "…"])`:
 participants then see the code and a **Finish** button that takes them back to Prolific. **From
 Prolific in this session** lists who joined and who finished, with **Copy bonus list** for
-Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event.
+Prolific's bulk bonus. Each completion is recorded as a `prolificComplete` event. What a participant
+writes under **Comments for the researcher** on that screen (it isn't shown with
+`noFeedback: true`) is kept in their session's data as a `participantComment` event, with `player`
+and `text`, also once their game has ended and the next session has opened: find it with **View
+events** in **Sessions & data**, or in the data you download.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game

@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import { computed, ref } from 'vue'
-import { PlayerData } from '@human-nature-lab/breadboard-core'
+import { PlayerData, participantToken } from '@human-nature-lab/breadboard-core'
 
 const props = defineProps<{
   player: PlayerData
@@ -12,14 +12,44 @@ const submitUrl = computed(() => {
   return `https://app.prolific.com/submissions/complete?cc=${data.value?.completionCode}`
 })
 
+// How long the comment may take to save before the page goes to Prolific all the same (ms).
+const SAVE_WAIT_MS = 3000
+
+/**
+ * The comment goes to the server on its own ('comment', next to the page's own address, with the
+ * seat's token), which keeps it in the participant's session's data (participantComment): this screen
+ * comes once the game is over, when the page's live connection may be closed and the server may run
+ * the next session already. Sent through the game only, it was lost. Resolves whatever happens.
+ */
+async function saveComment (text: string): Promise<void> {
+  const comment = text.trim()
+  if (!comment) return
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = participantToken()
+  if (token) headers['X-Breadboard-Token'] = token
+  try {
+    await Promise.race([
+      fetch('comment', { method: 'POST', headers, credentials: 'same-origin', body: JSON.stringify({ text: comment }) }),
+      new Promise(resolve => setTimeout(resolve, SAVE_WAIT_MS)),
+    ])
+  } catch (e) {
+    // (the way back to Prolific matters more than the comment)
+  }
+}
+
 const feedback = ref('')
 const sending = ref(false)
-function submit() {
+async function submit () {
   sending.value = true
-  Breadboard.send('exiting', { feedback: feedback.value })
+  const started = Date.now()
+  // (still sent to the game as well, for an experiment's own code that listens for it)
+  try {
+    Breadboard.send('exiting', { feedback: feedback.value })
+  } catch (e) {}
+  await saveComment(feedback.value)
   setTimeout(() => {
     window.location.href = submitUrl.value
-  }, 1000)
+  }, Math.max(0, 1000 - (Date.now() - started)))
 }
 </script>
 
