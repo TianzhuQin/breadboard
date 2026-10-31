@@ -438,6 +438,25 @@ public class AutopilotFlowTest extends BaseTest {
         return instance == null || instance.isNull() ? null : instance.get("id").asLong();
     }
 
+    private static Object getAutopilot(String name) throws Exception {
+        Field f = Autopilot.class.getDeclaredField(name);
+        f.setAccessible(true);
+        return f.get(null);
+    }
+
+    /** GET /autopilot reports this session as one the researcher opened by hand (status.handSession). */
+    private static void assertHandSession(JsonNode status, ExperimentInstance session, User by, boolean openToNewcomers) {
+        JsonNode hand = status.get("handSession");
+        assertNotNull(status.toString(), hand);
+        assertFalse("not reported: " + status, hand.isNull());
+        assertEquals(session.id.longValue(), hand.get("id").asLong());
+        assertEquals(session.name, hand.get("name").asText());
+        assertEquals("RUNNING", hand.get("status").asText());
+        assertEquals(by.email, hand.get("owner").asText());
+        assertEquals(status.toString(), openToNewcomers, hand.get("openToNewcomers").asBoolean());
+        assertEquals(status.toString(), !openToNewcomers, hand.get("gameStarted").asBoolean());
+    }
+
     @Test
     public void aSessionOpenedByHandIsTheResearchersWithTheStepsOwnSettings() throws Exception {
         final User researcher = user("byhand");
@@ -465,12 +484,31 @@ public class AutopilotFlowTest extends BaseTest {
         assertEquals("the steps' own takeover", 99, engineValue("autopilot.replace.afterSeconds"));
         String paused = st.get("problem").asText();
         assertTrue(paused, paused.contains("its session \"" + auto.name + "\" ended when " + researcher.email + " launched another session"));
+        // It is reported on its own, and the reason the autopilot is paused says that it is open and
+        // where the study's links lead: the Autopilot page used to say that no session was open.
+        assertHandSession(st, byHand, researcher, true);
+        String meanwhile = " Meanwhile \"Test players\", a session of this experiment that " + researcher.email
+            + " opened by hand, is open, and the participant links lead to it. Resume hands it to the autopilot.";
+        assertTrue(paused, paused.endsWith(meanwhile));
+        assertEquals("paused", st.get("problemKind").asText());
+        // Done (its one session finished) says the same, with the button that then hands it over.
+        Object pausedFor = getAutopilot("pausedBecause");
+        setAutopilot("pausedBecause", null);
+        setAutopilot("doneBecause", "Its session \"" + auto.name + "\" has finished, and opening the next session (continuous) is off");
+        st = autopilotStatus(researcher);
+        assertEquals("done", st.get("problemKind").asText());
+        assertTrue(st.get("problem").asText(), st.get("problem").asText().endsWith(
+            meanwhile.replace("Resume hands", "Open another session hands")));
+        setAutopilot("doneBecause", null);
+        setAutopilot("pausedBecause", pausedFor);
 
         // Stopping it leaves the reason the autopilot paused for, which is about its own session.
         tab.send("StopGame", "id", byHand.id);
         await("stopped", () -> ExperimentInstance.findById(byHand.id).status == ExperimentInstance.Status.STOPPED);
-        assertEquals(paused, autopilotStatus(researcher).get("problem").asText());
-        assertTrue(autopilotStatus(researcher).get("instance").isNull());
+        st = autopilotStatus(researcher);
+        assertEquals(paused.substring(0, paused.length() - meanwhile.length()), st.get("problem").asText());
+        assertTrue(st.get("instance").isNull());
+        assertTrue(st.toString(), st.get("handSession").isNull());
 
         // Resume: it opens a session of its own again.
         assertEquals(OK, status(callAction(controllers.routes.ref.AutopilotController.resume(),
@@ -684,6 +722,30 @@ public class AutopilotFlowTest extends BaseTest {
         JsonNode st = autopilotStatus(researcher);
         assertTrue(st.toString(), st.get("instance").isNull());
         assertFalse(st.get("paused").asBoolean());
+        // The Autopilot page is told of it, apart from its own (status.handSession), and why it opens
+        // none meanwhile: it used to say that no session was open and that it would open one shortly,
+        // and when the pause between its sessions would end, while the study's links led into that
+        // session and the autopilot opened nothing until it had ended.
+        assertHandSession(st, byHand, researcher, true);
+        assertEquals("waiting", st.get("problemKind").asText());
+        assertEquals("\"By hand\", a session of this experiment that " + researcher.email + " opened by hand, is open, and the "
+            + "participant links lead to it. The autopilot opens its own session once that one has ended; saving these "
+            + "settings hands it to the autopilot.", st.get("problem").asText());
+        assertTrue("nothing opens when the pause is over: " + st, st.get("nextOpenAt").isNull());
+        Result toIt = route(fakeRequest(GET, "/play/" + experiment.id + "/login"));
+        assertEquals(SEE_OTHER, status(toIt));
+        assertEquals("/game/" + experiment.id + "/" + byHand.id + "/login", header("Location", toIt));
+
+        // Its game starts. The page says so; the study's links wait for the autopilot's next session,
+        // which opens once that game has ended (the note isn't a reason that holds that one up).
+        tab.send("RunGame");
+        await("its game", () -> Boolean.TRUE.equals(ExperimentInstance.findById(byHand.id).hasStarted));
+        st = autopilotStatus(researcher);
+        assertHandSession(st, byHand, researcher, false);
+        assertTrue(st.get("problem").asText(), st.get("problem").asText().startsWith("\"By hand\", a session of this experiment that "
+            + researcher.email + " opened by hand, is running. The autopilot opens its own session once that one has ended"));
+        String during = page("/play/" + experiment.id + "/login");
+        assertTrue(during, during.contains("A session is in progress") && during.contains("http-equiv=\"refresh\""));
 
         // They open another over it ("Stop it and create"): a rebuild of the engine that ends theirs.
         // The console's question says nothing of the autopilot (status.instance names its own session
@@ -694,7 +756,9 @@ public class AutopilotFlowTest extends BaseTest {
         Thread.sleep(300);
         st = autopilotStatus(researcher);
         assertFalse("paused for a session it didn't open: " + st, st.get("paused").asBoolean());
-        assertTrue(st.toString(), st.get("problem").isNull());
+        assertEquals(st.toString(), "waiting", st.get("problemKind").asText());
+        assertTrue(st.get("problem").asText(), st.get("problem").asText().startsWith("\"Another\", a session of this experiment"));
+        assertHandSession(st, sessions(experiment).get(2), researcher, true);
 
         // Stopping that one doesn't pause it either, and once the pause between its sessions is over
         // (here: now), it opens its next one.
@@ -705,6 +769,7 @@ public class AutopilotFlowTest extends BaseTest {
         st = autopilotStatus(researcher);
         assertFalse(st.toString(), st.get("paused").asBoolean());
         assertTrue(st.toString(), st.get("problem").isNull());
+        assertTrue(st.toString(), st.get("handSession").isNull());
         setAutopilot("nextOpenAt", 0L);
         watchdog();
         await("its next session", () -> sessions(experiment).size() == 4 && Autopilot.openInstance(experiment.id) != null);

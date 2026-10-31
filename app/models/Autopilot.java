@@ -1376,6 +1376,21 @@ public final class Autopilot {
     return live ? fresh : null;
   }
 
+  /**
+   * The engine's live session of this experiment when a researcher opened it by hand: not the
+   * autopilot's (isAutopilotsSession), nor the test session. The autopilot opens none of its own
+   * beside it (whyNotOpen), and the study's links lead to it while it takes people (openInstance).
+   * Null when the engine runs no such session.
+   */
+  static ExperimentInstance handSession(Long experimentId) {
+    ExperimentInstance live = liveEngineSession();
+    if (experimentId == null || live == null || live.isTestInstance() || live.experiment == null
+        || !experimentId.equals(live.experiment.id) || isAutopilotsSession(live.id)) {
+      return null;
+    }
+    return live;
+  }
+
   /** The engine's session if it belongs to this experiment, whatever its state (it may have ended). */
   static ExperimentInstance engineSessionOf(Long experimentId) {
     ExperimentInstance session = ScriptBoard.engineSession();
@@ -1406,10 +1421,16 @@ public final class Autopilot {
     Long id = e.settings.experimentId;
     Experiment experiment = id == null ? null : Experiment.findById(id);
     status.put("on", e.isOn() && experiment != null);
+    // A session of its experiment that a researcher opened by hand (see handSession below).
+    ExperimentInstance hand = experiment == null ? null : handSession(experiment.id);
+    String handOwner = hand == null ? null : ScriptBoard.engineOwnerEmail();
+    ExperimentInstance takingPeople = hand == null ? null : openInstance(experiment.id);
+    boolean handOpen = takingPeople != null && hand.id.equals(takingPeople.id);
     if (experiment == null) {
       status.putNull("experimentId");
       status.putNull("experimentName");
       status.putNull("instance");
+      status.putNull("handSession");
       status.putNull("links");
     } else {
       status.put("experimentId", experiment.id);
@@ -1429,22 +1450,44 @@ public final class Autopilot {
         instance.put("status", session.status == null ? "" : session.status.toString());
         instance.put("gameStarted", Boolean.TRUE.equals(session.hasStarted));
       }
+      // A live session of its experiment that a researcher opened by hand, reported on its own: the
+      // console doesn't call it the autopilot's, and the autopilot opens none of its own until it has
+      // ended. The page used to say that no session was open meanwhile.
+      if (hand == null) {
+        status.putNull("handSession");
+      } else {
+        ObjectNode byHand = status.putObject("handSession");
+        byHand.put("id", hand.id);
+        byHand.put("name", hand.name);
+        byHand.put("status", hand.status == null ? "" : hand.status.toString());
+        byHand.put("gameStarted", Boolean.TRUE.equals(hand.hasStarted));
+        // whether the study's links lead into it now (its game hasn't started, its room isn't full)
+        byHand.put("openToNewcomers", handOpen);
+        if (handOwner == null) {
+          byHand.putNull("owner");
+        } else {
+          byHand.put("owner", handOwner);
+        }
+      }
       ObjectNode links = status.putObject("links");
       links.put("login", "/play/" + experiment.id + "/login");
       links.put("prolific", "/play/" + experiment.id + "/prolific?" + PROLIFIC_QUERY);
     }
     status.put("paused", e.isOn() && pausedBecause != null);
     status.put("done", e.isOn() && pausedBecause == null && doneBecause != null);
+    // A live session of another experiment holds the engine: the autopilot waits for it to end (a
+    // save with takeOver ends it). The console names it when it asks before taking over.
+    ExperimentInstance other = otherLiveSession(id);
     long due = nextOpenAt;
-    // Nothing is due while paused or done: it opens nothing by itself then.
-    if (e.isOn() && pausedBecause == null && doneBecause == null && due > System.currentTimeMillis()) {
+    // Nothing is due while paused or done: it opens nothing by itself then. Nor while a session it
+    // didn't open holds the engine (one opened by hand, another experiment's): when the time comes,
+    // it opens none beside that one (whyNotOpen), and opens its own once that one has ended.
+    if (e.isOn() && pausedBecause == null && doneBecause == null && hand == null && other == null
+        && due > System.currentTimeMillis()) {
       status.put("nextOpenAt", Timestamps.iso(new Date(due)));
     } else {
       status.putNull("nextOpenAt");
     }
-    // A live session of another experiment holds the engine: the autopilot waits for it to end (a
-    // save with takeOver ends it). The console names it when it asks before taking over.
-    ExperimentInstance other = otherLiveSession(id);
     if (other == null) {
       status.putNull("engineSession");
     } else {
@@ -1467,6 +1510,9 @@ public final class Autopilot {
       }
     }
     Problem problem = problem(e, experiment, other);
+    if (hand != null && e.isOn()) {
+      problem = withHandSession(problem, hand, handOwner, handOpen, ADMIN.equals(e.source));
+    }
     if (problem == null) {
       status.putNull("problem");
       status.putNull("problemKind");
@@ -1559,6 +1605,31 @@ public final class Autopilot {
           + "close the console" + (console ? ", or when someone saves these settings (which loads it over theirs)." : "."));
     }
     return lastProblem == null ? null : new Problem("error", lastProblem);
+  }
+
+  /**
+   * What the Autopilot page says while a session of its experiment that a researcher opened by hand
+   * is open (handSession), with {@code problem}, the reason it gives otherwise (problem()). With
+   * nothing else to say, a "waiting" note names that session: the page used to say that no session
+   * was open and that the autopilot would open one shortly, while the links led into that session and
+   * the autopilot opened nothing until it had ended. Paused or done, the reason says so as well, and
+   * that Resume (Open another session) hands that session to the autopilot (adoptLiveSession).
+   * Another reason (an error) is left as it is. Not a reason that holds up its next session
+   * (nextSessionHeldUp): during that session's game the links wait for the one it opens next.
+   */
+  private static Problem withHandSession(Problem problem, ExperimentInstance hand, String owner, boolean openToNewcomers,
+                                         boolean console) {
+    String which = "\"" + hand.name + "\", a session of this experiment that " + (owner == null ? "a researcher" : owner)
+        + " opened by hand, is " + (openToNewcomers ? "open, and the participant links lead to it." : "running.");
+    if (problem == null) {
+      return new Problem("waiting", which + " The autopilot opens its own session once that one has ended"
+          + (console ? "; saving these settings hands it to the autopilot." : "."));
+    }
+    if ("paused".equals(problem.kind) || "done".equals(problem.kind)) {
+      String button = "paused".equals(problem.kind) ? "Resume" : "Open another session";
+      return new Problem(problem.kind, problem.text + " Meanwhile " + which + " " + button + " hands it to the autopilot.");
+    }
+    return problem;
   }
 
   // ---- the autopilot's console output ----------------------------------------------------------------

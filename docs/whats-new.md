@@ -111,6 +111,9 @@ study URL.
   on the Autopilot page to let it open sessions again; after a run with **continuous** off, the
   button reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
   is in charge too, and a pause survives a server restart.
+- A session of its experiment that a researcher opens by hand isn't the autopilot's: the Autopilot
+  page names it and who opened it, the links lead to it while it takes participants, and the
+  autopilot opens none of its own until it has ended. **Resume** or a save hands it to the autopilot.
 - While a researcher has another experiment loaded and a console open, the autopilot leaves the
   engine to them and opens its session once they close the console.
 - While it is on, it opens a session whenever the script engine runs none. The engine is shared
@@ -161,7 +164,8 @@ says so and loads itself again every few seconds, which then goes into the sessi
 say "No session is open right now" and to try again later (Prolific participants: to return the
 study), which they still do while the autopilot is off, paused or done, or while something keeps it
 from opening the next session (another experiment's session in the engine, the disk almost full, a
-problem the Autopilot page shows). Someone whose connection
+problem the Autopilot page shows; a session of its experiment opened by hand isn't one: during its
+game they wait for the autopilot's next session too). Someone whose connection
 drops there counts as gone only after `departureGraceSeconds`, so a moment's drop neither starts the
 wait again nor gets the session given up. The game starts by itself. People who left before the
 start get no seat, and are told so if they come back (see below). With `maxPlayers`, at most that

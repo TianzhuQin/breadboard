@@ -431,7 +431,16 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(byHand.id).status);
         JsonNode status = state(researcher).get("status");
         assertTrue(status.toString(), status.get("paused").asBoolean());
-        assertEquals("still paused for the launch", pausedFor, status.get("problem").asText());
+        // (what follows the reason names the session opened by hand, which now runs its game)
+        assertEquals("still paused for the launch", pauseReason(pausedFor), pauseReason(status.get("problem").asText()));
+        assertTrue(status.toString(), status.get("problem").asText().endsWith(" Meanwhile \"by hand\", a session of this experiment that "
+            + researcher.email + " opened by hand, is running. Resume hands it to the autopilot."));
+    }
+
+    /** Why the autopilot paused, without what follows about a session opened by hand ("Meanwhile ..."). */
+    private static String pauseReason(String problem) {
+        int meanwhile = problem.indexOf(" Meanwhile ");
+        return meanwhile < 0 ? problem : problem.substring(0, meanwhile);
     }
 
     @Test
