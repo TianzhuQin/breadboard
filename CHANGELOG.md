@@ -25,9 +25,12 @@ see [docs/install.md](docs/install.md#upgrading).
   launcher asks systemd, and GNOME, to keep it awake).
 - Keep-running mode: the launcher starts the server again after a crash or when it runs out of
   memory (`logs/out-of-memory.hprof` tells you it did, and `logs/jvm-pid<N>.log` what Java said),
-  and says why in its window and in `logs/application.log`, also when it leaves it stopped. It
-  checks the port before each restart, and doesn't start again a server that never started (a
-  mistake in `conf/local.conf`, its port taken): `logs/start-errors.log` keeps what Java printed.
+  and says why in its window and in `logs/application.log`, also when it leaves it stopped (in the
+  log first, so a paused window can't hold that up). On Windows, exit code 1 is said to mean the
+  server's own stop after an error, a crash of Java (its report in `hs_err_pid*.log`) or an end from
+  outside, not the first alone. It checks the port before each restart, and doesn't start again a
+  server that never started (a mistake in `conf/local.conf`, its port taken):
+  `logs/start-errors.log` keeps what Java printed.
   Ready-made recipes for starting it with the computer: launchd (macOS), a Task Scheduler task
   (`breadboard-task.xml`, Windows) and systemd (Linux); as a Windows service, Java's own errors go
   to `logs/service-errors.log`. `/health` (GET or HEAD) for uptime monitors.
@@ -92,12 +95,15 @@ see [docs/install.md](docs/install.md#upgrading).
   says that a reload would end that session and pause the autopilot.
 - A session a researcher opens by hand is theirs: it runs with the steps' own waiting room and
   takeover, isn't marked "Opened by Autopilot", and ending it doesn't pause the autopilot, which
-  then opens its next session as usual. The top of the Autopilot page names it and who opened it,
-  and says whether the links lead to it; the autopilot opens its own once it has ended (paused or
-  done, Resume hands it over). The Autopilot page's settings apply to the sessions the autopilot
-  opens, and to one that Resume or a save hands it; ending one of those still pauses it.
+  then opens its next session as usual (nor does the server tell a researcher on another experiment
+  that it would). The Autopilot page shows it as the open session, with who opened it, whether it
+  takes participants and **Watch it live**, and says that the autopilot waits for it to end; the
+  autopilot opens its own once it has ended (paused or done, Resume hands it over). The Autopilot
+  page's settings apply to the sessions the autopilot opens, and to one that Resume or a save hands
+  it; ending one of those still pauses it.
 - A stopped session stays stopped: computer players no longer play it on to its end, so it can be
-  resumed.
+  resumed. Nothing happens in a session once it has ended: a page closed after its game finished no
+  longer hands that seat to the computer (an `aiTakeover` recorded in the finished session).
 - Sessions that were running when the server stopped are marked Stopped when it starts again, with a
   `sessionInterrupted` event, and the autopilot opens the next one; participants' pages stop
   reconnecting and say the session ended because the server stopped or restarted, also after a crash
@@ -129,7 +135,7 @@ see [docs/install.md](docs/install.md#upgrading).
 - An Autopilot setting that needs fixing is scrolled into view, clear of the save bar, and the
   page's messages no longer cover Save.
 - The autopilot names its sessions "Autopilot · 2026-10-30 13:20:47 UTC", which wrap the same in
-  every row of Sessions & data, and their data files download as
+  every row of Sessions & data, its search finds as typed or pasted, and whose data files download as
   `Autopilot - 2026-10-30 13-20-47 UTC_14.csv`.
 
 #### Participants' connections
@@ -140,7 +146,9 @@ see [docs/install.md](docs/install.md#upgrading).
   delay.
 - Two tabs of one participant no longer take the seat from each other: the older one says the study
   is open elsewhere, with **Use it here**. An older tab whose connection comes back by itself leaves
-  the seat to the newer page, and takes it back by itself once that page has gone. A network that
+  the seat to the newer page, and takes it back by itself once that page has gone. The tab the seat
+  was taken back on, by **Use it here** or by itself, keeps it when the other one reconnects in the
+  background (it counts as opened last, in the server's time). A network that
   blocks the live connection is told so, also after the page had connected (while the server answers
   over plain HTTP; while the server is down, the page says the connection was lost).
 - While the page is reconnecting, a note at the top of the page says so and moves the page down
@@ -196,7 +204,12 @@ see [docs/install.md](docs/install.md#upgrading).
 - Help in the menu under your email: the console's guide, the Chinese quick start, troubleshooting.
 - The first-account form says what **Default language** does: the language participants' texts are
   written in on the Content page, which new experiments are set up for; the console stays in
-  English.
+  English. A new server names the languages in English, also on a computer set to another language
+  (on a Chinese system they were named in Chinese for good), and the Chinese quick start names them
+  by their codes (`eng`, `zho`).
+- Parameters says which sessions get a parameter's default: the autopilot's, and the first New
+  session, which after that fills in the last session's values (**Use default** brings a new default
+  in). It said that every new session was filled in with the defaults.
 - The network game example: its network size and waiting room are launch parameters, and everything
   participants read is on the Content page; it is offered first, named Network game, when there is
   no experiment yet, and an empty Experiments page points to it. Its first round no longer shows
@@ -234,7 +247,9 @@ see [docs/install.md](docs/install.md#upgrading).
   session opens, and warns when something keeps the autopilot from opening it (another experiment's
   session on the engine, a colleague with another experiment loaded, a problem on the Autopilot
   page): the link then says no session is open and asks Prolific participants to return the study,
-  so recruiting is best paused.
+  so recruiting is best paused. The Autopilot card beside it follows the same answers (On, Paused,
+  Done, held up), asked again every 10 seconds, and no longer promises that people from Prolific
+  always find a session.
 - Recruitment → Prolific: **When a participant finishes** says when an experiment gives the
   completion code by itself (a `prolificCode` parameter, as the example has, set on Parameters);
   otherwise **Copy code** gives code that completes only Prolific participants.
@@ -245,7 +260,9 @@ see [docs/install.md](docs/install.md#upgrading).
   ended, nor lists the players of another session the engine runs.
 - What a Prolific participant writes under "Comments for the researcher" on the finish screen is
   saved in their session's data (`participantComment`), also once their game has ended and the next
-  session has opened: in View events and every download. It used to be lost.
+  session has opened: in View events and every download. It used to be lost. A finish screen left
+  open can send it for a week, also after many more sessions or a restart of the server, and when it
+  can't be saved the screen says so, with **Try again**, instead of going on to Prolific without it.
 - Preview shows the session's test players as soon as it opens, also after a reload and beside a
   player opened with Preview their screen; on a phone the player list folds away above them. Its
   tiles and player list say Watching where a preview only watches (a connected participant, a
@@ -285,7 +302,8 @@ Details are in [docs/whats-new.md](docs/whats-new.md).
   `clientDisconnected` only on real changes, marked when a preview caused them.
   `_system.disconnectedAt` and the waiting room's `departureGraceSeconds`.
 - A text not yet translated into the language the steps chose (`c.setDefaultLanguage`) is shown in
-  English, or else in the language it was first written in, instead of stopping the step.
+  English, or else in the language it was first written in, instead of stopping the step. A version
+  that is there but empty is shown as it is, nothing, as the Content page warns.
 - A tie change an experiment's `onEdit` makes itself is answered as made (`applied: true`): the
   participant's page says "Tie cut.", not "Your change was sent."
 - The new participant page's comment links to the previous default page (SVGGraph) on GitHub, since

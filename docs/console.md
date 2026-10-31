@@ -163,7 +163,8 @@ text with `c.get("Name")`, shown above the editor with a copy button. Each text 
 language: **Languages** sets the experiment's languages, and the language bar switches between them.
 The steps choose the language participants read with `c.setDefaultLanguage("zho")` (the codes are
 the ones the language bar shows); a text that has no version in it yet is shown in English, or else
-in the language it was written in first. **New text** starts from an empty text or a copy of
+in the language it was written in first. A version that is there but empty is shown as it is, so
+participants see nothing, as the page warns. **New text** starts from an empty text or a copy of
 another. Edit in **Visual** or **HTML**; **Preview** shows the text as participants see it. **Save**
 saves this text, and the button at the top right saves every changed text (Ctrl+S). The **⋯** menu
 has **Rename** (F2), **Discard changes** and **Delete text…**. After a rename, scripts that use the
@@ -387,10 +388,12 @@ next session (another experiment's session is running, a researcher has another 
 the disk is almost full, or another problem shown at the top of this page), they say that no session
 is open.
 
-A session of its experiment that someone opened by hand isn't the autopilot's: the top of the page
-names it and who opened it. The links lead to it while it takes participants, and the autopilot
-opens none of its own until it has ended; during its game they wait for the autopilot's next session
-as above. **Resume**, **Open another session** or a save hands that session to the autopilot.
+A session of its experiment that someone opened by hand isn't the autopilot's: **Open session**
+shows it, with who opened it and whether it takes participants (with **Watch it live** when it is
+the session your console shows), and the note above it says that the autopilot waits for it to end.
+The links lead to it while it takes participants, and the autopilot opens none of its own until it
+has ended; during its game they wait for the autopilot's next session as above. **Resume**, **Open
+another session** or a save hands that session to the autopilot.
 
 **What pauses it.** Ending the autopilot's session from the console pauses the autopilot: stopping
 it, or anything that reloads the engine (creating or resuming another session, reloading); selecting
@@ -515,7 +518,10 @@ records a `noCompletionCode` event for them while its `prolificCode` is empty). 
 writes under **Comments for the researcher** on the finish screen (it isn't shown with
 `noFeedback: true`) is kept in their session's data as a `participantComment` event, with `player`
 and `text`, also once their game has ended and the next session has opened: find it with
-**View events** in **Sessions & data**, or in the data you download.
+**View events** in **Sessions & data**, or in the data you download. A finish screen left open can
+send it for a week, also after many more sessions or a restart of the server. If it can't be saved,
+the screen says so, with **Try again** and **Return to Prolific without it**, instead of going on to
+Prolific without it.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game

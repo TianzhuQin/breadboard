@@ -38,7 +38,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 - **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 OnJoinStep、OnLeaveStep、InitStep 三个空步骤和标准的参与者页面）开始，从 **Example: network game**（一个可以直接运行的网络小游戏）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
 - **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S，Mac 上是 ⌘S）只是保存。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。注意：重新加载会让网络里的所有人断开。重新加载后，你自己开的那一场（或者自动运行用你的账号开的那一场）会继续；如果它的游戏已经开始或有人在线，控制台会先问你，并说明游戏会从头开始，里面的人会自己重新连上。有场次在运行时，保存后、重新加载前，顶栏会显示 **Reload needed**（没有场次在运行时显示 **Steps saved**，下一场会自动用上），所有研究者的控制台都一样，刷新页面也还在。自动运行自己的那一场开着时，下一场也会自动用上保存的代码，所以顶栏同样显示 **Steps saved**，Steps 页只提示已保存，不催你重新加载（如果自动运行用的不是你的账号，你这时重新加载会结束这一场并让自动运行暂停，页面也会这样提醒）。
-- **Content**：参与者读到的文字，比如说明和知情同意书。每段文字有一个名字，程序里用 `c.get("名字")` 显示。每种语言各写一份；实验有几种语言时，参与者读哪一种由步骤决定，比如 `c.setDefaultLanguage("zho")`（`zho` 是语言的代码，Content 页面上写在语言名字旁边）。某段文字还没有这种语言的版本时，参与者看到的是英文版。
+- **Content**：参与者读到的文字，比如说明和知情同意书。每段文字有一个名字，程序里用 `c.get("名字")` 显示。每种语言各写一份；实验有几种语言时，参与者读哪一种由步骤决定，比如 `c.setDefaultLanguage("zho")`（`zho` 是语言的代码，Content 页面上写在语言名字旁边）。某段文字还没有这种语言的版本时，参与者看到的是英文版；有这种语言的版本但内容是空的，参与者就什么也看不到（Content 页面也会这样提醒）。
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
 - **Preview**（页面标题是 Participant preview）：开场后，在这里按某位参与者的视角看他的页面，可选 **Desktop** 或 **Phone**。
   - 预览里的点击是真实的：在预览里选一个选项，就等于这位参与者做了这个选择，会记进数据。
@@ -51,9 +51,10 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 **第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；参与者看到的所有文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
-例子的文字是英文写的，放在 Content 页面的 **English** 下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
+例子的文字是英文写的，放在 Content 页面代码为 `eng` 的语言下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
 
-- 在 **Content** 页面顶部的语言栏（**Language**）点 **Chinese**（`zho`），写上译文（可以先点 **Copy from English**，再改成中文），保存后参与者就看到中文。
+- 在 **Content** 页面顶部的语言栏（**Language**）点代码为 `zho` 的语言，写上译文（可以先用 **Copy from** 按钮把 `eng` 的文字复制过来，再改成中文），保存后参与者就看到中文。
+- 语言栏里每种语言的名字旁边都写着代码。新装的服务器用英文写语言的名字：`eng` 是 **English**，`zho` 是 **Chinese**，按钮是 **Copy from English**。从旧版本升级来的服务器，名字跟着当初建数据库那台电脑的语言，在中文系统上可能是“英文”“中文”，按钮也就是 **Copy from 英文**。认代码就不会错。
 - 还没翻译的文字，参与者看到的仍是英文，所以可以一段一段地翻译。
 - 参与者读哪种语言，由启动参数 `language` 决定，默认是你的 Default language。要让参与者看英文，在 **Parameters** 页把 `language` 的 **Default** 改成 `eng`，自动运行以后开的场次就用英文。自己新建一场时要注意：**New session** 会照上一场填好启动参数，不会自动换成新的 Default，所以要在 `language` 下点 **Use default**，确认是 `eng`，再点 **Create session**。
 
@@ -98,7 +99,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 页面顶部显示当前状态、开放中的那一场（**Watch it live** 可以去看），以及给参与者的 **Sign-in link** 和 **Prolific link**。这两个链接总是指向当时开放的那一场，所以一直用同一个就行。没有一场在接收参与者时（游戏正在进行、等候室已满正在倒计时，或者下一场马上要开），打开链接的人会看到一个等待页：上面说有一场正在进行，结束后就开下一场；这个页面每隔几秒自己刷新一次，下一场一开就自动进入（从 Prolific 来的人还会看到：可以一直开着这个页面，等不及的话就退回研究）。自动运行关着、暂停、已经结束，或者没有打开 **Open the next session when one finishes** 时，或者有什么让它开不了下一场时（引擎里正跑着别的实验的场次、有研究者在引擎里载入了别的实验、磁盘快满了，或者 Autopilot 页顶部显示的别的问题），链接仍然显示 "No session is open right now"。
 
-有人手动为这个实验开的场次不算自动运行的，Autopilot 页顶部会写明是哪一场、是谁开的。这一场还在接收参与者时，链接会带人进去；它结束之前，自动运行不会自己另开一场；它的游戏开始后，链接像上面说的那样显示等待页，等自动运行开下一场。点 **Resume** 或 **Open another session**，或者保存设置，都会把这一场交给自动运行。
+有人手动为这个实验开的场次不算自动运行的：Autopilot 页的 **Open session** 会显示这一场、是谁开的、是不是还在接收参与者（如果它就是你控制台上的这一场，还有 **Watch it live**），上面的提示也写着自动运行在等它结束。这一场还在接收参与者时，链接会带人进去；它结束之前，自动运行不会自己另开一场；它的游戏开始后，链接像上面说的那样显示等待页，等自动运行开下一场。点 **Resume** 或 **Open another session**，或者保存设置，都会把这一场交给自动运行。
 
 **暂停与继续**：如果你在控制台里结束了自动运行的那一场（停止它，或做了会重新加载引擎、结束这一场的事，比如新建或恢复另一场，或者用别的账号点 **Reload engine**；切换实验不会，用保存了自动运行设置的那个账号点 **Reload engine** 时，这一场会接着进行，也不会暂停），自动运行就会暂停，控制台会先提醒你。结束你自己开的场次（包括这个实验的场次和测试场次）不会让它暂停，之后它照常开下一场；关掉 **Open the next session when one finishes** 时，这样的场次也不算它的那一场。暂停时它不开新场，所以除非你自己为这个实验开了一场，链接都进不去。回到 Autopilot 页点 **Resume** 继续。如果关掉了 **Open the next session when one finishes**，一场结束后按钮会变成 **Open another session**。暂停状态在服务器重启后仍然保留。
 
@@ -133,7 +134,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
      不加这个判断也不会出错：对不是从 Prolific 来的人，它什么都不做，只在服务器日志里写一行原因。
    - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场（用例子游戏时，确认 `prolificCode` 填的是你的完成码，不是的话点它下面的 **Use default**），然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮。
 
-参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场；**From Prolific in every session** 按场次列出这个实验所有场次从 Prolific 来的人（最新的一场在最上面）：什么时候加入的、有没有完成、完成码和奖金，它的 **Copy bonus list** 会复制所有场次的奖金名单。游戏结束时没拿到完成码的人（比如例子实验的 `prolificCode` 还空着的时候），在两个列表里都算完成，标成 **No code**。等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
+参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。这一页一直开着的话，一周之内都能把留言存下来，又过了很多场、服务器重启过也一样；万一存不下来，页面会直接告诉参与者，给出 **Try again** 和 **Return to Prolific without it** 两个按钮，不会不声不响地丢掉留言。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场；**From Prolific in every session** 按场次列出这个实验所有场次从 Prolific 来的人（最新的一场在最上面）：什么时候加入的、有没有完成、完成码和奖金，它的 **Copy bonus list** 会复制所有场次的奖金名单。游戏结束时没拿到完成码的人（比如例子实验的 `prolificCode` 还空着的时候），在两个列表里都算完成，标成 **No code**。等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 
 ## 导出数据
 
