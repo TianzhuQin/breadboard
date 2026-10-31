@@ -291,8 +291,11 @@ IF EXIST "logs\start-errors.log" IF NOT DEFINED SERVICE GOTO couldnotstart
 
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
 IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
-REM (1: the server's own stop after an error that stopped its engine, Global.exitIfActorsStop)
-IF "%EXIT_CODE%"=="1" SET "WHY=exit code 1: the server stopped itself after an error, which logs\application.log shows"
+REM 1: the server's own stop after an error that stopped its engine (Global.exitIfActorsStop), which
+REM logs\application.log shows. On Windows Java ends with 1 in two more cases, of which that log says
+REM nothing: when it crashes (HotSpot leaves its report in hs_err_pid*.log in this folder) and when it
+REM is ended from outside (Task Manager's End task, taskkill /F). breadboard.sh gets 13x for those.
+IF "%EXIT_CODE%"=="1" SET "WHY=exit code 1: the server stopped itself after an error, which logs\application.log then shows; or Java crashed, which leaves its report in hs_err_pid*.log in this folder; or it was ended from outside, from Task Manager for example"
 IF DEFINED SERVICE IF EXIST "logs\start-errors.log" SET "WHY=it could not start, exit code %EXIT_CODE%; logs\start-errors.log and logs\service-errors.log may say why"
 IF "%EXIT_CODE%"=="3" CALL :outofmemory
 CALL :now
@@ -350,7 +353,9 @@ CALL :say_port
 GOTO failed
 
 :giveup
-CALL :note "Breadboard stopped by itself (%WHY%). It has been started again 5 times in 10 minutes, so it is left stopped: logs\application.log says what went wrong."
+REM (not "logs\application.log says what went wrong": after a crash of Java, or an end from outside,
+REM it says nothing of it; the reason in brackets names where to look)
+CALL :note "Breadboard stopped by itself (%WHY%). It has been started again 5 times in 10 minutes, so it is left stopped: the reason in brackets says where to look."
 :failed
 REM Keep the window open after a failure, so the message can be read. (Play stops with -1, which
 REM IF ERRORLEVEL 1 doesn't catch.)
@@ -561,11 +566,13 @@ IF %AGE% LSS 600 SET /A "RECENT+=1"
 GOTO :EOF
 
 :note
-REM What happened, in this window and in logs\application.log
-ECHO %~1
+REM What happened, in logs\application.log and then in this window: the log first, as :note_going_on
+REM and :portnowtaken write it, since a window that doesn't take output (a click into it starts
+REM selecting text, which pauses it until Esc) holds ECHO up, and with it the log's line.
 >>"logs\application.log" ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
 >>"logs\application.log" ECHO %~1
 >>"logs\application.log" ECHO.
+ECHO %~1
 GOTO :EOF
 
 :note_going_on
