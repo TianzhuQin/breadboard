@@ -554,7 +554,8 @@ public class Breadboard extends UntypedActor {
           // New language, create it
           language = new Language();
           language.code = addLanguage.languageCode;
-          language.name = new Locale(addLanguage.languageCode).getDisplayLanguage();
+          // (in English, as LanguageController.seedLanguages names them)
+          language.name = new Locale(addLanguage.languageCode).getDisplayLanguage(Locale.ENGLISH);
         }
         boolean hasLanguage = false;
         for (Language l : selectedExperiment.languages) {

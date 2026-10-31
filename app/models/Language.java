@@ -49,7 +49,7 @@ public class Language extends Model {
     Locale locale = new Locale(iso3);
     Language language = new Language();
     language.setCode(iso3);
-    language.setName(locale.getDisplayName());
+    language.setName(locale.getDisplayName(Locale.ENGLISH));
     return language;
   }
 
