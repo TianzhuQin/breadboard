@@ -10,9 +10,11 @@ import static org.junit.Assert.*;
 /**
  * The texts scripts show ({@code c.get}, {@code c.getTranslated}, ContentFetcher) in an experiment
  * translated text by text, as the network game example is by a researcher whose language isn't
- * English: a text with no version in the language the steps chose, or an empty one, is shown in
- * English, or else in the language it was written in first. It used to stop the step with a
- * NullPointerException (and gave "" in file mode).
+ * English: a text with no version in the language the steps chose is shown in English, or else in
+ * the language it was written in first. It used to stop the step with a NullPointerException (and
+ * gave "" in file mode). A version there is, even an empty one, is shown as it is: participants see
+ * nothing, as the Content page warns ("The Chinese version is empty, so participants would see
+ * nothing").
  */
 public class ContentLanguageTest extends BaseTest {
 
@@ -37,6 +39,8 @@ public class ContentLanguageTest extends BaseTest {
         experiment.content.add(text("Prompt", english, "<p>Pick a color.</p>", chinese, "<p>选一个颜色。</p>"));
         experiment.content.add(text("Thanks", english, "<p>Thank you!</p>"));
         experiment.content.add(text("Heading", english, "<h2>Round {0}</h2>", chinese, "  "));
+        experiment.content.add(text("Note", english, "<p>Read this.</p>", chinese, "<p></p>"));
+        experiment.content.add(text("Blank", english, "", spanish, "<p>¡Hola!</p>"));
         experiment.content.add(text("Hola", spanish, "<p>¡Hola!</p>"));
         experiment.save();
 
@@ -44,7 +48,9 @@ public class ContentLanguageTest extends BaseTest {
         c.setDefaultLanguage("zho");
         assertEquals("<p>选一个颜色。</p>", c.get("Prompt"));
         assertEquals("not translated yet", "<p>Thank you!</p>", c.get("Thanks"));
-        assertEquals("an empty version", "<h2>Round 2</h2>", c.get("Heading", 2));
+        assertEquals("an empty version, as it is", "  ", c.get("Heading", 2));
+        assertEquals("one the Content page counts as empty too", "<p></p>", c.get("Note"));
+        assertEquals("not translated, and its English version is empty", "", c.get("Blank"));
         assertEquals("no English one either", "<p>¡Hola!</p>", c.get("Hola"));
         assertEquals("", c.get("No such text"));
         assertEquals("<p>Thank you!</p>", c.getTranslated("Thanks", "zho"));

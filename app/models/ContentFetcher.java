@@ -66,11 +66,14 @@ public class ContentFetcher {
 
   /**
    * The text {@code name} in the language {@code languageCode}, or in the language a script chose with
-   * setDefaultLanguage when that is null. A text with no version in that language, or an empty one, is
-   * given in English, or else in the language it was written in first: an experiment translated
-   * text by text (the network game example, whose English texts a researcher translates one at a
-   * time) shows every text meanwhile. That used to stop the step (a NullPointerException), or give ""
-   * in file mode. Without a language, the text's first version, as before.
+   * setDefaultLanguage when that is null. A text with no version in that language at all is given in
+   * English, or else in the language it was written in first: an experiment translated text by text
+   * (the network game example, whose English texts a researcher translates one at a time) shows every
+   * text meanwhile. That used to stop the step (a NullPointerException), or give "" in file mode. A
+   * version there is, even an empty one, is given as it is: the Content page tells the researcher that
+   * participants would see nothing for an empty version, and so they do. (For a while an empty version
+   * was given in English, while a version such as "&lt;p&gt;&lt;/p&gt;", which the Content page counts
+   * as empty too, was not.) Without a language, the text's first version, as before.
    */
   private String getContentString(String name, String languageCode) {
     // Accessing selectedExperiment.fileMode directly does not update due to some Ebean caching going on
@@ -119,26 +122,20 @@ public class ContentFetcher {
     return returnString;
   }
 
-  /** The version in {@code languageCode}; else the English one; else the first; null when none has text. */
+  /**
+   * The version in {@code languageCode}, as it is, even empty; with none in that language, the English
+   * one; else the first; null when the text has no version at all.
+   */
   private static Translation inLanguage(List<Translation> versions, String languageCode) {
     for (String code : new String[]{languageCode, "eng"}) {
       for (Translation t : versions) {
         Language l = t.getLanguage();
-        if (l != null && code.equals(l.getCode()) && hasText(t)) {
+        if (l != null && code.equals(l.getCode())) {
           return t;
         }
       }
     }
-    for (Translation t : versions) {
-      if (hasText(t)) {
-        return t;
-      }
-    }
-    return null;
-  }
-
-  private static boolean hasText(Translation t) {
-    return t.getHtml() != null && !t.getHtml().trim().isEmpty();
+    return versions.isEmpty() ? null : versions.get(0);
   }
 
   private static String html(Translation t) {
