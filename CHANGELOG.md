@@ -188,7 +188,9 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   researcher's preview signed in, and show failures in red and warnings in amber.
 - Preview shows the session's test players as soon as it opens, also after a reload. Its tiles and
   player list say **Watching** where a preview only watches and **Away** where it stands in for
-  someone who left, with what that means now; on a phone the player list folds away.
+  someone who left, with what that means now; on a phone the player list folds away. The list counts
+  only the players in the network: after a Reload engine it read "Players · 3 of 1 shown" while the
+  players previewed before joined again (their tiles stay, and show them once they are back).
 - "Reload needed" comes from the server: every researcher's console says the same, also after a
   refresh. It doesn't show after saving steps while no session runs: the next session loads them.
 - **New session** says that the session opens right away and that its game starts when you, or its
