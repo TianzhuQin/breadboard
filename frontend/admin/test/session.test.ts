@@ -1285,6 +1285,56 @@ describe('NewSessionDialog', () => {
     expect(w.emitted('update:open')).toBeFalsy()
   })
 
+  // The server's answer puts the new session in the store (running, with the name just given) before
+  // the dialog has faded out: worked out live, the closing form flashed a warning that creating stops
+  // that very session, and that its name was taken.
+  it('closes as it was, saying Creating…, without warnings about the session it has just created', async () => {
+    const w = await open()
+    await numberInput().setValue('3')
+    let answer!: (v: any) => void
+    store.launch.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    await submit()
+    const create = () => page().findAll('button').find(b => b.attributes('type') === 'submit')!
+    expect(create().text()).toBe('Creating…')
+    // the new session reaches the store before the launch is answered
+    const made = { id: 4, name: 'Session 2', status: 'RUNNING' }
+    admin.experiment = { ...admin.experiment, instances: [...admin.experiment.instances, made] }
+    admin.instance = made
+    await flushPromises()
+    const shown = () => ({
+      warn: page().find('.nsd-warn').exists(),
+      nameTaken: text().includes('already has this name'),
+      button: create().text(),
+    })
+    expect(shown()).toEqual({ warn: false, nameTaken: false, button: 'Creating…' })
+    answer({ user: {} })
+    await flushPromises()
+    const opens = w.emitted('update:open') || []
+    expect(opens[opens.length - 1]).toEqual([false])
+    // fading out (the parent has yet to close it): as it was
+    expect(shown()).toEqual({ warn: false, nameTaken: false, button: 'Creating…' })
+    // opened again, it shows what runs now, and the next free name
+    await w.setProps({ open: false })
+    await w.setProps({ open: true })
+    await nextTick()
+    expect(page().find('.nsd-warn').text()).toContain('“Session 2” is running.')
+    expect((page().findAll('input')[0].element as HTMLInputElement).value).toBe('Session 3')
+    expect(create().text()).toBe('Stop it and create')
+  })
+
+  it('shows the live state again after a launch that didn\'t happen', async () => {
+    await open()
+    await numberInput().setValue('3')
+    store.launch.mockImplementationOnce(async () => {
+      // meanwhile someone else's session started
+      admin.instance = { id: 9, name: 'Theirs', status: 'RUNNING' }
+      return null
+    })
+    await submit()
+    expect(text()).toContain('The server did not confirm the new session.')
+    expect(page().find('.nsd-warn').text()).toContain('“Theirs” is running.')
+  })
+
   it('warns that a running session will be stopped', async () => {
     admin.instance = { id: 9, name: 'Live one', status: 'RUNNING' }
     await open()
