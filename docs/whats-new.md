@@ -1,9 +1,10 @@
 # What's new in Breadboard 3
 
 Everything here adds to Breadboard 2.4; existing experiments keep working unless noted. The
-experiment language itself (steps, `g`, `a`, content) is unchanged and still described in the
-[original wiki](https://github.com/human-nature-lab/breadboard/wiki). For running a release, see
-[install.md](install.md); for the console, [console.md](console.md).
+experiment language itself (steps, `g`, `a`, content) is still the one described in the
+[original wiki](https://github.com/human-nature-lab/breadboard/wiki), with the additions and
+changes below. For running a release, see [install.md](install.md); for the console,
+[console.md](console.md).
 
 ## Participant login and recruitment
 
@@ -96,6 +97,18 @@ step.clearChoicesOnTimeout = true
 
 A timed step ends when every choice is made or time runs out, whichever comes first. With no
 choices it waits for the whole duration. Steps without `duration` behave as before.
+
+## Texts in several languages
+
+`c.get(name)` gives a text in the language the steps chose with `c.setDefaultLanguage` (by the code
+the Content page shows for it, such as `"zho"`), and `c.getTranslated(name, code)` in the one it
+names. A text with no version in that language yet is now given in English, or else in the language
+it was first written in, so an experiment translated one text at a time shows every text meanwhile;
+it used to stop the step that asked for it (a `NullPointerException`), or give nothing in file mode.
+A version that is there but empty is given as it is: participants see nothing, as the Content page
+warns. With no language chosen, `c.get` gives a text's first version, as before. A language
+`c.setDefaultLanguage` doesn't know is named in the server's log, and texts are then given in the
+language each was first written in.
 
 ## Running without anyone at the admin console (autopilot)
 
