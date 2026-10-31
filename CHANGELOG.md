@@ -180,6 +180,21 @@ see [docs/install.md](docs/install.md#upgrading).
 - The participant's network keeps everyone in their place when ties change; a newcomer sits next to
   someone they are tied to.
 
+#### Participants' pages in Chinese
+- In a session whose texts are in Chinese, participants see Breadboard's own words in Chinese too,
+  from the sign-in page to the end: the waiting room and its countdown, the network's hints,
+  confirmations and list of changes, the notes when the connection drops, the end screens, the
+  Prolific finish screen, and the pages before and between sessions ("You have already taken part",
+  "No session is open right now", the page that waits for the next session, "This session is full").
+  They follow the language the steps choose with `c.setDefaultLanguage("zho")`, as the example does
+  from its `language` launch parameter; a session in any other language gets them in English, as
+  before. They used to be English only, around the study's Chinese texts.
+- The pages shown before or between sessions are in the language of the session they lead to, or
+  else of the experiment's most recent session, also after a restart of the server.
+- The console, a preview's notes for the researcher, Mechanical Turk's pages and experiments that still
+  use the previous AngularJS participant page stay in English. The Chinese quick start says how to
+  make a study's pages Chinese, and what stays English.
+
 #### The console and the lab
 - Researcher accounts: Settings → Researchers adds, removes and gives new passwords to the lab's
   accounts (passwords are shown once, to pass on; **Copy sign-in details** gives the server's
@@ -310,6 +325,11 @@ Details are in [docs/whats-new.md](docs/whats-new.md).
   that is there but empty is shown as it is, nothing, as the Content page warns.
 - A tie change an experiment's `onEdit` makes itself is answered as made (`applied: true`): the
   participant's page says "Tie cut.", not "Your change was sent."
+- Breadboard's own words to participants follow `c.setDefaultLanguage` (English, or Chinese for
+  `zho`). The server records each session's language as its steps load, the page gets it
+  (`Breadboard.language`, the `bb:language` event), and both read the words from
+  `conf/i18n/eng.json` and `zho.json`; in Groovy, `bbText`. A refused tie change is told to the
+  participant in their language and recorded in English, as before.
 - The new participant page's comment links to the previous default page (SVGGraph) on GitHub, since
   a release doesn't carry that file.
 
