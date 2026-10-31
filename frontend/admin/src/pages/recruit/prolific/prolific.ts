@@ -223,8 +223,8 @@ export function groovyString (s: string): string {
 
 /**
  * The code for the step where a participant finishes: it completes Prolific participants only
- * (completeProlific refuses anyone else, which would stop the step), and says that `p` stands for
- * whatever the step calls the participant.
+ * (completeProlific does nothing for anyone else, and the server's log says why; it used to throw,
+ * which stopped the step), and says that `p` stands for whatever the step calls the participant.
  */
 export function completionSnippet (code: string): string {
   return [

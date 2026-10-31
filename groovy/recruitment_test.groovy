@@ -163,8 +163,8 @@ test("completeMturk refuses a non-mturk player") {
 
 // --- the console's completion code (Recruitment → When a participant finishes) --------------------
 // The code the console gives to paste into a step (completionSnippet in the console's prolific.ts),
-// with `p` for the participant: it completes those from Prolific and leaves everyone else alone,
-// where completeProlific alone threw for them and so stopped the step.
+// with `p` for the participant: it completes those from Prolific and leaves everyone else alone, as
+// completeProlific itself now does (it used to throw for them, which stopped the step).
 
 test("the console's completion code completes Prolific participants and leaves everyone else alone") {
   eventTracker = null
