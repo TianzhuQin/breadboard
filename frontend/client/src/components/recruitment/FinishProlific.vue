@@ -12,8 +12,12 @@ const submitUrl = computed(() => {
   return `https://app.prolific.com/submissions/complete?cc=${data.value?.completionCode}`
 })
 
-// How long the comment may take to save before the screen says it couldn't be (ms).
+// How long the comment may take to save, from the click, before the screen says it couldn't be (ms):
+// the request for a comment token it may have to make first included.
 const SAVE_WAIT_MS = 10000
+// How long a request for a comment token may go unanswered before the screen stops it (ms): see
+// commentToken. At Finish, the comment then goes with the seat's token alone.
+const TOKEN_WAIT_MS = 4000
 // How often the screen asks for a new comment token while it is open (ms): see commentToken.
 const TOKEN_REFRESH_MS = 60 * 60 * 1000
 
@@ -33,27 +37,47 @@ function headers (): Record<string, string> {
  * gives a new one for as long as it knows the seat, which it forgets only once the session has ended:
  * the last one is good until about a week after that, however long the session went on after this
  * screen appeared. Null when the server gives none (an older one, a researcher's preview, the network
- * down: then asked for again as the comment is sent).
+ * down, no answer within TOKEN_WAIT_MS: then asked for again as the comment is sent). A request that
+ * gets no answer in that time is stopped: Finish would wait for it, and one that never answers (a hung
+ * server, a connection that died without a word) would hold one of the few connections the browser
+ * opens to the server.
  */
 let commentToken: string | null = null
 async function getCommentToken (): Promise<string | null> {
-  try {
-    const res = await fetch('comment', { headers: headers(), credentials: 'same-origin' })
+  const stop = typeof AbortController === 'function' ? new AbortController() : null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const ask = async (): Promise<string | null> => {
+    const res = await fetch('comment', { headers: headers(), credentials: 'same-origin', signal: stop ? stop.signal : undefined })
     if (!res || res.status !== 200) return null
     const body = await res.json()
     return body && typeof body.token === 'string' && body.token ? body.token : null
+  }
+  try {
+    return await Promise.race([
+      ask(),
+      new Promise<null>(resolve => {
+        timer = setTimeout(() => {
+          if (stop) stop.abort()
+          resolve(null)
+        }, TOKEN_WAIT_MS)
+      }),
+    ])
   } catch (e) {
     return null
+  } finally {
+    clearTimeout(timer)
   }
+}
+/** Asks for a new comment token, and keeps the one there is when the server gives none. */
+async function renewCommentToken () {
+  const newer = await getCommentToken()
+  if (newer) commentToken = newer
 }
 let refresh: ReturnType<typeof setInterval> | undefined
 onMounted(async () => {
   if (!data.value || data.value.noFeedback) return
-  refresh = setInterval(async () => {
-    const newer = await getCommentToken()
-    if (newer) commentToken = newer
-  }, TOKEN_REFRESH_MS)
-  commentToken = await getCommentToken()
+  refresh = setInterval(renewCommentToken, TOKEN_REFRESH_MS)
+  await renewCommentToken()
 })
 onBeforeUnmount(() => clearInterval(refresh))
 
@@ -61,20 +85,26 @@ onBeforeUnmount(() => clearInterval(refresh))
  * The comment goes to the server on its own ('comment', POST, with the seat's token and the comment
  * token), which keeps it in the participant's session's data (participantComment): this screen comes
  * once the game is over, when the page's live connection may be closed and the server may run the
- * next session already. Sent through the game only, it was lost. True once the server has it; false
- * when it doesn't (refused, no answer within SAVE_WAIT_MS, no network).
+ * next session already. Sent through the game only, it was lost. Without a comment token, one is
+ * asked for first; when none comes (within TOKEN_WAIT_MS), the comment goes with the seat's token
+ * alone, which the server takes for as long as it knows the seat. True once the server has it; false
+ * when it doesn't (refused, no network, or no answer within SAVE_WAIT_MS of the click, that request
+ * for a token included).
  */
 async function saveComment (comment: string): Promise<boolean> {
-  if (!commentToken) commentToken = await getCommentToken()
-  const body: Record<string, string> = { text: comment }
-  if (commentToken) body.token = commentToken
+  const send = async (): Promise<boolean> => {
+    if (!commentToken) await renewCommentToken()
+    const body: Record<string, string> = { text: comment }
+    if (commentToken) body.token = commentToken
+    const res = await fetch('comment', { method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify(body) })
+    return !!res && res.status >= 200 && res.status < 300
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const res: any = await Promise.race([
-      fetch('comment', { method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify(body) }),
-      new Promise(resolve => { timer = setTimeout(() => resolve(null), SAVE_WAIT_MS) }),
+    return await Promise.race([
+      send(),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), SAVE_WAIT_MS) }),
     ])
-    return !!res && res.status >= 200 && res.status < 300
   } catch (e) {
     return false
   } finally {

@@ -159,6 +159,94 @@ describe('FinishProlific', () => {
     expect(JSON.parse(posts()[0][2].body)).toEqual({ text: 'Hello', token: 'comment-token' })
   })
 
+  it('stops a request for a comment token that gets no answer within 4 seconds, and asks again at Finish', async () => {
+    // (one that never answers, a hung server or a connection that died without a word, would hold one
+    // of the few connections the browser opens to the server)
+    let first = true
+    const answers = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: any) => {
+      if (first && (!init || !init.method)) {
+        first = false
+        return new Promise(() => {})
+      }
+      return answers(url, init)
+    })
+    wrapper = mount(FinishProlific, { propsData: { player } })
+    await settle()
+    const asked = requests()[0][2].signal as AbortSignal
+    await vi.advanceTimersByTimeAsync(3900)
+    expect(asked.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(asked.aborted).toBe(true)
+    await wrapper.find('textarea').setValue('Hello')
+    await wrapper.find('button').trigger('click')
+    await settle()
+    expect(requests().map(r => [r[0], r[1]])).toEqual([['GET', 'comment'], ['GET', 'comment'], ['POST', 'comment']])
+    expect(JSON.parse(posts()[0][2].body)).toEqual({ text: 'Hello', token: 'comment-token' })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wentToProlific()).toBe(true)
+  })
+
+  it('sends the comment with the seat\'s token alone when the comment token asked for at Finish doesn\'t come within 4 seconds', async () => {
+    // (none came as the screen appeared: the network was down then; at Finish, nothing answers)
+    let gets = 0
+    fetchMock.mockImplementation((_url: string, init?: any) => {
+      if (!init || !init.method) {
+        gets++
+        return gets === 1 ? Promise.reject(new Error('offline')) : new Promise(() => {})
+      }
+      return Promise.resolve({ status: 204 })
+    })
+    wrapper = mount(FinishProlific, { propsData: { player } })
+    await settle()
+    await wrapper.find('textarea').setValue('Hello')
+    await wrapper.find('button').trigger('click')
+    await settle()
+    expect(gets).toBe(2)
+    expect(wrapper.find('button').text()).toBe('Saving your comment…')
+    await vi.advanceTimersByTimeAsync(3900)
+    expect(posts().length).toBe(0)
+    await vi.advanceTimersByTimeAsync(200)
+    expect((requests()[1][2].signal as AbortSignal).aborted).toBe(true)
+    expect(posts().length).toBe(1)
+    expect(posts()[0][2].headers['X-Breadboard-Token']).toBe('seat-token')
+    expect(JSON.parse(posts()[0][2].body)).toEqual({ text: 'Hello' })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wentToProlific()).toBe(true)
+  })
+
+  it('says so within 10 seconds of the click when neither the comment token asked for at Finish nor the comment gets an answer', async () => {
+    let gets = 0
+    fetchMock.mockImplementation((_url: string, init?: any) => {
+      if (!init || !init.method) {
+        gets++
+        return gets === 1 ? Promise.reject(new Error('offline')) : new Promise(() => {})
+      }
+      return new Promise(() => {})
+    })
+    wrapper = mount(FinishProlific, { propsData: { player } })
+    await settle()
+    await wrapper.find('textarea').setValue('Hello')
+    await wrapper.find('button').trigger('click')
+    await settle()
+    await vi.advanceTimersByTimeAsync(9900)
+    expect(posts().length).toBe(1)
+    expect(wrapper.find('button').text()).toBe('Saving your comment…')
+    expect(wrapper.find('button').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(wrapper.find('[role="alert"]').text()).toContain('Your comment couldn’t be saved')
+    const buttons = wrapper.findAll('button')
+    expect(buttons.at(0).text()).toBe('Try again')
+    expect(buttons.at(0).attributes('disabled')).toBeUndefined()
+    expect(buttons.at(1).text()).toBe('Return to Prolific without it')
+    expect(wentToProlific()).toBe(false)
+    await buttons.at(1).trigger('click')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wentToProlific()).toBe(true)
+  })
+
   it('asks for a new comment token every hour, and keeps the one it has when the server gives none', async () => {
     // (the server gives one for as long as it knows the seat, which it forgets once the session has ended)
     let given = 0
