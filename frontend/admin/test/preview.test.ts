@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { reactive } from 'vue'
 import {
-  DEVICES, FIRST_LOOK_MAX_MS, TILE_WIDTHS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
+  DEVICES, FIRST_LOOK_MAX_MS, TILE_WIDTHS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, PLAYER_LIST_WIDTH, autoPicked, frameGeometry, heldByPreview, isAIPlayer,
   isComputerPlayer, isConnected, isTestPlayer, joinUrl, matchesPlayer, naturalWidth, ownPageConnected, previewMemory,
   previewPageUrl, previewRole, quickPick, seatText, seatWord, shownReadOnly, sortPlayers, tileWidth, truthyFlag, widthToFit,
   awayText,
@@ -222,11 +222,17 @@ describe('preview sizes', () => {
   })
 
   it('fits two Medium tiles in a row beside the player list in a 1280 px window', () => {
-    // the window, less the sidebar (248), the page's padding (2 × 28), the list (272) and its gap (20),
+    // the window, less the sidebar (248), the page's padding (2 × 28), the list and its gap (20),
     // and a scroll bar (17)
-    const room = 1280 - 248 - 2 * 28 - 272 - 20 - 17
+    const room = 1280 - 248 - 2 * 28 - PLAYER_LIST_WIDTH - 20 - 17
     expect(2 * tileWidth('desktop', 'M', room) + 18).toBeLessThanOrEqual(room)
     expect(TILE_WIDTHS.desktop.M).toBeGreaterThanOrEqual(300)
+  })
+
+  it('leaves a Prolific ID room in the player list', () => {
+    // 24 characters take 188 px in the list's monospace, which a 296 px list leaves beside the
+    // connected dot; at 272 px every one ended in "…" (what else a row says goes on a second line)
+    expect(PLAYER_LIST_WIDTH).toBeGreaterThanOrEqual(296)
   })
 
   it('never makes a tile wider than the space there is', () => {

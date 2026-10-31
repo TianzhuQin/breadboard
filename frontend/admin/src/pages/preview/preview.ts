@@ -203,9 +203,15 @@ export type TileSize = 'S' | 'M' | 'L'
 /** Tile widths in CSS pixels for each device and size. */
 export const TILE_WIDTHS: Record<DeviceKind, Record<TileSize, number>> = {
   // (two Medium ones fit in a row beside the player list in a 1280 px window)
-  desktop: { S: 260, M: 320, L: 540 },
+  desktop: { S: 260, M: 312, L: 540 },
   phone: { S: 170, M: 230, L: 320 },
 }
+/**
+ * The player list's width beside the previews, on wider screens: a 24-character participant ID (a
+ * Prolific ID) fits in it beside the connected dot, and two Medium tiles still fit beside it in a
+ * row in a 1280 px window.
+ */
+export const PLAYER_LIST_WIDTH = 296
 export const MIN_TILE_WIDTH = 140
 
 export interface FrameGeometry {

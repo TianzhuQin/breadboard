@@ -63,7 +63,7 @@
         <BSpinner :size="14" /> The engine is restarting. Previews reconnect by themselves when it is back.
       </div>
 
-      <div class="pv">
+      <div class="pv" :style="{ '--pv-list': `${PLAYER_LIST_WIDTH}px` }">
         <aside class="pv__side" :class="{ 'is-collapsed': !pickerOpen }">
           <button type="button" class="pv__side-toggle" :aria-expanded="pickerOpen ? 'true' : 'false'" aria-controls="pv-picker" @click="togglePicker">
             <Users :size="16" aria-hidden="true" />
@@ -181,9 +181,9 @@ import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, autoPicked, awayText, isAIPlayer, isComputerPlayer, isTestPlayer, joinUrl,
-  previewMemory as memory, previewPageUrl, previewRole, quickPick, shownReadOnly, sortPlayers, tileWidth, type PlayerLike,
-  type PreviewTarget, type QuickPick,
+  FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, PLAYER_LIST_WIDTH, autoPicked, awayText, isAIPlayer, isComputerPlayer,
+  isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, previewRole, quickPick, shownReadOnly, sortPlayers, tileWidth,
+  type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 
@@ -536,8 +536,8 @@ function readFlag (key: string) {
 </script>
 
 <style>
-/* (the list's width leaves room for two Medium tiles in a row at 1280 px: test/preview.test.ts) */
-.pv { display: grid; grid-template-columns: 272px minmax(0, 1fr); gap: 20px; align-items: start; }
+/* (the list's width, PLAYER_LIST_WIDTH, leaves room for two Medium tiles in a row at 1280 px: test/preview.test.ts) */
+.pv { display: grid; grid-template-columns: var(--pv-list, 296px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .pv__side {
   position: sticky;
   top: 16px;
