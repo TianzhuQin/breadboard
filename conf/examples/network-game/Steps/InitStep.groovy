@@ -21,7 +21,9 @@ paramOr = { String name, fallback ->
 
 NETWORK_SIZE = paramOr("networkSize", 8) as Integer   // people on the network, computer players included
 NEAREST = 2        // everyone starts tied to the NEAREST people on each side of a ring
-COLORS = [Blue: "#2563eb", Orange: "#ea580c"]   // the choices, and the people on the network
+// The choices, and the people on the network. Participants read their names from the Content page
+// (ColorBlue, ColorOrange: see colorName in RoundStep).
+COLORS = [Blue: "#2563eb", Orange: "#ea580c"]
 
 // The language of the texts participants read (on the Content page, by its code there, e.g. "zho"):
 // the language launch parameter. A text not yet written in it is shown in English.

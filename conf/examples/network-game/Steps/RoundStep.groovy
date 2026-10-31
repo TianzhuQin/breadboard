@@ -2,7 +2,8 @@
 // has picked or when time runs out.
 //
 // What participants read is on the Content page (c.get("RoundPrompt"), ...), where it can be reworded
-// or translated without changing this code; {0}, {1} there are filled in from here.
+// or translated without changing this code; {0}, {1} there are filled in from here. So are the names
+// of the colours (colorName below), while the code keeps "Blue" and "Orange" for itself.
 roundStep = stepFactory.createStep("RoundStep")
 
 roundStep.run = {
@@ -28,9 +29,18 @@ roundStep.run = {
         onEdit: { me, op, v1, v2 -> cutTie(me, v1 == me ? v2 : v1) }])
     }
     a.add(p,
-      [name: "Blue", color: COLORS.Blue, result: { pick(p, "Blue") }],
-      [name: "Orange", color: COLORS.Orange, result: { pick(p, "Orange") }])
+      [name: colorName("Blue"), color: COLORS.Blue, result: { pick(p, "Blue") }],
+      [name: colorName("Orange"), color: COLORS.Orange, result: { pick(p, "Orange") }])
   }
+}
+
+// A colour's name as participants read it, on the buttons and in the texts: its text on the Content
+// page ("Blue": ColorBlue, "Orange": ColorOrange), where it can be translated. Scoring, the network's
+// colours and the data use "Blue" and "Orange", whatever the name. Only the words count: the Content
+// page's Visual editor puts a text in a paragraph (<p>...</p>), which a button would show as it is.
+colorName = { String colour ->
+  def words = c.get("Color" + colour).replaceAll(/<[^>]*>/, "").replace("&nbsp;", " ").trim()
+  words ?: colour
 }
 
 // The round's heading, last round's result, `body`, then the score (from the second round on).
@@ -53,7 +63,7 @@ pick = { p, colour ->
   eventTracker.track("ColourPick", [player: p.id, round: round, colour: colour])
   if (isHuman(p)) {
     // (the computer plays the seat of someone who left; they see it when they come back)
-    p.text = roundText(p, c.get(p.ai == 1 ? "PickedForYou" : "Picked", colour))
+    p.text = roundText(p, c.get(p.ai == 1 ? "PickedForYou" : "Picked", colorName(colour)))
   }
 }
 
@@ -69,8 +79,8 @@ roundStep.done = {
     if (point) p.score = p.score + 1
     // (private: for this player only)
     p.private.lastResult = !p.pick ? c.get("ResultNoPick")
-        : (majority == null ? c.get("ResultTie", p.pick)
-        : c.get(point ? "ResultPoint" : "ResultNoPoint", p.pick, majority))
+        : (majority == null ? c.get("ResultTie", colorName(p.pick))
+        : c.get(point ? "ResultPoint" : "ResultNoPoint", colorName(p.pick), colorName(majority)))
     eventTracker.track("RoundResult", [player: p.id, round: round, pick: p.pick ?: "none",
                                        neighborsMajority: majority ?: "tie", score: p.score])
   }

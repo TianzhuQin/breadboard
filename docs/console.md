@@ -123,12 +123,14 @@ when their pick matches most of their neighbors'; the network shows what each ne
 round and the ties among their neighbors, and during a round everyone may cut one of their own ties
 by clicking it. The size of the network, the waiting room's minimum and wait, and the number and
 length of rounds are launch parameters, so they change on the Parameters page, and everything
-participants read is on the Content page, to reword or translate. Picks, scores and cut ties are
-recorded as `ColourPick`, `RoundResult` and `TieCut` events. Its texts are written in English: when
-your default language is another, that language is added next to English, and participants read it
-(the `language` launch parameter), each text in English until it is translated; with `zho`,
-Breadboard's own words to them are in Chinese too (see [Content](#content)). With `prolificCode`
-set, participants who came from Prolific are given that completion code at the end (see
+participants read is on the Content page, to reword or translate, the colours' names too
+(`ColorBlue`, `ColorOrange`): its steps score, colour the network and record picks as Blue and
+Orange, whatever participants read. Picks, scores and cut ties are recorded as `ColourPick`,
+`RoundResult` and `TieCut` events. Its texts are written in English: when your default language is
+another, that language is added next to English, and participants read it (the `language` launch
+parameter), each text in English until it is translated; with `zho`, Breadboard's own words to them
+are in Chinese too (see [Content](#content)). With `prolificCode` set, participants who came from
+Prolific are given that completion code at the end (see
 [Recruiting participants](#recruiting-participants)). Open a session (or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
@@ -187,7 +189,7 @@ Turk's pages, experiments that still use the previous AngularJS participant page
 isn't in the game is in the session's language, as the end screens are, while the note under its
 tile is the console's, in English. The example sets the language from its `language` launch
 parameter: with `zho`, and its texts translated on this page, its participants read Chinese from the
-sign-in page to the end, but for the names of its colours (Blue, Orange), which are in its steps.
+sign-in page to the end, the names of its colours included (`ColorBlue`, `ColorOrange`).
 
 ### Parameters
 
