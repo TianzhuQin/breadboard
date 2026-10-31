@@ -34,7 +34,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 ## 建一个实验
 
-控制台的大多数页面都针对一个实验：侧栏顶部选中的那个。点它可以切换实验，也可以新建或导入。
+控制台的大多数页面都针对一个实验：侧栏顶部选中的那个。点它可以切换实验，也可以新建或导入。服务器上还没有实验时，**Experiments** 页会建议从 **Example: network game** 开始；点 **New experiment**，它已经选好了，名字也填好了（Network game）。
 
 - **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 InitStep、OnJoinStep、OnLeaveStep 三个空步骤和标准的参与者页面）开始，从 **Example: network game**（一个可以直接运行的网络小游戏）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
 - **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S）只是保存。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。注意：重新加载会让网络里的所有人断开。重新加载后，你自己开的那一场（或者自动运行用你的账号开的那一场）会继续；如果它的游戏已经开始或有人在线，控制台会先问你，并说明游戏会从头开始，里面的人会自己重新连上。有场次在运行时，保存后、重新加载前，顶栏会显示 **Reload needed**（没有场次在运行时显示 **Steps saved**，下一场会自动用上），所有研究者的控制台都一样，刷新页面也还在。自动运行自己的那一场开着时，下一场也会自动用上保存的代码，所以顶栏同样显示 **Steps saved**，Steps 页只提示已保存，不催你重新加载（如果自动运行用的不是你的账号，你这时重新加载会结束这一场并让自动运行暂停，页面也会这样提醒）。
@@ -130,6 +130,12 @@ breadboard.example.org {
 ## 常见问题
 
 **服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次：参与者的页面会说明这一场因为研究服务器停止或重启而结束，并告诉他们几分钟后可以重新打开研究链接，加入那时开着的一场（从 Prolific 来的人：从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码）。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。回来的参与者（服务器崩溃后也一样）会看到这一场因为服务器停止或重启而结束，并被请求重新打开研究链接（从 Prolific 来的人：从 Prolific 重新打开，或者退回研究）；开着自动运行时，这个链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用，正常时返回 `{"status":"ok"}`。
+
+**控制台提示 "Not connected to the server"**：控制台和服务器断开了。每个页面的顶栏下面都会这样提示，顶栏上写着 **Reconnecting…**（手机上是 **Offline**），页面上显示的是断开前最后知道的情况。如果 Breadboard 被停止了，重新启动它就行，控制台会自己重新连上，不用刷新页面。
+
+**控制台一直停在 "Loading your experiments…"，顶栏写着 Reconnecting…**：控制台从打开起就没连上服务器（手机上顶栏写的是 **Offline**），所以也不会出现上面那条提示。服务器明明开着却这样，多半是前面的反向代理没有转发 websocket，nginx 的配置见 [install.md](install.md#putting-it-on-a-server)。
+
+**Preview 页面上的 Watching 和 Away 是什么意思？** **Watching**：预览只能看，因为这位参与者自己的页面在线，或者这是电脑玩家。**Away**：这位参与者在这一场里来过、现在离开了（他的位置可能已经由电脑接手），预览可以替他选，但他仍算离开。小窗上标着 Away 时，下面还写着这现在意味着什么：等候室不算他，过多久电脑接手他的位置，或者电脑已经在替他玩、他回来后电脑会不会把位置还给他。左边的玩家列表里也会写 Watching 或 Away，把鼠标移到上面可以看到原因。
 
 **启动时提示 "Breadboard needs Java 8"**：启动脚本没找到 Java，或找到的不是 Java 8。最简单的办法是下载带 Java 的版本（名字以 `-macos-arm64`、`-macos-x64`、`-windows-x64` 或 `-linux-x64` 结尾）。它按顺序找 `JAVA8_HOME`、自带的 `jre` 文件夹、（在 Mac 上）电脑里装好的任何 Java 8、`JAVA_HOME`，最后才用 PATH 里的 `java`，用找到的第一个 Java 8。`JAVA8_HOME` 可以是 JDK 的文件夹、它的 `bin` 文件夹，或者 Mac 的 Finder 里看到的 JDK 文件夹（比如 `zulu-8.jdk`）；如果那里没有 Java 8，启动脚本会提示 "JAVA8_HOME is …, which has no Java 8; ignoring it"，然后接着找别的。
 

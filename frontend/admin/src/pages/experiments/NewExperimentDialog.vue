@@ -115,7 +115,9 @@ watch(() => props.open, (open) => {
   // (A first experiment: the ready-to-run example is the quickest way to see Breadboard work.)
   from.value = source ? 'copy' : experiments.value.length ? 'template' : 'example'
   copyId.value = source ? source.id : (admin.experiment?.id ?? experiments.value[0]?.id ?? null)
-  name.value = source ? suggestCopyName(source.name) : ''
+  // (named here: the watch below sees no change when the example was chosen last time too, nor at
+  // all when the dialog opens with the page, from the switcher's New)
+  name.value = source ? suggestCopyName(source.name) : from.value === 'example' ? suggestCopyName(EXAMPLE_NAME, '') : ''
   touched.value = false
   tried.value = false
   switchTo.value = true

@@ -327,6 +327,18 @@ describe('content HTML', () => {
     expect(decodeEntities('&lt;b&gt; &#x41;&#66;')).toBe('<b> AB')
   })
 
+  // The list showed "You picked {0} . Waiting…" and "…: +1 point ." for the example's texts.
+  it('reads text as the page shows it: formatting inside a line adds no space', () => {
+    expect(plainText('<p>You picked <strong>{0}</strong>. Waiting for the others…</p>')).toBe('You picked {0}. Waiting for the others…')
+    expect(plainText('Last round you picked {0}; most of your neighbors picked {1}: <strong>+1 point</strong>.'))
+      .toBe('Last round you picked {0}; most of your neighbors picked {1}: +1 point.')
+    expect(plainText('<p>a<em>b</em>c, <a href="#x">link</a>! <SPAN class="k">x</SPAN>y</p>')).toBe('abc, link! xy')
+    // other tags part words, as on the page
+    expect(plainText('<h2>Thank you!</h2><p>{0}</p><p>Line<br>break</p><ul><li>one</li><li>two</li></ul><div>end</div>'))
+      .toBe('Thank you! {0} Line break one two end')
+    expect(plainText('word<img src="x.png">word')).toBe('word word')
+  })
+
   it('tokenizes tags, words and comments without repairing anything', () => {
     expect(tokenize('<P Class="a  b">Hi <!-- x -->there</p>')).toEqual([
       { t: 'open', name: 'p', attrs: { class: 'a b' } },
@@ -476,6 +488,13 @@ describe('ContentPage', () => {
       name: body.name,
       translations: body.translations.map((t: any, i: number) => ({ ...t, id: t.id === -1 ? 900 + i : t.id })),
     }))
+  })
+
+  it('previews each text in the list as the page shows it', async () => {
+    const exp = experiment({ content: [{ id: 12, name: 'Picked', translations: [{ id: 120, html: '<p>You picked <strong>{0}</strong>. Waiting for the others…</p>', language: eng }] }] })
+    const { wrapper } = await mountPage(exp)
+    expect(wrapper.find('.ct-row__snippet').text()).toBe('You picked {0}. Waiting for the others…')
+    wrapper.unmount()
   })
 
   it('loads the texts and shows which ones lack the selected language', async () => {

@@ -1,5 +1,5 @@
 <template>
-  <header class="topbar">
+  <header class="topbar" :class="{ 'is-offline': connectionState !== 'open' }">
     <button
       ref="menuBtn"
       type="button"
@@ -32,9 +32,12 @@
         </template>
       </BMenu>
 
-      <span v-if="connectionState !== 'open'" class="topbar__chip is-warn" role="status">
+      <!-- (in words at every width: on a phone it used to be an icon nobody could read; the notice
+           under the top bar says more) -->
+      <span v-if="connectionState !== 'open'" class="topbar__chip is-warn topbar__conn" role="status">
         <WifiOff :size="15" aria-hidden="true" />
-        <span class="topbar__chip-text">{{ connectionState === 'retrying' ? 'Reconnecting…' : 'Connecting…' }}</span>
+        <span class="topbar__conn-text">{{ connectionState === 'retrying' ? 'Reconnecting…' : 'Connecting…' }}</span>
+        <span class="topbar__conn-short" aria-hidden="true">Offline</span>
       </span>
 
       <button
@@ -206,6 +209,7 @@ const engineItems = computed<MenuItem[]>(() => [
 .topbar__chip.is-loaded { color: var(--success); }
 .topbar__chip.is-stale { color: var(--warning-soft-text); background: var(--warning-soft); }
 .topbar__chip.is-warn { color: var(--warning-soft-text); background: var(--warning-soft); cursor: default; }
+.topbar__conn-short { display: none; }
 .topbar__icon-btn {
   position: relative;
   display: grid;
@@ -253,6 +257,21 @@ const engineItems = computed<MenuItem[]>(() => [
   .topbar { padding: 0 12px; }
   .topbar__menu { display: block; }
   .topbar__session { max-width: 150px; }
+}
+@media (max-width: 600px) {
+  /* not connected: the chip says so in a word, in the room the session's (stale) name had */
+  .topbar__conn { padding: 0 8px; }
+  .topbar__conn-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .topbar__conn-short { display: inline; }
+  .topbar.is-offline .topbar__session-text { display: none; }
 }
 @media (max-width: 480px) {
   .topbar { gap: 8px; }

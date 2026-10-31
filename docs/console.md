@@ -60,6 +60,13 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 | **Reconnecting…** | The console has lost its connection to the server. |
 | Output (Ctrl+J) | What the experiment's scripts print and return, and their errors. A red badge counts new errors. |
 
+Once the console has connected, a notice under the top bar says on every page when it loses the
+connection, and the top bar says **Reconnecting…** (**Offline** on a phone). Each page shows what
+was last known until the console reconnects, which it does by itself. If Breadboard was stopped,
+start it again. A console that has never connected shows no such notice: it stays on "Loading your
+experiments…", with **Reconnecting…** in its top bar. Usually a proxy in front of Breadboard doesn't
+pass websockets: see [install.md](install.md#troubleshooting).
+
 There is one script engine per server, shared by every researcher's console and the autopilot.
 It runs one experiment at a time, which need not be the one you work on: while a session is running
 in it (yours, another researcher's or the autopilot's), switching experiments only changes what you
@@ -89,7 +96,7 @@ up by name in the server's settings file (`conf/local.conf`) needs the new name 
 | Action | |
 |---|---|
 | **New experiment** | Starts from **Breadboard's template** (the empty steps OnJoinStep, OnLeaveStep and InitStep, and the standard participant page), from **Example: network game**, or from **A copy of an experiment** (its steps, content, translations, parameters, images and participant page, without sessions or data). Names must be unique and can't contain `/` or `\`. |
-| **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment, named by the same rules; nothing you have is changed. |
+| **Import** | Takes a .zip exported from Breadboard, chosen in the dialog or dropped anywhere on the page. It becomes a new experiment, named by the same rules; nothing you have is changed. The name is filled in with the one the experiment had where it was exported, with " (copy)" added when an experiment here is called that already. |
 | **Export .zip** | Downloads the experiment, to move it to another server or keep a copy. |
 | **Delete…** | Deletes the experiment with all its sessions and their data, for good. Type its name to confirm (capital letters, spaces and dashes don't matter). Not possible while a session is running. If the autopilot runs it, the autopilot stops opening sessions. |
 
@@ -118,6 +125,9 @@ participants read is on the Content page, to reword or translate. Picks and scor
 recorded as `ColourPick` and `RoundResult` events. Open a session (or turn on the autopilot) and
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
+
+On a server without experiments, the Experiments page points to the example, and **New experiment**
+has it chosen, named "Network game".
 
 ### Steps
 
@@ -196,10 +206,20 @@ waiting room doesn't count them. So **AI players** shows the computer players an
 computer took over, and the computer goes on playing all of them. A preview never adds anyone to the
 game: the tile of a player who isn't in the network (someone who left before a **Resume**, say, and
 hasn't joined again) says they aren't in the game, and shows their page once they are back. When a player's own page comes back, it takes over, and the preview goes on
-read-only. In the list, a green dot means the seat is connected; its tooltip says whether by their
-own page or by a preview (maybe another console's), or that a preview stands in for someone away.
+read-only. The tile of a player whose preview only watches (their own page is connected, or it is a
+computer player) is tagged **Watching**. The tile of someone away is tagged **Away**, and
+says what standing in for them means now: a waiting room doesn't count them, the computer takes
+their seat after the usual wait, or the computer plays it, and gives it back when they return if the
+steps say so. In the autopilot's own session, with its takeover on, the tile says when the computer
+takes over (its **Take over after**) and whether it gives the seat back (**Give the seat back when
+they return**). In the list, a green dot means the seat is connected, and **Watching** or
+**Away** says when a preview of that player only watches, or stands in for someone away; the
+tooltip says why: their own page, a preview (maybe another console's), or the computer.
 The first look at a session shows the test players whose seat is neither connected nor held by a
-preview, theirs or another console's (which a preview here would take it from).
+preview, theirs or another console's (which a preview here would take it from). It is taken once
+the session's players have loaded, however the page was opened: a player opened with **Preview
+their screen** is shown with them. In a session without test players, it is taken when the first
+ones appear, unless you have chosen whose pages to see by then.
 
 ## Running a session
 

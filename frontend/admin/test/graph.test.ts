@@ -69,6 +69,29 @@ describe('LiveGraph', () => {
     g.apply({ action: 'nodePropertyChanged', id: 'a', key: 'yes', value: 'true' })
     expect(g.nodes.get('a')!.data).toEqual({ n: 7, o: { x: 1 }, s: 'plain', num: '5', yes: 'true' })
   })
+
+  // (the Preview page's first look waits only for a network that is still coming in)
+  it('says when it last changed, and when it was last emptied, after which the network comes in again', () => {
+    const now = vi.spyOn(Date, 'now')
+    try {
+      const g = new LiveGraph()
+      expect([g.changedAt, g.clearedAt]).toEqual([0, 0])
+      now.mockReturnValue(1000)
+      g.clear()
+      expect([g.changedAt, g.clearedAt]).toEqual([1000, 1000])
+      now.mockReturnValue(1500)
+      g.apply({ action: 'addNode', id: 'a' })
+      now.mockReturnValue(1700)
+      g.apply({ action: 'nodePropertyChanged', id: 'a', key: 'testmode', value: true })
+      expect([g.changedAt, g.clearedAt]).toEqual([1700, 1000])
+      // not about the graph: nothing changed
+      now.mockReturnValue(2000)
+      g.apply({ output: 'hi' })
+      expect(g.changedAt).toBe(1700)
+    } finally {
+      now.mockRestore()
+    }
+  })
 })
 
 describe('LiveGraph redraw signal', () => {

@@ -67,13 +67,17 @@ export function importNameFromFile (fileName: string): string {
   return base.replace(/\.[a-z0-9]{1,5}$/i, '').replace(/[/\\]/g, '-').trim()
 }
 
-/** `name`, or "name 2", "name 3", ... when an experiment is called that already (ignoring case). */
+/**
+ * The name an import is given: `name`, or "name (copy)", then "name (copy 2)", … when an experiment
+ * is called that already (ignoring case). ("Second study 2" read as if 2 were the experiment's id
+ * on the server it came from.)
+ */
 export function uniqueName (name: string, existing: string[]): string {
   const taken = new Set(existing.map(n => (n || '').trim().toLowerCase()))
   if (!name || !taken.has(name.trim().toLowerCase())) return name
-  let n = 2
-  while (taken.has(`${name} ${n}`.toLowerCase())) n++
-  return `${name} ${n}`
+  let candidate = `${name} (copy)`
+  for (let n = 2; taken.has(candidate.toLowerCase()); n++) candidate = `${name} (copy ${n})`
+  return candidate
 }
 
 /** The import route; the name is a path segment, so it must be encoded (the old console sent it raw). */

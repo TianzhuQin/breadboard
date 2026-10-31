@@ -4,15 +4,6 @@
       <BButton :icon="Plus" @click="newOpen = true">New session</BButton>
     </template>
 
-    <!-- while the server can't be reached, what is shown may be out of date -->
-    <p v-if="offline" class="live-offline" role="status">
-      <WifiOff :size="16" aria-hidden="true" />
-      <span>
-        <strong>Not connected to the server.</strong> This shows what was last known; the buttons work again once
-        the console reconnects, which it does by itself.
-      </span>
-    </p>
-
     <!-- the newest engine error, so a broken step doesn't go unnoticed -->
     <section v-if="latestError" class="live-err" aria-labelledby="live-err-title">
       <CircleAlert class="live-err__icon" :size="18" aria-hidden="true" />
@@ -177,11 +168,10 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  WifiOff,
   ArrowRight, Bot, CircleAlert, CircleCheck, CircleStop, Download, Hourglass, PanelBottom, Play, Plus, Share2, Timer, Users, Wifi,
 } from 'lucide-vue-next'
 import { BBadge, BButton, BPage, BSpinner } from '@/ui'
-import { admin, connectionState, engineElsewhere, graph, isResearcherRun } from '@/store/admin'
+import { admin, engineElsewhere, graph, isResearcherRun } from '@/store/admin'
 import { stepsCall } from '../autopilot/autopilot'
 import { openOutput } from '@/shell/output'
 import EngineError from '../console/EngineError.vue'
@@ -371,9 +361,6 @@ const lastEventAt = computed(() => allEvents.value.length ? allEvents.value[0].a
 const ranFor = computed(() => createdAt.value && lastEventAt.value >= createdAt.value ? formatDuration(lastEventAt.value - createdAt.value) : '—')
 const joinedCount = computed(() => Math.max(participantsSeen(allEvents.value).size, stats.value.people))
 
-// Once the first state has arrived: before that, the page shows its own loading state.
-const offline = computed(() => admin.ready && connectionState.value !== 'open')
-
 // ---- latest error -----------------------------------------------------------------------------
 
 // errors from before the scripts last reloaded are about code that is no longer running
@@ -517,7 +504,8 @@ function clock (at: number) {
 }
 .live-stat__label { display: flex; align-items: center; gap: 7px; order: 0; font-size: var(--text-xs); font-weight: 600; color: var(--muted); }
 .live-stat__value { order: 1; margin: 6px 0 0; font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; color: var(--text); }
-.live-stat__sub { order: 2; margin: 3px 0 0; font-size: var(--text-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* (wrapped, not cut: "5 AI players · 2 taken over" lost its end on a phone) */
+.live-stat__sub { order: 2; margin: 3px 0 0; font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; }
 
 /* ---- layout ---- */
 .live-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -540,16 +528,4 @@ function clock (at: number) {
   .live-err__actions { width: 100%; justify-content: flex-end; }
   .live-done__more { margin-left: 0; }
 }
-.live-offline {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 14px;
-  padding: 10px 14px;
-  border-radius: var(--radius);
-  background: var(--warning-soft);
-  color: var(--warning-soft-text);
-  font-size: var(--text-sm);
-}
-.live-offline svg { flex: none; margin-top: 2px; }
 </style>

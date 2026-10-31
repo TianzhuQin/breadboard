@@ -5,6 +5,13 @@
       <span class="pt__tags">
         <span v-if="test" class="pt__tag" title="Test player (testmode)"><FlaskConical :size="13" aria-hidden="true" /><span class="sr-only">Test player</span></span>
         <span v-if="ai" class="pt__tag" title="Played by the computer"><Bot :size="13" aria-hidden="true" /><span class="sr-only">Computer player</span></span>
+        <!-- (the participant page says so too, but at tile size its words are a few pixels high) -->
+        <span v-if="watching" class="pt__tag is-text" :title="watching">
+          <Eye :size="13" aria-hidden="true" /><span :class="{ 'sr-only': compact }">Watching</span>
+        </span>
+        <span v-else-if="role === 'away'" class="pt__tag is-text is-away" title="Away: their own page isn’t connected. You are standing in for them, but they count as away">
+          <UserX :size="13" aria-hidden="true" /><span :class="{ 'sr-only': compact }">Away</span>
+        </span>
       </span>
       <span class="pt__acts">
         <BButton
@@ -62,11 +69,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Bot, Ellipsis, ExternalLink, FlaskConical, Maximize2, RotateCw, TriangleAlert, X } from 'lucide-vue-next'
+import { Bot, Ellipsis, ExternalLink, Eye, FlaskConical, Maximize2, RotateCw, TriangleAlert, UserX, X } from 'lucide-vue-next'
 import { BButton, BMenu, type MenuItem } from '@/ui'
 import { playerName } from '@/network/players'
 import PreviewFrame from './PreviewFrame.vue'
-import { frameGeometry, type DeviceKind, type PreviewTarget } from './preview'
+import { WATCHING_WHY, frameGeometry, type DeviceKind, type PreviewRole, type PreviewTarget } from './preview'
 
 const props = defineProps<{
   playerId: string
@@ -76,6 +83,8 @@ const props = defineProps<{
   interactive: boolean
   test: boolean
   ai: boolean
+  /** What a preview of this player does (preview.ts previewRole). */
+  role?: PreviewRole | null
   /** Changing it loads the page again, with a new preview token. */
   frameKey: string
   /** Why the page isn't shown here right now. */
@@ -87,6 +96,10 @@ const emit = defineEmits<{ focus: [], reload: [], 'open-tab': [], remove: [], re
 // "AI 6 (_6)" for a computer player, as in the list
 const name = computed(() => playerName(props.playerId))
 const geo = computed(() => frameGeometry(props.device, props.width))
+/** Why the preview only watches ('' when it doesn't), for the Watching tag. */
+const watching = computed(() => props.role === 'computer' || props.role === 'watching' ? `Watching: ${WATCHING_WHY[props.role]}` : '')
+// small tiles keep the tags' icons only (the words stay for screen readers and in the tooltip)
+const compact = computed(() => props.width < 230)
 const menu = computed<MenuItem[]>(() => [
   { label: 'Open full size', icon: Maximize2, run: () => emit('focus') },
   { label: 'Open in a new tab', icon: ExternalLink, run: () => emit('open-tab') },
@@ -120,6 +133,17 @@ const menu = computed<MenuItem[]>(() => [
   background: var(--bg-subtle);
   color: var(--text-soft);
 }
+.pt__tag.is-text {
+  display: inline-flex;
+  gap: 4px;
+  width: auto;
+  min-width: 20px;
+  padding: 0 6px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pt__tag.is-away { background: var(--warning-soft); color: var(--warning-soft-text); }
 .pt__acts { margin-left: auto; display: inline-flex; align-items: center; flex: none; }
 .pt__body { position: relative; }
 .pt__cover {

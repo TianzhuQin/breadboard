@@ -44,9 +44,17 @@ export class LiveGraph {
   links = new Map<string, GraphLink>()
   /** Bumped (once per animation frame at most) whenever anything changed. */
   version = shallowRef(0)
+  /** When anything last changed (Date.now()); 0 before the first change. */
+  changedAt = 0
+  /**
+   * When it was last emptied (Date.now()). The network comes in again after that: the server sends
+   * the whole of it to a console that connects, and a rebuilt engine fills it anew.
+   */
+  clearedAt = 0
   private pending = false
 
   private changed () {
+    this.changedAt = Date.now()
     if (this.pending) return
     this.pending = true
     let done = false
@@ -74,6 +82,7 @@ export class LiveGraph {
   clear () {
     this.nodes.clear()
     this.links.clear()
+    this.clearedAt = Date.now()
     this.changed()
   }
 

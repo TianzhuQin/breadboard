@@ -44,6 +44,76 @@ export const heldByPreview = (p: PlayerLike) => p.data?._system?.preview === tru
 /** Their own page is connected: a preview of them only watches it, read-only. */
 export const ownPageConnected = (p: PlayerLike) => isConnected(p) && !heldByPreview(p)
 
+/**
+ * What a preview of this player does, as far as the console can tell:
+ * - 'computer': a computer player; the preview watches what the computer does.
+ * - 'watching': their own page is connected; the preview watches it.
+ * - 'plays': a preview plays the seat (a test player's, whose own page hasn't been in the session).
+ * - 'away': their own page has been in the session and isn't now: a preview stands in for them (or
+ *   will), answering for them, but they count as away. Also a person whose seat the computer took over.
+ * - null: nobody is on the seat, and the console can't tell whether their own page has been in the
+ *   session (the server says so once a preview takes the seat).
+ */
+export type PreviewRole = 'computer' | 'watching' | 'plays' | 'away'
+export function previewRole (p: PlayerLike): PreviewRole | null {
+  if (isComputerPlayer(p)) return 'computer'
+  if (ownPageConnected(p)) return 'watching'
+  if (heldByPreview(p)) return isConnected(p) ? 'plays' : 'away'
+  // (the computer takes over only the seat of someone who left)
+  if (truthyFlag(p.data?.ai)) return 'away'
+  return null
+}
+
+/**
+ * Where the player's seat is, and so what a preview of them does, in words (the player list's
+ * tooltip and screen-reader text). `shownHere`: their page is shown on this page.
+ */
+export function seatText (p: PlayerLike, shownHere = false): string {
+  const text = (() => {
+    switch (previewRole(p)) {
+      case 'computer': return 'played by the computer, so a preview is read-only'
+      case 'watching': return 'their own page is connected, so a preview is read-only'
+      case 'plays': return 'a preview plays this seat: their own page hasn’t been in this session'
+      // (another console's preview, or this one's)
+      case 'away': return heldByPreview(p) ? 'away: a preview stands in for them' : 'away: the computer plays their seat'
+      default: return 'not connected'
+    }
+  })()
+  return shownHere ? `${text}, shown here` : text
+}
+
+/** The same in a word, for the list (only where it changes what a preview does). */
+export function seatWord (p: PlayerLike): string {
+  const role = previewRole(p)
+  return role === 'computer' || role === 'watching' ? 'Watching' : role === 'away' ? 'Away' : ''
+}
+
+/**
+ * What the tile of someone away says ('away' above): the preview stands in for them, answering for
+ * them, but they count as away, and what that means now. What the computer does with their seat is
+ * said when the console knows it, in the autopilot's own session with its takeover switched on: how
+ * long it waits before it takes the seat (`takeoverSeconds`), and whether it gives the seat back when
+ * their own page is back (`returnToHuman`, the Autopilot page's "Give the seat back when they
+ * return"). Otherwise the steps decide, if they let the computer play at all.
+ */
+export function awayText (p: PlayerLike, opts: { gameStarted: boolean, takeoverSeconds?: number | null, returnToHuman?: boolean | null }): string {
+  if (truthyFlag(p.data?.ai)) {
+    if (opts.returnToHuman === true) return 'Away: you are standing in, and the computer plays their seat until their own page is back.'
+    if (opts.returnToHuman === false) return 'Away: you are standing in, and the computer plays their seat; it doesn’t give it back when they return.'
+    return 'Away: you are standing in, and the computer plays their seat; it gives it back when they return if the steps say so.'
+  }
+  if (!opts.gameStarted) return 'Away: you are standing in, but they count as away, so a waiting room doesn’t count them.'
+  const s = opts.takeoverSeconds
+  if (s != null && s >= 0) return `Away: you are standing in; the computer takes over their seat ${s > 0 ? `after ${s} s away` : 'at once'}.`
+  return 'Away: you are standing in, but they count as away: the computer takes their seat after the usual wait, if it plays for people who leave.'
+}
+
+/** Why a preview only watches, for the roles where it does (as the participant page says it). */
+export const WATCHING_WHY: Record<'computer' | 'watching', string> = {
+  computer: 'the computer plays this seat, so you see what it does but can’t answer for it',
+  watching: 'their own page is connected, so you see their screen but can’t answer for them',
+}
+
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 /** Players in natural id order: p2 before p10. */
 export function sortPlayers<T extends PlayerLike> (list: readonly T[]): T[] {
@@ -89,6 +159,19 @@ export function autoPicked<T extends PlayerLike> (players: readonly T[]): T[] {
   return quickPick(players, 'test').filter(p => !isConnected(p) && !heldByPreview(p)).slice(0, MAX_PREVIEWS)
 }
 
+/**
+ * When the first look at a session is taken: once its network has been quiet this long. The server
+ * sends each player before their properties (testmode among them), so a look taken while the
+ * network comes in, as on a direct load of the page or a reload, found no test players, or only
+ * some of them. A page that opens on a network quiet this long already takes it at once.
+ */
+export const FIRST_LOOK_QUIET_MS = 300
+/**
+ * …or this long after the first players were seen, at the latest, in a network that keeps changing.
+ * A network sent this long before the page opened has come in: the look is taken at once.
+ */
+export const FIRST_LOOK_MAX_MS = 2000
+
 // ---- addresses --------------------------------------------------------------------------------
 
 /** One player of one session, whose page a researcher previews. */
@@ -119,9 +202,16 @@ export const DEVICES: Record<DeviceKind, { width: number, height: number, label:
 export type TileSize = 'S' | 'M' | 'L'
 /** Tile widths in CSS pixels for each device and size. */
 export const TILE_WIDTHS: Record<DeviceKind, Record<TileSize, number>> = {
-  desktop: { S: 260, M: 360, L: 540 },
+  // (two Medium ones fit in a row beside the player list in a 1280 px window)
+  desktop: { S: 260, M: 312, L: 540 },
   phone: { S: 170, M: 230, L: 320 },
 }
+/**
+ * The player list's width beside the previews, on wider screens: a 24-character participant ID (a
+ * Prolific ID) fits in it beside the connected dot, and two Medium tiles still fit beside it in a
+ * row in a 1280 px window.
+ */
+export const PLAYER_LIST_WIDTH = 296
 export const MIN_TILE_WIDTH = 140
 
 export interface FrameGeometry {

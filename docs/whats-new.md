@@ -245,7 +245,9 @@ New experiments start with a redesigned page (`conf/defaults/default-client-html
 - Vuetify's colours change only for pages marked `class="bb-app"`.
 - `SVGGraph` and every other component still work.
 - Imported and upgraded experiments keep the previous default page,
-  `conf/defaults/legacy-client-html.html`; only new experiments get `BBGame`.
+  [`conf/defaults/legacy-client-html.html`](https://github.com/TianzhuQin/breadboard/blob/main/conf/defaults/legacy-client-html.html)
+  (in a release it is inside the server's jar; the new page's comment links to it too); only new
+  experiments get `BBGame`.
 To move an old page over, replace `<SVGGraph ...>` with `<BBNetwork :player="player" :graph="graph" />`,
 or the whole layout with `BBGame`.
 
