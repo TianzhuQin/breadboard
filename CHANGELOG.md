@@ -18,10 +18,10 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   can't read is refused, with how to fix it.
 - The launchers say what is wrong and what to do: the port taken (by Breadboard itself or by another
   program, also one on `[::1]` only), with a command for another port that works from where you are;
-  no Java 8; a folder they can't write; the Windows launcher opened inside the zip. They work behind
-  a proxy set in `http_proxy` (common in China), and accept as `JAVA8_HOME` the folder Finder shows
-  for a JDK. A server window that stops taking output (a click in a Windows console, Ctrl+S, a pipe
-  nobody reads) no longer holds the server up.
+  a `JAVA8_HOME` without Java 8; a folder they can't write; the Windows launcher opened inside the
+  zip. They work behind a proxy set in `http_proxy` (common in China), and accept as `JAVA8_HOME` the
+  folder Finder shows for a JDK. A server window that stops taking output (a click in a Windows
+  console, Ctrl+S, a pipe nobody reads) no longer holds the server up.
 - Keep-running mode: the launcher starts the server again after a crash or when it runs out of
   memory, says why in its window and in `logs/application.log`, checks the port first, and gives up
   after 5 restarts in 10 minutes. A server that never started (a mistake in `conf/local.conf`, its
