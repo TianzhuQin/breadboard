@@ -112,11 +112,11 @@ public final class EngineCleanup {
    * choices the metaclasses of the classes that outlive the engine remember. The engine's classes
    * leave the first three last, as looking up a class's metaclass adds its entry back.
    *
-   * <p>An engine's code can run again after it was dropped: a task of its timers that was at work when
-   * they were cancelled carries on. Groovy then puts the classes that code uses back in its caches,
-   * and they stayed there, with the whole engine, until memory ran short. So the classes of the
-   * engines dropped before go as well, should they be back: their loaders are kept, weakly, in
-   * {@link #RELEASED}.
+   * <p>An engine's code can run on after it was dropped: a task of its timers that was at work when
+   * they were cancelled carries on, during the release and after it. That code keeps working (see
+   * {@link #forgetClassInfo}), and Groovy puts the classes it uses back in its caches, where they
+   * stayed, with the whole engine, until memory ran short. So the classes of the engines dropped
+   * before go as well, should they be back: their loaders are kept, weakly, in {@link #RELEASED}.
    *
    * @param scripts the loader the dropped engine compiled with: only classes loaded under it or under
    *     the loader of an engine dropped before are touched, never those of an engine in use (the next
@@ -128,7 +128,8 @@ public final class EngineCleanup {
       RELEASED.add(scripts);
       dropped.addAll(RELEASED);
     }
-    List<Object> known = entries(groovyCache(ClassInfo.class.getName(), "globalClassSet"));
+    AbstractConcurrentMap<?, ?> classInfos = groovyCache(ClassInfo.class.getName(), "globalClassSet");
+    List<Object> known = entries(classInfos);
     AbstractConcurrentMap<?, ?> classNodes = groovyCache(ClassHelper.class.getName() + "$ClassHelperCache", "classCache");
     Set<Class<?>> classes = new LinkedHashSet<Class<?>>();
     // The ones with a changed metaclass, and those Groovy's caches know: getLoadedClasses no longer
@@ -167,7 +168,7 @@ public final class EngineCleanup {
       forgetStaticCaches(c);
     }
     for (Class<?> c : classes) {
-      ClassInfo.getClassInfo(c).finalizeRef();
+      forgetClassInfo(classInfos, c);
       if (classNodes != null) {
         // The compiler's description of a class a later script used (one of an earlier script's),
         // kept softly with the class under a weak key.
@@ -186,7 +187,11 @@ public final class EngineCleanup {
    * note for Integer and the like) matters only for classes that go on running.
    */
   private static void forgetMetaClass(Class<?> c) {
-    ClassInfo info = ClassInfo.getClassInfo(c);
+    forgetMetaClass(ClassInfo.getClassInfo(c));
+  }
+
+  /** The same, for an entry that may have left Groovy's set. */
+  private static void forgetMetaClass(ClassInfo info) {
     info.lock();
     try {
       info.setStrongMetaClass(null);
@@ -210,17 +215,43 @@ public final class EngineCleanup {
 
   /**
    * Empties what a compiled Groovy class keeps in static fields of its own: its call-site cache, and
-   * the ClassInfo its constructors look up its metaclass in, which no longer holds the class once
-   * its entry has left Groovy's set. Should the class run again (a task of the old engine finishing),
-   * Groovy makes both anew. The call-site cache is a soft reference, cleared rather than dropped:
-   * the class's code reads the field twice, and would fail between the two. Java initializes a class
-   * the engine never used before the field is read, so the static initializer of such a class runs
-   * here (those of Breadboard's scripts only set up empty maps).
+   * the ClassInfo its constructors look its metaclass up in, its entry in Groovy's set (emptied again
+   * once the entry has left the set: see {@link #forgetClassInfo}). Should the class run again (a task
+   * of the old engine still at work), Groovy makes the one and looks the other up anew. The call-site
+   * cache is a soft reference, cleared rather than dropped: the class's code reads the field twice,
+   * and would fail between the two. Java initializes a class the engine never used before the field
+   * is read, so the static initializer of such a class runs here, before any entry leaves Groovy's
+   * caches (those of Breadboard's scripts only set up empty maps).
    */
   private static void forgetStaticCaches(Class<?> c) {
     Object callSites = staticField(c, "$callSiteArray");
     if (callSites instanceof Reference) {
       ((Reference<?>) callSites).clear();
+    }
+    if (staticField(c, "$staticClassInfo") != null) {
+      setStaticField(c, "$staticClassInfo", null);
+    }
+  }
+
+  /**
+   * Takes {@code c}'s entry out of Groovy's set of what it knows about each class (ClassInfo), which
+   * kept the class, softly, until memory ran short. The entry itself is left whole, as code of the
+   * dropped engine still at work (a task of its timers under way at a reload or a launch) may hold it:
+   * the class's constructors take it from the class's own field, where that code puts it back as soon
+   * as {@link #forgetStaticCaches} has emptied the field, or have just taken it from there. Groovy's own
+   * way to drop an entry, finalizeRef, also empties the entry, and from then on that code failed to
+   * make any object of the class. The field is emptied again once the entry has left the set, so the
+   * class's next object looks up its entry anew. The metaclass that code may have given the entry
+   * meanwhile goes too, as {@link #forgetMetaClass} does: one a script changed would keep the entry,
+   * and the class, in Groovy's set of changed metaclasses for good.
+   */
+  private static void forgetClassInfo(AbstractConcurrentMap<?, ?> classInfos, Class<?> c) {
+    if (classInfos != null) {
+      Object entry = ((AbstractConcurrentMap<Object, ?>) classInfos).get(c);
+      ((AbstractConcurrentMap<Object, ?>) classInfos).remove(c);
+      if (entry instanceof ClassInfo) {
+        forgetMetaClass((ClassInfo) entry);
+      }
     }
     if (staticField(c, "$staticClassInfo") != null) {
       setStaticField(c, "$staticClassInfo", null);

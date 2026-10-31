@@ -142,7 +142,54 @@ public class EngineReplacementTest extends BaseTest {
         assertNotNull("memory ran short: soft references were cleared", noShortage.get());
     }
 
+    @Test
+    public void aTimerTaskAtWorkDuringTheReloadGoesOnWorking() throws Exception {
+        // A timer's task under way at a reload (or a launch) runs on while the old engine is released,
+        // making objects of its script's own class. Every one it made from the reload on used to fail:
+        // the release emptied the entry Groovy keeps for the class while the task held it.
+        User user = user("working");
+        final AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Working");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        play(t);
+        for (String signal : new String[]{BUSY_STARTED, BUSY_STOP, BUSY_FINISHED}) {
+            System.clearProperty(signal);
+        }
+        final String sent = "busy-task-sent";
+        t.send("SendScript", "script", "class Busy { int n; Busy twice() { new Busy(n: n * 2) } }\n"
+            + "timers.newTimer().runAfter(10) {\n"
+            + "  int made = 0; int failed = 0; String first = null\n"
+            + "  def until = System.currentTimeMillis() + 30000\n"
+            + "  while (System.getProperty('" + BUSY_STOP + "') == null && System.currentTimeMillis() < until) {\n"
+            + "    try { assert new Busy(n: made).twice().n == made * 2; made++ }\n"
+            + "    catch (Throwable e) { failed++; if (first == null) first = e.toString() }\n"
+            + "    if (made == 1000) System.setProperty('" + BUSY_STARTED + "', 'yes')\n"
+            + "  }\n"
+            + "  System.setProperty('" + BUSY_FINISHED + "', 'made ' + made + ', failed ' + failed + (first ? ', first ' + first : ''))\n"
+            + "}\n"
+            + "'" + sent + "'");
+        await(sent, () -> t.count(AdminSocketsTest.output(sent)) == 1);
+        await("the task at work", () -> System.getProperty(BUSY_STARTED) != null);
+        try {
+            reload(t);
+            Thread.sleep(500); // (and on after it)
+        } finally {
+            System.setProperty(BUSY_STOP, "yes");
+        }
+        await("the task finished", () -> System.getProperty(BUSY_FINISHED) != null);
+        String result = System.getProperty(BUSY_FINISHED);
+        assertTrue("the task at work during the reload: " + result, result.matches("made \\d+, failed 0"));
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------
+
+    /** What the busy task of aTimerTaskAtWorkDuringTheReloadGoesOnWorking and the test tell each other. */
+    private static final String BUSY_STARTED = "EngineReplacementTest.busyStarted";
+    private static final String BUSY_STOP = "EngineReplacementTest.busyStop";
+    private static final String BUSY_FINISHED = "EngineReplacementTest.busyFinished";
 
     /** What the slow task of anEngineWhoseTimerTaskFinishesAfterTheReloadIsUnloadedToo and the test tell each other. */
     private static final String TASK_STARTED = "EngineReplacementTest.taskStarted";

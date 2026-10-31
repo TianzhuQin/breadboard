@@ -23,6 +23,9 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
 
@@ -95,6 +98,45 @@ public class EngineCleanupTest {
         try {
             SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
             assertTrue("the classes of an engine whose code ran again after its release are still loaded",
+                collected(classes, 20000));
+            assertNotNull("memory ran short: soft references were cleared", noShortage.get());
+        } finally {
+            next.close();
+        }
+    }
+
+    @Test
+    public void codeOfAnEngineAtWorkWhileItIsReleasedGoesOnWorking() throws Exception {
+        // A task of the old engine under way when it is replaced (a timer's task at a reload or a launch)
+        // goes on making objects of its scripts' own classes, during the release and after it. Every one
+        // of them used to fail from the release on: the task had put Groovy's entry for its class back in
+        // the class's own field during the release, and the release then emptied that entry.
+        JsonSetup.install();
+        replaced(played(new ScriptTestHarness(false))); // (the JVM's first engines can stay: see above)
+        ScriptTestHarness engine = played(new ScriptTestHarness(false));
+        WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
+        Task task = new Task((Closure<?>) engine.eval("class Work { int n; Work twice() { new Work(n: n * 2) } }\n"
+            + "def task = { int i -> new Work(n: i).twice().n }\n"
+            + "task"), 4);
+        try {
+            task.awaitCalls(1000);
+            replaced(engine);
+            engine = null;
+            task.awaitCalls(1000);
+            // The next release takes the classes the task uses out of Groovy's caches again.
+            replaced(played(new ScriptTestHarness(false)));
+            task.awaitCalls(1000);
+        } finally {
+            task.stop();
+        }
+        task.assertNoneFailed();
+        task = null;
+        // The engine still goes once the task is over, by the release after it.
+        replaced(played(new ScriptTestHarness(false)));
+        ScriptTestHarness next = played(new ScriptTestHarness(false));
+        try {
+            SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
+            assertTrue("the classes of an engine whose code was at work during its release are still loaded",
                 collected(classes, 20000));
             assertNotNull("memory ran short: soft references were cleared", noShortage.get());
         } finally {
@@ -202,6 +244,67 @@ public class EngineCleanupTest {
         engine.close();
         EngineCleanup.release(engine.engine);
         return engine.engine;
+    }
+
+    /**
+     * A task of an engine at work: threads that call {@code body} with 1, 2, 3, ... until stopped, each
+     * call to give twice its number.
+     */
+    private static final class Task {
+        private final AtomicBoolean stopped = new AtomicBoolean();
+        private final AtomicLong calls = new AtomicLong();
+        private final AtomicLong failed = new AtomicLong();
+        private final AtomicReference<Throwable> firstFailure = new AtomicReference<Throwable>();
+        private final List<Thread> threads = new ArrayList<Thread>();
+
+        Task(final Closure<?> body, int threadCount) {
+            for (int t = 1; t <= threadCount; t++) {
+                Thread thread = new Thread(new Runnable() {
+                    public void run() {
+                        for (int i = 1; !stopped.get(); i++) {
+                            try {
+                                Object result = body.call(i);
+                                if (!Integer.valueOf(2 * i).equals(result)) {
+                                    throw new AssertionError("call " + i + " gave " + result);
+                                }
+                            } catch (Throwable e) {
+                                failed.incrementAndGet();
+                                firstFailure.compareAndSet(null, e);
+                            }
+                            calls.incrementAndGet();
+                        }
+                    }
+                }, "EngineCleanupTest task " + t);
+                thread.setDaemon(true);
+                threads.add(thread);
+                thread.start();
+            }
+        }
+
+        /** Waits for {@code n} more calls, for at most 30 seconds. */
+        void awaitCalls(long n) throws InterruptedException {
+            long until = System.currentTimeMillis() + 30000;
+            long target = calls.get() + n;
+            while (calls.get() < target && System.currentTimeMillis() < until) {
+                Thread.sleep(5);
+            }
+            assertTrue("the task made no more calls", calls.get() >= target);
+        }
+
+        void stop() throws InterruptedException {
+            stopped.set(true);
+            for (Thread thread : threads) {
+                thread.join(10000);
+            }
+        }
+
+        void assertNoneFailed() {
+            if (failed.get() > 0) {
+                AssertionError error = new AssertionError(failed.get() + " of the task's " + calls.get() + " calls failed");
+                error.initCause(firstFailure.get());
+                throw error;
+            }
+        }
     }
 
     /** The class loader of an engine played, then replaced (nothing else of it is kept here). */
