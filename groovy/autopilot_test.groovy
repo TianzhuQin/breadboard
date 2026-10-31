@@ -41,6 +41,81 @@ test("the game starts as soon as maxPlayers are here") {
   ap.stop()
 }
 
+test("at most maxPlayers are seated, the first to arrive, and the others are told the session is full") {
+  def hooks = [:]
+  def full = []
+  def started = []
+  def ap = pilot('ap-cap-', hooks)
+  ap.sessionFull = { String id -> full << id }
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 2, waitSeconds: 60, countdownSeconds: 30,
+                    onStart: { players -> started.addAll(players*.id) }])
+    arrive(ap, 'ap-cap-1'); Thread.sleep(5)
+    assert !ap.roomFull()
+    arrive(ap, 'ap-cap-2'); Thread.sleep(5)
+    assert ap.starting && ap.roomFull() : "full, and counting down"
+    // Someone sent here before the room was full arrives during the countdown.
+    arrive(ap, 'ap-cap-3')
+    ap.launch()
+    assert hooks.started == 1
+    assert started.toSet() == ['ap-cap-1', 'ap-cap-2'].toSet()
+    assert g.getVertex('ap-cap-3') == null : "seated, although the room was full"
+    assert full == ['ap-cap-3']
+    assert !ap.roomFull()
+  } finally {
+    ap.stop()
+  }
+}
+
+test("someone away for a moment keeps their place by arrival, and the room isn't full while a seat is free") {
+  def hooks = [:]
+  def full = []
+  def ap = pilot('ap-capaway-', hooks)
+  ap.sessionFull = { String id -> full << id }
+  try {
+    ap.waitingRoom([minPlayers: 2, maxPlayers: 3, waitSeconds: 60, countdownSeconds: 30])
+    ap.replaceDisconnected([afterSeconds: 30])
+    arrive(ap, 'ap-capaway-1'); Thread.sleep(5)
+    arrive(ap, 'ap-capaway-2'); Thread.sleep(5)
+    arrive(ap, 'ap-capaway-3'); Thread.sleep(5)
+    assert ap.roomFull()
+    // A drop for a moment during the countdown keeps the seat: the room stays full.
+    leave(ap, 'ap-capaway-2', 2000)
+    assert ap.roomFull()
+    // One who stays away long enough loses it: a seat is free, and newcomers may come again.
+    leave(ap, 'ap-capaway-3', 61000)
+    assert !ap.roomFull()
+    arrive(ap, 'ap-capaway-4'); Thread.sleep(5)
+    arrive(ap, 'ap-capaway-5')
+    ap.launch()
+    assert g.getVertex('ap-capaway-2') != null : "the seat of someone away for a moment was given away"
+    assert g.getVertex('ap-capaway-3') == null
+    assert g.getVertex('ap-capaway-4') != null
+    assert g.getVertex('ap-capaway-5') == null
+    assert full == ['ap-capaway-5']
+  } finally {
+    ap.stop()
+  }
+}
+
+test("without maxPlayers everyone here is seated, and the room is never full") {
+  def hooks = [:]
+  def full = []
+  def ap = pilot('ap-nocap-', hooks)
+  ap.sessionFull = { String id -> full << id }
+  try {
+    ap.waitingRoom([minPlayers: 2, waitSeconds: 60, countdownSeconds: 30])
+    (1..4).each { arrive(ap, "ap-nocap-${it}".toString()) }
+    ap.beginCountdown()
+    assert !ap.roomFull()
+    ap.launch()
+    assert (1..4).every { g.getVertex("ap-nocap-${it}".toString()) != null }
+    assert full.isEmpty()
+  } finally {
+    ap.stop()
+  }
+}
+
 test("the game starts even when the experiment's onStart fails") {
   def hooks = [:]
   def ap = pilot('ap-onstart-', hooks)
@@ -73,6 +148,30 @@ test("a start that fails is handed on with what went wrong, and one that works i
   assert fine.launched
   assert failedWith.size() == 1
   fine.stop()
+}
+
+test("someone away is shown the room as it is now, not as it was when they left") {
+  def hooks = [:]
+  def ap = pilot('ap-awaytext-', hooks)
+  try {
+    ap.waitingRoom([minPlayers: 2, waitSeconds: 60, countdownSeconds: 30])
+    arrive(ap, 'ap-awaytext-1'); arrive(ap, 'ap-awaytext-2')
+    def away = g.getVertex('ap-awaytext-2')
+    assert away._system.autopilot.here == 2 && away._system.autopilot.startsIn != null
+    leave(ap, 'ap-awaytext-2')
+    // (a researcher's preview standing in for them shows this)
+    assert away._system.autopilot.state == "waiting"
+    assert away._system.autopilot.here == 1 : "what the room said as they left"
+    assert away._system.autopilot.startsIn == null
+    assert away.text.contains("1 joined so far")
+    // and the countdown, once it begins
+    arrive(ap, 'ap-awaytext-3')
+    ap.beginCountdown()
+    assert away._system.autopilot.state == "starting"
+    assert away.text.contains("Starting in")
+  } finally {
+    ap.stop()
+  }
 }
 
 test("waiting participants are told how many are here") {
@@ -326,11 +425,12 @@ test("someone away for a moment at the start keeps their seat, which the compute
     leave(ap, 'ap-seat-3', 5000)
     // a player whose page never connected (e.g. one a script added) still goes
     g.addPlayer('ap-seat-ghost')
-    arrive(ap, 'ap-seat-4'); arrive(ap, 'ap-seat-5')
+    // (the kept seat is one of the four: the room is full with the fourth here)
+    arrive(ap, 'ap-seat-4')
     assert hooks.started == 1
     assert g.getVertex('ap-seat-3') != null : "their seat was taken away as their page reconnected"
     assert g.getVertex('ap-seat-ghost') == null
-    assert started.toSet() == ['ap-seat-1', 'ap-seat-2', 'ap-seat-3', 'ap-seat-4', 'ap-seat-5'].toSet()
+    assert started.toSet() == ['ap-seat-1', 'ap-seat-2', 'ap-seat-3', 'ap-seat-4'].toSet()
     assert ap.takeoverTimers.keySet() == ['ap-seat-3'] as Set : "nobody plays the kept seat"
   } finally {
     ap.stop()
@@ -371,7 +471,7 @@ test("whoever launch() takes out is passed on, so their page is told when it com
     leave(ap, 'ap-out-2', 61000)
     arrive(ap, 'ap-out-3')
     leave(ap, 'ap-out-3', 5000)
-    arrive(ap, 'ap-out-4'); arrive(ap, 'ap-out-5')
+    arrive(ap, 'ap-out-4')
     assert hooks.started == 1
     assert told == ['ap-out-2'] : "only those taken out"
   } finally {
@@ -391,9 +491,10 @@ test("the game starts as it should when passing on whoever was taken out fails")
     leave(ap, 'ap-outfail-2', 61000)
     arrive(ap, 'ap-outfail-3')
     leave(ap, 'ap-outfail-3', 5000)
-    arrive(ap, 'ap-outfail-4'); arrive(ap, 'ap-outfail-5')
+    // (the kept seat is one of the three: the room is full with the fourth here)
+    arrive(ap, 'ap-outfail-4')
     assert hooks.started == 1
-    assert started.toSet() == ['ap-outfail-1', 'ap-outfail-3', 'ap-outfail-4', 'ap-outfail-5'].toSet()
+    assert started.toSet() == ['ap-outfail-1', 'ap-outfail-3', 'ap-outfail-4'].toSet()
     assert ap.takeoverTimers.containsKey('ap-outfail-3') : "the kept seat was not handed to the computer"
   } finally {
     ap.stop()
@@ -461,6 +562,63 @@ test.async("a player who leaves mid-game is replaced by the computer, and gets t
       assert tookOver : "the computer did not take the seat"
       assert returned : "the seat was not given back"
       ap.stop()
+    }
+  }
+}
+
+// Once the session is over (its game finished, or it was stopped), nothing more happens in it: a page
+// closed after the end used to hand its seat to the computer 30 s later, recorded as aiTakeover in
+// the finished session.
+test.async("a page closed once the session is over hands no seat to the computer", 5000) { done ->
+  def hooks = [:]
+  def tracked = []
+  def ap = pilot('ap-over-', hooks)
+  ap.eventTracker = [track: { name, data -> tracked << name }]
+  ap.waitingRoom([minPlayers: 1, maxPlayers: 1, countdownSeconds: 0])
+  ap.replaceDisconnected([afterSeconds: 0.3])
+  def v = arrive(ap, 'ap-over-1')
+  assert hooks.started == 1
+  ap.gameListener.experimentInstance.status = "FINISHED"
+  leave(ap, 'ap-over-1')
+  def scheduled = ap.takeoverTimers.containsKey('ap-over-1')
+  timers.newTimer().runAfter(800) {
+    def tookOver = v.getProperty("ai") == 1
+    a.ai.remove(v)
+    done {
+      try {
+        assert !scheduled : "a takeover was set up in a session that is over"
+        assert !tookOver : "the computer took the seat in a session that is over"
+        assert !tracked.contains("aiTakeover")
+      } finally {
+        ap.stop()
+      }
+    }
+  }
+}
+
+test.async("nor does a player who left before the session ended, once it has", 5000) { done ->
+  def hooks = [:]
+  def tracked = []
+  def ap = pilot('ap-ended-', hooks)
+  ap.eventTracker = [track: { name, data -> tracked << name }]
+  ap.waitingRoom([minPlayers: 1, maxPlayers: 1, countdownSeconds: 0])
+  ap.replaceDisconnected([afterSeconds: 0.3])
+  def v = arrive(ap, 'ap-ended-1')
+  leave(ap, 'ap-ended-1')
+  assert ap.takeoverTimers.containsKey('ap-ended-1') : "the computer takes over while the game goes on"
+  // the session is stopped before the takeover is due
+  ap.gameListener.experimentInstance.status = "STOPPED"
+  timers.newTimer().runAfter(800) {
+    def tookOver = v.getProperty("ai") == 1
+    a.ai.remove(v)
+    done {
+      try {
+        assert !tookOver : "the computer took the seat in a session that is over"
+        assert !tracked.contains("aiTakeover")
+        assert tracked.contains("autopilotStart")
+      } finally {
+        ap.stop()
+      }
     }
   }
 }

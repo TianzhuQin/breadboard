@@ -35,25 +35,32 @@ Then start it:
   **Unblock** and click **OK**. Otherwise Windows (Smart App Control) may refuse to run
   `breadboard.bat`, which came from the internet. Then right-click the zip, choose **Extract All**,
   and double-click `breadboard.bat` in the new folder. (Opened inside the zip, it says to extract
-  the zip first.) The first time, Windows Firewall asks about Java: tick **Private networks**, so
-  that the lab's computers can reach Breadboard, and click **Allow**. If SmartScreen still warns,
-  choose **More info** → **Run anyway**.
+  the zip first.) The first time, Windows Firewall asks whether Java may communicate on networks.
+  For the lab's computers to reach Breadboard, tick the kind of network this computer is on,
+  **Private networks** or **Public networks** (Windows often counts a network it joins for the first
+  time as public; Settings → Network & internet says which), and click **Allow access**, which needs
+  an administrator. Breadboard works on this computer either way. If SmartScreen still warns, choose
+  **More info** → **Run anyway**.
 - **Linux**: unzip it (if `unzip` is missing: `sudo apt install unzip`) and run `./breadboard.sh` in
   the folder.
 
 The launcher says where Breadboard is reached: `On this computer: http://localhost:9000`, and
 `On this network: http://192.168.…:9000`, this computer's address on its network (a lab's), for the
-other computers there. The console opens in your browser once the server is up. On a new install
-it asks you to create the first researcher account. Opened from another computer (a server you
-reach over the network, or through a proxy), it also asks for a **setup code**: the server prints
-it in its window and in `logs/application.log`, so only whoever runs the server can create that
-first account. Stop the server with Ctrl+C, or by closing its window. If the port is taken, the
-launcher says so: often Breadboard is running already, and its address is the one to open.
+other computers there: a line for each network it is on (Wi-Fi and an Ethernet adapter, say), the
+one it reaches the internet through first. The console opens in your browser once the server is
+up. On a new install it asks you to create the first researcher account. Opened from another
+computer (a server you reach over the network, or through a proxy), it also asks for a
+**setup code**: the server prints it in its window and in `logs/application.log`, so only whoever
+runs the server can create that first account. Stop the server with Ctrl+C, or by closing its
+window. Started again while it runs (a second double-click, say), the launcher opens its console
+again. If the port is taken, the launcher says so: often Breadboard is running already, and its
+address is the one to open.
 
-Anything after the launcher's name is passed to the server as a setting:
+Anything after the launcher's name is passed to the server as a setting (on a Mac, in Terminal,
+`sh`, a space and the dragged `breadboard.sh` take the place of `./breadboard.sh`):
 
 ```bash
-./breadboard.sh -Dhttp.port=8080
+./breadboard.sh -Dhttp.port=8080           # this time on port 8080
 JAVA8_HOME=/opt/zulu8 ./breadboard.sh      # another Java 8 than the one in jre/
 BREADBOARD_NO_BROWSER=1 ./breadboard.sh    # don't open the browser
 BREADBOARD_KEEP_RUNNING=0 ./breadboard.sh  # don't start it again if it stops by itself
@@ -61,17 +68,22 @@ BREADBOARD_KEEP_RUNNING=0 ./breadboard.sh  # don't start it again if it stops by
 
 `JAVA8_HOME` can be the JDK's folder, its `bin` folder, or on macOS the JDK's folder as Finder shows
 it (`zulu-8.jdk`); one that holds no Java 8 is ignored, with a warning. The settings you change go in
-`conf/local.conf` (see [Settings](#settings)).
+`conf/local.conf` (see [Settings](#settings)), the port and the memory too, so that every start
+uses them, a double-click included.
 
 **Keeping it running.** Started in a terminal, by `Start Breadboard.command` (macOS), or by
 double-clicking `breadboard.bat`, the launcher starts the server again when it stops by itself (it
 ran out of memory, or crashed), after a short wait that grows each time (5 s up to a minute), and
 gives up after 5 restarts within 10 minutes. It says why on its window and in
-`logs/application.log`. Ctrl+C, closing the window, or stopping it as a service ends it for good.
-`BREADBOARD_KEEP_RUNNING=0` turns this off, and `=1` turns it on anywhere else. Under systemd or
-launchd, the launcher becomes the server and the service manager starts it again. Run by Task
-Scheduler as a service (see [Running it for good](#running-it-for-good)), `breadboard.bat` starts it
-again itself and never gives up: after 5 restarts in 10 minutes, it tries once a minute.
+`logs/application.log`. Before each restart it checks the port again, and stops if another program
+has taken it. A server that stops before it ever started (a mistake in `conf/local.conf`, its port
+taken) isn't started again, as it would only fail the same way: the launcher says so, and
+`logs/start-errors.log` keeps what Java printed as errors. Ctrl+C, closing the window, or stopping
+it as a service ends it for good. `BREADBOARD_KEEP_RUNNING=0` turns this off, and `=1` turns it on
+anywhere else. Under systemd or launchd, the launcher becomes the server and the service manager
+starts it again. Run by Task Scheduler as a service (see [Running it for good](#running-it-for-good)),
+`breadboard.bat` starts it again itself and never gives up, also when it couldn't start: after 5
+restarts in 10 minutes, it tries once a minute.
 
 **Sleep.** While the server runs, the launchers keep the computer from going to sleep by itself
 (on macOS with `caffeinate`, on Windows by asking Windows to stay awake), and let it sleep again
@@ -88,13 +100,14 @@ Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
-that file is gone). A server whose shutdown is stuck (an experiment's script that never ends) is
-stopped after 20 seconds. When it stops normally, a running session's game stops at once (no page
-joins it again, no computer player or timer plays it on), a `serverStopping` event is recorded in
-it, and its participants are told the session ended because the server was stopped or restarted,
-and that they can open the study's link again in a few minutes to join the session open then (those
-from Prolific: open the study again from Prolific, or return it). Someone given a completion code
-keeps it on screen.
+that file is gone). Java says so, and what it ran out of, in `logs/jvm-pid<N>.log` (see below). To
+give it more memory, set `breadboard.memory` in `conf/local.conf`. A server whose shutdown is stuck
+(an experiment's script that never ends) is stopped after 20 seconds. When it stops normally, a
+running session's game stops at once (no page joins it again, no computer player or timer plays it
+on), a `serverStopping` event is recorded in it, and its participants are told the session ended
+because the server was stopped or restarted, and that they can open the study's link again in a
+few minutes to join the session open then (those from Prolific: open the study again from Prolific,
+or return it). Someone given a completion code keeps it on screen.
 
 On first start the launcher creates:
 
@@ -104,7 +117,14 @@ On first start the launcher creates:
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
 | `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux the launcher lets only its owner read it, as it may hold keys. The account the server runs as must be able to read it. |
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
+| `logs/jvm-pid<N>.log` | What Java itself says, such as that the server ran out of memory, which would otherwise go to the server's window. One for each start, N being Java's process id; at the next start, those in which Java said nothing are deleted, and at most 10 are kept. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
+
+On macOS and Linux, `db/`, `backups/` and `logs/`, and what is in them, can be read only by the
+account the server runs as: they hold participants' data and researchers' password hashes, and a
+lab computer's other accounts could otherwise read them. What the server makes is private from the
+start, and at every start the launcher makes private what is already there (copied from an earlier
+release, say), when it is that account's. Copy backups elsewhere as that account (or with `sudo`).
 
 ## Settings
 
@@ -121,10 +141,16 @@ win. Don't change `application-prod.conf` itself: each release brings its own, w
 `conf/local.conf` is yours, and you copy it into the next release when you upgrade. (A setting can
 also be given when starting, e.g. `./breadboard.sh -Dbreadboard.allowLateJoin=true`.)
 
-Text values go in double quotes, where a backslash starts an escape, as in JSON. So on Windows,
-write a path with forward slashes, `breadboard.backup.dir="D:/Breadboard backups"`, or with each
-backslash doubled, `"D:\\Breadboard backups"`. A single backslash either stops the server from
-starting or, as `\b` in `"D:\backups"` does, quietly changes the path.
+Text values go in straight double quotes (`"`). TextEdit's Smart Quotes, on unless you turned it
+off, makes them curly (`“ ”`) as you type, and so does a Chinese input method's punctuation. Turn
+Smart Quotes off (in TextEdit, Edit → Substitutions → Smart Quotes) before you type, or type those
+quotes again afterwards. With curly quotes in `conf/local.conf`, the launchers don't start the
+server, and say on which line they are.
+
+In a text value, a backslash starts an escape, as in JSON. So on Windows, write a path with forward
+slashes, `breadboard.backup.dir="D:/Breadboard backups"`, or with each backslash doubled,
+`"D:\\Breadboard backups"`. A single backslash either stops the server from starting or, as `\b` in
+`"D:\backups"` does, quietly changes the path.
 
 The account the server runs as must be able to read `conf/local.conf`. Java would take a file it
 can't read for one that isn't there, and the server would run without your settings, so the
@@ -141,11 +167,13 @@ The ones to look at before participants join:
 | `breadboard.rootUrl` | `http://localhost:9000` | The public address. Mechanical Turk HITs send workers here. (The links the console shows for participants use the address the console was opened at: see [console.md](console.md).) |
 | `breadboard.secureCookies` | `false` | `true` when participants reach the server over HTTPS. |
 | `session.secure` | (off) | `true` when researchers reach the console over HTTPS. |
+| `http.port` | `9000` | The port. The launchers read it from `conf/local.conf` (only there) and pass it on; `-Dhttp.port=` given when starting wins. |
+| `breadboard.memory` | `1g` | How much memory the server may use for its data (Java's heap), in megabytes or gigabytes: `1500m`, `2g`. Read by the launchers, only from `conf/local.conf`. An `-Xmx` in `JAVA_OPTS` (as 3.0's launchers suggested) or given when starting wins over it. |
 | `breadboard.allowLateJoin` | `false` | Let people join a session after its game started. |
 | `breadboard.clientUpdateRate` | `500` | How often participants' pages are updated, in milliseconds. |
 | `amt.accessKey`, `amt.secretKey` | from `AMT_ACCESS_KEY`, `AMT_SECRET_KEY` | Your AWS keys, for Mechanical Turk. |
 | `breadboard.backup.everyHours` | `24` | How often the database is copied into `backups/`. |
-| `breadboard.backup.keep` | `14` | How many copies are kept. |
+| `breadboard.backup.keep` | `14` | How many copies of each kind are kept (the daily ones, those made by hand, those made before an upgrade). |
 | `breadboard.backup.dir` | `backups` | Where they go (relative to the Breadboard folder, or a full path, e.g. on another disk). |
 | `breadboard.backup.enabled` | `true` | `false` stops the copies. |
 
@@ -315,8 +343,8 @@ From then on it also starts whenever you log in. To stop it, and keep it stopped
 
 What the server prints for a window (`StandardOutPath`) goes nowhere: what it logs is in
 `logs/application.log` anyway, and this copy, kept, would only grow, with colour codes. That also
-throws away what experiments print (`println`), and the line Java prints when the server runs out
-of memory: `logs/out-of-memory.hprof` shows that it did (and launchd starts it again).
+throws away what experiments print (`println`). When the server runs out of memory, Java says so in
+`logs/jvm-pid<N>.log`, not there, and launchd starts it again.
 `logs/launchd.log` (`StandardErrorPath`) gets what goes wrong outside the server's log, such as why
 the launcher couldn't start the server, or what Java says when it can't start (a crash of Java
 leaves its report in `hs_err_pid*.log` in the Breadboard folder).
@@ -368,27 +396,34 @@ the task is wrong.
 
 ### Checking that it is up
 
-`GET /health` answers `{"status":"ok", "database":"ok", "diskFreeMb": …}` with status 200 while the
-server works: it writes to the database (so a full disk or a locked database shows), checks there
-are more than 100 MB free where the database is, and that the server's internals are running.
-Otherwise it answers 503 with `"status":"failing"` and a `"reason"`. Point an uptime monitor (or
-your proxy's health check) at `https://breadboard.example.org/health`. It needs no sign-in and says
+`GET /health` answers `{"status":"ok", "database":"ok", "diskFreeMb": …, "version":"v3.1.0",
+"uptimeSeconds": …}` with status 200 while the server works: it writes to the database (so a full
+disk or a locked database shows), checks there are more than 100 MB free where the database is, and
+that the server's internals are running. Otherwise it answers 503 with `"status":"failing"` and a
+`"reason"`. `HEAD /health` gives the same status without the body. Point an uptime monitor (or your
+proxy's health check) at `https://breadboard.example.org/health`. It needs no sign-in and says
 nothing about experiments or participants.
 
 **A restart ends running sessions.** The game state of a session lives in the server's memory,
 so stopping the server ends any session in progress. When it starts again, such a session is
 marked Stopped, with a `sessionInterrupted` event in its data; **Resume** (Sessions & data) starts
-its game again from the beginning, as for a session a researcher stopped. Participants who come
-back are told the session isn't running, and are asked to open the study's link again: with the
-autopilot on, that link leads to the session it opens after the restart. Restart between sessions.
+its game again from the beginning, as for a session a researcher stopped. Participants whose page
+comes back to it, also after a crash, are told the session ended because the server was stopped or
+restarted, as a normal stop tells them, and that they can open the study's link again (those from
+Prolific: open the study again from Prolific, or return it): with the autopilot on, that link leads
+to the session it opens after the restart. Restart between sessions.
 
 ## Backups
 
 Everything researchers create (experiments, sessions, their events, accounts) is in
 `db/breadboard.h2.db`. The server copies it while it runs (nothing has to stop) into `backups/`:
-once a day, and before a newer release changes it (`...-upgrade.zip`). The newest 14 are kept. The
-console's **Settings → Backups** lists them, makes one when you ask (before a big change, say), and
-downloads them. The settings above change how often, how many and where.
+once a day, and before a newer release changes it (`...-upgrade.zip`). The console's
+**Settings → Backups** lists them, makes one when you ask (before a big change, say;
+`...-manual.zip`), and downloads them. The newest 14 of each kind are kept: the daily ones, those
+made by hand, and those made before an upgrade, so making many by hand never pushes out the daily
+ones. Each one's name says when it was made (in UTC, e.g. `breadboard-2026-10-30-133336.zip`), and
+the console shows that time, also for backups copied from an earlier release. The settings above
+change how often, how many and where.
 
 The copies are on the same disk as the database, so copy them somewhere else now and then (or set
 `breadboard.backup.dir` to a folder on another disk or a synced drive).
@@ -449,37 +484,49 @@ launcher goes on with the others. Point it at the JDK's folder, or remove it.
 rest of Breadboard isn't. Right-click the zip, **Extract All**, and open `breadboard.bat` in the new
 folder.
 
-**"Port 9000 is in use"** (or "Breadboard is already running on port 9000"): another program, or
-a Breadboard started earlier, holds the port. If it is Breadboard, open its address; otherwise
-start on another port with `-Dhttp.port=9001`. (A proxy set for the internet, such as
-`http_proxy`, doesn't matter: the launchers check the port directly.)
+**"Another program is using port 9000"** (on Windows **"Port 9000 is in use"**), or **"Breadboard
+is already running on port 9000"**: another program, or a Breadboard started earlier, holds the
+port. If it is Breadboard, open its address. Otherwise stop that program, or use another port: the
+line `http.port=9001` in `conf/local.conf` for every start, or `-Dhttp.port=9001` once, as the
+message shows. (A proxy set for the internet, such as `http_proxy`, doesn't matter: the launchers
+check the port directly.)
 
-**The server's window shows nothing new**: the window is probably paused, and a paused window can
-hold the server up. A click into a Windows console window starts selecting text, which pauses it,
-and Ctrl+S pauses a terminal. What the server logs doesn't wait at first, and its routine lines are
-left out (`logs/application.log` has them all); but what experiment scripts print (`println`, chat
-messages) waits for the window at once, and warnings and errors do once about 500 are waiting.
-Whatever waits holds up what printed or logged it (a step of the game, a participant's choice, a
-sign-in). Press Esc (or Ctrl+Q in a terminal) to let it go on, and don't leave it paused.
+**The server's window shows nothing new**: the window is probably paused. A click into a Windows
+console window starts selecting text, which pauses it, and Ctrl+S pauses a terminal. The server
+doesn't wait for it: what it prints waits for the window, and once about a megabyte is waiting, the
+rest is left out of the window, with a line that says how many lines were. `logs/application.log`
+has everything the server logs; what experiment scripts print (`println`, chat messages) is only in
+the window, and what Java itself says (that the server ran out of memory) is in
+`logs/jvm-pid<N>.log`. Only a crash of Java itself, which is rare, waits for the window to show its
+first lines: the server is started again once the window goes on. Press Esc (or Ctrl+Q in a
+terminal) to let the window go on.
 
 **A setting in `conf/local.conf` has a typo**: the server doesn't start, and says which line of
-`conf/local.conf` it couldn't read (as a service: in `logs/service-errors.log` on Windows,
-`logs/launchd.log` on a Mac, `journalctl -u breadboard` with systemd). Fix that line (text values go
-in double quotes; for a path on Windows, see [Settings](#settings)) and start it again.
+`conf/local.conf` it couldn't read, in its window and in `logs/start-errors.log` (as a service also
+in `logs/service-errors.log` on Windows, `logs/launchd.log` on a Mac, `journalctl -u breadboard`
+with systemd). Fix that line (text values go in double quotes; for a path on Windows, see
+[Settings](#settings)) and start it again.
+
+**"Line … of conf/local.conf has curly quotes"**: the quotes on that line are curly (`“ ”`), as
+TextEdit's Smart Quotes types them, where the server needs straight ones (`"`). Type them again with
+Smart Quotes off (see [Settings](#settings)), and start it again.
 
 **The first start of a new install stopped halfway** (the server says the database "could not be
 brought up to date"): stop it, delete the `db` folder, which holds nothing yet, and start again.
 
 **"Breadboard is already running from this folder"**: a server started from this folder still runs
-(the message gives its process number and address): open it, or stop it first. A `RUNNING_PID` left
-behind by a crash is removed by the launchers themselves; if you start the server another way,
-delete `RUNNING_PID` after checking that no server is running.
+(the message gives its process number and address). Started in a terminal or by a double-click, the
+launcher opens that server's console in the browser; otherwise open its address. To start it again,
+stop it first. A `RUNNING_PID` left behind by a crash is removed by the launchers themselves; if you
+start the server another way, delete `RUNNING_PID` after checking that no server is running.
 
 **"db/ can't be written by …"**: the folder belongs to another account (often after unzipping with
 `sudo`). Fix its owner as the message says, e.g. `sudo chown -R breadboard: /opt/breadboard`.
 **"conf/local.conf can't be read by …"** is the same for your settings file, often one copied with
-`sudo`: `sudo chown breadboard: /opt/breadboard/conf/local.conf`. (On Windows: right-click the file,
-**Properties**, **Security**, and give the account that runs Breadboard read access.)
+`sudo`: `sudo chown breadboard: /opt/breadboard/conf/local.conf`. When the folder or file is the
+account's own, only without write or read access for it, the message says `chmod` instead (e.g.
+`chmod u+rw ".../conf/local.conf"`), which needs no administrator. (On Windows: right-click the
+file, **Properties**, **Security**, and give the account that runs Breadboard read access.)
 
 **Event values cut short**: values are kept up to 1 MB each; a longer one is cut, ending in
 "…[truncated from N characters]".
@@ -487,9 +534,9 @@ delete `RUNNING_PID` after checking that no server is running.
 **The console can't connect** (its top bar keeps saying "Reconnecting…"): a proxy in front of
 Breadboard doesn't pass websockets. See the nginx settings above.
 
-**Participants see "This session isn't running right now"**: the session finished, the server
-restarted, or the console moved the engine to another session. Open a new session, or turn the
-autopilot on, and give participants the study's link again.
+**Participants see "This session isn't running right now"**: the session finished or was stopped,
+or the console moved the engine to another session (one a restart cut short says so instead). Open a
+new session, or turn the autopilot on, and give participants the study's link again.
 
 **A forgotten password**: stop the server and start it once with the account's email:
 

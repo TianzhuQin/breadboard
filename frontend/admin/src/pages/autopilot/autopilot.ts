@@ -36,11 +36,30 @@ export interface EngineSession {
   /** the email of the account that runs it, when the server knows */
   owner: string | null
 }
+/**
+ * A live session of the autopilot's experiment that a researcher opened by hand (GET /autopilot's
+ * status.handSession): not the autopilot's, which opens none of its own until it has ended.
+ */
+export interface HandSession {
+  id: number
+  name: string
+  /** RUNNING or TESTING */
+  status: string
+  /** its game has started */
+  gameStarted: boolean
+  /** the study's links lead into it now: its game hasn't started and its room isn't full */
+  openToNewcomers: boolean
+  /** the email of the account that opened it, when the server knows */
+  owner: string | null
+}
 export interface AutopilotStatus {
   on: boolean
   experimentId: number | null
   experimentName: string | null
+  /** the autopilot's own session (the one it opened, or was handed on Resume or a save), whatever its state */
   instance: { id: number, name: string, status: string } | null
+  /** a live session of its experiment that a researcher opened by hand (newer servers); see HandSession */
+  handSession: HandSession | null
   links: { login: string, prolific: string } | null
   /**
    * Why the autopilot, switched on, opens no session (the server's words); null when all is well.
@@ -159,6 +178,18 @@ function normalizeEngineSession (raw: any): EngineSession | null {
   }
 }
 
+function normalizeHandSession (raw: any): HandSession | null {
+  if (!raw || typeof raw !== 'object' || idOrNull(raw.id) == null) return null
+  return {
+    id: Number(raw.id),
+    name: String(raw.name ?? ''),
+    status: String(raw.status ?? ''),
+    gameStarted: raw.gameStarted === true,
+    openToNewcomers: raw.openToNewcomers === true,
+    owner: text(raw.owner),
+  }
+}
+
 export function normalizeState (raw: any): AutopilotState {
   const r = raw && typeof raw === 'object' ? raw : {}
   const s = r.status && typeof r.status === 'object' ? r.status : {}
@@ -174,6 +205,7 @@ export function normalizeState (raw: any): AutopilotState {
       experimentId: s.experimentId == null ? null : Number(s.experimentId),
       experimentName: typeof s.experimentName === 'string' ? s.experimentName : null,
       instance: inst ? { id: Number(inst.id), name: String(inst.name ?? ''), status: String(inst.status ?? '') } : null,
+      handSession: normalizeHandSession(s.handSession),
       links: links ? { login: String(links.login || ''), prolific: String(links.prolific || '') } : null,
       problem: text(s.problem),
       paused: s.paused === true,
@@ -249,6 +281,53 @@ export function haltOf (state: Pick<AutopilotState, 'settings' | 'status'> | nul
   if (s.done) return 'done'
   return problemKind(state!) === 'done' ? 'done' : null
 }
+/**
+ * The step failure a pause names (status.problem: the steps of its session didn't load, or a step
+ * failed during its game): which step, on which line, and what went wrong in the server's brief
+ * words ("No such property: five"); `text` is the problem without them. Null for any other pause.
+ */
+export interface PauseFailure {
+  step: string
+  line: number | null
+  message: string
+  text: string
+}
+export function pauseFailure (problem: string | null | undefined): PauseFailure | null {
+  if (!problem) return null
+  // "the steps of its session "S" didn't load (InitStep: line 24: No such property: five), so that session was stopped …"
+  const load = /didn't load (\(([^:()]+): (?:line (\d+): )?([\s\S]*?)\))(?=, so that session was stopped)/.exec(problem)
+  // "the step "RoundStep" failed during its session "S" (line 71: No such property: x), so that session was stopped …"
+  // (or ", and then the game had nothing left to do, …")
+  const game = load ? null : /the step "([^"]+)" failed during its session "[\s\S]*?" (\((?:line (\d+): )?([\s\S]*?)\))(?=, (?:so that session was stopped|and then the game))/.exec(problem)
+  if (load) return failureOf(load[2], load[3], load[4], problem, load[1])
+  if (game) return failureOf(game[1], game[3], game[4], problem, game[2])
+  return null
+}
+function failureOf (step: string, line: string | undefined, message: string, problem: string, bracket: string): PauseFailure {
+  return {
+    step: step.trim(),
+    line: line ? Number(line) : null,
+    message: message.trim(),
+    text: problem.replace(` ${bracket}`, '').replace(bracket, ''),
+  }
+}
+
+/**
+ * The paused status card's line under its title, by the reason the server gives (status.problem):
+ * a mistake in a step, sessions that ran out of time, or a researcher ending its session. Neutral
+ * when the reason is none of those (the reason itself is said below it).
+ */
+export function pausedLine (problem: string | null | undefined): string {
+  const p = problem || ''
+  const until = 'so it opens no new session until you press Resume.'
+  if (/didn't load \(/.test(p)) return `The steps of its last session didn’t load, ${until}`
+  if (/the step "[^"]+" failed during its session/.test(p)) return `A step failed in its last session, ${until}`
+  if (/sessions in a row ran longer than/.test(p)) return `Its last sessions ran out of time, ${until}`
+  if (/its session "[\s\S]*?" was stopped/.test(p)) return `Its session was stopped, ${until}`
+  if (/its session "[\s\S]*?" ended when/.test(p)) return `Its session was ended from the console, ${until}`
+  return 'It opens no new session until you press Resume (see why below).'
+}
+
 /** The button that resumes it: "Resume" after a pause, "Open another session" once it is done. */
 export function resumeLabel (halt: 'paused' | 'done'): string {
   return halt === 'paused' ? 'Resume' : 'Open another session'
@@ -256,18 +335,17 @@ export function resumeLabel (halt: 'paused' | 'done'): string {
 
 /**
  * Whether stopping this session pauses the autopilot (the server's Autopilot.sessionStopped): it is
- * the session the engine runs, of the autopilot's experiment. `status.instance` is the engine's
- * session of that experiment; a test session is left out of it, so `engineSessionId` (what the
- * console's engine info says the engine runs) covers that case. Already paused: nothing changes.
+ * the autopilot's session, `status.instance` (the one it opened, or was handed on Resume or a save).
+ * A session a researcher opened by hand, of its experiment or the test session, is theirs: stopping
+ * it leaves the autopilot running, and it opens its next session once the engine is free. Already
+ * paused: nothing changes.
  */
 export function stopPausesAutopilot (
   ap: Pick<AutopilotState, 'settings' | 'status'> | null,
-  session: { id: number, experimentId: number | null | undefined },
-  engineSessionId?: number | null,
+  session: { id: number },
 ): boolean {
   if (!ap || !ap.status.on || ap.status.paused) return false
-  if (ap.status.instance?.id === session.id) return true
-  return engineSessionId === session.id && session.experimentId != null && ap.settings.experimentId === session.experimentId
+  return ap.status.instance?.id === session.id
 }
 /** Said before stopping a session that would pause the autopilot (see stopPausesAutopilot). */
 export const STOP_PAUSES_AUTOPILOT = 'The autopilot runs this experiment, so stopping its session pauses it: it opens no new session, and its participant links (including Prolific’s) lead nowhere, until you press Resume on the Autopilot page.'
@@ -300,7 +378,7 @@ export function validateAutopilot (f: AutopilotForm): AutopilotErrors {
   const e: AutopilotErrors = {}
   if (f.enabled && f.experimentId == null) e.experimentId = 'Choose the experiment to run.'
   if (f.continuous) {
-    whole(f.nextSessionDelaySeconds, 'nextSessionDelaySeconds', e, { min: 0, max: MAX_SECONDS, required: true, what: 'a number of seconds (0 opens it at once)' })
+    whole(f.nextSessionDelaySeconds, 'nextSessionDelaySeconds', e, { min: 0, max: MAX_SECONDS, required: true, what: 'a number of seconds (0 for no pause)' })
   }
   // (empty: no limit)
   whole(f.maxSessionMinutes, 'maxSessionMinutes', e, { min: 1, max: MAX_SESSION_MINUTES, required: false, what: '' })
@@ -492,23 +570,73 @@ export function waitingRoomLive (nodes: Iterable<{ id: string, data: Record<stri
   return best
 }
 
-const AUTOPILOT_EVENTS = new Set(['autopilotStart', 'autopilotCancelled', 'aiTakeover', 'aiReturned', 'sessionTooLong', 'sessionStalled'])
+const AUTOPILOT_EVENTS = new Set([
+  'autopilotStart', 'autopilotCancelled', 'aiTakeover', 'aiReturned', 'sessionTooLong', 'sessionStalled',
+  // failures, stops and restarts: what keeps a session from running as it should
+  'stepFailed', 'sessionFailed', 'stepsFailedToLoad', 'sessionStopped', 'serverStopping', 'engineReloaded',
+])
 
-/** The autopilot's recent events in words, newest first. */
+export type ActivityTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral'
+
+/** The line a failure was on: the event's own `line`, or the "line 72: …" its error starts with. */
+function lineOf (d: Record<string, any>): number | null {
+  const n = Number(d.line)
+  if (Number.isInteger(n) && n > 0) return n
+  const m = /^line (\d+):/.exec(String(d.error ?? ''))
+  return m ? Number(m[1]) : null
+}
+/** "RoundStep failed at line 72" */
+function failedAt (step: unknown, line: number | null): string {
+  return `${step ? String(step) : 'A step'} failed${line ? ` at line ${line}` : ''}`
+}
+
+/** The autopilot's recent events in words, newest first: its games, takeovers, failures and stops. */
 export function autopilotActivity (events: { name: string, datetime: string, data: Record<string, any> }[], limit = 6) {
-  const out: { key: string, at: string, text: string, tone: 'success' | 'warning' | 'info' | 'neutral' }[] = []
+  const out: { key: string, at: string, text: string, tone: ActivityTone }[] = []
+  // the step whose failure the session was then ended for (sessionFailed, or sessionStalled, newer): that failure
+  // didn't let the game go on
+  let endedFor: string | null = null
   for (let i = events.length - 1; i >= 0 && out.length < limit; i--) {
     const e = events[i]
     if (!AUTOPILOT_EVENTS.has(e.name)) continue
     const d = e.data || {}
     let text = ''
-    let tone: 'success' | 'warning' | 'info' | 'neutral' = 'neutral'
+    let tone: ActivityTone = 'neutral'
     if (e.name === 'autopilotStart') { text = `Game started with ${d.players ?? '?'} ${String(d.players) === '1' ? 'person' : 'people'}`; tone = 'success' }
     if (e.name === 'autopilotCancelled') { text = `Called off: only ${d.players ?? '?'} joined`; tone = 'warning' }
     if (e.name === 'aiTakeover') { text = `The computer took over ${d.playerId ?? 'a player'}'s seat`; tone = 'info' }
     if (e.name === 'aiReturned') { text = `${d.playerId ?? 'A player'} came back and plays again`; tone = 'info' }
     if (e.name === 'sessionTooLong') { text = `Ended: the game ran out of time (longest session: ${d.limit ?? '?'} min)`; tone = 'warning' }
-    if (e.name === 'sessionStalled') { text = `Stopped: nothing was left to do after ${d.step ? `the step ${d.step}` : 'a step'} failed`; tone = 'warning' }
+    if (e.name === 'sessionStalled') {
+      // (the failure it names didn't let the game go on for good either)
+      endedFor = d.step ? String(d.step) : ''
+      text = `Stopped: nothing was left to do after ${d.step ? `the step ${d.step}` : 'a step'} failed`
+      tone = 'danger'
+    }
+    if (e.name === 'sessionFailed') {
+      endedFor = d.step ? String(d.step) : ''
+      text = `Ended: ${failedAt(d.step, lineOf(d))} and stalled the game`
+      tone = 'danger'
+    }
+    if (e.name === 'stepFailed') {
+      const stalled = endedFor !== null && (endedFor === '' || endedFor === String(d.step ?? ''))
+      if (stalled) endedFor = null
+      text = stalled ? failedAt(d.step, lineOf(d)) : `${failedAt(d.step, lineOf(d))}; the game went on`
+      tone = stalled ? 'danger' : 'warning'
+    }
+    if (e.name === 'stepsFailedToLoad') {
+      // "InitStep: line 24: No such property: five"
+      const m = /^([^:]+): (?:line (\d+):)?/.exec(String(d.error ?? ''))
+      text = `Stopped before anyone joined: ${m ? failedAt(m[1].trim(), m[2] ? Number(m[2]) : null) : 'a step failed'} as the steps loaded`
+      tone = 'danger'
+    }
+    if (e.name === 'sessionStopped') { text = `Stopped${d.by ? ` by ${d.by}` : ' by a researcher'}`; tone = 'warning' }
+    if (e.name === 'serverStopping') { text = 'Ended: the server was stopped'; tone = 'warning' }
+    if (e.name === 'engineReloaded') {
+      const restarted = d.restarted === true || d.restarted === 'true'
+      text = `The engine was reloaded${d.by ? ` by ${d.by}` : ''}${restarted ? '; the game started again from the beginning' : ''}`
+      tone = 'info'
+    }
     out.push({ key: `${i}-${e.name}`, at: e.datetime, text, tone })
   }
   return out

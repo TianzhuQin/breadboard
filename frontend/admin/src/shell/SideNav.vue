@@ -5,7 +5,7 @@
       <span class="sidenav__name">Breadboard</span>
     </div>
 
-    <ExperimentSwitcher class="sidenav__switcher" />
+    <ExperimentSwitcher class="sidenav__switcher" @picked="emit('navigate')" />
 
     <div class="sidenav__scroll">
       <div v-for="g in NAV" :key="g.label" class="sidenav__group">

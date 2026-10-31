@@ -4,7 +4,7 @@
       Everyone in the session, live. Find people by id, or filter by any property, e.g. <code>score&gt;5</code>. Click someone to see their screen, choices, ties and properties.
     </template>
     <template #actions>
-      <BButton :icon="Download" :disabled="!rows.length" title="The players shown, with every property" @click="downloadCsv">Download CSV</BButton>
+      <BButton :icon="Download" :disabled="!rows.length" :title="`The players shown, with every property${csvForExcel ? ', for Excel (as chosen on Sessions & data)' : ''}`" @click="downloadCsv">Download CSV</BButton>
     </template>
 
     <BEmpty
@@ -185,7 +185,7 @@ import { selectedPlayer, selectPlayer, networkPrefs as prefs, loadColumns, saveC
 import { parseFilter, matchFilter, describeFilter } from '@/network/filter'
 import { columnProperties, connectionOf, discoverProperties, formatValue, isAi, playerName, statusOf, choicesOf, valueOf } from '@/network/players'
 import { undoLast } from '@/network/tieEdits'
-import { download } from '@/network/exporters'
+import { csvForExcel, saveCsv } from '@/lib/csvFiles'
 import PlayerPanel from './PlayerPanel.vue'
 import PlayerDetails from './PlayerDetails.vue'
 import { BASE_COLUMNS, QUICK_FILTERS, csvKeys, quickMatch, sortNodes, toCsv, type Column, type QuickFilter, type Sort } from './table'
@@ -406,8 +406,10 @@ function downloadCsv () {
     // every property anyone has (not only the ones a table column can show), plus Prolific ids
     const keys = csvKeys(nodes.value)
     const name = [admin.experiment?.name, admin.instance?.name].filter(Boolean).join('-').replace(/[^\w-]+/g, '-') || 'players'
-    download(toCsv(sorted.value, keys, degree), `players-${name}.csv`, 'text/csv;charset=utf-8')
-    notify.success('Players downloaded', `${rows.value.length} ${rows.value.length === 1 ? 'row' : 'rows'}, with every property the experiment set as a column.`)
+    // with the byte-order mark when For Excel is chosen on Sessions & data, as the console's other CSV files
+    saveCsv(`players-${name}.csv`, toCsv(sorted.value, keys, degree))
+    const n = rows.value.length
+    notify.success('Players downloaded', `${n} ${n === 1 ? 'row' : 'rows'}, with every property the experiment set as a column${csvForExcel.value ? '; for Excel, as chosen on Sessions & data' : ''}.`)
   } catch (e: any) {
     notify.error('Couldn\'t download the players', e?.message || String(e))
   }

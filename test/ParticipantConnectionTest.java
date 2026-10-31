@@ -14,6 +14,7 @@ import play.mvc.Http;
 import play.mvc.Result;
 import play.mvc.WebSocket;
 import security.ParticipantAuth;
+import security.PreviewTokens;
 
 import javax.script.ScriptEngine;
 import java.lang.reflect.Field;
@@ -46,6 +47,7 @@ public class ParticipantConnectionTest extends BaseTest {
 
     private final List<AdminSocketsTest.Tab> tabs = new ArrayList<>();
     private AdminSocketsTest.Tab console;
+    private User researcher;
     private Experiment experiment;
     private ExperimentInstance session;
     private long silenceLimit;
@@ -56,6 +58,7 @@ public class ParticipantConnectionTest extends BaseTest {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
         User user = createUser("conn-" + UUID.randomUUID() + "@test.org", "conn", "secret-1", lang);
+        researcher = user;
         experiment = createExperiment("Connections");
         user.ownedExperiments.add(experiment);
         user.saveManyToManyAssociations("ownedExperiments");
@@ -85,6 +88,7 @@ public class ParticipantConnectionTest extends BaseTest {
         clients.clear();
         ((Set<?>) field("endedPages").get(null)).clear();
         ParticipantAuth.reset();
+        PreviewTokens.reset();
         Recruitment.reset();
         ((EventTracker) field("eventTracker").get(null)).setExperimentInstance(null);
     }
@@ -96,10 +100,11 @@ public class ParticipantConnectionTest extends BaseTest {
         final WebSocket.In<JsonNode> in = new WebSocket.In<JsonNode>();
         final List<JsonNode> frames = new CopyOnWriteArrayList<>();
         volatile boolean closed;
-        final ThrottledWebSocketOut out = new ThrottledWebSocketOut(new WebSocket.Out<JsonNode>() {
+        final WebSocket.Out<JsonNode> socketOut = new WebSocket.Out<JsonNode>() {
             public void write(JsonNode frame) { frames.add(frame); }
             public void close() { closed = true; }
-        }, 0L);
+        };
+        final ThrottledWebSocketOut out = new ThrottledWebSocketOut(socketOut, 0L);
 
         void send(String action, Object... pairs) {
             ObjectNode m = Json.newObject();
@@ -135,6 +140,26 @@ public class ParticipantConnectionTest extends BaseTest {
     private Page connect(String clientId, boolean preview) throws Exception {
         Page page = new Page();
         ScriptBoard.addClient(experiment.id.toString(), session.id.toString(), clientId, page.in, page.out, preview);
+        return page;
+    }
+
+    /**
+     * A participant's page opening its socket with its seat token, as a page does: through the
+     * handshake (ClientController.connectClient), with what else the page adds to the address
+     * ({@code query}, e.g. "bbPage=1000").
+     */
+    private Page handshake(String clientId, String token, String query) throws Exception {
+        String e = experiment.id.toString();
+        String i = session.id.toString();
+        play.test.FakeRequest request = fakeRequest(GET, "/game/" + e + "/" + i + "/" + clientId + "/connect?"
+            + ParticipantAuth.QUERY_PARAM + "=" + token + (query.isEmpty() ? "" : "&" + query));
+        Http.Context.current.set(play.core.j.JavaHelpers$.MODULE$.createJavaContext(request.getWrappedRequest()));
+        Page page = new Page();
+        try {
+            controllers.ClientController.connectClient(e, i, clientId).onReady(page.in, page.socketOut);
+        } finally {
+            Http.Context.current.remove();
+        }
         return page;
     }
 
@@ -276,6 +301,221 @@ public class ParticipantConnectionTest extends BaseTest {
         assertSame(back.out, client("p1").out);
     }
 
+    // ---- the page opened last keeps the seat ------------------------------------------------------
+
+    @Test
+    public void anOlderPageReconnectingByItselfLeavesTheSeatToThePageOpenedSince() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        Page older = handshake("p1", token, "bbPage=1000");
+        assertTrue(older.count(VIEW) >= 1);
+        // They open the study again in a new tab, while the older one's connection is down.
+        Page newer = handshake("p1", token, "bbPage=2000");
+        assertEquals(1, older.count(REPLACED));
+
+        // The older tab's network comes back, and it reconnects by itself: the newer page keeps the
+        // seat, and the older one is told it has been taken.
+        Page again = handshake("p1", token, "bbPage=1000");
+        assertTrue(again.closed);
+        assertEquals(again.frames.toString(), 1, again.frames.size());
+        assertTrue(REPLACED.matches(again.frames.get(0)));
+        assertFalse(newer.closed);
+        assertEquals(0, newer.count(REPLACED));
+        client("p1").send("still-here");
+        assertTrue(newer.last().has("eventName"));
+        assertEquals(1, again.frames.size());
+        // What the refused socket sends, and its going, change nothing; nothing is recorded.
+        again.send("MakeChoice", "choiceUID", "no-such-choice");
+        again.hangUp();
+        assertEquals(0, again.count(ANSWER));
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(1, events("clientConnected", "p1"));
+        assertEquals(0, events("clientDisconnected", "p1"));
+
+        // "Use it here" on the older page takes the seat, from the newer one.
+        Page here = handshake("p1", token, "bbPage=1000&bbTake=1");
+        assertFalse(here.closed);
+        assertEquals(1, newer.count(REPLACED));
+        assertTrue(newer.closed);
+        assertTrue(here.count(VIEW) >= 1);
+        // A page that doesn't say when it was loaded (from an older server) takes it as before.
+        Page unknown = handshake("p1", token, "");
+        assertEquals(1, here.count(REPLACED));
+        assertFalse(unknown.closed);
+        assertEquals(1, events("clientConnected", "p1"));
+        assertEquals(0, events("clientDisconnected", "p1"));
+    }
+
+    @Test
+    public void anOlderPageIsSeatedOnceThePageOpenedSinceHasGone() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        handshake("p1", token, "bbPage=1000");
+        Page newer = handshake("p1", token, "bbPage=2000");
+        newer.hangUp();
+        Page older = handshake("p1", token, "bbPage=1000");
+        assertFalse(older.closed);
+        assertEquals(0, older.count(REPLACED));
+        assertTrue(older.count(VIEW) >= 1);
+        assertEquals(Boolean.TRUE, system("p1").get("connected"));
+        assertEquals(2, events("clientConnected", "p1"));
+        assertEquals(1, events("clientDisconnected", "p1"));
+    }
+
+    private static final AdminSocketsTest.Matcher CLAIM = f -> f.has("bbPage") && f.size() == 1;
+
+    /**
+     * The participant chooses the older page ("Use it here", or it takes the seat back by itself once the
+     * newer one has gone): from then on that page counts as the one they opened last, so the newer
+     * page, reconnecting by itself in the background as its network comes back, is refused and leaves
+     * the seat to it. It used to count as opened last by when it was loaded, and took the seat back.
+     */
+    @Test
+    public void thePageTheParticipantChoseKeepsTheSeatWhenTheNewerOneReconnectsByItself() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        Page older = handshake("p1", token, "bbPage=1000");
+        Page newer = handshake("p1", token, "bbPage=2000");
+        assertEquals(1, older.count(REPLACED));
+        // The newer page's connection is cut; on the older one they press "Use it here".
+        newer.hangUp();
+        long before = System.currentTimeMillis();
+        Page chosen = handshake("p1", token, "bbPage=1000&bbTake=1");
+        assertFalse(chosen.closed);
+        // It is told the time it counts as opened at, the server's now, to give as bbPage from now on.
+        assertEquals(chosen.frames.toString(), 1, chosen.count(CLAIM));
+        long claimed = chosen.frames.stream().filter(CLAIM::matches).findFirst().get().get("bbPage").asLong();
+        assertTrue(claimed + " >= " + before, claimed >= before && claimed <= System.currentTimeMillis());
+        // The newer page's network comes back and it reconnects by itself: refused, the chosen page keeps it.
+        Page back = handshake("p1", token, "bbPage=2000");
+        assertTrue(back.closed);
+        assertEquals(back.frames.toString(), 1, back.frames.size());
+        assertTrue(REPLACED.matches(back.frames.get(0)));
+        assertFalse("the tab the participant chose keeps the seat", chosen.closed);
+        assertEquals(0, chosen.count(REPLACED));
+        client("p1").send("still-here");
+        assertTrue("what the game sends reaches the chosen tab", chosen.last().has("eventName"));
+        assertEquals(1, back.frames.size());
+
+        // The chosen page's own connection drops in turn, and the newer one takes the free seat by
+        // itself; the chosen page, back with the time it was given, takes the seat from it.
+        chosen.hangUp();
+        Page newerAgain = handshake("p1", token, "bbPage=2000");
+        assertFalse(newerAgain.closed);
+        Page chosenAgain = handshake("p1", token, "bbPage=" + claimed);
+        assertFalse(chosenAgain.closed);
+        assertEquals(0, chosenAgain.count(CLAIM));
+        assertEquals(1, newerAgain.count(REPLACED));
+        // A page they open after all this is newer still, and takes it.
+        Page latest = handshake("p1", token, "bbPage=" + (System.currentTimeMillis() + 1));
+        assertFalse(latest.closed);
+        assertEquals(1, chosenAgain.count(REPLACED));
+    }
+
+    @Test
+    public void ofTwoPagesOfTheParticipantsTheOneLoadedLastHoldsTheSeat() {
+        Client client = new Client("p1", session);
+        assertEquals(Client.Arrival.SEATED, client.connect(socket(1000L, false, false)));
+        Client.Connection newer = socket(2000L, false, false);
+        assertEquals(Client.Arrival.TOOK_OVER, client.connect(newer));
+        Client.Connection older = socket(1000L, false, false);
+        assertEquals(Client.Arrival.REFUSED, client.connect(older));
+        assertFalse(older.isOpen());
+        assertTrue(client.holdsSeat(newer));
+        // the same page connecting again, or one loaded at the same moment, takes it
+        Client.Connection samePage = socket(2000L, false, false);
+        assertEquals(Client.Arrival.TOOK_OVER, client.connect(samePage));
+        // a researcher's preview is none of this: it watches their page, whenever it was loaded
+        assertEquals(Client.Arrival.WATCHING, client.connect(socket(9000L, true, true)));
+        assertEquals(Client.Arrival.WATCHING, client.connect(socket(1L, true, false)));
+        assertTrue(client.holdsSeat(samePage));
+        // the participant asks for it on the older page
+        Client.Connection asked = socket(1000L, false, true);
+        assertEquals(Client.Arrival.TOOK_OVER, client.connect(asked));
+        assertTrue(client.holdsSeat(asked));
+    }
+
+    @Test
+    public void aPageOfTheirsThatLostTheSeatCanAskWhetherAnotherOneStillHoldsIt() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        assertFalse("nobody's page yet", seatHeld("p1", token));
+        Page older = handshake("p1", token, "bbPage=1000");
+        Page newer = handshake("p1", token, "bbPage=2000");
+        assertTrue(older.closed);
+        assertTrue("the newer page holds it", seatHeld("p1", token));
+        // A researcher's preview watching changes nothing; standing in for them, it is nobody's page.
+        Page preview = connect("p1", true);
+        assertTrue(seatHeld("p1", token));
+        newer.hangUp();
+        assertEquals(1, preview.count(NOT_WATCHING));
+        assertFalse("the newer page has gone", seatHeld("p1", token));
+        // Only the participant's own token may ask.
+        Result stranger = route(fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/p1/state?seat=1"));
+        assertEquals(UNAUTHORIZED, status(stranger));
+    }
+
+    @Test
+    public void aResearchersPageThatLostTheSeatCountsAnyPageThatHoldsIt() throws Throwable {
+        // The previous console's Testing panel opens a participant's page without ?preview=1, signed in
+        // by the researcher's cookie, and the console's Preview page opens one with a preview token.
+        // Such a page that another one took the seat from takes it back by itself only once no page
+        // holds it. It used to be told the seat was free whenever a preview held it, so it took the seat
+        // from the console's preview within 20 s, and two of them took it from each other every 20 s.
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        String previewToken = PreviewTokens.issue(researcher.email, experiment.id.toString(), session.id.toString(), "p1").token;
+        handshake("p1", token, "bbPage=1000").hangUp();
+        // They have left. A page of the Testing panel stands in, and the console's preview takes the
+        // seat from it.
+        Page testingPanel = connect("p1", true);
+        Page preview = connect("p1", true);
+        assertEquals(1, testingPanel.count(REPLACED));
+        assertTrue("the preview holds it", seatHeld("p1", null, researcher.uid));
+        assertTrue(seatHeld("p1", previewToken, null));
+        // The participant's own page counts only theirs, also when it is signed in as the researcher
+        // too: it takes the seat, and the preview watches.
+        assertFalse(seatHeld("p1", token, null));
+        assertFalse(seatHeld("p1", token, researcher.uid));
+        // Another page of the Testing panel takes the seat from the preview: held all the same.
+        Page another = connect("p1", true);
+        assertEquals(1, preview.count(REPLACED));
+        assertTrue(seatHeld("p1", null, researcher.uid));
+        // Their own page comes back and holds it, and goes again: the page that watched stands in.
+        Page own = handshake("p1", token, "bbPage=2000");
+        assertEquals(1, another.count(WATCHING));
+        assertTrue(seatHeld("p1", null, researcher.uid));
+        assertTrue(seatHeld("p1", token, null));
+        own.hangUp();
+        assertEquals(1, another.count(NOT_WATCHING));
+        assertTrue(seatHeld("p1", null, researcher.uid));
+        assertFalse(seatHeld("p1", token, null));
+        // Nobody holds it.
+        another.hangUp();
+        assertFalse(seatHeld("p1", null, researcher.uid));
+        assertFalse(seatHeld("p1", previewToken, null));
+    }
+
+    /** What /state?seat=1 answers the participant's page: whether a page of theirs holds the seat. */
+    private boolean seatHeld(String clientId, String token) {
+        return seatHeld(clientId, token, null);
+    }
+
+    /**
+     * What /state?seat=1 answers a page that presents this token, signed in as the researcher with this
+     * uid (either null: none).
+     */
+    private boolean seatHeld(String clientId, String token, String researcherUid) {
+        play.test.FakeRequest request = fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/" + clientId + "/state?seat=1");
+        if (token != null) request = request.withHeader(ParticipantAuth.HEADER, token);
+        if (researcherUid != null) request = request.withSession("uid", researcherUid);
+        Result result = route(request);
+        assertEquals(OK, status(result));
+        JsonNode answer = Json.parse(contentAsString(result));
+        assertEquals("that, and nothing else", 1, answer.size());
+        return answer.get("seatHeld").asBoolean();
+    }
+
+    private static Client.Connection socket(long pageLoadedAt, boolean preview, boolean takesSeat) {
+        return new Client.Connection(null, new ThrottledWebSocketOut(new WebSocketTest.TestWebSocketOut(), 0L), preview,
+            pageLoadedAt, takesSeat);
+    }
+
     // ---- the heartbeat -----------------------------------------------------------------------------
 
     @Test
@@ -343,6 +583,221 @@ public class ParticipantConnectionTest extends BaseTest {
         now[0] += 400;
         closeSilentPages(now[0]);
         assertTrue(page.closed);
+    }
+
+    // ---- gaps in a connection ----------------------------------------------------------------------
+
+    /** How many connectionGap events this participant has, and the awayMs of the last one ("" if none). */
+    private String gaps(String clientId) {
+        int n = 0;
+        String last = "";
+        for (Event e : Event.find.where().eq("experimentInstance.id", session.id).eq("name", "connectionGap").order("id").findList()) {
+            String player = null;
+            String away = null;
+            for (EventData d : e.eventData) {
+                if ("player".equals(d.name)) player = d.value;
+                if ("awayMs".equals(d.name)) away = d.value;
+            }
+            if (clientId.equals(player)) {
+                n++;
+                last = away;
+            }
+        }
+        return n + (n > 0 ? ":" + last : "");
+    }
+
+    @Test
+    public void aPageThatReconnectsAfterADropSaysHowLongItWasOutOfTouch() throws Throwable {
+        Page page = connect("p1");
+        page.send("LogIn", "clientId", "p1");
+        assertEquals(1, events("clientLogIn", "p1"));
+        // Its connection drops; its page connects again and signs in with how long it was away.
+        Page back = connect("p1");
+        back.send("LogIn", "clientId", "p1", "awayMs", 24900);
+        assertEquals("1:24900", gaps("p1"));
+        assertEquals("no new sign-in", 1, events("clientLogIn", "p1"));
+        // Not for a socket that no longer holds the seat, nor for a researcher's preview.
+        page.send("LogIn", "clientId", "p1", "awayMs", 5000);
+        Page preview = connect("p1", true);
+        preview.send("LogIn", "clientId", "p1", "awayMs", 7000);
+        assertEquals("1:24900", gaps("p1"));
+        assertEquals(1, events("clientLogIn", "p1"));
+    }
+
+    @Test
+    public void aShortSilentOutageIsRecordedTheSameWayWhicheverSocketComesFirst() throws Throwable {
+        final long[] now = {System.currentTimeMillis()};
+        field("clock").set(null, (LongSupplier) () -> now[0]);
+        Page page = connect("p1");
+        page.send("Ping");
+        Announcements announced = new Announcements();
+        bus().on("bb:connection", announced);
+        try {
+            // Away 25 s, without a word: the page noticed after 15 s and gave its socket up. As the
+            // network comes back, what it sent meanwhile (its pings) comes through, then that socket's
+            // close, and its new socket 2 ms later. That used to be recorded as a disconnection and a
+            // connection 2 ms apart.
+            now[0] += 25000;
+            page.send("Ping");
+            page.send("Ping");
+            now[0] += 1;
+            page.hangUp();
+            assertEquals(Boolean.TRUE, system("p1").get("connected"));
+            assertEquals(0, events("clientDisconnected", "p1"));
+            now[0] += 2;
+            Page back = connect("p1");
+            back.send("LogIn", "clientId", "p1", "awayMs", 25003);
+            back.send("Ping");
+            closeSilentPages(now[0] + 10000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            assertEquals(1, events("clientConnected", "p1"));
+            assertEquals("1:25003", gaps("p1"));
+            assertFalse("never announced as gone", announced.heard.contains(false));
+
+            // The same again, with the new socket first (the old one's pings and close come after):
+            // the same record. It used to be no record at all.
+            now[0] += 25000;
+            Page again = connect("p1");
+            again.send("LogIn", "clientId", "p1", "awayMs", 25000);
+            back.send("Ping");
+            back.hangUp();
+            closeSilentPages(now[0] + 10000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            assertEquals(1, events("clientConnected", "p1"));
+            assertEquals("2:25000", gaps("p1"));
+
+            // A close after a silence, with nothing before it: the same.
+            again.send("Ping");
+            now[0] += 12000;
+            again.hangUp();
+            Page third = connect("p1");
+            third.send("LogIn", "clientId", "p1", "awayMs", 12000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            assertEquals("3:12000", gaps("p1"));
+
+            // Out of touch and not back: gone once the silence would have closed the page.
+            third.send("Ping");
+            final long heard = now[0];
+            now[0] += 20000;
+            third.send("Ping");
+            third.hangUp();
+            assertEquals(Boolean.TRUE, system("p1").get("connected"));
+            closeSilentPages(heard + 29000);
+            assertEquals(0, events("clientDisconnected", "p1"));
+            closeSilentPages(heard + 31000);
+            assertEquals(1, events("clientDisconnected", "p1"));
+            assertEquals(Boolean.FALSE, system("p1").get("connected"));
+            assertEquals(Arrays.<Object>asList(false), announced.heard.subList(announced.heard.size() - 1, announced.heard.size()));
+            closeSilentPages(heard + 60000);
+            assertEquals("once", 1, events("clientDisconnected", "p1"));
+        } finally {
+            bus().off("bb:connection", announced);
+        }
+
+        // A page in touch whose socket closes (a tab closed) is gone at once, also some time after
+        // it was out of touch for a while.
+        Page tab = connect("p2");
+        tab.send("Ping");
+        now[0] += 3000;
+        tab.hangUp();
+        assertEquals(1, events("clientDisconnected", "p2"));
+        assertEquals(Boolean.FALSE, system("p2").get("connected"));
+        Page laptop = connect("p3");
+        laptop.send("Ping");
+        now[0] += 12000;
+        laptop.send("Ping");
+        for (int k = 0; k < 4; k++) {
+            now[0] += 5000;
+            laptop.send("Ping");
+        }
+        now[0] += 4000;
+        laptop.hangUp();
+        assertEquals(1, events("clientDisconnected", "p3"));
+        // and a page from before 3.1, which never pings, whatever its silence
+        Page old = connect("p4");
+        now[0] += 20000;
+        old.hangUp();
+        assertEquals(1, events("clientDisconnected", "p4"));
+    }
+
+    @Test
+    public void silencesOfAPageAreTimedFromWhatItSent() {
+        Client.Connection c = socket(0L, false, false);
+        assertEquals("never pinged: its silences mean nothing", 0L, c.outOfTouchSince(System.currentTimeMillis() + 60000));
+        c.heard(true, 1000L);
+        assertEquals(0L, c.outOfTouchSince(10999L));
+        assertEquals(1000L, c.outOfTouchSince(11000L));
+        // what it sent during a silence comes through at once: out of touch for a moment after that
+        c.heard(true, 26000L);
+        c.heard(false, 26001L);
+        assertEquals(1000L, c.outOfTouchSince(26002L));
+        assertEquals(1000L, c.outOfTouchSince(29000L));
+        assertEquals(0L, c.outOfTouchSince(29001L));
+        // pings every few seconds are no silence
+        c.heard(true, 31000L);
+        c.heard(true, 36000L);
+        assertEquals(0L, c.outOfTouchSince(36500L));
+    }
+
+    // ---- answers that come too late -----------------------------------------------------------------
+
+    /** The ageMs of each answerDropped of this participant, in order. */
+    private List<String> dropped(String clientId) {
+        List<String> ages = new ArrayList<>();
+        for (Event e : Event.find.where().eq("experimentInstance.id", session.id).eq("name", "answerDropped").order("id").findList()) {
+            String player = null;
+            String age = null;
+            for (EventData d : e.eventData) {
+                if ("player".equals(d.name)) player = d.value;
+                if ("ageMs".equals(d.name)) age = d.value;
+            }
+            if (clientId.equals(player)) ages.add(age);
+        }
+        return ages;
+    }
+
+    @Test
+    public void anAnswerThatReachesTheServerTooLateIsDroppedAndThePageIsShownWhatTheServerHolds() throws Throwable {
+        final long[] now = {System.currentTimeMillis()};
+        field("clock").set(null, (LongSupplier) () -> now[0]);
+        Page page = connect("p1");
+        // The page reckons the server's time from its pongs.
+        page.send("Ping");
+        assertEquals(now[0], page.last().get("pong").asLong());
+        engine().eval("picked = java.util.Collections.synchronizedList([]); "
+            + "a.add(g.getVertex('p1'), [name: 'Orange', result: { picked << 'Orange' }]); null");
+        String uid = String.valueOf(engine().eval("g.getVertex('p1').choices[0].uid"));
+        CustomEvents customEvents = new CustomEvents();
+        bus().on("CustomEvent", customEvents);
+        try {
+            // Clicked into a connection that had died without closing, and delivered 24.5 s later, as
+            // the network came back: dropped, and the page is sent the view again (the choice still on
+            // offer), so it doesn't show the pick as made. It used to be recorded 24.5 s late.
+            int views = page.count(VIEW);
+            page.send("MakeChoice", "choiceUID", uid, "bbSentAt", now[0] - 24500);
+            assertEquals(0, page.count(ANSWER));
+            assertEquals(Arrays.asList(), engine().eval("new ArrayList(picked)"));
+            assertEquals(views + 1, page.count(VIEW));
+            assertEquals(uid, page.last().get("player").get("choices").get(0).get("uid").asText());
+            page.send("CustomEvent", "eventName", "bb:edge-edit", "bbSentAt", now[0] - 11000);
+            assertEquals(0, customEvents.heard.size());
+            assertEquals(Arrays.asList("24500", "11000"), dropped("p1"));
+
+            // In time: taken, also when the page's reckoning puts it a little ahead, or it doesn't say.
+            page.send("CustomEvent", "eventName", "bb:edge-edit", "bbSentAt", now[0] - 9000);
+            page.send("CustomEvent", "eventName", "bb:edge-edit", "bbSentAt", now[0] + 2000);
+            page.send("CustomEvent", "eventName", "screen-tracker");
+            assertEquals(3, customEvents.heard.size());
+            page.send("MakeChoice", "choiceUID", uid, "bbSentAt", now[0] - 300);
+            assertEquals(1, page.count(ANSWER));
+            assertEquals(Arrays.asList("Orange"), engine().eval("new ArrayList(picked)"));
+            // A sign-in is never dropped.
+            page.send("LogIn", "clientId", "p1", "bbSentAt", now[0] - 60000);
+            assertEquals(1, events("clientLogIn", "p1"));
+            assertEquals(2, dropped("p1").size());
+        } finally {
+            bus().off("CustomEvent", customEvents);
+        }
     }
 
     // ---- the game started without them -----------------------------------------------------------
@@ -1203,14 +1658,17 @@ public class ParticipantConnectionTest extends BaseTest {
         Set<Object> endedPages = (Set<Object>) field("endedPages").get(null);
         Page page = connect("p1");
         engine().eval("def v = g.getVertex('p1'); v.finished = true; v.text = '<p>Thank you</p>'; null");
-        // The session finishes and the next one opens, as the autopilot does, restarting the engine.
+        // The session finishes, then the next one opens, as the autopilot does, restarting the engine.
+        // (Finished first: a launch over a session still running stops it, and a page that comes back to
+        // it then is told it was stopped, as after Stop.)
+        ExperimentInstance finished = ExperimentInstance.findById(session.id);
+        finished.finish();
+        finished.update();
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
         console.send("LaunchGame", "name", "Next", "parameters", Json.newObject());
         await("the next session", () -> ExperimentInstance.find.where().eq("experiment.id", experiment.id).eq("name", "Next")
             .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
         await("their page let go", () -> page.closed);
-        ExperimentInstance finished = ExperimentInstance.findById(session.id);
-        finished.finish();
-        finished.update();
         assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
 
         // Their page, still on its thank-you screen, comes back to the session that is over.

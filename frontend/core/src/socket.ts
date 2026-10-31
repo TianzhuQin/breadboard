@@ -21,6 +21,9 @@ const PING_EVERY_MS = 5 * 1000
 const SILENCE_MS = 15 * 1000
 // reconnectNow() leaves an attempt this young alone ('pageshow' and 'visibilitychange' come together)
 const FRESH_ATTEMPT_MS = 1000
+// How many unanswered pings it keeps the times of (a server that never answers would have it keep
+// them all); a pong is paired with the oldest kept, so it is never taken for the answer to a later one
+const PINGS_KEPT = 20
 
 export interface SocketOptions {
   /** A heartbeat, sent every 5 s while the connection is open, e.g. '{"action":"Ping"}' */
@@ -42,14 +45,17 @@ type Queued = { message: any, at: number, maxAge?: number }
  * while it isn't connected. Once closed with close(), it stays closed: it never reconnects and sends
  * nothing more.
  *
- * Events: 'connect' (an attempt starts), 'open', 'message' (data, event), 'close', 'error', 'retry'
- * (the wait in ms before the next attempt), 'refused' and 'blocked' (below).
+ * Events: 'connect' (an attempt starts), 'open', 'message' (data, event), 'pong' (data, and when the
+ * ping it answers was sent, by Date.now(): the server's answer to the heartbeat, which is no
+ * 'message'), 'close', 'error', 'retry' (the wait in ms before the next attempt), 'unopened',
+ * 'refused' and 'blocked' (below).
  *
+ * After each attempt that didn't open, it emits 'unopened' with the number of such attempts in a row.
  * When the server takes the connection and closes it again without sending anything, several
  * times in a row, it emits 'refused': reconnecting alone is not going to change that. When the
  * connection has never opened after several attempts, it emits 'blocked': the network may not let
- * it through. It goes on trying in both cases, and at once when the browser says the network is
- * back, or the page is shown again (from the background, or the back/forward cache).
+ * it through. It goes on trying in all these cases, and at once when the browser says the network
+ * is back, or the page is shown again (from the background, or the back/forward cache).
  */
 export class Socket extends Emitter {
   public state: SocketState = SocketState.CLOSED
@@ -77,6 +83,8 @@ export class Socket extends Emitter {
   private lastHeard = 0
   /** When the first ping that nothing has come after was sent; 0 when there is none */
   private unansweredSince = 0
+  /** When each ping over the current connection that hasn't been answered yet was sent, oldest first */
+  private pingsSent: number[] = []
   /** When the current attempt started */
   private attemptAt = 0
   /** Stops listening to the current connection (see abandon) */
@@ -87,18 +95,27 @@ export class Socket extends Emitter {
   private maxRefusals = 3
   /** The connection has opened at least once */
   private everOpened = false
-  /** Attempts in a row that never opened */
+  /** Attempts in a row that never opened (since the connection last opened) */
   private unopened = 0
   /** Listening for the network or the page coming back */
   private watchingPage = false
 
-  constructor (private url: string, private protocols?: string | string[], private options: SocketOptions = {}) {
+  /**
+   * @param url where to connect, or what says so for each attempt (e.g. with what the page asks of
+   * the server this time)
+   */
+  constructor (private url: string | (() => string), private protocols?: string | string[], private options: SocketOptions = {}) {
     super()
     this.connect = this.connect.bind(this)
     this.wake = this.wake.bind(this)
     this.onVisibility = this.onVisibility.bind(this)
     this.onPageShow = this.onPageShow.bind(this)
     this.beat = this.beat.bind(this)
+  }
+
+  /** Whether the connection has opened at least once (one that never has may be 'blocked') */
+  get hasOpened (): boolean {
+    return this.everOpened
   }
 
   /**
@@ -115,7 +132,8 @@ export class Socket extends Emitter {
     this.state = SocketState.PENDING
     this.attemptAt = Date.now()
     this.emit('connect')
-    const ws = this.protocols ? new WebSocket(this.url, this.protocols) : new WebSocket(this.url)
+    const url = typeof this.url === 'function' ? this.url() : this.url
+    const ws = this.protocols ? new WebSocket(url, this.protocols) : new WebSocket(url)
     this.socket = ws
     // Only the current connection counts: once given up (abandon), whatever it does is ignored.
     let attached = true
@@ -277,6 +295,7 @@ export class Socket extends Emitter {
       return
     }
     if (!this.unansweredSince) this.unansweredSince = now
+    if (this.pingsSent.length < PINGS_KEPT) this.pingsSent.push(now)
     this._send(this.options.ping)
     this.schedulePing()
   }
@@ -365,6 +384,7 @@ export class Socket extends Emitter {
     this.ponged = false
     this.lastHeard = Date.now()
     this.unansweredSince = 0
+    this.pingsSent = []
     this.emit('open')
     this.flush()
     // The first heartbeat at once: the server (and this page) only time a connection out once a
@@ -391,6 +411,8 @@ export class Socket extends Emitter {
       // Timed from the answer: a timer set from a network event isn't slowed down to once a minute
       // in a background tab, as a long chain of timers is.
       this.schedulePing()
+      // (the server answers the pings in turn: this one answers the oldest still unanswered)
+      this.emit('pong', ev.data, this.pingsSent.shift())
       return
     }
     this.emit('message', ev.data, ev)
@@ -432,9 +454,13 @@ export class Socket extends Emitter {
       this.refusals = 0
       this.emit('refused')
     }
-    if (unopened && !this.everOpened && ++this.unopened >= BLOCKED_AFTER && !this.blocked) {
-      this.blocked = true
-      this.emit('blocked')
+    if (unopened) {
+      this.unopened++
+      if (!this.everOpened && this.unopened >= BLOCKED_AFTER && !this.blocked) {
+        this.blocked = true
+        this.emit('blocked')
+      }
+      this.emit('unopened', this.unopened)
     }
   }
 

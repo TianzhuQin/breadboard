@@ -53,7 +53,7 @@ public class AutopilotSessionTest extends BaseTest {
         Field launch = Autopilot.class.getDeclaredField("launchRequestedAt");
         launch.setAccessible(true);
         launch.set(null, 0L);
-        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession"}) {
+        for (String name : new String[]{"pausedBecause", "doneBecause", "lastProblem", "ownSession", "openedSession"}) {
             Field f2 = Autopilot.class.getDeclaredField(name);
             f2.setAccessible(true);
             f2.set(null, null);
@@ -266,6 +266,13 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals(1, failed.size());
         assertEquals("finishStep", value(failed.get(0), "step"));
         assertTrue(value(failed.get(0), "error"), value(failed.get(0), "error").startsWith("line 3: No such property: roundz"));
+        // and that the autopilot ended the session for it: where, and what went wrong there
+        List<Event> ended = events(session, "sessionFailed");
+        assertEquals(1, ended.size());
+        assertEquals("finishStep", value(ended.get(0), "step"));
+        assertEquals("3", value(ended.get(0), "line"));
+        assertTrue(value(ended.get(0), "error"), value(ended.get(0), "error").startsWith("No such property: roundz"));
+        assertTrue("after the failure", ended.get(0).id > failed.get(0).id);
         assertNull("the link leads nowhere now", Autopilot.openInstance(experiment.id));
 
         // Not even the watchdog opens another until Resume
@@ -334,14 +341,15 @@ public class AutopilotSessionTest extends BaseTest {
         final ExperimentInstance session = sessions(experiment).get(0);
 
         tab.send("RunGame");
-        // As processScript tells of an error, from the step: the Live session page shows it.
+        // As processScript tells of an error, from the step, which it names: the Live session page shows it.
         await("the error on the console", () -> tab.count(f -> f.has("error") && f.has("source")
             && "finishStep".equals(f.get("source").asText()) && f.get("error").asText().startsWith("Caught error: ")
-            && f.get("error").asText().contains("roundz")) == 1);
+            && f.get("error").asText().contains("roundz") && "finishStep".equals(f.path("step").asText())) == 1);
         await("the event", () -> events(session, "stepFailed").size() == 1);
         Thread.sleep(500);
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
         assertFalse(state(researcher).get("status").get("paused").asBoolean());
+        assertEquals(0, events(session, "sessionFailed").size());
     }
 
     private static ExperimentInstance named(Experiment experiment, String name) {
@@ -349,6 +357,38 @@ public class AutopilotSessionTest extends BaseTest {
             if (name.equals(i.name)) return i;
         }
         return null;
+    }
+
+    @Test
+    public void anErrorAStepGivesAsItLoadsOrRunsNamesThatStep() throws Exception {
+        final User researcher = user("named");
+        final Experiment experiment = createExperiment("Names its step");
+        createStep(experiment, "InitStep", "initStep = stepFactory.createStep('InitStep')\n"
+            + "initStep.run = { }\n"
+            + "initStep.done = { }");
+        // valid Groovy, but "five" is not defined: it fails as the step loads
+        createStep(experiment, "RoundStep", "SEATS = 2\nROUNDS = five");
+        researcher.ownedExperiments.add(experiment);
+        researcher.saveManyToManyAssociations("ownedExperiments");
+
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(researcher.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", experiment.id);
+        await("the error of the step that didn't load", () -> tab.count(f -> f.has("error")
+            && f.get("error").asText().contains("five")) == 1);
+        JsonNode loading = tab.first(f -> f.has("error") && f.get("error").asText().contains("five"));
+        assertEquals("Steps", loading.get("source").asText());
+        assertEquals("RoundStep", loading.get("step").asText());
+
+        // A script typed in the Script console names no step, unless a step's own code fails in it.
+        tab.send("SendScript", "script", "undefinedName + 1");
+        await("its error", () -> tab.count(f -> f.has("error") && f.get("error").asText().contains("undefinedName")) == 1);
+        assertFalse(tab.first(f -> f.has("error") && f.get("error").asText().contains("undefinedName")).has("step"));
+        tab.send("SendScript", "script", "probe = stepFactory.createStep('Probe'); probe.run = { missingName + 1 }; probe.start()");
+        await("the step's error", () -> tab.count(f -> f.has("error") && f.get("error").asText().contains("missingName")) == 1);
+        assertEquals("Probe", tab.first(f -> f.has("error") && f.get("error").asText().contains("missingName")).get("step").asText());
     }
 
     /** A console tab of the user's, logged in, with the experiment selected. */
@@ -391,7 +431,16 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(byHand.id).status);
         JsonNode status = state(researcher).get("status");
         assertTrue(status.toString(), status.get("paused").asBoolean());
-        assertEquals("still paused for the launch", pausedFor, status.get("problem").asText());
+        // (what follows the reason names the session opened by hand, which now runs its game)
+        assertEquals("still paused for the launch", pauseReason(pausedFor), pauseReason(status.get("problem").asText()));
+        assertTrue(status.toString(), status.get("problem").asText().endsWith(" Meanwhile \"by hand\", a session of this experiment that "
+            + researcher.email + " opened by hand, is running. Resume hands it to the autopilot."));
+    }
+
+    /** Why the autopilot paused, without what follows about a session opened by hand ("Meanwhile ..."). */
+    private static String pauseReason(String problem) {
+        int meanwhile = problem.indexOf(" Meanwhile ");
+        return meanwhile < 0 ? problem : problem.substring(0, meanwhile);
     }
 
     @Test
@@ -503,6 +552,9 @@ public class AutopilotSessionTest extends BaseTest {
             && f.get("error").asText().contains("roundStepp")));
         assertEquals("OnJoinStep", tab.first(f -> f.has("error") && f.get("error").asText().contains("roundStepp"))
             .get("source").asText());
+        // (and names the step that failed: the OnJoinStep ran InitStep's code)
+        assertEquals("InitStep", tab.first(f -> f.has("error") && f.get("error").asText().contains("roundStepp"))
+            .get("step").asText());
 
         tab.send("SendScript", "script", "initStep.done = { }");
         await("fixed", () -> tab.count(f -> f.has("request") && "SendScript".equals(f.get("request").asText())
@@ -934,12 +986,14 @@ public class AutopilotSessionTest extends BaseTest {
         await("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
         assertEquals("their choices are still on screen", 2, ((Number) engineValue("a.actions.size()")).intValue());
 
-        // One leaves (the takeover is due), and a script makes the other a computer player: neither
-        // picks, so the stopped game isn't played on to its finish.
+        // One leaves, and a script makes the other a computer player: neither picks, so the stopped game
+        // isn't played on to its finish. (Nothing happens in a session once it has ended: the seat of
+        // the one who left isn't even handed to the computer, groovy/autopilot.groovy's sessionOver.)
         engine().eval("def v = g.getVertex('noai-1'); v._system.connected = false; autopilot.onConnection('noai-1', false); null");
         engine().eval("a.ai.add(g.getVertex('noai-2'), picksAtOnce); null");
         Thread.sleep(1500);
-        assertEquals(Integer.valueOf(1), engineValue("g.getVertex('noai-1').ai"));
+        assertNull("no takeover in a session that is over", engineValue("g.getVertex('noai-1').ai"));
+        assertEquals(Integer.valueOf(1), engineValue("g.getVertex('noai-2').ai"));
         assertEquals(0, engineValue("finishes"));
         assertEquals(2, ((Number) engineValue("a.actions.size()")).intValue());
         assertEquals("still stopped, so it can be resumed", ExperimentInstance.Status.STOPPED,
@@ -1333,7 +1387,7 @@ public class AutopilotSessionTest extends BaseTest {
         Thread.sleep(500);
         assertEquals("one session", 1, sessions(experiment).size());
         final ExperimentInstance first = sessions(experiment).get(0);
-        assertTrue(first.name, first.name.startsWith("Autopilot · "));
+        assertTrue(first.name, first.name.matches("Autopilot\u00a0· \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\u00a0UTC"));
         await("the console's waiting room over the experiment's own",
             () -> Integer.valueOf(3).equals(engineValue("autopilot.room?.minPlayers")));
         assertEquals(true, engineValue("autopilot.room.onCancel != null"));
@@ -1630,6 +1684,73 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(live.id).status);
         tab.send("SendScript", "script", "watched = 1", "experimentId", auto.id, "requestId", "a-1");
         await("its scripts run again", () -> Integer.valueOf(1).equals(engineValue("watched")));
+    }
+
+    /** What the server tells this account when it refuses a reload, and another engine action. */
+    private static String[] refusals(User user) throws Exception {
+        User fresh = User.findByEmail(user.email);
+        java.lang.reflect.Method reload = ScriptBoard.class.getDeclaredMethod("reloadRefusal", User.class);
+        reload.setAccessible(true);
+        java.lang.reflect.Method other = ScriptBoard.class.getDeclaredMethod("engineRefusal", User.class);
+        other.setAccessible(true);
+        return new String[]{(String) reload.invoke(null, fresh), (String) other.invoke(null, fresh)};
+    }
+
+    /**
+     * A researcher working on another experiment is refused engine actions while a session of the
+     * autopilot's experiment runs, and told to end it first. Only of the autopilot's own session do they
+     * read that ending it pauses the autopilot: not of one a researcher opened by hand, which ending
+     * leaves the autopilot running (it said so of both).
+     */
+    @Test
+    public void onlyOfTheAutopilotsOwnSessionDoesTheRefusalSayThatEndingItPausesTheAutopilot() throws Exception {
+        final User operator = user("hand");
+        final User colleague = user("colleague");
+        final Experiment auto = createExperiment("Autopilot's experiment");
+        final Experiment other = createExperiment("Another experiment");
+        createStep(other, "Setup", "otherLoaded = true");
+        operator.ownedExperiments.add(auto);
+        operator.saveManyToManyAssociations("ownedExperiments");
+        colleague.ownedExperiments.add(other);
+        colleague.saveManyToManyAssociations("ownedExperiments");
+        colleague.setSelectedExperiment(other);
+        colleague.update();
+
+        ObjectNode s = settings(auto, 2);
+        s.put("nextSessionDelaySeconds", 600);
+        assertEquals(OK, status(post(operator, s)));
+        await("the autopilot's session", () -> sessions(auto).size() == 1 && running(auto) == 1);
+        final ExperimentInstance own = sessions(auto).get(0);
+        for (String refusal : refusals(colleague)) {
+            assertTrue(refusal, refusal.contains("(the autopilot's session \"" + own.name + "\")"));
+            assertTrue(refusal, refusal.contains("To run \"Another experiment\", end that session first (that pauses the autopilot), or open"));
+        }
+
+        // Its game finishes, and the operator opens a session of its experiment by hand meanwhile.
+        engine().eval("gameListener.finish(); null");
+        await("its session finished", () -> ExperimentInstance.findById(own.id).status == ExperimentInstance.Status.FINISHED);
+        final AdminSocketsTest.Tab tab = new AdminSocketsTest.Tab(operator.uid);
+        tabs.add(tab);
+        tab.send("LogIn");
+        await("LogIn", () -> tab.count(f -> f.has("user")) >= 1);
+        tab.send("SelectExperiment", "experimentId", auto.id);
+        await("the selection", () -> selected(operator, auto));
+        tab.send("LaunchGame", "name", "By hand", "parameters", Json.newObject());
+        await("the session opened by hand", () -> named(auto, "By hand") != null && running(auto) == 1);
+        final ExperimentInstance byHand = named(auto, "By hand");
+        for (String refusal : refusals(colleague)) {
+            assertTrue(refusal, refusal.contains("(session \"By hand\" of " + operator.email + ")"));
+            assertTrue(refusal, refusal.contains("To run \"Another experiment\", end that session first, or open a new session of \"Another experiment\", which ends it."));
+            assertFalse(refusal, refusal.contains("pauses the autopilot"));
+        }
+
+        // As it says: ending it leaves the autopilot running.
+        tab.send("StopGame", "id", byHand.id);
+        await("stopped", () -> ExperimentInstance.findById(byHand.id).status == ExperimentInstance.Status.STOPPED);
+        Thread.sleep(300);
+        JsonNode status = state(operator).get("status");
+        assertTrue(status.toString(), status.get("on").asBoolean());
+        assertFalse(status.toString(), status.get("paused").asBoolean());
     }
 
     @Test

@@ -110,6 +110,17 @@ public class ParticipantAuthTest extends BaseTest {
     }
 
     @Test
+    public void stateSaysWhenThePageWasLoadedInTheServersTime() {
+        // (the page's socket says so as it connects: of two pages of theirs, the one loaded last keeps the seat)
+        String token = ParticipantAuth.claim(i, "P1");
+        long before = System.currentTimeMillis();
+        Result result = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P1/state").withHeader(ParticipantAuth.HEADER, token));
+        long after = System.currentTimeMillis();
+        long loadedAt = Json.parse(contentAsString(result)).get("loadedAt").asLong();
+        assertTrue(loadedAt + " in [" + before + ", " + after + "]", loadedAt >= before && loadedAt <= after);
+    }
+
+    @Test
     public void stateAcceptsTheSeatCookie() {
         String token = ParticipantAuth.claim(i, "P1");
         Result result = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P1/state")

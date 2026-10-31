@@ -99,6 +99,73 @@ describe('the shell', () => {
     expect(w.find('#shell-nav').attributes('inert')).toBeUndefined()
     w.unmount()
   })
+
+  // The drawer stayed open after a switch, and the "Switched to …" toast covered the switcher.
+  it('closes the phone navigation once an experiment is picked', async () => {
+    const exp = (id: number, name: string) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
+    narrowWindow()
+    __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(1, 'A'), experimentInstance: '' })
+    graph.clear()
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    const { w } = await mountShell()
+    const nav = () => w.find('#shell-nav')
+    const pick = async (name: string) => {
+      await w.find('.topbar__menu').trigger('click')
+      await tick()
+      expect(nav().attributes('inert')).toBeUndefined()
+      await w.find('.xsw__btn').trigger('click')
+      await nextTick()
+      await w.findAll('.xsw__opt').find(o => o.find('.xsw__opt-name').text() === name)!.trigger('click')
+    }
+    try {
+      await pick('B')
+      await vi.waitFor(() => expect(send).toHaveBeenCalledWith('SelectExperiment', { experimentId: 2 }))
+      // open until the server has switched
+      expect(nav().attributes('inert')).toBeUndefined()
+      __receive({ user: { email: 'r', experiments: [exp(1, 'A'), exp(2, 'B')], currentScript: '' }, experiment: exp(2, 'B'), experimentInstance: '' })
+      await vi.waitFor(() => expect(nav().attributes('inert')).toBeDefined())
+      // picking the one already chosen closes it too
+      await pick('B')
+      await vi.waitFor(() => expect(nav().attributes('inert')).toBeDefined())
+    } finally {
+      connection.state.value = 'idle'
+      w.unmount()
+    }
+  })
+
+  // Only Live session used to say so; elsewhere, and on a phone, there was an icon in the top bar.
+  it('says on every page when the console isn\'t connected, and that a stopped server needs starting', async () => {
+    connection.state.value = 'open'
+    const { w, router } = await mountShell()
+    try {
+      expect(w.find('.conn-notice').exists()).toBe(false)
+      connection.state.value = 'retrying'
+      await nextTick()
+      for (const page of ['/steps', '/parameters']) {
+        await router.push(page)
+        await nextTick()
+        const notice = w.find('.conn-notice')
+        expect(notice.attributes('role')).toBe('status')
+        expect(notice.text()).toContain('Not connected to the server.')
+        expect(notice.text()).toContain('If Breadboard was stopped, start it again; the console reconnects by itself.')
+      }
+      // the chip keeps its words at every width (a short one on a phone)
+      const chip = w.find('.topbar__conn')
+      expect(chip.find('.topbar__conn-text').text()).toBe('Reconnecting…')
+      expect(chip.find('.topbar__conn-short').text()).toBe('Offline')
+      expect(chip.find('.topbar__chip-text').exists()).toBe(false)
+      expect(w.find('.topbar').classes()).toContain('is-offline')
+      connection.state.value = 'open'
+      await nextTick()
+      expect(w.find('.conn-notice').exists()).toBe(false)
+      expect(w.find('.topbar__conn').exists()).toBe(false)
+    } finally {
+      connection.state.value = 'idle'
+      w.unmount()
+    }
+  })
 })
 
 describe('the output panel', () => {
@@ -254,6 +321,56 @@ describe('reloading the engine from the top bar', () => {
     await tick()
     expect(send).toHaveBeenCalledWith('ReloadEngine', {})
     connection.state.value = 'idle'
+    w.unmount()
+  })
+})
+
+describe('the top bar\'s engine chip', () => {
+  const exp = (id: number, name: string, instances: any[] = []) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances, images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
+  const session = { id: 9, name: 'Auto 3', status: 'RUNNING' }
+
+  it('says "Reload needed" as the server says, and that the autopilot\'s next session uses the saved steps while its session is open', async () => {
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ notify: { ScriptEngineReloaded: 2 } })
+    admin.engine = 'ready'
+    // (what the engine runs says whose session it is: the top bar doesn't ask the autopilot)
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}'))
+    const engine = (more: any) => ({ experimentId: 1, experimentName: 'A', sessionId: 9, sessionName: 'Auto 3', owner: 'r@lab', stepsChanged: true, autopilotSession: true, ...more })
+    __receive({
+      user: { email: 'r@lab', experiments: [exp(1, 'A', [session])], currentScript: '' },
+      experiment: exp(1, 'A', [session]),
+      experimentInstance: session,
+      engine: engine({}),
+    })
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
+    const w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    const chip = () => w.find('.topbar__chip')
+    await vi.waitFor(() => expect(chip().text()).toBe('Steps saved'))
+    expect(chip().attributes('title')).toMatch(/^Saved: the autopilot’s next session uses it\./)
+    // (it runs as this account: a reload carries its session on; as another, it would end it)
+    expect(chip().attributes('title')).toContain('Reload the engine only to use the saved steps in its session now, whose game then starts again.')
+    __receive({ engine: engine({ owner: 'other@lab' }) })
+    await vi.waitFor(() => expect(chip().attributes('title')).toContain('Reloading the engine from your account would end its session and pause the autopilot.'))
+    __receive({ engine: engine({}) })
+    await chip().trigger('click')
+    await nextTick()
+    expect(w.text()).toContain('Saved: the autopilot’s next session uses it')
+    await chip().trigger('click')
+
+    // The autopilot is switched off (or paused) while its session goes on: every console hears it, and
+    // the saved steps need a reload to reach that session. The top bar stays where it is.
+    __receive({ engine: engine({ autopilotSession: false }) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Reload needed'))
+    expect(chip().attributes('title')).toBe('The steps changed since the engine loaded them. Reload it to use the new steps.')
+    // switched on again, it takes that session as its own
+    __receive({ engine: engine({}) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Steps saved'))
+    __receive({ engine: engine({ autopilotSession: false }) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Reload needed'))
+    // and once the server says the engine runs the saved steps, nothing is needed
+    __receive({ engine: engine({ stepsChanged: false }) })
+    await vi.waitFor(() => expect(chip().text()).toBe('Engine'))
+    expect(fetch.mock.calls.map(c => String(c[0])).filter(u => u.includes('/autopilot'))).toEqual([])
     w.unmount()
   })
 })

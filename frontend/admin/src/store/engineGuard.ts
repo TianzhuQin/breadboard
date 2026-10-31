@@ -71,6 +71,39 @@ function runningLine (s: { name: string, experimentName: string | null, owner: s
     : `The engine is running ${session}.`
 }
 
+/** People (not computer players) whose page is connected to the engine's network right now. */
+function peopleConnected (): number {
+  let n = 0
+  for (const node of graph.nodes.values()) {
+    if (String(node.id).startsWith('_')) continue
+    const sys = (node.data as any)?._system
+    if (sys && typeof sys === 'object' && sys.connected === true) n++
+  }
+  return n
+}
+
+/**
+ * What a rebuild that carries session `keeping` on means for it, in words, when the engine runs it
+ * now ('' otherwise, or when its game hasn't started and nobody is connected): the session goes on in
+ * the new engine, but its game starts again from the beginning, and the people in it are disconnected
+ * and rejoin by themselves. Also the autopilot's own session (opened as this account, so it is
+ * "yours" to the server): a reload carries it on too, without pausing the autopilot.
+ */
+function carriedOn (keeping: number | undefined, auto: Named | null): string {
+  const e = admin.user?.engine
+  if (keeping == null || !e || e.sessionId !== keeping) return ''
+  const started = e.gameStarted === true
+  const here = peopleConnected()
+  if (!started && !here) return ''
+  const name = e.sessionName || (admin.instance && admin.instance.id === keeping ? admin.instance.name : String(keeping))
+  const whose = auto && auto.id === keeping ? `The autopilot’s session “${name}”` : `Your session “${name}”`
+  const people = here === 1 ? 'The 1 person in it is' : `The ${here} people in it are`
+  const rejoin = here ? ` ${people} disconnected for a moment and ${here === 1 ? 'rejoins' : 'rejoin'} by themselves.` : ''
+  return started
+    ? `${whose} carries on, but its game is in progress: reloading starts the game again from the beginning.${rejoin}`
+    : `${whose} carries on.${rejoin}`
+}
+
 /** Said when a rebuild would end the autopilot's live session (see engineUse). */
 export const REBUILD_PAUSES_AUTOPILOT = 'This also pauses the autopilot: it opens no new session by itself until someone presses Resume on the Autopilot page, so its participant links only lead somewhere while a session of its experiment is open.'
 
@@ -85,17 +118,24 @@ export async function engineUsers (): Promise<string> {
  * engine runs the autopilot's session, and the autopilot is on and not paused (say
  * REBUILD_PAUSES_AUTOPILOT then). A resume or reload that carries a session on passes its id as
  * `keeping`: that session isn't ended (nor the autopilot paused, when it is the autopilot's), though
- * the people in it are disconnected too.
+ * the people in it are disconnected too, and its game starts again: said when its game is in progress
+ * or anyone is connected to it (see carriedOn).
  */
 export async function engineUse (keeping?: number): Promise<{ who: string, pausesAutopilot: boolean, endsSession: boolean }> {
   const lines: string[] = []
   const own = running.value && admin.instance ? admin.instance : null
   const named = new Set<number>(keeping != null ? [keeping] : [])
+  const { auto, other, autopilotLive, known } = await engineSessions()
   if (own && !named.has(own.id)) {
-    lines.push(`Your session “${own.name}” is running.`)
+    // (the running session this console shows needn't be this account's own: it follows the
+    // autopilot's, and a colleague's, of the experiment it works on)
+    const e = admin.user?.engine
+    const owner = e && e.sessionId === own.id ? e.owner : null
+    if (auto && auto.id === own.id) lines.push(`The autopilot has session “${own.name}” open.`)
+    else if (owner && owner.toLowerCase() !== admin.email.toLowerCase()) lines.push(`${owner} has session “${own.name}” running.`)
+    else lines.push(`Your session “${own.name}” is running.`)
     named.add(own.id)
   }
-  const { auto, other, autopilotLive, known } = await engineSessions()
   if (auto && !named.has(auto.id)) {
     lines.push(`The autopilot has session “${auto.name}” open.`)
     named.add(auto.id)
@@ -110,6 +150,8 @@ export async function engineUse (keeping?: number): Promise<{ who: string, pause
     lines.push(runningLine({ name: e.sessionName || String(e.sessionId), experimentName: e.experimentName, owner: e.owner }))
   }
   const endsSession = lines.length > 0
+  const carried = carriedOn(keeping, auto)
+  if (carried) lines.unshift(carried)
   const n = graph.nodes.size
   // When the server says no session is running, people left in the network are what a finished or
   // stopped session left behind: clearing them disturbs no one, so it isn't worth a warning.
@@ -149,10 +191,11 @@ export async function confirmEngineRebuild (opts: { title: string, action: strin
   return askRebuild(opts, use)
 }
 
-function askRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string }, use: { who: string, pausesAutopilot: boolean }): Promise<boolean> {
+function askRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string, ask?: string }, use: { who: string, pausesAutopilot: boolean }): Promise<boolean> {
   return confirm({
     title: opts.title,
-    message: `${use.who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
+    message: (opts.ask ? `${opts.ask}\n\n` : '') +
+      `${use.who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
       (opts.detail ? ` ${opts.detail}` : '') +
       (use.pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : ''),
     confirmLabel: opts.confirmLabel || 'Continue anyway',
@@ -166,10 +209,14 @@ function askRebuild (opts: { title: string, action: string, confirmLabel?: strin
  * this console works on, and the server leaves the engine and that session alone
  * (ScriptBoard.sessionKeptBySelection): nothing to ask. Otherwise the engine loads the selected
  * experiment's steps, and this asks as confirmEngineRebuild does (at once true when nobody uses it).
+ * With `ask` (why to switch, for a switch the researcher didn't choose in the switcher, e.g. to open
+ * a step of another experiment), it always asks, saying that first.
  */
-export async function confirmSwitch (opts: { title: string, action: string, confirmLabel?: string }): Promise<boolean> {
+export async function confirmSwitch (opts: { title: string, action: string, confirmLabel?: string, ask?: string }): Promise<boolean> {
   const use = await engineUse()
-  if (use.endsSession || !use.who) return true
+  if (use.endsSession || !use.who) {
+    return opts.ask ? confirm({ title: opts.title, message: opts.ask, confirmLabel: opts.confirmLabel || 'Switch' }) : true
+  }
   return askRebuild(opts, use)
 }
 

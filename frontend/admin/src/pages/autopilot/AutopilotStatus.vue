@@ -9,7 +9,7 @@
         <!-- The way out of a pause is the same button whoever is in charge (POST /autopilot/resume),
              so this never asks for a save: application.conf autopilots have nothing to save. -->
         <p class="apst__sub">
-          <template v-if="halt === 'paused'">Its session was stopped, so it opens no new one for now.</template>
+          <template v-if="halt === 'paused'">{{ pausedLine(status.problem) }}</template>
           <template v-else-if="halt === 'done'">
             Its one session{{ expName ? ` of “${expName}”` : '' }} has finished, so it opens no new one for now.
           </template>
@@ -41,11 +41,21 @@
         <p v-else class="apst__problem-text">{{ status.problem }}</p>
       </div>
     </div>
-    <div v-else-if="status.problem" class="apst__problem is-info" role="status">
+    <div v-else-if="status.problem" class="apst__problem" :class="{ 'is-info': !failure }" role="status">
       <component :is="kind === 'waiting' ? Hourglass : kind === 'paused' ? CirclePause : Info" :size="16" aria-hidden="true" />
       <div>
         <p class="apst__problem-title">{{ infoTitle }}</p>
-        <p class="apst__problem-text">{{ infoText }}</p>
+        <p class="apst__problem-text">{{ failure ? failure.text : infoText }}</p>
+        <!-- paused by a mistake in a step: what went wrong, explained as on the Steps page, and the way there -->
+        <template v-if="failure">
+          <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" />
+          <!-- (a step of the autopilot's experiment, which needn't be the one this console works on: named then,
+               and the Steps page asks to switch to it) -->
+          <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line, status.experimentId)">
+            Open {{ failure.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ failure.line ? ` at line ${failure.line}` : '' }}
+            <ArrowRight :size="14" aria-hidden="true" />
+          </RouterLink>
+        </template>
       </div>
     </div>
 
@@ -65,6 +75,15 @@
         <BBadge :tone="sessionTone" :dot="sessionTone === 'success'">{{ sessionLabel }}</BBadge>
         <RouterLink v-if="isCurrent" to="/session" class="apst__watch">Watch it live <ArrowRight :size="14" aria-hidden="true" /></RouterLink>
       </div>
+      <!-- a session of its experiment that a researcher opened by hand: open, though not the autopilot's -->
+      <template v-else-if="hand">
+        <div class="apst__session apst__hand">
+          <span class="apst__session-name" :title="`Session #${hand.id}`">{{ hand.name || `Session #${hand.id}` }}</span>
+          <BBadge tone="success" dot>{{ handLabel }}</BBadge>
+          <RouterLink v-if="handIsCurrent" to="/session" class="apst__watch">Watch it live <ArrowRight :size="14" aria-hidden="true" /></RouterLink>
+        </div>
+        <p class="apst__muted">{{ handLine }}</p>
+      </template>
       <p v-else class="apst__muted">
         No session is open right now. {{ status.on && !status.problem && !nextOpen ? 'The autopilot opens one shortly.' : '' }}
       </p>
@@ -80,15 +99,18 @@
     <div v-if="links && (status.on || status.instance)" class="apst__block">
       <h3 class="apst__label">Participant links</h3>
       <p class="apst__muted">They always lead to the session that is open at the moment, so the same links keep working from one session to the next.</p>
-      <LocalOnlyNote class="apst__local" />
+      <LocalOnlyNote class="apst__local" what="The sign-in link uses" />
       <div class="apst__links">
         <CopyLink label="Sign-in link" :url="links.login" hint="Participants enter an ID, then join." />
-        <CopyLink
-          v-if="links.prolific"
-          label="Prolific link"
-          :url="links.prolific"
-          hint="Paste it into Prolific as the study URL; Prolific fills in the {{%…%}} parts."
-        />
+        <div v-if="links.prolific" class="apst__link">
+          <CopyLink
+            label="Prolific link"
+            :url="links.prolific"
+            hint="Paste it into Prolific as the study URL; Prolific fills in the {{%…%}} parts."
+          />
+          <!-- Prolific's people come from the internet: no lab-network tip for this one -->
+          <LocalOnlyNote what="This link uses" internet compact />
+        </div>
       </div>
     </div>
 
@@ -118,7 +140,9 @@ import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
 import LocalOnlyNote from '../session/LocalOnlyNote.vue'
 import EngineError from '../console/EngineError.vue'
-import { describeEngineSession, haltOf, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import { describeEngineSession, haltOf, pauseFailure, pausedLine, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import { stepAt } from '../steps/stepsModel'
+import { admin } from '@/store/admin'
 
 const props = defineProps<{
   state: AutopilotState
@@ -152,6 +176,10 @@ const problemError = computed(() => {
 const kind = computed(() => problemKind(props.state))
 /** paused or done: it opens nothing until Resume */
 const halt = computed(() => haltOf(props.state))
+/** paused by a mistake in a step: which one, where, and what went wrong */
+const failure = computed(() => kind.value === 'paused' ? pauseFailure(status.value.problem) : null)
+/** the autopilot runs another experiment than the one this console works on */
+const elsewhere = computed(() => status.value.experimentId != null && status.value.experimentId !== admin.experiment?.id)
 
 const badge = computed<{ tone: 'success' | 'warning' | 'neutral', label: string, pulse: boolean }>(() => {
   if (halt.value === 'paused') return { tone: 'warning', label: 'Paused', pulse: false }
@@ -160,11 +188,33 @@ const badge = computed<{ tone: 'success' | 'warning' | 'neutral', label: string,
   return stalled.value ? { tone: 'warning', label: 'Not running', pulse: false } : { tone: 'neutral', label: 'Off', pulse: false }
 })
 
+/** A session of its experiment that a researcher opened by hand (not the autopilot's own, which comes first). */
+const hand = computed(() => (status.value.instance ? null : status.value.handSession))
+/** It is the console's own session, which Live session shows. */
+const handIsCurrent = computed(() => !!hand.value && admin.instance?.id === hand.value.id)
+const handLabel = computed(() => {
+  const h = hand.value
+  if (!h) return ''
+  if (h.openToNewcomers) return 'Taking participants'
+  if (h.gameStarted) return 'Game under way'
+  if (h.status === 'TESTING') return 'Testing'
+  // (it runs, its game hasn't started, and it takes nobody more: its full waiting room counts down)
+  return 'Room full'
+})
+const handLine = computed(() => {
+  const h = hand.value
+  if (!h) return ''
+  const by = `Opened by hand by ${h.owner || 'a researcher'}, not by the autopilot`
+  return h.openToNewcomers ? `${by}: the participant links lead to it.` : `${by}.`
+})
+
 const infoTitle = computed(() => {
   if (kind.value === 'waiting') {
-    // without a live session to wait for, another researcher has their experiment loaded in the
-    // engine; the server's message says who and what
-    return status.value.engineSession ? 'Waiting for another session to end' : 'Waiting for the script engine'
+    // what it waits for: another experiment's session, a session of its own experiment that a
+    // researcher opened by hand, or else the engine, which another researcher has their experiment
+    // loaded in (the server's message says who and what)
+    if (status.value.engineSession) return 'Waiting for another session to end'
+    return status.value.handSession ? 'Waiting for the session opened by hand to end' : 'Waiting for the script engine'
   }
   return ({
     paused: 'Paused until you resume it',
@@ -268,8 +318,10 @@ const noticeTime = computed(() => {
 .apst__problem-title { font-weight: 650; }
 .apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .apst__problem-err { margin-top: 6px; }
+.apst__open-step { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; font-weight: 600; color: inherit; }
 .apst__live { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-soft-text); font-size: var(--text-sm); }
 .apst__local { margin: 6px 0 8px; }
+.apst__link { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .apst__links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 4px; }
 @media (max-width: 760px) { .apst__links { grid-template-columns: minmax(0, 1fr); } }
 .apst__activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -279,6 +331,7 @@ const noticeTime = computed(() => {
 .apst__dot.is-success { background: var(--success); }
 .apst__dot.is-warning { background: var(--warning); }
 .apst__dot.is-info { background: var(--info); }
+.apst__dot.is-danger { background: var(--danger); }
 .apst__foot { display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 20px; border-top: 1px solid var(--border); background: var(--surface-sunken); }
 .apst__foot > :first-child { flex: 1; min-width: 0; }
 .apst__err { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--warning-soft-text); }

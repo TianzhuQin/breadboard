@@ -80,6 +80,18 @@ describe('the first account', () => {
     w.unmount()
   })
 
+  it('says what the default language does, and that the console stays in English', async () => {
+    ;(admin as any).setupCodeRequired = false
+    const w = mount(SetupPage)
+    await flushPromises()
+    const field = w.findAll('.b-field').find((f: any) => f.find('label').text().startsWith('Default language'))!
+    expect(field.text()).toContain('The language you write participants’ texts in, on the Content page')
+    expect(field.text()).toContain('new experiments are set up for it')
+    expect(field.text()).toContain('The console itself stays in English')
+    expect(field.text()).toContain('You can change it later in Settings')
+    w.unmount()
+  })
+
   it('asks for no setup code on the server\'s own computer', async () => {
     ;(admin as any).setupCodeRequired = false
     const w = mount(SetupPage)

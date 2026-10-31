@@ -11,6 +11,7 @@ import play.mvc.Result;
 
 import java.io.File;
 import java.lang.management.ManagementFactory;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -24,9 +25,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 /**
- * GET /health, for uptime monitors and service managers: 200 {"status": "ok", ...} while the server
- * can write to its database, the disk that holds it has room and its actors (the engine, the
- * console) run, else 503 {"status": "failing", "reason": "..."}. A full disk used to leave the
+ * GET /health (and HEAD), for uptime monitors and service managers: 200 {"status": "ok", ...} while
+ * the server can write to its database, the disk that holds it has room and its actors (the engine,
+ * the console) run, else 503 {"status": "failing", "reason": "..."}. A full disk used to leave the
  * database refusing every write ("Timeout trying to lock table") while a read (select 1) still
  * answered, so each check writes a row (a heartbeat). It needs no sign-in, and may face the
  * internet: it says nothing about experiments or people, and its reasons are fixed phrases. The
@@ -65,6 +66,30 @@ public class HealthController extends Controller {
   private static volatile String lastReason;
 
   public static Result health() {
+    ObjectNode result = check();
+    response().setHeader("Cache-Control", "no-store");
+    return isOk(result) ? ok(result) : status(SERVICE_UNAVAILABLE, result);
+  }
+
+  /**
+   * HEAD /health, for uptime monitors and proxies that check with HEAD: the same check, status and
+   * headers as GET, without the body, which an answer to HEAD never has (Play 2.2 would send it). Its
+   * Content-Length is the body's, as GET would send it then.
+   */
+  public static Result healthHead() {
+    ObjectNode result = check();
+    response().setHeader("Cache-Control", "no-store");
+    response().setContentType("application/json; charset=utf-8");
+    response().setHeader(CONTENT_LENGTH, String.valueOf(Json.stringify(result).getBytes(StandardCharsets.UTF_8).length));
+    return isOk(result) ? ok() : status(SERVICE_UNAVAILABLE);
+  }
+
+  private static boolean isOk(ObjectNode result) {
+    return "ok".equals(result.get("status").asText());
+  }
+
+  /** What /health says (see the top); a change between well and failing goes to the log. */
+  static ObjectNode check() {
     Problem database = databaseProblem();
     File folder = databaseFolder();
     long freeMb = Backups.megabytes(Backups.freeSpace(folder));
@@ -86,8 +111,7 @@ public class HealthController extends Controller {
     result.put("diskFreeMb", freeMb);
     result.put("version", Play.application().configuration().getString("application.version", ""));
     result.put("uptimeSeconds", ManagementFactory.getRuntimeMXBean().getUptime() / 1000);
-    response().setHeader("Cache-Control", "no-store");
-    return reason == null ? ok(result) : status(SERVICE_UNAVAILABLE, result);
+    return result;
   }
 
   /** Null when {@code freeMb} is enough, else why not ({@code folder}: where the database is kept). */

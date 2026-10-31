@@ -60,6 +60,50 @@ public final class Recruitment {
     pending.clear();
   }
 
+  // The Prolific entries recorded in a session (prolificEntry: clientId, prolificPid, studyId, sessionId).
+  private static final String ENTRIES_SQL =
+      "select e.id as event_id, d.name as name, d.value as value from events e join event_data d on d.event_id = e.id"
+      + " where e.experiment_instance_id = :session and e.name = 'prolificEntry' order by e.id";
+
+  /**
+   * A session carries on in a rebuilt engine (a Reload engine, a Resume), which forgot every pending
+   * entry (reset): the details of the Prolific participants who entered it are taken up again from
+   * its data, so a seat holder's player gets them back as they return (applyTo). Without them the
+   * page showed no Prolific end, and recruitment.completeProlific refused their completion. Never
+   * throws.
+   */
+  public static void restoreFor(Long instanceId) {
+    if (instanceId == null) {
+      return;
+    }
+    try {
+      Map<Long, Map<String, String>> entries = new LinkedHashMap<Long, Map<String, String>>();
+      for (SqlRow row : Ebean.createSqlQuery(ENTRIES_SQL).setParameter("session", instanceId).findList()) {
+        Long event = row.getLong("event_id");
+        Map<String, String> entry = entries.get(event);
+        if (entry == null) {
+          entry = new HashMap<String, String>();
+          entries.put(event, entry);
+        }
+        entry.put(row.getString("name"), row.getString("value"));
+      }
+      for (Map<String, String> entry : entries.values()) {
+        String clientId = entry.get("clientId");
+        String pid = entry.get("prolificPid");
+        if (clientId != null && pid != null && !pending.containsKey(clientId)) {
+          prolificEntry(clientId, pid, nullIfNull(entry.get("studyId")), nullIfNull(entry.get("sessionId")));
+        }
+      }
+    } catch (RuntimeException e) {
+      Logger.warn("Could not take up the Prolific entries of session " + instanceId + " again: " + e);
+    }
+  }
+
+  // (a value recorded from null reads "null")
+  private static String nullIfNull(String value) {
+    return value == null || "null".equals(value) ? null : value;
+  }
+
   /** What a Prolific participant who already took part was given (see {@link #prolificCompletion}). */
   public static final class Completion {
     /** Their completion code (the latest, if they were given several), or null when none was recorded. */
@@ -87,10 +131,11 @@ public final class Recruitment {
       + "    join event_data who on who.event_id = conn.id"
       + "   where conn.experiment_instance_id = i.id and conn.name in ('clientConnected', 'clientDisconnected')"
       + "     and who.name = 'clientId' and who.value = seat.value"
-      // only since the session last stopped, was cut short or resumed: a game resumed after a stop
-      // starts again, and someone in the first run who isn't in the new one didn't reach its end
+      // only since the session last stopped, was cut short, resumed or reloaded: a game resumed after
+      // a stop starts again, and someone in the first run who isn't in the new one didn't reach its
+      // end; a reload of the engine that carries the session on drops everyone without recording it
       + "     and not exists (select 1 from events restart where restart.experiment_instance_id = i.id"
-      + "       and restart.name in ('sessionStopped', 'sessionInterrupted', 'sessionResumed')"
+      + "       and restart.name in ('sessionStopped', 'sessionInterrupted', 'sessionResumed', 'engineReloaded')"
       + "       and restart.datetime >= conn.datetime)"
       + "   order by conn.datetime desc, conn.id desc limit 1) as last_connection"
       + " from experiment_instances i"

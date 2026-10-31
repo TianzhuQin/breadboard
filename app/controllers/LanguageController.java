@@ -24,12 +24,16 @@ public class LanguageController extends Controller {
     Ebean.beginTransaction();
     try {
       for (Locale locale : locales) {
+        // Named in English, whatever the language of the server's computer, as the console's other
+        // words and its docs are ("Copy from English"). They used to follow the computer's language, so
+        // a database made on a Chinese system names them in Chinese for good.
+        String name = locale.getDisplayLanguage(Locale.ENGLISH);
         if (locale.getISO3Language().length() > 0 &&
-            locale.getDisplayLanguage().length() > 0 &&
-            (! addedLanguages.contains(locale.getISO3Language() + '-' + locale.getDisplayLanguage()))) {
-          addedLanguages.add(locale.getISO3Language() + '-' + locale.getDisplayLanguage());
+            name.length() > 0 &&
+            (! addedLanguages.contains(locale.getISO3Language() + '-' + name))) {
+          addedLanguages.add(locale.getISO3Language() + '-' + name);
           Language language = new Language();
-          language.setName(locale.getDisplayLanguage());
+          language.setName(name);
           language.setCode(locale.getISO3Language());
           language.save();
           returnLanguages.add(language);

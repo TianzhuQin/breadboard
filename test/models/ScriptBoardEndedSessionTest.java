@@ -56,7 +56,10 @@ public class ScriptBoardEndedSessionTest {
         ObjectNode round = Json.newObject();
         round.putObject("player").put("text", "Round 3");
         ScriptBoard.rememberLastScreens(Arrays.asList(clientOf(9004L, "stopped", ScriptBoard.stoppedScreen()),
-            clientOf(9004L, "outOfTime", ScriptBoard.outOfTimeScreen()),
+            clientOf(9004L, "outOfTime", ScriptBoard.outOfTimeScreen(false)),
+            clientOf(9004L, "outOfTimeProlific", ScriptBoard.outOfTimeScreen(true)),
+            clientOf(9004L, "problemProlific", ScriptBoard.problemScreen(true)),
+            clientOf(9004L, "full", ScriptBoard.sessionFullScreen(false, null)),
             clientOf(9004L, "leftOut", ScriptBoard.missedStartScreen(true)),
             clientOf(9004L, "playing", round),
             clientOf(9004L, "coded", code),
@@ -66,7 +69,8 @@ public class ScriptBoardEndedSessionTest {
 
         assertSame(code, ScriptBoard.endedSessionScreen(9004L, "coded"));
         assertSame(finished, ScriptBoard.endedSessionScreen(9004L, "finished"));
-        for (String forgotten : new String[]{"stopped", "outOfTime", "leftOut", "playing"}) {
+        for (String forgotten : new String[]{"stopped", "outOfTime", "outOfTimeProlific", "problemProlific", "full",
+            "leftOut", "playing"}) {
             ObjectNode screen = ScriptBoard.endedSessionScreen(9004L, forgotten);
             assertEquals(forgotten, "", screen.path("player").path("ended").asText());
             assertTrue(forgotten, screen.path("player").path("text").asText().contains("This session has ended"));

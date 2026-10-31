@@ -554,7 +554,8 @@ public class Breadboard extends UntypedActor {
           // New language, create it
           language = new Language();
           language.code = addLanguage.languageCode;
-          language.name = new Locale(addLanguage.languageCode).getDisplayLanguage();
+          // (in English, as LanguageController.seedLanguages names them)
+          language.name = new Locale(addLanguage.languageCode).getDisplayLanguage(Locale.ENGLISH);
         }
         boolean hasLanguage = false;
         for (Language l : selectedExperiment.languages) {
@@ -1131,6 +1132,8 @@ public class Breadboard extends UntypedActor {
     final Long generation;
     // The requestId of the SendStep it answers, or null.
     final String requestId;
+    // The saved step whose code this is (SendStep's id), or null (-1: a step not saved yet).
+    final Long stepId;
 
     public RunStep(User user, String source, ThrottledWebSocketOut out) {
       this(user, source, out, null);
@@ -1145,11 +1148,17 @@ public class Breadboard extends UntypedActor {
     }
 
     public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation, String requestId) {
+      this(user, source, out, request, generation, requestId, null);
+    }
+
+    public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation, String requestId,
+                   Long stepId) {
       super(user, out);
       this.source = source;
       this.request = request;
       this.generation = generation;
       this.requestId = requestId;
+      this.stepId = stepId;
     }
 
     @Override

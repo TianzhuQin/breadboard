@@ -612,21 +612,7 @@ public class ScriptBoard extends UntypedActor {
     } catch (Exception e) {
       // (the database may still say)
     }
-    if (instanceId == null) {
-      return false;
-    }
-    try {
-      SqlRow entries = Ebean.createSqlQuery("select count(*) as n from events e join event_data d on d.event_id = e.id"
-          + " where e.experiment_instance_id = :session and e.name = 'prolificEntry' and d.name = 'clientId' and d.value = :client")
-          .setParameter("session", instanceId)
-          .setParameter("client", client.id)
-          .findUnique();
-      Integer n = entries == null ? null : entries.getInteger("n");
-      return n != null && n > 0;
-    } catch (RuntimeException e) {
-      Logger.warn("Could not tell whether " + client.id + " came from Prolific: " + e);
-      return false;
-    }
+    return enteredFromProlific(instanceId, client.id);
   }
 
   private static void cancelEngineTimers() {
@@ -793,9 +779,12 @@ public class ScriptBoard extends UntypedActor {
         engineGeneration++;
         gameStartedIn = null;
         engineBuiltFor = builtFor;
+        EngineSteps.building(experiment);
         buildEngine(experiment);
       }
     } catch (Throwable failed) {
+      // It loaded none of the steps: they count as changed ("Reload needed") from now on.
+      EngineSteps.settled();
       // Every console saw "Reloading", so every console hears that it failed, not only the one
       // that asked (which also gets the error itself).
       toAllAdmins(reloadFailed(failed));
@@ -861,7 +850,9 @@ public class ScriptBoard extends UntypedActor {
       }
     });
 
-    engine = manager.getEngineByName("gremlin-groovy");
+    // Its scripts ask the server's classpath through ScriptClasspath, which remembers the names that
+    // aren't there: the compiler's thousands of misses no longer look in every jar at every rebuild.
+    engine = ScriptClasspath.newEngine(manager);
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("r", rand);
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("results", results);
 
@@ -959,6 +950,7 @@ public class ScriptBoard extends UntypedActor {
         failed = step.name + ": " + problem;
       }
     }
+    EngineSteps.loaded(experiment);
     afterStepsLoaded(experiment);
     if (failed == null) {
       Autopilot.stepsLoaded(experiment);
@@ -984,11 +976,12 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
-  // AutopilotHooks.afterStepsLoaded; a field only so tests can watch when it runs.
+  // AutopilotHooks.afterStepsLoaded, for the session the engine runs (they apply only in the
+  // autopilot's own); a field only so tests can watch when it runs.
   static volatile java.util.function.BiConsumer<Experiment, ScriptEngine> afterStepsLoadedHook =
       new java.util.function.BiConsumer<Experiment, ScriptEngine>() {
         public void accept(Experiment experiment, ScriptEngine engine) {
-          AutopilotHooks.afterStepsLoaded(experiment, engine);
+          AutopilotHooks.afterStepsLoaded(experiment, engine, instanceIdOf(engineGameListener));
         }
       };
 
@@ -1377,6 +1370,16 @@ public class ScriptBoard extends UntypedActor {
 
   /** @param byResearcher a researcher's preview of this player (its sign-in is recorded as such) */
   public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId, final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out, final boolean byResearcher) throws Exception {
+    addClient(experimentIdString, experimentInstanceIdString, clientId, in, out, byResearcher, 0L, false);
+  }
+
+  /**
+   * @param pageLoadedAt when the socket's page was loaded, in the server's time (0: unknown), and
+   * @param takesSeat whether it asks for the seat: see Client.Connection
+   */
+  public static void addClient(String experimentIdString, String experimentInstanceIdString, String clientId,
+                               final WebSocket.In<JsonNode> in, final ThrottledWebSocketOut out, final boolean byResearcher,
+                               long pageLoadedAt, boolean takesSeat) throws Exception {
     try {
       Long experimentId = Long.parseLong(experimentIdString);
       Long experimentInstanceId = Long.parseLong(experimentInstanceIdString);
@@ -1472,7 +1475,7 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
 
-      final Client.Connection connection = new Client.Connection(in, out, byResearcher);
+      final Client.Connection connection = new Client.Connection(in, out, byResearcher, pageLoadedAt, takesSeat);
       // Someone this session has seen: their page reconnecting, another tab, or a preview of them.
       boolean returning = client != null;
       if (client == null) {
@@ -1492,6 +1495,12 @@ public class ScriptBoard extends UntypedActor {
       // preview. Client.connect says what becomes of this socket, and of the one before, which can
       // no longer act for this participant.
       Client.Arrival arrival = client.connect(connection);
+      if (arrival == Client.Arrival.REFUSED) {
+        // An older tab of theirs reconnecting by itself, while the page they opened since holds the
+        // seat: it was told so, and changes nothing.
+        Logger.debug("addClient: " + clientId + "'s older page was refused: a page they loaded later holds the seat");
+        return;
+      }
       if (!byResearcher && arrival != Client.Arrival.WATCHING) {
         ownPageHolds(experimentInstance, clientId);
       }
@@ -1569,11 +1578,36 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
+   * Whether a page holds the participant's seat in this session now, as the page that asks counts it
+   * (ClientController.getState). A page that another one took the seat from asks: once none holds it,
+   * it takes the seat back by itself (frontend/core). For the participant's own page
+   * ({@code byResearcher} false), only an open page of theirs counts, not a researcher's preview: a
+   * page of theirs would take the seat from it. For a researcher's page (a preview, or the previous
+   * console's Testing panel, signed in by the researcher's cookie), any open socket in the seat counts,
+   * a preview's too: it never takes the seat from another page. It used to count only the
+   * participant's own, so such a page took the seat from a preview within 20 s, and two of them on
+   * screen took it from each other every 20 s, for ever. A socket that has fallen silent counts until
+   * it is closed (closeSilentPages).
+   */
+  public static boolean seatHeld(String experimentId, String instanceId, String clientId, boolean byResearcher) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    ExperimentInstance seat = client == null ? null : client.experimentInstance;
+    if (seat == null || seat.id == null || !seat.id.toString().equals(instanceId)) {
+      return false;
+    }
+    if (seat.experiment != null && seat.experiment.id != null && !seat.experiment.id.toString().equals(experimentId)) {
+      return false;
+    }
+    return byResearcher ? client.seatOpen() : client.presence() == Client.Presence.HERE;
+  }
+
+  /**
    * A message from a participant's page, or from a researcher's preview of it. Every message counts
    * as hearing from that socket (see closeSilentPages), and {"action": "Ping"} is answered on it with
    * {"pong": <the server's time in ms>}. What the page that holds the seat sends acts for the player.
    * A preview that only watches can't act: its sign-in is recorded (as a preview's), the rest is
-   * ignored. So is everything from a socket that has been replaced.
+   * ignored. So is everything from a socket that has been replaced, and an answer that reaches the
+   * server too late (see lateAnswer).
    */
   @SuppressWarnings("unchecked")
   private static void participantMessage(Client client, Client.Connection connection, final String clientId,
@@ -1585,11 +1619,21 @@ public class ScriptBoard extends UntypedActor {
     if (!client.holdsSeat(connection) && !(client.watches(connection) && "LogIn".equals(action))) {
       return;
     }
+    if (lateAnswer(client, connection, clientId, event)) {
+      return;
+    }
     try {
       ObjectMapper mapper = new ObjectMapper();
       // TODO: is event.toString() the correct method here?
       Map<String, Object> jsonInput = mapper.readValue(event.toString(), Map.class);
-      if (action.equals("LogIn")) {
+      if (action.equals("LogIn") && event.hasNonNull("awayMs") && event.get("awayMs").canConvertToLong()) {
+        // The page signs in again on a connection that follows a drop, saying how long it was out
+        // of touch: no new sign-in, but a gap in the participant's connection, recorded the same way
+        // however short it was (from 3.1, see socketClosed).
+        if (!byResearcher && client.holdsSeat(connection)) {
+          connectionGap(clientId, Math.max(0L, event.get("awayMs").asLong()));
+        }
+      } else if (action.equals("LogIn")) {
         // The browser used to report its own IP address, user agent, referer (full URL,
         // including recruitment ids) and other headers here, which were stored with every
         // login. They were unverified and mostly personal data, so only the id is kept.
@@ -1621,6 +1665,66 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  /**
+   * The event connectionGap {player, awayMs}: the participant's page came back after its connection
+   * dropped, out of touch for that long (as the page measured it, from when it last heard from the
+   * server). Not into a session that is over, nor for a computer player.
+   */
+  private static void connectionGap(String clientId, long awayMs) {
+    try {
+      if (eventTracker != null && eventTracker.sessionLive() && !Client.isComputer(clientId)) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("player", clientId);
+        data.put("awayMs", awayMs);
+        eventTracker.track("connectionGap", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not record the connection gap of " + clientId, e);
+    }
+  }
+
+  // When a page says it gave an answer (a choice, a tie change: frontend/core, breadboard.ts), in
+  // the server's time as the page reckons it from the pongs. An answer that reaches the server more
+  // than LATE_ANSWER_MS after that is dropped.
+  static final String ANSWER_SENT_AT = "bbSentAt";
+  static final long LATE_ANSWER_MS = 10000L;
+
+  /**
+   * Whether this message is an answer that reached the server more than LATE_ANSWER_MS after the page
+   * sent it: one the page sent into a connection that had died without closing, which delivered it
+   * only as the network came back (often after the page had said the connection was lost, and taken
+   * the answer back). It is dropped, and recorded as answerDropped (player, ageMs); the page is sent
+   * the participant's view again, so it shows what the server holds (the choice not made) rather
+   * than what it took for sent. Messages that don't say when they were sent (the sign-in, pages
+   * from before 3.1) are taken as they come.
+   */
+  private static boolean lateAnswer(Client client, Client.Connection connection, String clientId, JsonNode event) {
+    JsonNode sentAt = event == null ? null : event.get(ANSWER_SENT_AT);
+    if (sentAt == null || !sentAt.isNumber() || "LogIn".equals(actionOf(event))) {
+      return false;
+    }
+    long ageMs = clock.getAsLong() - sentAt.asLong();
+    if (ageMs <= LATE_ANSWER_MS) {
+      return false;
+    }
+    Logger.info("Dropped an answer of " + clientId + " that reached the server " + ageMs + " ms after it was given");
+    try {
+      if (eventTracker != null && eventTracker.sessionLive() && !Client.isComputer(clientId)) {
+        LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+        data.put("player", clientId);
+        data.put("ageMs", ageMs);
+        eventTracker.track("answerDropped", data);
+      }
+    } catch (Exception e) {
+      Logger.error("Could not record the dropped answer of " + clientId, e);
+    }
+    ObjectNode view = client.lastFrame;
+    if (view != null) {
+      connection.write(view);
+    }
+    return true;
+  }
+
   // A message's "action", or "".
   private static String actionOf(JsonNode event) {
     JsonNode actionNode = event == null ? null : event.get("action");
@@ -1634,10 +1738,12 @@ public class ScriptBoard extends UntypedActor {
    */
   private static boolean heardFrom(Client.Connection connection, String action) {
     boolean ping = "Ping".equals(action);
-    connection.heard(ping, clock.getAsLong());
+    long now = clock.getAsLong();
+    connection.heard(ping, now);
     if (ping) {
+      // (the page reckons the server's time from it, to say when it gave an answer: see lateAnswer)
       ObjectNode pong = Json.newObject();
-      pong.put("pong", System.currentTimeMillis());
+      pong.put("pong", now);
       connection.writeAside(pong);
     }
     return ping;
@@ -1714,6 +1820,125 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
+   * The autopilot's launch took this participant out of the game because its waiting room was full:
+   * maxPlayers were seated, the first to arrive, and they came after (groovy/autopilot.groovy). Their
+   * page is told so, with how to join the next session (sessionFullScreen), and closed, the previews
+   * watching it too; their going is recorded (clientDisconnected), and so is the event sessionFull. A
+   * page of theirs that comes back gets that screen again (their session is over for them:
+   * Client.end). They used to be seated however many were there already. Someone the experiment had
+   * already given an end of their own (e.g. a completion code) keeps it.
+   *
+   * <p>Their end is settled here, before the game starts, so a page of theirs that comes back from
+   * now on gets it (addClient). Their sockets are closed and their going recorded a moment later, on
+   * a thread of its own (closeTurnedAway): launch() calls this holding the waiting room's monitor,
+   * and recording takes their Client's record lock, which a page of theirs holds while it announces a
+   * connection change to that same waiting room (bb:connection, autopilot.onConnection). Done here, a
+   * page of theirs that connected, reconnected or closed just as the countdown ended deadlocked the
+   * engine: the game never started, everyone stayed on "Starting in…", and every later connection
+   * change in the session waited too.
+   */
+  public static void sessionFullAtStart(String clientId) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    if (client == null || client.leftOut || client.ended() || ownEnd(client.lastFrame)) {
+      return;
+    }
+    ExperimentInstance session = client.experimentInstance;
+    Long instanceId = session == null ? null : session.id;
+    Long experimentId = session == null || session.experiment == null ? null : session.experiment.id;
+    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId);
+    client.leftOut = true;
+    client.end(screen);
+    rememberLastScreens(Collections.singletonList(client));
+    if (eventTracker != null && eventTracker.sessionLive()) {
+      LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+      data.put("clientId", clientId);
+      eventTracker.track("sessionFull", data);
+    }
+    closeTurnedAway(client, screen);
+  }
+
+  /**
+   * The rest of sessionFullAtStart, on a thread of its own, which holds no lock of the waiting room's:
+   * {@code client}'s sockets get their end {@code screen} and are closed, and their going is recorded,
+   * once no page of theirs is recording a connection change any more (see recordConnection). Not
+   * recorded once the engine runs another game, whose data isn't theirs.
+   */
+  private static void closeTurnedAway(final Client client, final ObjectNode screen) {
+    Thread thread = new Thread(new Runnable() {
+      public void run() {
+        try {
+          client.disconnect(screen);
+          if (clients.get(client.id) == client) {
+            recordConnection(client, false);
+          }
+        } catch (Throwable t) {
+          Logger.error("Could not close the page of " + client.id + ", whom a full session turned away", t);
+        }
+      }
+    }, "breadboard-session-full");
+    thread.setDaemon(true);
+    thread.start();
+  }
+
+  /**
+   * What someone gets whom a full waiting room left out at the start (sessionFullAtStart). When the
+   * autopilot opens the experiment's next session by itself, and nothing keeps it from doing so
+   * (Autopilot.opensNextSoon), it says so: a link to the study's sign-in link, whose page waits for
+   * the next session and takes them in (ClientLogin.toOpenSession), or, for a {@code prolific}
+   * participant, to open the study again from Prolific; otherwise to contact the researcher, or to
+   * return the study.
+   */
+  static ObjectNode sessionFullScreen(boolean prolific, Long experimentId) {
+    boolean next = experimentId != null && Autopilot.opensNextSoon(experimentId);
+    String what;
+    if (prolific) {
+      what = next ? "The next session opens as soon as this one has ended: open the study again from Prolific to join "
+          + "it (the page waits for it to open), or return the study on Prolific if you can't wait."
+          : "Please return the study on Prolific, and message the researcher there if you have any questions.";
+    } else {
+      what = next ? "The next session opens as soon as this one has ended. <a href=\"/play/" + experimentId
+          + "/login\">Join the next session</a>: the page waits for it to open and takes you in."
+          : "You can close this page. If you have any questions, please contact the researcher.";
+    }
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "sessionFull");
+    player.put("text", "<h3>This session is full</h3><p>It started with as many people as it can take, so it "
+        + "can't take you in. " + what + "</p>");
+    return frame;
+  }
+
+  /**
+   * Whether the game of this session left this participant out (leftOutAtStart, sessionFullAtStart):
+   * the study's link then treats them as someone new (ClientLogin.toOpenSession), rather than sending
+   * them back to the seat that only says so. Known while the engine runs that session's game.
+   */
+  public static boolean leftOutOf(String instanceId, String clientId) {
+    Client client = clientId == null ? null : clients.get(clientId);
+    ExperimentInstance seat = client == null ? null : client.experimentInstance;
+    return client != null && client.leftOut && seat != null && seat.id != null && seat.id.toString().equals(instanceId);
+  }
+
+  /**
+   * Whether the engine's waiting room (groovy/autopilot.groovy) is full and counting down, so it can
+   * seat nobody more (Autopilot.openInstance then sends nobody to its session). Never waits.
+   */
+  static boolean waitingRoomFull() {
+    ScriptEngine running = engine;
+    Object autopilot = running == null ? null : running.get("autopilot");
+    if (!(autopilot instanceof GroovyObject)) {
+      return false;
+    }
+    try {
+      return Boolean.TRUE.equals(((GroovyObject) autopilot).invokeMethod("roomFull", new Object[0]));
+    } catch (Exception e) {
+      return false;
+    }
+  }
+
+  /**
    * A page of someone the game started without (leftOutAtStart) connected: it is told so, and the
    * socket is closed, as nothing more comes for them. A researcher's preview of them sees the same.
    */
@@ -1747,6 +1972,10 @@ public class ScriptBoard extends UntypedActor {
     if (client.computer()) {
       return;
     }
+    if (tookSeat) {
+      // (a page of theirs is back before a departure socketClosed put off was due)
+      client.cancelDeparture();
+    }
     synchronized (client.recordLock()) {
       Client.Presence now = client.presence();
       Client.Presence before = client.recordPresence(now);
@@ -1779,11 +2008,27 @@ public class ScriptBoard extends UntypedActor {
    * have someone with the same id). When the participant's page goes, a researcher's preview watching
    * them takes the seat (Client.seatAWatcher) and can act for them until they are back, but they have
    * left all the same: the computer takes their seat after the usual wait, and the waiting room
-   * stops counting them, as for anyone who leaves.
+   * stops counting them, as for anyone who leaves. A page that was out of touch as its socket closed
+   * (Client.Connection.outOfTouchSince) counts as gone only when the silence would have closed it,
+   * unless a page of theirs is back by then (closeSilentPages): such a close comes through only as
+   * the network comes back, just before the page's new socket, or after it. A short outage used to
+   * be recorded as a disconnection and a connection 2 ms apart in the first case, and not at all in
+   * the second; now neither, and the page's next sign-in says how long it was out of touch
+   * (connectionGap).
    */
   static void socketClosed(Client client, Client.Connection connection) {
+    socketClosed(client, connection, clock.getAsLong());
+  }
+
+  /** socketClosed, judged at {@code now}. */
+  private static void socketClosed(Client client, Client.Connection connection, long now) {
     if (client.closed(connection) && clients.get(client.id) == client) {
       client.seatAWatcher();
+      long since = connection.outOfTouchSince(now);
+      if (since > 0 && now < since + silenceLimitMs) {
+        client.departAt(since + silenceLimitMs);
+        return;
+      }
       recordConnection(client, false);
     }
   }
@@ -1795,7 +2040,9 @@ public class ScriptBoard extends UntypedActor {
    * participant counts as gone, as when a socket closes, and the computer takes over after the
    * usual wait. A preview that watches is just closed and dropped, and so is a page that got its
    * final screen as it connected (finalScreen). Pages that never ping (from before 3.1) are left
-   * alone. {@code now}: the time to judge by.
+   * alone. Someone whose page's socket closed while it was out of touch (socketClosed), and who isn't
+   * back by the time the silence would have closed it, counts as gone now. {@code now}: the time to
+   * judge by.
    */
   static void closeSilentPages(long now) {
     for (Client client : clients.values()) {
@@ -1803,9 +2050,13 @@ public class ScriptBoard extends UntypedActor {
         if (connection.silent(now, silenceLimitMs)) {
           Logger.info("Closing a socket of " + client.id + (connection.preview ? " (a preview)" : "")
               + ": nothing heard from it for " + (now - connection.lastHeard()) / 1000 + " s");
-          socketClosed(client, connection);
+          socketClosed(client, connection, now);
           connection.close(null);
         }
+      }
+      if (client.departureDue(now) && clients.get(client.id) == client) {
+        // (their page went out of touch and isn't back: gone, as the silence would have had it)
+        recordConnection(client, false);
       }
     }
     for (Client.Connection page : endedPages) {
@@ -1991,7 +2242,7 @@ public class ScriptBoard extends UntypedActor {
           generation = engineGeneration;
         }
         getSelf().tell(new Breadboard.RunStep(breadboardMessage.user, sendStep.source, breadboardMessage.out, "SendStep",
-            generation, sendStep.requestId), null);
+            generation, sendStep.requestId, sendStep.id), null);
         // A re-run step may set the autopilot up itself; the console's settings apply again after it.
         getSelf().tell(new Breadboard.StepsLoaded(breadboardMessage.user, engineExperiment(), breadboardMessage.out, generation), null);
       } else {
@@ -2007,7 +2258,11 @@ public class ScriptBoard extends UntypedActor {
               "Nothing was run: the engine was reloaded (by you or someone else) before the step could run. Check what it runs now, then try again.",
               null, runStep.echo());
         } else if (runStep.request != null) {
-          processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
+          String problem = processScript(runStep.source, breadboardMessage.out, null, "request", runStep.request, runStep.requestId, true);
+          // A saved step run without an error: the engine has that code of it now (see EngineSteps).
+          if (problem == null && EngineSteps.ran(engineExperimentId, runStep.stepId, runStep.source)) {
+            engineChanged();
+          }
         } else {
           processScript(runStep.source, breadboardMessage.out, null, "source", STEPS_SOURCE, null, true);
         }
@@ -2209,7 +2464,13 @@ public class ScriptBoard extends UntypedActor {
             gameListener.experimentInstance = null;
           }
         }
+        if (carriesOn) {
+          carryOnThroughRebuild(own, breadboardMessage.user);
+        }
         rebuildScriptBoard(selectedExperiment, builtFor(breadboardMessage));
+        if (carriesOn) {
+          Recruitment.restoreFor(own.id);
+        }
         Breadboard.ReloadEngine reloadEngine = (Breadboard.ReloadEngine) message;
         ExperimentInstance ei = reloadEngine.user.experimentInstanceId == -1 ? null
             : ExperimentInstance.findById(reloadEngine.user.experimentInstanceId);
@@ -2374,6 +2635,34 @@ public class ScriptBoard extends UntypedActor {
     if (request.out != null) {
       request.out.write(json.deepCopy().put("engineKept", true));
     }
+  }
+
+  /**
+   * A Reload engine is about to rebuild the engine under the account's live session, which carries
+   * on in the new one (ReloadEngine; or the session is selected again, SelectInstance), before the
+   * rebuild closes its participants' pages. Its data
+   * says the engine was reloaded there, by whom, and whether a game in progress starts again from the
+   * beginning (engineReloaded: restarted, by), as sessionResumed says for a Resume: the data of the
+   * game before is the old game's. And it takes people again now (reopenAfterRebuild), not once the
+   * new engine has loaded the steps: the pages of those who held a seat reconnect within a second of
+   * being closed, while the steps were still loading, and were given the late-arrival page ("it began
+   * before you arrived") of a game that was no longer there, and stopped trying. Nothing for a
+   * session that isn't running.
+   */
+  private static void carryOnThroughRebuild(ExperimentInstance session, User by) {
+    ExperimentInstance fresh = session == null || session.id == null ? null : ExperimentInstance.findById(session.id);
+    if (fresh == null || fresh.isTestInstance() || fresh.status != ExperimentInstance.Status.RUNNING) {
+      return;
+    }
+    // (the game counts as started by the engine, or as closed to newcomers by the session: with
+    // breadboard.allowLateJoin a game that started never closes)
+    ScriptEngine running = engine;
+    boolean restarted = (running != null && gameStartedIn == running) || Boolean.TRUE.equals(fresh.hasStarted);
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    data.put("restarted", restarted);
+    data.put("by", by == null || by.email == null ? "" : by.email);
+    EventTracker.record(fresh, "engineReloaded", data);
+    reopenAfterRebuild(session);
   }
 
   /**
@@ -2568,7 +2857,7 @@ public class ScriptBoard extends UntypedActor {
       return text;
     }
     String owner = engineOwnerEmail();
-    if (isAutopilots(session)) {
+    if (isAutopilots(session) && Autopilot.isAutopilotsSession(session.id)) {
       return text + " (the autopilot's session \"" + session.name + "\")";
     }
     if (owner != null && user != null && owner.equalsIgnoreCase(user.email)) {
@@ -2577,20 +2866,35 @@ public class ScriptBoard extends UntypedActor {
     return text + " (session \"" + session.name + "\"" + (owner == null ? "" : " of " + owner) + ")";
   }
 
-  /** What to do to run the selected experiment while {@code session} holds the engine. */
+  /**
+   * What to do to run the selected experiment while {@code session} holds the engine. Ending it pauses
+   * the autopilot only when it is the autopilot's own session and the autopilot runs it now
+   * (pausesTheAutopilot): not one a researcher opened by hand, even of its experiment, nor one of an
+   * autopilot that is paused or done already. It said so of any session of its experiment.
+   */
   private static String toRunYours(String yours, ExperimentInstance session) {
     if (yours == null) {
       return " Select an experiment first.";
     }
-    return " To run \"" + yours + "\", end that session first" + (isAutopilots(session) ? " (that pauses the autopilot)" : "")
+    return " To run \"" + yours + "\", end that session first" + (pausesTheAutopilot(session) ? " (that pauses the autopilot)" : "")
         + ", or open a new session of \"" + yours + "\", which ends it.";
   }
 
-  /** Whether a session is of the experiment the autopilot runs (ending it pauses the autopilot). */
+  /** Whether a session is of the experiment the autopilot runs (it may be the autopilot's: see describeEngine). */
   private static boolean isAutopilots(ExperimentInstance session) {
     Experiment autopilot = Autopilot.experiment();
     Long of = session == null || session.experiment == null ? null : session.experiment.id;
     return autopilot != null && of != null && of.equals(autopilot.id);
+  }
+
+  /**
+   * Whether ending this session pauses the autopilot (Autopilot.sessionStopped): it is the session the
+   * autopilot opened or was handed, and the autopilot, on for its experiment, runs it now, neither
+   * paused nor done (Autopilot.isOwnSession). Ending a session a researcher opened by hand leaves it
+   * running.
+   */
+  private static boolean pausesTheAutopilot(ExperimentInstance session) {
+    return session != null && isAutopilots(session) && Autopilot.isOwnSession(session.id);
   }
 
   /** The account whose actor built the running engine (it runs the session in it), or null. */
@@ -2603,8 +2907,10 @@ public class ScriptBoard extends UntypedActor {
    * What the shared engine runs, for the console's User JSON ({@code engine}): {@code experimentId},
    * {@code experimentName}, {@code sessionId}, {@code sessionName} (its live session, if any),
    * {@code owner} (the account running it) and {@code gameStarted} (initStep.start() has run without
-   * an error since the engine was last built); null values when unknown. An account's own selection
-   * can differ, and its engine actions are refused then (see engineRefusal).
+   * an error since the engine was last built); null values when unknown. {@code stepsChanged}: steps
+   * saved since the engine loaded them (EngineSteps). {@code autopilotSession}: the live session is
+   * the autopilot's own, which it runs now (autopilotRuns). An account's own selection can differ,
+   * and its engine actions are refused then (see engineRefusal).
    */
   static ObjectNode engineJson() {
     ObjectNode json = Json.newObject();
@@ -2619,6 +2925,8 @@ public class ScriptBoard extends UntypedActor {
       json.put("experimentId", experiment.id);
       json.put("experimentName", experiment.name);
     }
+    // Steps of that experiment saved since the engine loaded them ("Reload needed"; see EngineSteps)
+    json.put("stepsChanged", EngineSteps.changed(experiment));
     if (session == null) {
       json.putNull("sessionId");
       json.putNull("sessionName");
@@ -2626,12 +2934,38 @@ public class ScriptBoard extends UntypedActor {
       json.put("sessionId", session.id);
       json.put("sessionName", session.name);
     }
+    // Steps saved while it runs go into the autopilot's next session: the consoles say so, rather than
+    // "Reload needed". Every console hears it change: with the session, and on a save or Resume on the
+    // Autopilot page (AutopilotController), which can switch it off or hand it a session.
+    json.put("autopilotSession", session != null && autopilotRuns(session));
     if (owner == null) {
       json.putNull("owner");
     } else {
       json.put("owner", owner);
     }
     return json;
+  }
+
+  /**
+   * Whether the autopilot runs this live session as its own (Autopilot.isOwnSession: one it opened,
+   * or was handed on Resume or a save, while it is neither paused nor done) and is on for its
+   * experiment. Switched off, the autopilot leaves its session running, and it is no longer its own.
+   */
+  private static boolean autopilotRuns(ExperimentInstance session) {
+    // Read outside the try: the Ebean enhancer breaks entity field reads inside one.
+    Long id = session.id;
+    Long of = session.experiment == null ? null : session.experiment.id;
+    if (id == null || of == null || !Autopilot.isOwnSession(id)) {
+      return false;
+    }
+    Autopilot.Effective settings;
+    try {
+      settings = Autopilot.effective();
+    } catch (Exception e) {
+      Logger.warn("Could not read the autopilot's settings: " + e);
+      return false;
+    }
+    return settings.isOn() && of.equals(settings.settings.experimentId);
   }
 
   // Whether a push of what the engine runs is waiting to go out (see engineChanged).
@@ -2661,7 +2995,7 @@ public class ScriptBoard extends UntypedActor {
    * Never waits: the caller may hold the game's own locks (a waiting room giving up finishes its
    * session while holding its own).
    */
-  static void engineChanged() {
+  public static void engineChanged() {
     if (!engineNewsDue.compareAndSet(false, true)) {
       return;
     }
@@ -2692,6 +3026,9 @@ public class ScriptBoard extends UntypedActor {
       List<Long> ended;
       try {
         synchronized (REBUILD_LOCK) {
+          // No build is under way while this holds the lock: one that stopped before its steps
+          // loaded (a launch that threw half-way) left the engine without them (EngineSteps).
+          EngineSteps.settled();
           ObjectNode engineNow = engineJson();
           news.put("engine", engineNow);
           JsonNode sessionId = engineNow.get("sessionId");
@@ -2833,11 +3170,15 @@ public class ScriptBoard extends UntypedActor {
       gameListener.experimentInstance = instance;
       gameListener.start();
 
+      // The autopilot's session from now on, before its steps load: the Autopilot page's settings
+      // apply in it (AutopilotHooks).
+      if (byAutopilot) {
+        Autopilot.launchCarriedOut(instance.id);
+      }
       // Re-run the Steps, then the autopilot settings over them: here, under the lock, so another
       // account's rebuild can't come between (queued, they used to run in whatever engine was there).
       String failed = loadSteps(experiment, launchGame.out);
       if (byAutopilot) {
-        Autopilot.launchCarriedOut(instance.id);
         if (failed != null) {
           // The steps define its waiting room and game: participants would wait for a game that
           // never starts. The session stops, and the autopilot pauses until the steps are fixed.
@@ -2850,7 +3191,7 @@ public class ScriptBoard extends UntypedActor {
           }
           stopSession(gameListener);
           // (not the "stopped" screen: no researcher stopped it; a completion code on screen stays)
-          endParticipants(instance.id, problemScreen());
+          endParticipants(instance.id, problemScreens(instance.id));
           cancelEngineTimers();
           eventTracker.disable();
           Autopilot.stepsFailed(instance, failed);
@@ -2994,9 +3335,14 @@ public class ScriptBoard extends UntypedActor {
       if (previous != null && (continuing == null || !continuing.equals(instanceIdOf(previous)))) {
         endBeforeRebuild(previous);
       }
+      if (continuing != null && continuing.equals(instanceIdOf(previous)) && !resuming) {
+        // The engine's live session selected again: it carries on in the new engine, as with a reload.
+        carryOnThroughRebuild(previous.experimentInstance, user);
+      }
       rebuildScriptBoard(experiment, builtFor(selectInstance));
       if (continuing != null) {
         bindLaunchParameters(target, experiment);
+        Recruitment.restoreFor(target.id);
       }
       loadSteps(experiment, selectInstance.out);
       user.setExperimentInstanceId(target.id);
@@ -3445,11 +3791,13 @@ public class ScriptBoard extends UntypedActor {
    * says nothing then: whether the game starts is seen when the init step actually starts
    * (stepStarting). Returns what went wrong, briefly (ScriptBoardSupport.briefError), or null when
    * the script ran. A step that throws while the script runs is reported here, as the script's error
-   * (stepFailed leaves it to this method), and FAILED_RUN names it.
+   * (stepFailed leaves it to this method), and FAILED_RUN names it. The error sent to {@code out}
+   * names the failing step in "step" when that is known (failedStep), so a console can say "line 71
+   * of RoundStep" rather than "of a step".
    */
   static String processScript(String script, ThrottledWebSocketOut out, String scriptName, String tag, String tagValue,
                               String requestId, boolean stepCode) {
-    if (scriptName == null) scriptName = "Unnamed Script";
+    if (scriptName == null) scriptName = UNNAMED_SCRIPT;
     // (FAILED_RUN is about this run from here on)
     FAILED_RUN.remove();
 
@@ -3606,6 +3954,10 @@ public class ScriptBoard extends UntypedActor {
         SCRIPT_RUN.remove();
       }
       if (out != null) {
+        String failedStep = failure == null ? null : failedStep(thisScript, thrown, stepCode, scriptName);
+        if (failedStep != null) {
+          jsonOutput.put("step", failedStep);
+        }
         out.write(jsonOutput);
       }
     }
@@ -3625,6 +3977,23 @@ public class ScriptBoard extends UntypedActor {
     return failure;
   }
 
+  /**
+   * The step a script that failed with {@code thrown} names in its error ("step"), for the consoles:
+   * the step whose own code threw (run, done, a timer's), when that is what the script failed with;
+   * else, for step code being loaded ({@code stepCode}: the experiment's steps as they load, a step
+   * file of file mode), the step whose code it is ({@code scriptName}, "RoundStep" or "RoundStep.groovy");
+   * else null (a script typed in the console, a step's code run again from the Steps page).
+   */
+  private static String failedStep(ScriptRun run, Throwable thrown, boolean stepCode, String scriptName) {
+    if (run.stepFailure != null && run.step != null && causedBy(thrown, run.stepFailure)) {
+      return run.step;
+    }
+    if (!stepCode || scriptName == null || UNNAMED_SCRIPT.equals(scriptName)) {
+      return null;
+    }
+    return scriptName.endsWith(".groovy") ? scriptName.substring(0, scriptName.length() - ".groovy".length()) : scriptName;
+  }
+
   /** Whether {@code cause} is {@code thrown} or one of its causes. */
   private static boolean causedBy(Throwable thrown, Throwable cause) {
     Set<Throwable> seen = new HashSet<Throwable>();
@@ -3638,6 +4007,8 @@ public class ScriptBoard extends UntypedActor {
 
   /** The script that starts the game. */
   static final String START_COMMAND = "initStep.start()";
+  /** What processScript calls a script that has no name (one typed in the console, say). */
+  private static final String UNNAMED_SCRIPT = "Unnamed Script";
 
   /** What stepStarting marked when an init step started outside processScript, for stepStartFailed. */
   static final class StartMark {
@@ -4039,7 +4410,8 @@ public class ScriptBoard extends UntypedActor {
   /**
    * A step of the engine's game failed where no one would see it (stepFailed, gameStartFailed,
    * joinOrLeaveStep). It is recorded (the event "stepFailed": step, error), every open console is
-   * told as processScript tells of an error ({"error": "Caught error: ...", "source": the step}), so
+   * told as processScript tells of an error ({"error": "Caught error: ...", "source" and "step": the
+   * step}), so
    * the Live session page shows it (unless processScript has told them: {@code consolesTold}), and,
    * when the failure stalls the game ({@code stalls}: it kept the next step from getting going; the
    * rule is above STEPS_STARTED), the autopilot's own session ends (endAutopilotSession). A session a
@@ -4065,6 +4437,7 @@ public class ScriptBoard extends UntypedActor {
     if (!consolesTold) {
       ObjectNode frame = Json.newObject();
       frame.put("source", step);
+      frame.put("step", step);
       frame.put("error", "Caught error: " + details + "\n");
       toAllAdmins(frame);
     }
@@ -4078,9 +4451,9 @@ public class ScriptBoard extends UntypedActor {
    * session (Autopilot.gameFailed decides: one it opened, or was handed on Resume or a save; not one
    * a researcher launched or resumed by hand, even of its experiment), its participants would wait
    * for good and no new session would open: it ends as when its steps don't load (stepsFailedToLoad:
-   * participants are told it had to stop because of a problem with the study (problemScreen), the
+   * participants are told it had to stop because of a problem with the study (problemScreens), the
    * computer players and the game's timers stop, nothing more is recorded, the session is stopped),
-   * and the autopilot pauses, saying where.
+   * with a sessionFailed event (step, line, error), and the autopilot pauses, saying where.
    * On the autopilot's thread, under the engine lock, which the failing thread may not wait for: it
    * can hold the autopilot's own lock (groovy/autopilot.groovy), which an engine change can wait for.
    */
@@ -4101,6 +4474,9 @@ public class ScriptBoard extends UntypedActor {
           if (live == null || !sessionId.equals(live.id) || !Autopilot.gameFailed(live, step, error)) {
             return;
           }
+          // The data says the autopilot ended it, and why: stepFailed alone doesn't say whether the
+          // failure stalled the game (one that didn't is recorded the same way), and nothing marked the end.
+          trackEvent("sessionFailed", sessionFailedData(step, error));
           // The computer players first, as a rebuild does: a pick asked for once the timers are
           // cancelled starts a timer of its own while they are on, so a takeover as the participants'
           // pages close (autopilot.handleDeparture) would play the stopped game on, and its finish()
@@ -4109,7 +4485,7 @@ public class ScriptBoard extends UntypedActor {
             playerActions.turnAIOff();
           }
           stopSession(listener);
-          endParticipants(sessionId, problemScreen());
+          endParticipants(sessionId, problemScreens(sessionId));
           cancelEngineTimers();
           eventTracker.disable();
           // The console tabs of the account running it show it stopped, as after Stop.
@@ -4122,6 +4498,28 @@ public class ScriptBoard extends UntypedActor {
         }
       }
     });
+  }
+
+  // What briefError says of a failure at a line of the experiment's code: "line 71: what went wrong".
+  private static final java.util.regex.Pattern AT_LINE = java.util.regex.Pattern.compile("^line (\\d+): (.*)$",
+      java.util.regex.Pattern.DOTALL);
+
+  /**
+   * The data of sessionFailed, the event the autopilot's session ends with when a step failure stalls
+   * its game (endAutopilotSession): {@code step}, {@code line} (left out when the error names none) and
+   * {@code error}, what went wrong there; {@code brief} is briefError's "line N: what went wrong".
+   */
+  static LinkedHashMap<Object, Object> sessionFailedData(String step, String brief) {
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    data.put("step", step);
+    java.util.regex.Matcher at = brief == null ? null : AT_LINE.matcher(brief);
+    if (at != null && at.matches()) {
+      data.put("line", at.group(1));
+      data.put("error", at.group(2));
+    } else {
+      data.put("error", brief);
+    }
+    return data;
   }
 
   // ---- what the autopilot's guards of its own session see and do (Autopilot.guardOwnSession) ----
@@ -4325,20 +4723,74 @@ public class ScriptBoard extends UntypedActor {
    * once the server is back, the study's link leads to the session open then, which takes someone cut
    * short. A {@code prolific} participant opens the study again from Prolific, or returns it.
    */
-  static ObjectNode serverStoppedScreen(boolean prolific) {
+  public static ObjectNode serverStoppedScreen(boolean prolific) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "serverStopped");
-    player.put("text", "<h3>This session has ended</h3><p>It ended because the study's server was stopped or restarted. "
+    player.put("text", "<h3>" + SERVER_STOPPED_TITLE + "</h3><p>" + serverStoppedText(prolific) + "</p>");
+    return frame;
+  }
+
+  /** The heading of serverStoppedScreen (and of the page a reload shows, ClientLogin.notRunning). */
+  public static final String SERVER_STOPPED_TITLE = "This session has ended";
+
+  /** The words of serverStoppedScreen, as text (also on the page a reload shows). */
+  public static String serverStoppedText(boolean prolific) {
+    return "It ended because the study's server was stopped or restarted. "
         + (prolific
             ? "You can open the study again from Prolific in a few minutes to join the session that is open then. "
                 + "If no session is open, please return the study on Prolific, and message the researcher there if you have any questions."
             : "If you were given a link to the study, you can open it again in a few minutes to join the session that is "
-                + "open then; otherwise, thank you for taking part, and please contact the researcher if you have any questions.")
-        + "</p>");
-    return frame;
+                + "open then; otherwise, thank you for taking part, and please contact the researcher if you have any questions.");
+  }
+
+  /**
+   * Whether a restart of the server cut this session short, and nothing has run it since: its data's
+   * last interruption (sessionInterrupted, which Global.markInterruptedSessions records as it marks the
+   * session stopped) comes after its last resumption (sessionResumed), and it is stopped. Its pages
+   * that come back are told the server stopped (serverStoppedScreen), as those open during a normal stop
+   * were: after a crash (kill -9, a power cut) nothing told them, and once the server was back they were
+   * given the general "This session isn't running right now". False when it can't be told.
+   */
+  public static boolean interruptedByRestart(String instanceId) {
+    try {
+      ExperimentInstance session = ExperimentInstance.findById(Long.valueOf(instanceId));
+      if (session == null || session.status != ExperimentInstance.Status.STOPPED) {
+        return false;
+      }
+      SqlRow last = Ebean.createSqlQuery("select name as name from events where experiment_instance_id = :session"
+          + " and name in ('sessionInterrupted', 'sessionResumed') order by id desc limit 1")
+          .setParameter("session", session.id)
+          .findUnique();
+      return last != null && "sessionInterrupted".equals(last.getString("name"));
+    } catch (RuntimeException e) {
+      Logger.warn("Could not tell whether session " + instanceId + " was cut short by a restart: " + e);
+      return false;
+    }
+  }
+
+  /**
+   * Whether the session's data records that this participant entered it from Prolific (prolificEntry);
+   * false when it can't be told. For a page of theirs once the game that knew them is gone.
+   */
+  public static boolean enteredFromProlific(Long instanceId, String clientId) {
+    if (instanceId == null || clientId == null) {
+      return false;
+    }
+    try {
+      SqlRow entries = Ebean.createSqlQuery("select count(*) as n from events e join event_data d on d.event_id = e.id"
+          + " where e.experiment_instance_id = :session and e.name = 'prolificEntry' and d.name = 'clientId' and d.value = :client")
+          .setParameter("session", instanceId)
+          .setParameter("client", clientId)
+          .findUnique();
+      Integer n = entries == null ? null : entries.getInteger("n");
+      return n != null && n > 0;
+    } catch (RuntimeException e) {
+      Logger.warn("Could not tell whether " + clientId + " came from Prolific: " + e);
+      return false;
+    }
   }
 
   /**
@@ -4376,32 +4828,81 @@ public class ScriptBoard extends UntypedActor {
     return screens;
   }
 
-  /** What the participants of a session that ran out of time see (Autopilot's longest session). */
-  static ObjectNode outOfTimeScreen() {
+  /**
+   * What the participants of a session that ran out of time see (Autopilot's longest session). The
+   * session finished, and the study gave them no completion code: a {@code prolific} participant
+   * messages the researcher on Prolific about their submission (opening the study again would only
+   * say they took part already).
+   */
+  static ObjectNode outOfTimeScreen(boolean prolific) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "outOfTime");
-    player.put("text", "<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. You can close "
-        + "this page; if you have any questions, please contact the researcher.</p>");
+    player.put("text", "<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. "
+        + (prolific
+            ? "It ended before the study gave you a completion code, so please message the researcher on Prolific "
+                + "about your submission."
+            : "You can close this page; if you have any questions, please contact the researcher.")
+        + "</p>");
     return frame;
   }
 
   /**
    * What the participants of the autopilot's own session see when it ends that session itself because
    * of a problem with the study: a step failure that stalls its game (endAutopilotSession, the stall
-   * backstop) or steps that don't load. The "stopped" screen would say a researcher stopped it.
+   * backstop) or steps that don't load. The "stopped" screen would say a researcher stopped it. A
+   * {@code prolific} participant may open the study again from Prolific later, as the server's stop
+   * says (the autopilot opens nothing until the researcher has fixed the study), or return it.
    */
-  static ObjectNode problemScreen() {
+  static ObjectNode problemScreen(boolean prolific) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "problem");
     player.put("text", "<h3>This session has ended</h3><p>It had to stop because of a problem with the study. Thank you for "
-        + "taking part. You can close this page; if you have any questions, please contact the researcher.</p>");
+        + "taking part. "
+        + (prolific
+            ? "You can open the study again from Prolific later to join a new session, if one is open then. Otherwise, "
+                + "please return the study on Prolific, and message the researcher there if you have any questions."
+            : "You can close this page; if you have any questions, please contact the researcher.")
+        + "</p>");
     return frame;
+  }
+
+  /**
+   * The end screens of a session's participants, each in the words for Prolific to someone who came
+   * from there (fromProlific, which may ask the session's data), as stopForServerStop chooses them:
+   * {@code screen} given whether they did. Also for a page that comes back to the session later
+   * (endedSessionScreen).
+   */
+  static java.util.function.Function<Client, ObjectNode> perParticipant(final Long sessionId,
+                                                                         final java.util.function.Function<Boolean, ObjectNode> screen) {
+    return new java.util.function.Function<Client, ObjectNode>() {
+      public ObjectNode apply(Client client) {
+        return screen.apply(client != null && fromProlific(client, sessionId));
+      }
+    };
+  }
+
+  /** The out-of-time screens of a session's participants (outOfTimeScreen, per participant). */
+  static java.util.function.Function<Client, ObjectNode> outOfTimeScreens(Long sessionId) {
+    return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
+      public ObjectNode apply(Boolean prolific) {
+        return outOfTimeScreen(prolific);
+      }
+    });
+  }
+
+  /** The problem screens of a session's participants (problemScreen, per participant). */
+  static java.util.function.Function<Client, ObjectNode> problemScreens(Long sessionId) {
+    return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
+      public ObjectNode apply(Boolean prolific) {
+        return problemScreen(prolific);
+      }
+    });
   }
 
   /**
@@ -4522,12 +5023,13 @@ public class ScriptBoard extends UntypedActor {
    * the engine lock, if the engine still runs that session live and {@code stillWanted} (asked there)
    * agrees, it ends as the other paths end a session: the computer players off first (see Stop),
    * {@code event} recorded, the session marked finished ({@code finished}: the autopilot opens the
-   * next one after its pause, as when a game ends) or stopped, the participants told ({@code screen},
-   * see endParticipants(Long, ObjectNode)), the game's timers cancelled and nothing more recorded,
+   * next one after its pause, as when a game ends) or stopped, the participants told ({@code screens}
+   * gives each theirs, see endParticipants), the game's timers cancelled and nothing more recorded,
    * and every console hears of it. Returns whether it ended it. Waits for the engine lock as long as
    * it takes: the autopilot calls it on a thread of its own.
    */
-  static boolean endForGuard(Long sessionId, String event, LinkedHashMap<Object, Object> data, ObjectNode screen,
+  static boolean endForGuard(Long sessionId, String event, LinkedHashMap<Object, Object> data,
+                             java.util.function.Function<Client, ObjectNode> screens,
                              boolean finished, java.util.concurrent.Callable<Boolean> stillWanted) {
     synchronized (REBUILD_LOCK) {
       GameListener listener = engineGameListener;
@@ -4551,7 +5053,7 @@ public class ScriptBoard extends UntypedActor {
       } else {
         stopSession(listener);
       }
-      endParticipants(sessionId, screen);
+      endParticipants(sessionId, screens);
       cancelEngineTimers();
       eventTracker.disable();
       if (!finished) {

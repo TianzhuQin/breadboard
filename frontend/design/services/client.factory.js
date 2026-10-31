@@ -1,9 +1,8 @@
 ClientFactory.$inject = ['websocketFactory', '$rootScope', 'configService'];
 export default function ClientFactory($websocketFactory, $rootScope, configService){
-  Breadboard.connect().then(async () => {
-    const clientVars = await configService.all()
-    Breadboard.sendType('LogIn', clientVars)
-  })
+  // Signs in as the Vue participant page does: on the first connection, and again (with how long the
+  // page was out of touch) on one that follows a drop. The server only ever kept the id.
+  Breadboard.login()
 
   return {
     async onmessage (callback) {

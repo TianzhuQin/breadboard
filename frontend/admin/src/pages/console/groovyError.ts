@@ -34,7 +34,8 @@ export interface GroovyError {
 
 const TYPE_PREFIX = /^(?:[a-z_$][\w$]*\.)*([A-Z][\w$]*(?:Exception|Error)):\s*/
 const TYPE_ONLY = /^(?:[a-z_$][\w$]*\.)*([A-Z][\w$]*(?:Exception|Error))\s*$/
-const FRAME = /^\s*at\s+(\S+\.groovy):(\d+)\s*$/
+// (a closure's frame can have no line: "at step.groovy:-1")
+const FRAME = /^\s*at\s+(\S+\.groovy):(-?\d+)\s*$/
 const COMPILE_AT = /(\S+?\.groovy): (\d+): (.+?)(?: @ line (\d+), column (\d+)\.)?\s*$/m
 const SCRIPT_NAME = /^Script(\d+)(?:\.groovy)?$/
 
@@ -50,8 +51,8 @@ export function parseGroovyError (raw: string): GroovyError {
   const body: string[] = []
   for (const l of lines) {
     const f = FRAME.exec(l)
-    if (f) frames.push({ file: f[1], line: Number(f[2]) })
-    else body.push(l)
+    // (a frame without a line says nothing that can be opened: it is left to the full error)
+    if (f) { if (Number(f[2]) > 0) frames.push({ file: f[1], line: Number(f[2]) }) } else body.push(l)
   }
 
   // Unwrap "ScriptException: groovy.lang.MissingPropertyException: …" down to the innermost type.
@@ -110,7 +111,8 @@ function explain (type: string, message: string, compileMessage: string | null):
       cleaned: compileMessage,
     }
   }
-  if (type === 'MissingPropertyException') {
+  // (the server's brief words for an error leave the type out: "No such property: five")
+  if (type === 'MissingPropertyException' || (!type && /^No such property: /.test(msg))) {
     const name = /No such property: (\S+)/.exec(msg)?.[1]
     return {
       title: name ? `Unknown name “${name}”` : 'Unknown name',
@@ -118,7 +120,7 @@ function explain (type: string, message: string, compileMessage: string | null):
       cleaned: msg,
     }
   }
-  if (type === 'MissingMethodException') {
+  if (type === 'MissingMethodException' || (!type && /^No signature of method: /.test(msg))) {
     const name = /No signature of method: (?:[\w.$]+\.)?([\w$]+)\(\)/.exec(msg)?.[1]
     return {
       title: name ? `“${name}” can't be used like this` : 'No such function',

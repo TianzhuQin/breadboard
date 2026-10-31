@@ -1,0 +1,24 @@
+@(title: String, message: String, retrySeconds: Int)
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    @* Asked again every few seconds: once a session is open, the same link goes into it (ClientLogin.toOpenSession). *@
+    <meta http-equiv="refresh" content="@retrySeconds">
+    <title>@title</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
+    <link rel="stylesheet" href="/assets/css/participant.css?v=@models.AssetVersion.VALUE">
+  </head>
+  <body class="bb-page">
+    <main class="bb-panel bb-panel--wide">
+      @participantMark()
+      <h1>@title</h1>
+      <p class="bb-lead">@message</p>
+      <div class="bb-loading" role="status">
+        <div class="bb-spinner" aria-hidden="true"></div>
+        <span>Checking every few seconds…</span>
+      </div>
+    </main>
+  </body>
+</html>

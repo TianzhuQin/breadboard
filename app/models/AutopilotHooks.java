@@ -13,24 +13,29 @@ import java.util.Map;
  * <p>{@link #afterStepsLoaded} runs every time an experiment's steps have been loaded into the
  * engine (selecting an experiment or a session, launching, reloading, re-running a step, a file-mode
  * step change), after the steps themselves, so settings saved in the console override what the
- * experiment's own scripts set up (e.g. {@code autopilot.waitingRoom(...)} in groovy/autopilot.groovy).
- * ScriptBoard calls it inside a try/catch that logs, so a failure here never stops a load.
+ * experiment's own scripts set up (e.g. {@code autopilot.waitingRoom(...)} in groovy/autopilot.groovy)
+ * in the autopilot's own session. ScriptBoard calls it inside a try/catch that logs, so a failure
+ * here never stops a load.
  */
 public final class AutopilotHooks {
 
   private AutopilotHooks() {}
 
   /**
-   * Called right after {@code experiment}'s steps were loaded into {@code engine}. When the autopilot
-   * is on for this experiment with settings saved in the console, its waiting room and the takeover
-   * of disconnected seats are set up from them (each only when switched on there; otherwise what the
-   * experiment's scripts set up stays).
+   * Called right after {@code experiment}'s steps were loaded into {@code engine} for {@code session}.
+   * When that is the autopilot's session (Autopilot.isAutopilotsSession: it opened it, or was handed
+   * it on Resume or a save) and the autopilot is on for this experiment with settings saved in the
+   * console, its waiting room and the takeover of disconnected seats are set up from them (each only
+   * when switched on there; otherwise what the experiment's scripts set up stays). A session a
+   * researcher opens by hand (the test session too) keeps what the steps set up: the console's
+   * settings used to apply to every session of the experiment.
    *
    * @param experiment the experiment whose steps were loaded; null when the engine has none loaded
    * @param engine     the engine they were loaded into
+   * @param session    the id of the session the engine runs; null when it runs none
    */
-  public static void afterStepsLoaded(Experiment experiment, ScriptEngine engine) {
-    if (experiment == null || experiment.id == null || engine == null) {
+  public static void afterStepsLoaded(Experiment experiment, ScriptEngine engine, Long session) {
+    if (experiment == null || experiment.id == null || engine == null || !Autopilot.isAutopilotsSession(session)) {
       return;
     }
     Autopilot.Effective effective = Autopilot.effective();

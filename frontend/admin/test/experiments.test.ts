@@ -154,7 +154,8 @@ describe('import name handling', () => {
     expect(importNameFromFile('no-extension')).toBe('no-extension')
     expect(importNameFromFile('notes.txt')).toBe('notes')
     expect(importNameFromFile('')).toBe('')
-    expect(uniqueName('Network game', ['network GAME', 'Network game 2'])).toBe('Network game 3')
+    expect(uniqueName('Network game', ['network GAME'])).toBe('Network game (copy)')
+    expect(uniqueName('Network game', ['network GAME', 'Network game (COPY)', 'Network game (copy 2)'])).toBe('Network game (copy 3)')
     expect(uniqueName('Fresh', ['Other'])).toBe('Fresh')
   })
   it('encodes the name in the import URL (the old console sent it raw)', () => {
@@ -361,6 +362,15 @@ describe('Import dialog', () => {
     w.unmount()
   })
 
+  // The export of an experiment on this server, imported again: it was "Public goods 2", which read
+  // as if 2 were its id where it came from.
+  it('adds (copy) to the recorded name when an experiment here has it already', async () => {
+    store.exps.push({ id: 2, name: 'Public goods', instances: [], steps: [], languages: [] })
+    const w = await openWith(new File([makeZip(EXPORTED) as BlobPart], 'Public-goods_2.zip'))
+    expect(input().value).toBe('Public goods (copy)')
+    w.unmount()
+  })
+
   it('does not upload a zip the server would reject (it would leave an empty experiment behind)', async () => {
     const w = await openWith(new File([new TextEncoder().encode('nope') as BlobPart], 'notes.zip'))
     expect(document.body.textContent).toMatch(/isn't a zip archive/)
@@ -373,8 +383,8 @@ describe('Import dialog', () => {
   it('suggests a free name, and refuses a duplicate one typed in before uploading', async () => {
     const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'existing.zip'))
     const name = document.querySelector<HTMLInputElement>('.b-dialog input[maxlength="120"]')!
-    expect(name.value).toMatch(/ 2$/)
-    name.value = name.value.replace(/ 2$/, '')
+    expect(name.value).toBe('existing (copy)')
+    name.value = name.value.replace(/ \(copy\)$/, '')
     name.dispatchEvent(new Event('input'))
     await flushPromises()
     submit().click()
@@ -429,6 +439,24 @@ describe('New experiment dialog', () => {
     document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
     await flushPromises()
     expect(http.put).toHaveBeenCalledWith('/experiment', expect.objectContaining({ newExperimentName: 'Network game', example: 'network-game' }))
+    w.unmount()
+  })
+
+  it('says, once the example is made, that each tab joins with an ID of its own', async () => {
+    store.exps.splice(0, store.exps.length)
+    http.put.mockResolvedValue({ id: 6, name: 'Network game' })
+    const admin = (store as any).admin
+    store.actions.selectExperiment.mockImplementationOnce(async () => { admin.experiment = { id: 6, name: 'Network game' }; return null })
+    toasts.splice(0, toasts.length)
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    await w.setProps({ open: true })
+    await flushPromises()
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    const created = toasts.find(t => t.title === 'Created “Network game”')!
+    expect(created.detail).toBe('It runs as it is: open a session, then join it from two tabs with its sign-in link, typing an ID in each (any name or number; one seat per ID).')
+    expect(created.action!.label).toBe('Open a session')
+    admin.experiment = null
     w.unmount()
   })
 
@@ -517,6 +545,21 @@ describe('New experiment dialog', () => {
     document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
     await flushPromises()
     expect(http.put).toHaveBeenCalledWith('/experiment', { newExperimentName: 'Base copy 2', copyExperimentId: 5 })
+    w.unmount()
+  })
+
+  it('names the example again each time it opens with the example chosen', async () => {
+    store.exps.splice(0, store.exps.length)
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    const name = () => document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(name()!.value).toBe('Network game')
+    await w.setProps({ open: false })
+    await flushPromises()
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(name()!.value).toBe('Network game')
     w.unmount()
   })
 
@@ -661,6 +704,30 @@ describe('Experiments page', () => {
   it('opens the Import dialog from ?action=import', async () => {
     const { w } = await mountAt('/experiments?action=import')
     expect(document.querySelector('.b-dialog__title')!.textContent).toBe('Import an experiment')
+    w.unmount()
+  })
+
+  // A newcomer's first look at the page didn't say that a ready-to-run example exists.
+  it('points a server without experiments to the ready-to-run example, which New experiment names', async () => {
+    store.exps.splice(0, store.exps.length)
+    ;(store as any).admin.experiment = null
+    const { w } = await mountAt('/experiments')
+    expect(w.find('.xempty').text()).toContain('start from Example: network game, a complete study that runs as it is')
+    expect(w.find('.xempty strong').text()).toBe('Example: network game')
+    await w.find('.xempty').findAll('button').find(b => b.text() === 'New experiment')!.trigger('click')
+    await flushPromises()
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input[value="example"]')!.checked).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
+    w.unmount()
+  })
+
+  // Opened with the page (the switcher's New), the dialog chose the example but left its name empty.
+  it('names the example when the New dialog opens with the page', async () => {
+    store.exps.splice(0, store.exps.length)
+    ;(store as any).admin.experiment = null
+    const { w } = await mountAt('/experiments?action=new')
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input[value="example"]')!.checked).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
     w.unmount()
   })
 

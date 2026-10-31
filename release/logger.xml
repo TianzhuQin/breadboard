@@ -28,15 +28,15 @@
 
   <!-- The console's lines wait in a queue, and a thread of their own writes them out: a window that
        stops taking output (a click in a Windows console starts selecting text, which pauses it until
-       Esc; Ctrl+S in a terminal, until Ctrl+Q) used to hold up at once everything that logs,
-       participants signing in among them. Once 128 lines wait, which happens only when the console
-       takes none, INFO lines are left out of the console; warnings and errors still wait for it, in
-       the other 384 places, and once those are taken too, whatever logs a warning or an error waits
-       until the window takes output again (logback 1.0.13 has no setting that drops them).
-       logs/application.log (FILE) gets every line all along. This is only what is logged: what
-       experiment scripts print (println, and groovy/chat.groovy's line for each chat message) goes
-       to the window directly, not through here, and waits for a paused one at once.
-       docs/install.md tells people to un-pause the window. -->
+       Esc; Ctrl+S in a terminal, until Ctrl+Q; a pipe nobody reads) used to hold up at once
+       everything that logs, participants signing in among them. The launchers start the server
+       through launcher.Main, whose window output never waits at all (what doesn't fit is left out of
+       the window, which then says how many lines were), for what is logged and what experiment
+       scripts print alike, so this queue never fills there. It still helps a server started another
+       way, as far as logback 1.0.13 lets it: once 128 lines wait, INFO lines are left out of the
+       console; warnings and errors wait for it, in the other 384 places, and once those are taken
+       too, whatever logs a warning or an error waits until the window takes output again.
+       logs/application.log (FILE) gets every line all along. -->
   <appender name="CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
     <queueSize>512</queueSize>
     <discardingThreshold>384</discardingThreshold>

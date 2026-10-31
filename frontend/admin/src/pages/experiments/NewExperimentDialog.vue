@@ -115,7 +115,9 @@ watch(() => props.open, (open) => {
   // (A first experiment: the ready-to-run example is the quickest way to see Breadboard work.)
   from.value = source ? 'copy' : experiments.value.length ? 'template' : 'example'
   copyId.value = source ? source.id : (admin.experiment?.id ?? experiments.value[0]?.id ?? null)
-  name.value = source ? suggestCopyName(source.name) : ''
+  // (named here: the watch below sees no change when the example was chosen last time too, nor at
+  // all when the dialog opens with the page, from the switcher's New)
+  name.value = source ? suggestCopyName(source.name) : from.value === 'example' ? suggestCopyName(EXAMPLE_NAME, '') : ''
   touched.value = false
   tried.value = false
   switchTo.value = true
@@ -166,7 +168,7 @@ async function submit () {
     if (switchTo.value && created && typeof created.id === 'number') {
       // (the example runs as it is: the next step is a session to try it)
       await switchToNew(created.id, finalName, `Created “${finalName}”`, from.value === 'example'
-        ? { label: 'Open a session', detail: 'It runs as it is: open a session, then join it from two tabs with its sign-in link.', run: () => { void router.push('/session?new=1') } }
+        ? { label: 'Open a session', detail: 'It runs as it is: open a session, then join it from two tabs with its sign-in link, typing an ID in each (any name or number; one seat per ID).', run: () => { void router.push('/session?new=1') } }
         : undefined)
     } else {
       notify.success(`Created “${finalName}”`)

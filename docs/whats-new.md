@@ -1,9 +1,10 @@
 # What's new in Breadboard 3
 
 Everything here adds to Breadboard 2.4; existing experiments keep working unless noted. The
-experiment language itself (steps, `g`, `a`, content) is unchanged and still described in the
-[original wiki](https://github.com/human-nature-lab/breadboard/wiki). For running a release, see
-[install.md](install.md); for the console, [console.md](console.md).
+experiment language itself (steps, `g`, `a`, content) is still the one described in the
+[original wiki](https://github.com/human-nature-lab/breadboard/wiki), with the additions and
+changes below. For running a release, see [install.md](install.md); for the console,
+[console.md](console.md).
 
 ## Participant login and recruitment
 
@@ -22,7 +23,9 @@ form.
 Prolific participants get a pseudonymous client id (`pp-…`). The PID is never in a URL and never
 sent to other participants. It is logged as a `prolificEntry` event for payment, and stored in the
 player's own `_system.recruitment`, which drives the built-in Prolific completion screen
-(`recruitment.completeProlific(player, [completionCode: "..."])`).
+(`recruitment.completeProlific(player, [completionCode: "..."])`). For a player who didn't come
+from Prolific, `completeProlific` does nothing and returns false (the server's log says why); it
+used to throw, which stopped the step that called it.
 
 | Setting (in `conf/local.conf`) | Effect |
 |---|---|
@@ -37,7 +40,10 @@ autopilot, the AMT timer, or the experiment's own code calling `initStep.start()
 OnJoinStep that starts the game once enough people are in). Code that only mentions
 `initStep.start()`, such as that OnJoinStep while the steps load, starts nothing. Reloading the
 engine, resuming a session or selecting its experiment again forgets the game, so the session then
-takes people again (newcomers and those who held a seat) until its game is started again.
+takes people again (newcomers and those who held a seat) until its game is started again. A reload
+that carries a running session on opens it to them before it closes their pages, so the pages of
+those who held a seat get back in by themselves as they reconnect (they used to be told the game
+began before they arrived), and records `engineReloaded` in it.
 
 ## What participants receive about others
 
@@ -71,7 +77,9 @@ Every `allow()` starts a new turn (`player.edgeEdits.turn`); a change sent with 
 as one confirmed just as a round ended and the next one called `allow()` again, is refused rather
 than made in (and counted against) the new turn.
 The answer (`bb:edge-edit-result`) says whether the edit was accepted (`ok`). It also says whether
-the network changed (`applied`), which is false when `onEdit` only collects it. Every edit,
+the network changed (`applied`), which is false when `onEdit` only collects it, and true when
+`onEdit` makes the change itself (the network game example does, to record a cut as a `TieCut`
+event of its own). Every edit,
 accepted or not, is logged as an `edgeEdit` event naming the actor.
 
 Scopes `amongNeighbors` and `visible` concern ties among a participant's neighbors. Turn those ties
@@ -90,6 +98,18 @@ step.clearChoicesOnTimeout = true
 A timed step ends when every choice is made or time runs out, whichever comes first. With no
 choices it waits for the whole duration. Steps without `duration` behave as before.
 
+## Texts in several languages
+
+`c.get(name)` gives a text in the language the steps chose with `c.setDefaultLanguage` (by the code
+the Content page shows for it, such as `"zho"`), and `c.getTranslated(name, code)` in the one it
+names. A text with no version in that language yet is now given in English, or else in the language
+it was first written in, so an experiment translated one text at a time shows every text meanwhile;
+it used to stop the step that asked for it (a `NullPointerException`), or give nothing in file mode.
+A version that is there but empty is given as it is: participants see nothing, as the Content page
+warns. With no language chosen, `c.get` gives a text's first version, as before. A language
+`c.setDefaultLanguage` doesn't know is named in the server's log, and texts are then given in the
+language each was first written in.
+
 ## Running without anyone at the admin console (autopilot)
 
 The simplest way is the console's **Autopilot** page. Pick the experiment, the waiting room
@@ -101,11 +121,19 @@ study URL.
 - If another experiment's session is running when you turn it on, the autopilot waits for that
   session to end; the page also offers to end it there and then.
 - Ending the autopilot's session from the console pauses the autopilot: stopping it, or anything
-  that reloads the engine (launching or resuming another session, reloading). Selecting another
-  experiment, to edit it, doesn't: the autopilot's session keeps running. Press **Resume** on the
+  that reloads the engine and ends it (launching or resuming another session, a reload from an
+  account other than the one that saved its settings). Selecting another experiment, to edit it,
+  doesn't: the autopilot's session keeps running, and so it does through a reload from the account
+  that saved its settings, which carries it on. Nor does ending a session a researcher opened by
+  hand, even one of its experiment: the autopilot then opens its next session as usual (with
+  **continuous** off, such a session isn't its one session either). Press **Resume** on the
   Autopilot page to let it open sessions again; after a run with **continuous** off, the button
-  reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
-  is in charge too, and a pause survives a server restart.
+  reads **Open another session**. Both work when the server's settings file (`conf/local.conf`) is
+  in charge too, and a pause survives a server restart.
+- A session of its experiment that a researcher opens by hand isn't the autopilot's: the Autopilot
+  page shows it as the open session, with who opened it and whether it takes participants (GET
+  `/autopilot`'s `status.handSession`), the links lead to it while it takes participants, and the
+  autopilot opens none of its own until it has ended. **Resume** or a save hands it to the autopilot.
 - While a researcher has another experiment loaded and a console open, the autopilot leaves the
   engine to them and opens its session once they close the console.
 - While it is on, it opens a session whenever the script engine runs none. The engine is shared
@@ -130,7 +158,7 @@ In the experiment's steps:
 
 ```groovy
 autopilot.waitingRoom([
-  minPlayers: 15, maxPlayers: 25,
+  minPlayers: 15, maxPlayers: 25,   // at most 25 play: the first 25 to arrive
   waitSeconds: 120,        // once minPlayers are here, wait this long for more
   maxWaitSeconds: 900,     // give up if minPlayers never arrive
   countdownSeconds: 10,
@@ -149,15 +177,28 @@ People who come back after a session was given up get its "could not start" noti
 to `onCancel` too.
 
 The server opens a session at startup. Participants enter through `/play/{e}/login` or
-`/play/{e}/prolific?...` and wait in the waiting room. Someone whose connection drops there counts
-as gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor
-gets the session given up. The game starts by itself. People who left before the start get no
-seat, and are told so if they come back (see below). With `replaceDisconnected`, someone away for
-less than a minute (or `afterSeconds`, if that is longer) keeps their seat, which the computer plays
-until they are back; without it nobody would play that seat, so they get none either.
-Someone who drops out mid-game is played by the computer after the grace period. A new session
-opens when the game finishes. Waiting-room settings saved in the console replace the steps' own
-even for people who are already waiting: the limits count from the first arrival.
+`/play/{e}/prolific?...` and wait in the waiting room. While no session takes participants (a game
+is under way, a full room counts down, or the next session is about to open) and the autopilot opens
+the next one by itself (it is on, continuous, and neither paused nor done), these links show a page
+that says so and loads itself again every few seconds, which then goes into the session; they used
+to say "No session is open right now" and to try again later (Prolific participants: to return the
+study), which they still do while the autopilot is off, paused or done, or while something keeps it
+from opening the next session (another experiment's session in the engine, the disk almost full, a
+problem the Autopilot page shows; a session of its experiment opened by hand isn't one: during its
+game they wait for the autopilot's next session too). Someone whose connection drops there counts as
+gone only after `departureGraceSeconds`, so a moment's drop neither starts the wait again nor gets
+the session given up. The game starts by itself. People who left before the start get no seat, and
+are told so if they come back (see below). With `maxPlayers`, at most that many are seated, the
+first to arrive: once that many are here (or away for a moment, keeping their seat) the countdown
+begins, and the study's links send nobody more to the session; anyone else there as the game starts
+is taken out of the network and told the session is full, with how to join the next one
+(`player.ended = "sessionFull"`, and a `sessionFull` event). They used to be seated however many
+were there. With `replaceDisconnected`, someone away for less than a minute (or `afterSeconds`, if
+that is longer) keeps their seat, which the computer plays until they are back; without it nobody
+would play that seat, so they get none either. Someone who drops out mid-game is played by the
+computer after the grace period. A new session opens when the game finishes. Waiting-room settings
+saved in the console replace the steps' own even for people who are already waiting: the limits
+count from the first arrival.
 
 ## The participant page
 
@@ -224,7 +265,9 @@ New experiments start with a redesigned page (`conf/defaults/default-client-html
 - Vuetify's colours change only for pages marked `class="bb-app"`.
 - `SVGGraph` and every other component still work.
 - Imported and upgraded experiments keep the previous default page,
-  `conf/defaults/legacy-client-html.html`; only new experiments get `BBGame`.
+  [`conf/defaults/legacy-client-html.html`](https://github.com/TianzhuQin/breadboard/blob/main/conf/defaults/legacy-client-html.html)
+  (in a release it is inside the server's jar; the new page's comment links to it too); only new
+  experiments get `BBGame`.
 To move an old page over, replace `<SVGGraph ...>` with `<BBNetwork :player="player" :graph="graph" />`,
 or the whole layout with `BBGame`.
 
@@ -246,7 +289,20 @@ is told how it ended this time.
 The page reconnects by itself, at once when the network or the participant comes back to the tab,
 and notices a connection that died without closing. `<ConnectionStatus />` says what is going on,
 with **Try now** while it reconnects. When the study is opened in another tab or window, the newer
-page takes over and the older one stops, with **Use it here** to take it back.
+page takes over and the older one stops, with **Use it here** to take it back. An older page whose
+connection comes back by itself doesn't take the seat from a newer one that is open: the page the
+participant opened last keeps it, or the one they took the seat back on since (by **Use it here**,
+or by itself), which counts as opened last from then on. Once the newer page has gone (closed, or
+its connection lost for good), the older one takes the seat back by itself as soon as it is on
+screen: the page that holds the seat tells the participant's other pages in the same browser as it
+goes, and a page that has lost the seat also asks the server every 20 seconds.
+
+**A network that blocks the live connection.** A page that has never connected after three tries
+says the network may not let it through, and suggests another network or browser. So does a page
+that was connected and then can't connect again: after five failed tries in a row it asks the
+server over plain HTTP after each try. If the server answers, the page tries once more at once, and
+if that fails too, the network lets it reach the server but not open its live connection. If the
+server doesn't answer, it is down, and the page goes on saying the connection was lost.
 
 `Breadboard.connection` says how the connection is, and Breadboard emits `bb:connection` whenever
 it may have changed (`Breadboard.on('bb:connection', () => ...)`):
@@ -256,7 +312,7 @@ it may have changed (`Breadboard.on('bb:connection', () => ...)`):
 | `connecting` | The first try is under way. |
 | `open` | Connected. |
 | `lost` | It dropped, and is reconnecting. |
-| `blocked` | It has never connected after several tries: the network may not let it. It goes on trying. |
+| `blocked` | It can't connect, and the network may not let it (see above). It goes on trying. |
 | `elsewhere` | Another page has the seat, e.g. the study opened in another tab. `Breadboard.useHere()` takes it back. |
 | `ended` | The session is over for this page; it no longer reconnects. |
 | `watching` | A researcher's preview that only watches (below). |
@@ -266,7 +322,11 @@ it may have changed (`Breadboard.on('bb:connection', () => ...)`):
 `PlayerChoices`'s `choice` slot get a `disabled` slot prop. A choice or tie change sent anyway
 (`Breadboard.sendChoice`, `sendGroupChoice`, `sendEdgeEdit`) waits for the connection for at most
 5 seconds and is then dropped, since the screen may have moved on. Other messages
-(`Breadboard.send`) wait as long as it takes, as before.
+(`Breadboard.send`) wait as long as it takes, as before. A choice or tie change also says when it
+was given, and the server drops one that reaches it more than 10 seconds after that: one clicked
+just before the connection died without a word came through only as the network came back, after
+the page had said the connection was lost, and used to count, 25 seconds late. The page then gets
+the participant's view again, so it shows the choice as still to be made.
 
 **`ConnectionStatus`'s slots.** The default slot replaces the message while the page reconnects
 (`lost` and `blocked`), with the slot props `time` (ms until the next try, counting down, and 0
@@ -302,17 +362,55 @@ playing, and a waiting room doesn't count them.
 
 - **One page holds the seat.** A participant's newer page (another tab, a reload) takes the seat.
   The older one is sent `{"bbClosed": "replaced"}` and closed, so it doesn't reconnect and take the
-  seat back. `clientConnected` and `clientDisconnected` are recorded only when the participant comes
-  or goes, not each time a page takes over; `bb:connection` is emitted whenever a page takes the
-  seat, so scripts may hear `connected: true` for someone who is connected already.
+  seat back. An older page that reconnects by itself while a newer one holds the seat (its
+  connection had dropped meanwhile) is sent the same and closed, and the newer page keeps the seat:
+  the page says when it was loaded, in the server's time, as it connects (its state's `loadedAt`, as
+  `bbPage` in the socket's address). **Use it here** asks for the seat (`bbTake=1`) and gets it,
+  from a newer page too, and so does a page that takes the seat back by itself. From then on that
+  page counts as the one opened last: the server sends it `{"bbPage": <its time then>}`, which it
+  gives as `bbPage` when it reconnects, so the other page, reconnecting by itself (its network
+  back), is refused and leaves the seat to it. It used to take the seat back. A page that has lost
+  the seat asks `/state?seat=1`, which answers `{"seatHeld": true}` while an open page of the
+  participant's own holds it. A page a researcher opened without `?preview=1` (the previous
+  console's Testing panel, signed in by the researcher's cookie) is told whether any page holds it,
+  a preview included: it takes the seat back by itself only once nobody has it, never from another
+  page. `clientConnected` and `clientDisconnected` are recorded only when the participant comes or
+  goes, not each time a page takes over; `bb:connection` is emitted whenever a page takes the seat,
+  so scripts may hear `connected: true` for someone who is connected already.
 - **A heartbeat.** The page sends `{"action": "Ping"}` as soon as it connects and every 5 seconds
-  after, and gets `{"pong": <the server's time in ms>}`. A page that has pinged and then sends
+  after, and gets `{"pong": <the server's time in ms>}`, from which it reckons the server's time (see
+  below). A page that has pinged and then sends
   nothing for 30 seconds is closed and counts as gone, as when its socket closes: a connection that
   dies without closing (a phone out of range, a laptop put to sleep) used to look connected for
   good, so the computer never took that seat. Pages that never ping (from before 3.1) are left
   alone. A page given its last screen as it connects (its session is over, isn't the one running,
   or started without it: e.g. a thank-you page left open when the next session opens) has its pings
   answered too, and is closed once it falls silent; nobody used to answer them.
+- **Gaps in a connection.** A page that connects again after its connection dropped signs in again
+  with how long it was out of touch, from when it last heard from the server
+  (`{"action": "LogIn", "clientId": ..., "awayMs": ...}`), and the session records `connectionGap`
+  (`player`, `awayMs`) rather than another `clientLogIn`. An outage without a word is recorded this
+  way once the page has noticed it: after 15 to 20 seconds without a word from the server, it gives
+  the connection up and makes a new one. When the page is back before the 30 seconds of silence that
+  close a page, the `connectionGap` is all that is recorded: the participant never counts as gone. An
+  outage too short for the page to notice, which the connection lives through, leaves no record.
+  When the page's old socket closes after it was out of touch (it had sent nothing for 10 seconds,
+  or what it sent meanwhile came through only just before the close), they count as gone only once
+  30 seconds have passed since it was last heard from, unless a page of theirs is back by then. That
+  close comes through only as the network comes back, just before the page's new socket or just
+  after it, so the same outage used to be recorded as a `clientDisconnected` and a
+  `clientConnected` 2 ms apart, or not at all.
+- **Answers that come too late.** A choice or tie change says when it was given, in the server's
+  time as the page reckons it from the pongs (`bbSentAt`, in `MakeChoice` and in the `CustomEvent`s
+  that `sendGroupChoice` and `sendEdgeEdit` send, and in anything sent with `Breadboard.sendType`'s
+  `maxAge`; the older AngularJS client's choices too). One that reaches the server more than 10
+  seconds after that is dropped: the page sent it into a connection that had died without closing,
+  which delivered it only as the network came back. The session records `answerDropped` (`player`,
+  `ageMs`: how long after it was given it arrived), and the page is sent the participant's view
+  again, so it shows what the server holds. The page reckons the server's time from when it sent the
+  ping a pong answers, never from when it got round to the pong (a tab in the background, a laptop
+  asleep), so a fresh click isn't taken for an old one. Messages that don't say when they were sent
+  are taken as they come.
 - **`player._system.disconnectedAt`**: since when (ms) the player has been away, next to
   `_system.connected`; it goes when they are back.
 - **Previews.** A researcher's preview of a player whose own page is connected, or of a computer
@@ -392,17 +490,45 @@ restarts the running session.
 
 ## Data
 
-- **Timestamps:** CSV exports are now in true UTC. The format is unchanged.
+- **Timestamps:** CSV exports are now in true UTC. The format is unchanged
+  (`2026-10-28T13:24:23:757Z`), and the files the console makes from a session's events use it too.
 - **Exact values:** every CSV, the server's and the console's downloads, keeps values exactly as
-  recorded, with no byte-order mark. A spreadsheet may read a value that starts with `=`, `+`,
-  `-` or `@` as a formula, so import the file as text when participants could type such values.
+  recorded, with no byte-order mark unless you ask for one: **For Excel** on Sessions & data, or
+  `excel=true` on the server's CSV addresses, adds the mark Excel and WPS need to read Chinese. A
+  spreadsheet may read a value that starts with `=`, `+`, `-` or `@` as a formula, so import the
+  file as text when participants could type such values.
 - **No IP addresses:** login events no longer store IP address, user agent or referer.
 - **Connection events:** `clientConnected` and `clientDisconnected`, each time a participant comes
-  or goes (not for every page that takes over their seat).
+  or goes (not for every page that takes over their seat), and `connectionGap` (`player`, `awayMs`)
+  each time a participant's page connects again after its connection dropped, with how long it was
+  out of touch, also when that was too short to count as leaving; an outage too short for the page to
+  notice, which its connection lives through, isn't recorded. `answerDropped` (`player`, `ageMs`):
+  a choice or tie change that reached the server more than 10 seconds after it was given, and didn't
+  count.
 - **Order:** events recorded in the same millisecond come out in the order they were recorded. Their
   ids follow that order now; they were given out twenty at a time, in an order of the database's
   own, so such events could come out the wrong way round.
 - **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
-  `missedStart` (someone its start left out), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+  `missedStart` (someone its start left out), `sessionFull` (someone a full room left out, with
+  `clientId`), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+- **How the autopilot ended its session:** `sessionFailed` (a step failure stalled its game: `step`,
+  `line`, `error`; the `stepFailed` before it doesn't say whether the failure stalled the game),
+  `sessionStalled` (its game had nothing left to do after a step failed: `step`, `error`) and
+  `sessionTooLong` (`minutes`, `limit`).
+- **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the
+  researcher), in a session that a reload of the engine carries on.
 - **Tie edits:** `edgeEdit`, which records the actor.
-- **Prolific entry:** `prolificEntry`.
+- **Prolific:** `prolificEntry`, `prolificComplete`, and `participantComment` (`player`, `text`):
+  what a participant wrote under "Comments for the researcher" on the finish screen, kept in their
+  session's data even after its game has ended. It used to be sent to the game, which ignored it.
+  The screen sends it to `POST /game/<experiment>/<session>/<player>/comment`, with the seat's token
+  and a comment token it asks for as it appears and every hour after (`GET` on the same address,
+  answered while the server knows the seat), signed with `application.secret` and good for a week: a
+  comment sent once the server has forgotten the seat's token (ten more sessions have ended, or it
+  restarted) is kept too, until about a week after the session ended. When it isn't kept (an answer
+  4xx), the screen says so and goes on to Prolific only when asked; with no answer at all, or a
+  server error, it says the comment may not have reached the researcher. When no answer comes within
+  10 seconds of Finish, it says the comment isn't confirmed yet, and goes on to Prolific by itself
+  once the answer says it is kept; its Try again waits for that answer, and sends the comment again
+  only once that request has failed. The server keeps the same comment (`text`) from the same
+  participant in a session once.

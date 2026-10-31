@@ -37,10 +37,18 @@
           <p class="set-people__handout-title">
             {{ handout.kind === 'added' ? `Account added for ${handout.email}.` : `New password for ${handout.email}.` }}
           </p>
-          <p class="set-people__handout-text">
+          <p v-if="lanAddress" class="set-people__handout-text">
+            Give them this password, and the server's address on this network,
+            <b class="set-people__addr">{{ signInAddress }}</b> (this page's own address, localhost, works on this
+            computer only; the copied details have the network's). They can change the password in Settings
+            once they have signed in. It is shown only once.
+          </p>
+          <p v-else class="set-people__handout-text">
             Give them this password, and the address of this page. They can change it in Settings once
             they have signed in. It is shown only once.
           </p>
+          <!-- at localhost, with no address on a network known: the copied address works here only -->
+          <LocalOnlyNote v-if="!lanAddress" class="set-people__local" what="The copied details use" compact />
           <div class="set-people__secret">
             <code class="set-people__code">{{ handout.password }}</code>
             <CopyButton :text="handoutText" label="Copy sign-in details" size="sm" />
@@ -79,6 +87,9 @@ import { computed, ref, watch } from 'vue'
 import { KeyRound, UserMinus, UserPlus } from 'lucide-vue-next'
 import { BBadge, BButton, BField, BInput, confirm, notify } from '@/ui'
 import CopyButton from '../recruit/CopyButton.vue'
+import LocalOnlyNote from '../session/LocalOnlyNote.vue'
+import { isLocalOrigin } from '../session/live'
+import { admin } from '@/store/admin'
 import { describeError } from '../experiments/experiments'
 import { looksLikeEmail, researchers, type Researcher } from './settings'
 
@@ -91,9 +102,13 @@ const newEmail = ref('')
 const addError = ref('')
 const handout = ref<null | { kind: 'added' | 'reset', email: string, password: string }>(null)
 
-const signInAddress = `${window.location.origin}/`
+// Opened at localhost, this page's address only works on this computer: a colleague reaches the
+// server at its address on this network, which the server says (GET /state), as LocalOnlyNote finds it.
+const local = isLocalOrigin(window.location.origin)
+const lanAddress = computed(() => (local && admin.lanAddresses?.length ? admin.lanAddresses[0].replace(/\/+$/, '') : ''))
+const signInAddress = computed(() => `${lanAddress.value || window.location.origin}/`)
 const handoutText = computed(() => handout.value
-  ? `Breadboard: ${signInAddress}\nEmail: ${handout.value.email}\nPassword: ${handout.value.password}`
+  ? `Breadboard: ${signInAddress.value}\nEmail: ${handout.value.email}\nPassword: ${handout.value.password}`
   : '')
 
 watch(newEmail, () => { addError.value = '' })
@@ -201,6 +216,8 @@ async function remove (r: Researcher) {
 .set-people__handout { padding: 12px 14px; border-radius: var(--radius); background: var(--success-soft); color: var(--success-soft-text); }
 .set-people__handout-title { font-weight: 650; }
 .set-people__handout-text { margin-top: 2px; font-size: var(--text-sm); }
+.set-people__addr { font-weight: 650; overflow-wrap: anywhere; }
+.set-people__local { margin-top: 8px; }
 .set-people__secret { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .set-people__code {
   padding: 5px 10px;

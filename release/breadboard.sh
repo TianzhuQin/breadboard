@@ -1,25 +1,29 @@
 #!/bin/sh
 # Start Breadboard. Open http://localhost:9000 once it says it is listening.
 #
-#   ./breadboard.sh                       # port 9000
+#   ./breadboard.sh                       # port 9000, or http.port in conf/local.conf
 #   ./breadboard.sh -Dhttp.port=8080      # other settings go to the server as -D options
 #
 # Needs Java 8: the first Java 8 among JAVA8_HOME's (the JDK's folder, its bin folder, or a macOS JDK
 # folder as Finder shows it), the one that comes with this download (jre/), (on macOS) the one that
 # /usr/libexec/java_home finds, JAVA_HOME's, and java on PATH. JAVA_OPTS adds options for Java
-# itself, e.g. JAVA_OPTS=-Xmx2g. The database lives in db/ (with copies in backups/), application.secret
-# (which signs sign-ins and invitation links) in conf/application.secret, and the settings you change
-# in conf/local.conf. Run in a terminal, it opens the console in the browser once it is up
-# (BREADBOARD_NO_BROWSER=1 stops that). On macOS it keeps the computer awake while the server runs.
+# itself. The database lives in db/ (with copies in backups/), application.secret (which signs
+# sign-ins and invitation links) in conf/application.secret, and the settings you change in
+# conf/local.conf, where http.port=8080 sets the port, and breadboard.memory=2g how much memory the
+# server may use for its data (1g), for every start. Run in a terminal, it opens the console in the
+# browser once it is up, and again when started a second time while it runs (BREADBOARD_NO_BROWSER=1
+# stops that). On macOS it keeps the computer awake while the server runs.
 # On Linux, in a desktop session, it asks systemd (and on GNOME the desktop too) to keep the computer
 # awake; if the computer still suspends (some desktops do, such as Cinnamon), turn off automatic
 # suspend in the power settings.
 #
 # Keep running: run in a terminal, or with BREADBOARD_KEEP_RUNNING=1 (Start Breadboard.command sets
 # it), a server that stops by itself (it ran out of memory, Java crashed, it was killed) is started
-# again after a few seconds, saying why; after 5 restarts in 10 minutes it is left stopped. Ctrl+C,
-# closing the window and SIGTERM still stop it. Otherwise (BREADBOARD_KEEP_RUNNING=0, or no terminal,
-# as under systemd or launchd, which restart it themselves), this script becomes the server (exec).
+# again after a few seconds, saying why; after 5 restarts in 10 minutes it is left stopped, and so
+# is one that stopped before it ever started (a mistake in conf/local.conf, its port taken): what
+# Java printed as errors is then in logs/start-errors.log. Ctrl+C, closing the window and SIGTERM
+# still stop it. Otherwise (BREADBOARD_KEEP_RUNNING=0, or no terminal, as under systemd or launchd,
+# which restart it themselves), this script becomes the server (exec).
 set -e
 cd "$(dirname "$0")"
 # set again below for the server when this script starts it again
@@ -78,31 +82,172 @@ fi
 
 # Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
 # and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-# would fill the disk): delete logs/out-of-memory.hprof once it has been looked at. These options
-# need Java 8u92 or newer; an older Java 8 runs without them.
-MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof"
+# would fill the disk): delete logs/out-of-memory.hprof once it has been looked at. What Java itself
+# says then (that it ran out of memory, and of what; the heap dump) goes into logs/jvm-pid<its
+# process id>.log, not to this window: Java writes it to the window directly, and one that doesn't
+# take output (paused, or a pipe nobody reads) held it up there for good, before it ended, so that
+# it was never started again (Keep running, below). Each start has a file of its own: launcher.Main
+# deletes the earlier ones in which Java said nothing, and keeps at most 10. These options need Java
+# 8u92 or newer; an older Java 8 runs without them.
+MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
 # shellcheck disable=SC2086 # a list of options
-if ! "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
+if "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
+  # (not in the check: there, Java would make such a file too)
+  MEMORY_OPTS="$MEMORY_OPTS -XX:+LogVMOutput -XX:LogFile=logs/jvm-%p.log"
+else
   MEMORY_OPTS=""
 fi
-
-# The port: 9000, or the one given with -Dhttp.port=...; and the file the server writes its process
-# id to: RUNNING_PID in this folder, or the one given with -Dpidfile.path=... (/dev/null: none). (Also
-# from JAVA_OPTS, which go to Java before the settings given here.)
-PORT=9000
-PID_FILE=RUNNING_PID
-# shellcheck disable=SC2086 # JAVA_OPTS is a list of options
-for arg in $JAVA_OPTS "$@"; do
-  case "$arg" in
-    -Dhttp.port=*) PORT="${arg#-Dhttp.port=}" ;;
-    -Dpidfile.path=*) PID_FILE="${arg#-Dpidfile.path=}" ;;
-  esac
-done
-URL="http://localhost:$PORT"
 
 # The real folder, not a symbolic link to it (e.g. /opt/breadboard), which may be moved to the next
 # release while this one runs.
 HERE="$(pwd -P)"
+
+# A folder unpacked, or run once, by another account (often root) can't be written, and the
+# database then fails with a stack trace: say how to fix it instead (below). The same for a file
+# this account can't read.
+# (One that is this account's own, only made read-only or unreadable, this account can fix itself,
+# with chmod, without an administrator.)
+ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
+cannot_write() {
+  if [ -O "$2" ]; then
+    echo "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:" >&2
+    if [ -d "$2" ]; then
+      echo "  chmod -R u+rwX \"$2\"" >&2
+    else
+      echo "  chmod u+rw \"$2\"" >&2
+    fi
+  else
+    echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
+    if [ -d "$2" ]; then
+      echo "  sudo chown -R $ME \"$2\"" >&2
+    else
+      echo "  sudo chown $ME \"$2\"" >&2
+    fi
+  fi
+  exit 1
+}
+
+# conf/local.conf holds the settings changed for this Breadboard (see below). One the server can't
+# read (made or copied by another account, often root) would be left out without a word, as if
+# there were none: the server would run without those settings (its address, its port, HTTPS-only
+# cookies, AWS keys). Say so instead, before anything is read from it.
+[ ! -e conf/local.conf ] || [ -r conf/local.conf ] || cannot_write "conf/local.conf" "$HERE/conf/local.conf" read
+
+# The value of a setting written on a line of its own in conf/local.conf (key=value, key: value or
+# key = "value", with a comment after it or not), the last one if there are several; nothing when
+# there is none, or the file can't be read. $1 is the key, as a sed pattern.
+local_setting() {
+  [ -r conf/local.conf ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*[=:][[:space:]]*//p" conf/local.conf \
+    | sed -e 's/[[:space:]]*#.*$//' -e 's#[[:space:]]*//.*$##' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' \
+    | tail -n 1
+}
+
+# The port: 9000, or http.port in conf/local.conf, or the one given with -Dhttp.port=..., which wins
+# (Play reads the port only from -Dhttp.port, so the launcher passes on the one in conf/local.conf);
+# how much memory the server may use for its data (Java's heap, -Xmx): 1g, or breadboard.memory in
+# conf/local.conf (-Xmx given here, or in JAVA_OPTS, wins: MEMORY_GIVEN, and where, MEMORY_GIVEN_IN);
+# and the file the server writes its process id to: RUNNING_PID in this folder, or the one given with
+# -Dpidfile.path=... (/dev/null: none). (Also from JAVA_OPTS, which go to Java before the settings
+# given here.)
+PORT=""
+PORT_OPT=""
+MEMORY=1g
+MEMORY_GIVEN=""
+MEMORY_GIVEN_IN=""
+PID_FILE=RUNNING_PID
+# (the options $2 and after, given in $1: JAVA_OPTS, or the command line)
+read_options() {
+  GIVEN_IN="$1"
+  shift
+  for arg in "$@"; do
+    case "$arg" in
+      -Dhttp.port=*) PORT="${arg#-Dhttp.port=}" ;;
+      -Xmx*)
+        MEMORY_GIVEN="${arg#-Xmx}"
+        MEMORY_GIVEN_IN="$GIVEN_IN"
+        ;;
+      -Dpidfile.path=*) PID_FILE="${arg#-Dpidfile.path=}" ;;
+    esac
+  done
+}
+# shellcheck disable=SC2086 # JAVA_OPTS is a list of options
+read_options JAVA_OPTS $JAVA_OPTS
+read_options "the command line" "$@"
+# Curly double quotes (U+201C, U+201D), which TextEdit's Smart Quotes (or an input method) types in
+# place of straight ones ("), make conf/local.conf unreadable to the server, whose message then
+# misleads ("try enclosing the value in double quotes"): name their lines instead. Inside straight
+# quotes, or in a comment, they are fine. A comment (# or //) starts outside straight quotes: after
+# one left open, as in "https://...” (one quote typed again, the other not), it is all the value.
+# (In UTF-8, as the server reads the file.)
+if [ -r conf/local.conf ]; then
+  CURLY="$(LC_ALL=C sed -e 's/"[^"]*"//g' -e 's@//@#@g' -e 's/^\([^"#]*\)#.*/\1/' conf/local.conf \
+    | LC_ALL=C grep -n "$(printf '\342\200[\234\235]')" | cut -d: -f1 | paste -s -d, - | sed 's/,/, /g')"
+  if [ -n "$CURLY" ]; then
+    case "$CURLY" in
+      *,*) WHERE="Lines $CURLY of conf/local.conf have" ;;
+      *) WHERE="Line $CURLY of conf/local.conf has" ;;
+    esac
+    echo "$WHERE curly quotes ($(printf '\342\200\234 \342\200\235')) where Breadboard needs straight ones (\")," >&2
+    echo "as TextEdit's Smart Quotes (or an input method) types them. Type those quotes again with Smart" >&2
+    echo "Quotes off (in TextEdit: Edit > Substitutions > Smart Quotes), save the file, and start" >&2
+    echo "Breadboard again." >&2
+    exit 1
+  fi
+fi
+LOCAL_PORT="$(local_setting 'http\.port')"
+if [ -n "$LOCAL_PORT" ]; then
+  case "$LOCAL_PORT" in
+    [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]|[1-9][0-9][0-9][0-9][0-9]) [ "$LOCAL_PORT" -le 65535 ] || LOCAL_PORT="?$LOCAL_PORT" ;;
+    *) LOCAL_PORT="?$LOCAL_PORT" ;;
+  esac
+  case "$LOCAL_PORT" in
+    \?*)
+      echo "conf/local.conf gives http.port as ${LOCAL_PORT#?}, which isn't a port number (1 to 65535): write it as, e.g.," >&2
+      echo "  http.port=8080" >&2
+      exit 1
+      ;;
+  esac
+  if [ -z "$PORT" ]; then
+    PORT="$LOCAL_PORT"
+    PORT_OPT="-Dhttp.port=$PORT"
+  fi
+fi
+PORT="${PORT:-9000}"
+LOCAL_MEMORY="$(local_setting 'breadboard\.memory')"
+if [ -n "$LOCAL_MEMORY" ]; then
+  case "$LOCAL_MEMORY" in
+    [1-9][mMgG]|[1-9][0-9][mMgG]|[1-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][0-9][mMgG]) MEMORY="$LOCAL_MEMORY" ;;
+    *)
+      echo "conf/local.conf gives breadboard.memory as $LOCAL_MEMORY: write it in megabytes or gigabytes, e.g." >&2
+      echo "  breadboard.memory=2g" >&2
+      exit 1
+      ;;
+  esac
+fi
+URL="http://localhost:$PORT"
+
+# In a terminal on a desktop (started there, or by a double-click), the console is opened in the
+# browser once the server answers: open_console PORT waits for it (for up to 3 minutes).
+OPENER=""
+if [ -t 1 ] && [ -z "${BREADBOARD_NO_BROWSER:-}" ] && command -v curl >/dev/null 2>&1; then
+  if [ "$(uname)" = Darwin ]; then
+    OPENER=open
+  elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    OPENER=xdg-open
+  fi
+fi
+open_console() {
+  i=0
+  while [ $i -lt 180 ]; do
+    if curl -s --noproxy '*' -o /dev/null --max-time 2 "http://127.0.0.1:$1/health"; then
+      "$OPENER" "http://localhost:$1" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+}
 
 # Whether a Breadboard runs from this folder now: the pid file names it (its process id, written by
 # Play), and a crash or power cut leaves the file behind, naming a process that is gone or another
@@ -113,57 +258,83 @@ running_here() {
   RUNNING="$(tr -cd '0-9' < "$PID_FILE" 2>/dev/null)"
   [ -n "$RUNNING" ] || return 1
   case "$(ps -ww -p "$RUNNING" -o args= 2>/dev/null | sed 's/[[:space:]]*$//')" in
-    *"NettyServer $HERE") return 0 ;;
+    *" launcher.Main $HERE"|*"NettyServer $HERE") return 0 ;;
   esac
   return 1
 }
 
 # One already running from this folder, on whatever port, has the database open: say so, instead
-# of the database's stack trace.
+# of the database's stack trace. In a terminal on a desktop (often a second double-click), its
+# console is opened, as the first start did.
 if running_here; then
   RUNNING_PORT="$(ps -ww -p "$RUNNING" -o args= 2>/dev/null | sed -n 's/.*-Dhttp\.port=\([0-9][0-9]*\).*/\1/p')"
-  echo "Breadboard is already running from this folder (process $RUNNING): open http://localhost:${RUNNING_PORT:-9000}, or stop it first." >&2
+  RUNNING_PORT="${RUNNING_PORT:-9000}"
+  if [ -n "$OPENER" ]; then
+    echo "Breadboard is already running from this folder (process $RUNNING): its console, http://localhost:$RUNNING_PORT, opens in the browser. To start it again, stop it first." >&2
+    # (not as a child of this process, which ends now; nor ended by the hangup that ending it may
+    # send, as the window is closed or its shell ends)
+    (trap '' HUP; open_console "$RUNNING_PORT" &)
+  else
+    echo "Breadboard is already running from this folder (process $RUNNING): open http://localhost:$RUNNING_PORT, or stop it first." >&2
+  fi
   exit 1
 fi
 
 # Something already answering on the port (often Breadboard itself, started earlier): say so
-# instead of Play's stack trace. curl's 7 means nothing listens there. (--noproxy: a proxy set for
-# the internet, often one on this computer, would answer in the port's place; curl uses it even for
-# 127.0.0.1.)
-if command -v curl >/dev/null 2>&1; then
-  set +e
-  ANSWER="$(curl -s --noproxy '*' --max-time 8 "http://127.0.0.1:$PORT/health" 2>/dev/null)"
-  CODE=$?
-  set -e
-  if [ "$CODE" -ne 7 ]; then
-    if printf '%s' "$ANSWER" | grep -q '"database"'; then
-      echo "Breadboard is already running on port $PORT: open $URL" >&2
+# instead of Play's stack trace (here, and again before the server is started again after it
+# stopped by itself). Sets TAKEN to what to say, and is true, when the port is taken. Also on its
+# IPv6 address, [::1]: a program there (as Node's dev servers listen for localhost) leaves the
+# server free to start, and the browser, which tries ::1 first for localhost, then opens that
+# program. curl's 7 means nothing listens there; at [::1], so do the codes a computer (or a curl)
+# without IPv6 ends with (1, 3, 4, 6, 45): nothing can listen there. (--noproxy: a proxy set for the
+# internet, often one on this computer, would answer in the port's place; curl uses it even for
+# 127.0.0.1. -g: the brackets are the address's, not a range.)
+port_taken() {
+  TAKEN=""
+  command -v curl >/dev/null 2>&1 || return 1
+  for HOST in 127.0.0.1 '[::1]'; do
+    if ANSWER="$(curl -g -s --noproxy '*' --max-time 8 "http://$HOST:$PORT/health" 2>/dev/null)"; then
+      CURL=0
     else
-      echo "Another program is using port $PORT. Stop it, or start Breadboard on another port:" >&2
-      echo "  ./breadboard.sh -Dhttp.port=$((PORT + 1))" >&2
+      CURL=$?
     fi
-    exit 1
+    case "$HOST $CURL" in
+      *" 7") ;;
+      "[::1] 1"|"[::1] 3"|"[::1] 4"|"[::1] 6"|"[::1] 45") CURL=7 ;;
+      *) break ;;
+    esac
+  done
+  [ "$CURL" -ne 7 ] || return 1
+  if printf '%s' "$ANSWER" | grep -q '"database"'; then
+    TAKEN="Breadboard is already running on port $PORT: open $URL"
+  elif [ -n "$PORT_OPT" ]; then
+    TAKEN="Another program is using port $PORT (http.port in conf/local.conf). Stop it, or change that
+line to another port, e.g.  http.port=$((PORT + 1))"
+  else
+    # (the command works from wherever the terminal is)
+    TAKEN="Another program is using port $PORT. Stop it, or start Breadboard on another port: for every
+start, with the line  http.port=$((PORT + 1))  in conf/local.conf, or once, with
+  sh \"$HERE/breadboard.sh\" -Dhttp.port=$((PORT + 1))"
   fi
+}
+if port_taken; then
+  echo "$TAKEN" >&2
+  exit 1
 fi
 
-# A folder unpacked, or run once, by another account (often root) can't be written, and the
-# database then fails with a stack trace: say how to fix it instead. The folder itself is written
-# only to make db/ and logs/ and for RUNNING_PID: one kept read-only (root's, under /opt) runs with
+# A folder Breadboard can't write to (see cannot_write, above). The folder itself is written only to
+# make db/ and logs/ and for RUNNING_PID: one kept read-only (root's, under /opt) runs with
 # -Dpidfile.path elsewhere and a db/ and logs/ (and, for backups and images, backups/ and dev/) that
 # the server's account can write.
-ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
-cannot_write() {
-  echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
-  if [ -d "$2" ]; then
-    echo "  sudo chown -R $ME \"$2\"" >&2
-  else
-    echo "  sudo chown $ME \"$2\"" >&2
-  fi
-  exit 1
-}
 if [ ! -d db ] || [ ! -d logs ] || [ "$(dirname "$PID_FILE")" = . ]; then
   [ -w . ] || cannot_write "The Breadboard folder ($HERE)" "$HERE"
 fi
+# The data (the database, its copies in backups/, the logs: participants' data, researchers' password
+# hashes) is for this account only, as conf/local.conf is: other accounts of this computer (a lab
+# Mac's) don't read it, however open the folders above it are. What this script and the server make
+# from here on can be read and written by this account only (umask 077); what is there already, from
+# an earlier start or copied from an earlier release, is made so below, when it is this account's.
+umask 077
 mkdir -p db logs 2>/dev/null || cannot_write "The Breadboard folder ($HERE)" "$HERE"
 for f in db db/*.db; do
   if [ -e "$f" ] && [ ! -w "$f" ]; then
@@ -175,6 +346,11 @@ for f in db db/*.db; do
   fi
 done
 [ -w logs ] || cannot_write "logs/" "$HERE/logs"
+for f in db backups logs db/* backups/* logs/*; do
+  if [ -e "$f" ] && [ -O "$f" ]; then
+    chmod go-rwx "$f" 2>/dev/null || true
+  fi
+done
 
 # application.secret must not be a published value. Use $APPLICATION_SECRET if set; otherwise
 # generate one on first start and keep it in conf/application.secret. The server reads it from the
@@ -203,20 +379,27 @@ EOF
 fi
 # A copy brought from an earlier release (each release is a folder of its own) is made private too,
 # at every start, when the file is this account's: chmod takes the group's and others' access away.
-# Another account's file is left as it is.
+# Another account's file is left as it is. (One the server can't read was turned away above.)
 if [ -O conf/local.conf ]; then
   chmod go-rwx conf/local.conf 2>/dev/null || true
 fi
-# One the server can't read (made or copied by another account, often root) would be left out
-# without a word, as if there were none: the server would run without those settings (its address,
-# HTTPS-only cookies, AWS keys). Say so instead.
-[ ! -e conf/local.conf ] || [ -r conf/local.conf ] || cannot_write "conf/local.conf" "$HERE/conf/local.conf" read
 
 # Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
 remove_pid_file() {
   [ "$PID_FILE" = /dev/null ] || rm -f "$PID_FILE"
 }
 remove_pid_file
+
+# Before each start of Java, logs/start-errors.log says that it is starting. launcher.Main deletes it
+# once the server listens; when Java ends before that, it writes what Java printed as errors into
+# it. So the file is there after Java ended only when the server never started.
+starting() {
+  printf '%s\n' "Breadboard's Java was started at $(date -u '+%Y-%m-%d %H:%M:%S') UTC, and the server hasn't listened yet." \
+    "Once it listens, this file is deleted. If Java ends before, what it printed as errors is written here;" \
+    "if nothing else is, it ended before it could: what it printed in Breadboard's window says why, and the" \
+    "newest logs/jvm-pid*.log has what Java itself said (such as that it ran out of memory)." \
+    > logs/start-errors.log 2>/dev/null || true
+}
 
 # The jars in the order the build lists them (lib/classpath.txt): a few classes are in two of them.
 CP="$(sed 's#^#lib/#' lib/classpath.txt | paste -s -d: -)"
@@ -229,15 +412,39 @@ case "${BREADBOARD_KEEP_RUNNING:-}" in
   *) KEEP_RUNNING=1 ;;
 esac
 
-# This computer's private IPv4 addresses (10.x, 172.16-31.x, 192.168.x), where the other computers
-# on its network (a lab's) reach it, one per line.
+# This computer's IPv4 addresses, where the other computers on its network (a lab's) reach it, one
+# per line: first those of the interface its default route goes through, then those of every other
+# active interface (an Ethernet adapter, a second network; a lab's network may hand out public
+# addresses). Only loopback (127.x) and link-local (169.254.x) addresses are left out.
 lan_addresses() {
   if [ "$(uname)" = Darwin ]; then
-    ipconfig getifaddr en0 2>/dev/null || true
-    ipconfig getifaddr en1 2>/dev/null || true
+    DEFAULT_IF="$(route -n get default 2>/dev/null | awk '/interface:/ { print $2 }')"
+  elif command -v ip >/dev/null 2>&1; then
+    DEFAULT_IF="$(ip -4 route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
   else
-    hostname -I 2>/dev/null | tr ' ' '\n' || true
-  fi | grep -E '^(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]+\.[0-9]+$' | awk '!seen[$0]++'
+    DEFAULT_IF=""
+  fi
+  interface_addresses \
+    | awk -v d="$DEFAULT_IF" '$1 == d { print $2; next } { rest[++n] = $2 } END { for (i = 1; i <= n; i++) print rest[i] }' \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -vE '^(127|169\.254)\.' | awk '!seen[$0]++'
+}
+# "interface address", one per line, for the interfaces that are up and connected (macOS: not
+# "status: inactive"; Linux: LOWER_UP)
+interface_addresses() {
+  if [ "$(uname)" = Darwin ]; then
+    ifconfig 2>/dev/null | awk '
+      function flush() { if (up && !inactive) for (i = 0; i < n; i++) print name, addr[i]; n = 0 }
+      /^[^ \t]/ { flush(); name = $1; sub(/:$/, "", name); up = /[<,]UP[,>]/ && /[<,]RUNNING[,>]/; inactive = 0; next }
+      /^[ \t]+inet / { addr[n++] = $2 }
+      /^[ \t]+status: inactive/ { inactive = 1 }
+      END { flush() }'
+  elif command -v ip >/dev/null 2>&1; then
+    ip -o link show up 2>/dev/null | awk -F': ' '/LOWER_UP/ { sub(/@.*/, "", $2); print $2 }' | while read -r NAME; do
+      ip -4 -o addr show dev "$NAME" 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $2, $4 }'
+    done
+  else
+    hostname -I 2>/dev/null | tr ' ' '\n' | sed 's/^/- /'
+  fi
 }
 
 echo "Starting Breadboard. Once it says \"Listening for HTTP\", it is ready at:"
@@ -251,35 +458,16 @@ else
   echo "Ctrl+C stops it."
 fi
 
-# In a terminal on a desktop, open the console once the server answers (for up to 3 minutes).
-OPENER=""
+# In a terminal on a desktop, open the console once the server answers (see OPENER, above).
 OPENER_PID=""
-if [ -t 1 ] && [ -z "${BREADBOARD_NO_BROWSER:-}" ] && command -v curl >/dev/null 2>&1; then
-  if [ "$(uname)" = Darwin ]; then
-    OPENER=open
-  elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    OPENER=xdg-open
-  fi
-fi
 if [ -n "$OPENER" ]; then
-  open_console() {
-    i=0
-    while [ $i -lt 180 ]; do
-      if curl -s --noproxy '*' -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/health"; then
-        "$OPENER" "$URL" >/dev/null 2>&1 || true
-        return 0
-      fi
-      sleep 1
-      i=$((i + 1))
-    done
-  }
   if [ -n "$KEEP_RUNNING" ]; then
     # (this script stops it when it ends)
-    open_console &
+    open_console "$PORT" &
     OPENER_PID=$!
   else
     # (not as a child of this process, which Java takes over below: see the next part)
-    (open_console &)
+    (open_console "$PORT" &)
   fi
 fi
 
@@ -320,16 +508,20 @@ fi
 # The server's command line, in "$@" (the settings given to this script go before the main class).
 # MaxMetaspaceSize: the classes made for the experiments' scripts (anew at every engine reload) may
 # take that much memory besides the heap, so that a leak of them ends in a restart (out of memory)
-# instead of taking all the computer's memory.
-# shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options
-set -- "$JAVA" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
+# instead of taking all the computer's memory. launcher.Main is Play's start with an output that
+# never waits for this window: one that doesn't take it (paused, or a pipe nobody reads) can't hold
+# the server up, nor, with MEMORY_OPTS (above), Java as it runs out of memory. (Only a crash of Java
+# itself, which is rare, still waits for the window to take its first lines.)
+# shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options, PORT_OPT one or none
+set -- "$JAVA" "-Xmx$MEMORY" -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
   -Duser.timezone=UTC \
   -Dconfig.file=conf/application-prod.conf -Dlogger.file=conf/logger.xml \
   -cp "$CP" \
-  "$@" \
-  play.core.server.NettyServer "$HERE"
+  $PORT_OPT "$@" \
+  launcher.Main "$HERE"
 
 if [ -z "$KEEP_RUNNING" ]; then
+  starting
   exec "$@"
 fi
 
@@ -339,22 +531,81 @@ fi
 # itself), and this script ends once Java has stopped: it never leaves Java running on its own.
 set +e
 
-# What happened, on the console and in logs/application.log (in the server's own format, in UTC)
+# Says $1 (one message, of one or more lines) in this window without waiting for it: a helper in the
+# background writes it, so that a window that doesn't take output (paused, or a pipe nobody reads)
+# can't hold up what comes next, such as starting the server again. SAID is the last helper, which
+# the end of this script lets finish (for up to 2 seconds), so that its message comes before the
+# shell's next prompt.
+SAID=""
+say() {
+  printf '%s\n' "$1" >&2 &
+  SAID=$!
+}
+# (SIGKILL: a helper stuck on the window would wait for it again to say it was asked to stop)
+let_said_out() {
+  [ -n "$SAID" ] || return 0
+  (sleep 2; kill -KILL "$SAID" 2>/dev/null) &
+  SAY_LIMIT=$!
+  wait "$SAID" 2>/dev/null
+  kill -KILL "$SAY_LIMIT" 2>/dev/null
+}
+# What happened, in this window and in logs/application.log (in the server's own format, in UTC)
 note() {
-  echo "$1" >&2
   printf '%s - [ERROR] - from breadboard.sh in launcher \n%s\n\n' "$(date -u '+%Y-%m-%d %H:%M:%S,000')" "$1" \
     >> logs/application.log 2>/dev/null
+  say "$1"
 }
 
-# Why Java stopped, from its exit code
+# Why Java stopped, from its exit code ($1); $2 is "start" when it stopped before the server started.
+# A signal N ends it with 128 + N (Java's own signals are 1 to 31); Java's own exit codes go up to
+# 255, which is -1 (Play's, for a server that couldn't start). 1 is the server's own stop after an
+# error that stopped its engine (Global.exitIfActorsStop), or Java that couldn't start at all; 3,
+# running out of memory (-XX:+ExitOnOutOfMemoryError).
+signalled() {
+  [ "$1" -gt 128 ] && [ "$1" -lt 160 ]
+}
+# Twice the memory the server has, as breadboard.memory (and -Xmx) is written, for when it ran out
+# of it: in gigabytes when that is a whole number of them (2g for 1g), otherwise in megabytes.
+more_memory() {
+  HAS="${MEMORY_GIVEN:-$MEMORY}"
+  case "$HAS" in
+    [1-9]*[gG]) MB=$((${HAS%?} * 1024)) ;;
+    [1-9]*[mM]) MB=${HAS%?} ;;
+    [1-9]*[kK]) MB=$((${HAS%?} / 1024)) ;;
+    [1-9]*[0-9]) MB=$((HAS / 1048576)) ;;
+    *) MB=1024 ;;
+  esac
+  MB=$((MB * 2))
+  if [ "$MB" -le 0 ]; then
+    echo 2g
+  elif [ $((MB % 1024)) -eq 0 ]; then
+    echo "$((MB / 1024))g"
+  else
+    echo "${MB}m"
+  fi
+}
+# Why a server that ran out of memory (exit code 3) stopped, and how to give it more: it had MEMORY,
+# unless -Xmx was given (MEMORY_GIVEN, in MEMORY_GIVEN_IN), which wins over breadboard.memory.
+out_of_memory() {
+  case "$MEMORY_GIVEN_IN" in
+    '') MORE="A line such as breadboard.memory=$(more_memory) in conf/local.conf gives it more than the $MEMORY it has." ;;
+    JAVA_OPTS) MORE="-Xmx$MEMORY_GIVEN in JAVA_OPTS gives it $MEMORY_GIVEN, and wins over breadboard.memory: raise that, e.g. to -Xmx$(more_memory), or take it out of JAVA_OPTS and put a line such as breadboard.memory=$(more_memory) in conf/local.conf." ;;
+    *) MORE="-Xmx$MEMORY_GIVEN, given to breadboard.sh, gives it $MEMORY_GIVEN, and wins over breadboard.memory: start it with more, e.g. -Xmx$(more_memory), or without -Xmx and with a line such as breadboard.memory=$(more_memory) in conf/local.conf." ;;
+  esac
+  echo "it ran out of memory: a script may keep too much data. $MORE What was in memory is in logs/out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
+}
 stop_reason() {
   case "$1" in
-    3) echo "it ran out of memory: a script may keep too much data. JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs/out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards" ;;
+    3) out_of_memory ;;
     137) echo "it was killed with signal 9, perhaps by the system when memory ran low" ;;
     134|139) echo "Java crashed with signal $(($1 - 128)); its report is in hs_err_pid*.log in this folder" ;;
     *)
-      if [ "$1" -gt 128 ]; then
+      if signalled "$1"; then
         echo "it was ended with signal $(($1 - 128))"
+      elif [ "${2:-}" = start ]; then
+        if [ "$1" -eq 255 ]; then echo "it could not start, exit code 255"; else echo "exit code $1"; fi
+      elif [ "$1" -eq 1 ]; then
+        echo "exit code 1: the server stopped itself after an error, which logs/application.log shows"
       else
         echo "exit code $1; logs/application.log may say why"
       fi
@@ -374,8 +625,8 @@ KILLER=""
 stop_java() {
   [ -n "$JAVA_PID" ] && [ "$TOLD" != "$JAVA_PID" ] || return 0
   TOLD="$JAVA_PID"
-  echo "Stopping Breadboard..." >&2
   kill -TERM "$JAVA_PID" 2>/dev/null
+  say "Stopping Breadboard..."
   (
     i=0
     while [ $i -lt 40 ]; do
@@ -400,7 +651,7 @@ stop_server() {
 trap 'stop_server 130' INT
 trap 'stop_server 143' TERM
 trap 'stop_server 129' HUP
-trap '[ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null' EXIT
+trap '[ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null; let_said_out' EXIT
 
 RESTARTS=""   # when the server was started again (in seconds), within the last 10 minutes
 CODE=""       # how the last Java ended (none yet)
@@ -409,7 +660,8 @@ while :; do
   if [ -n "$STOPPING" ]; then
     exit "${CODE:-$STOP_CODE}"
   fi
-  [ -z "$CODE" ] || echo "Starting Breadboard again."
+  [ -z "$CODE" ] || say "Starting Breadboard again."
+  starting
   "$@" &
   JAVA_PID=$!
   # (asked to stop just as it started, before stop_server could know its process id)
@@ -431,6 +683,12 @@ while :; do
     # stop took too long and the server cut it short: Global.stopIfShutdownHangs.)
     0|129|130|143) exit "$CODE" ;;
   esac
+  # The server never started (a mistake in conf/local.conf, its port taken by then, Java that can't
+  # start at all): started again, it would only fail the same way.
+  if [ -f logs/start-errors.log ]; then
+    note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs/start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+    exit "$CODE"
+  fi
 
   NOW="$(date +%s)"
   RECENT=""
@@ -459,7 +717,12 @@ while :; do
     exit "$CODE"
   fi
   if running_here; then
-    echo "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one." >&2
+    note "Breadboard was started from this folder meanwhile (process $RUNNING): leaving it to that one."
+    exit "$CODE"
+  fi
+  # (another program may have taken the port meanwhile: the server would only fail to start)
+  if port_taken; then
+    note "Breadboard is not started again. $TAKEN"
     exit "$CODE"
   fi
   remove_pid_file

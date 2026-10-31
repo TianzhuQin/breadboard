@@ -5,3 +5,4 @@ waitSeconds,Integer,0,600,20,How long to wait for more people once enough are he
 rounds,Integer,1,20,3,How many rounds are played
 roundSeconds,Integer,10,600,40,How long each round lasts (seconds)
 prolificCode,Text,,,,"Prolific completion code, if you recruit there (Prolific participants are shown it at the end)"
+language,Text,,,eng,"The language participants read the texts in: its code on the Content page, e.g. zho (a text not written in it yet is shown in English)"

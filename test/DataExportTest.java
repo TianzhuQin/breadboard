@@ -2,6 +2,9 @@ import models.*;
 import org.junit.Test;
 import play.mvc.Result;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+
 import static org.junit.Assert.*;
 import static play.test.Helpers.*;
 
@@ -59,6 +62,42 @@ public class DataExportTest extends BaseTest {
         assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/csv/experiment/" + experiment.id + "/data?ids=x").withSession("uid", me.uid))));
         assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/csv/experiment/987654/data").withSession("uid", me.uid))));
         assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/csv/experiment/" + experiment.id + "/data"))));
+    }
+
+    /**
+     * ?excel=true, the console's "For Excel": the same file with the UTF-8 byte-order mark first, without
+     * which Excel and WPS read it in the computer's own encoding and Chinese turns into garbage. Without
+     * it, the files are as they always were: analysis scripts read them.
+     */
+    @Test
+    public void forExcelTheFilesStartWithAByteOrderMarkAndAreOtherwiseTheSame() {
+        Language lang = createLanguage("eng", "English");
+        User me = createUser("pi@lab.org", "PI", "password123", lang);
+        Experiment experiment = createExperiment("网络小游戏");
+        ExperimentInstance pilot = createInstance("试点1", experiment);
+        param(pilot, "rounds", "3");
+        event(pilot, "ColourPick", "player", "张伟", "colour", "Blue");
+        String[] urls = {"/csv/data/" + pilot.id, "/csv/instances/" + experiment.id,
+            "/csv/experiment/" + experiment.id + "/data", "/csv/experiment/" + experiment.id + "/data?ids=" + pilot.id};
+        for (String url : urls) {
+            Result plain = route(fakeRequest(GET, url).withSession("uid", me.uid));
+            assertEquals(url, OK, status(plain));
+            byte[] file = contentAsBytes(plain);
+            assertEquals(url + ": no byte-order mark", '"', file[0]);
+            assertTrue(url, new String(file, StandardCharsets.UTF_8).contains("试点1") || url.startsWith("/csv/data/"));
+            for (String yes : new String[]{"true", "1"}) {
+                Result excel = route(fakeRequest(GET, url + (url.contains("?") ? "&" : "?") + "excel=" + yes).withSession("uid", me.uid));
+                assertEquals(url, OK, status(excel));
+                byte[] forExcel = contentAsBytes(excel);
+                assertArrayEquals(url, new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF}, Arrays.copyOfRange(forExcel, 0, 3));
+                assertArrayEquals(url, file, Arrays.copyOfRange(forExcel, 3, forExcel.length));
+                assertEquals("text/csv", contentType(excel));
+                assertEquals("utf-8", charset(excel));
+            }
+            Result no = route(fakeRequest(GET, url + (url.contains("?") ? "&" : "?") + "excel=false").withSession("uid", me.uid));
+            assertArrayEquals(url, file, contentAsBytes(no));
+        }
+        assertTrue(new String(contentAsBytes(route(fakeRequest(GET, urls[0]).withSession("uid", me.uid))), StandardCharsets.UTF_8).contains("张伟"));
     }
 
     /**

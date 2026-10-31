@@ -2,6 +2,7 @@ import groovy.lang.Closure;
 import models.EventBus;
 import models.EventTracker;
 import models.GameListener;
+import models.ScriptClasspath;
 import models.ScriptLoader;
 import org.apache.commons.io.FileUtils;
 import org.codehaus.groovy.runtime.InvokerHelper;
@@ -112,7 +113,7 @@ public class ScriptTestHarness {
      */
     public ScriptTestHarness(boolean experimental) {
         try {
-            this.engine = new ScriptEngineManager().getEngineByName("gremlin-groovy");
+            this.engine = ScriptClasspath.newEngine(new ScriptEngineManager()); // as ScriptBoard makes it
             if (this.engine == null) {
                 throw new IllegalStateException("gremlin-groovy ScriptEngine not found on the classpath");
             }

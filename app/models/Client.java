@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Client extends Model {
   public String id;
@@ -62,11 +63,29 @@ public class Client extends Model {
   // made after a rebuild of the engine (a Resume, a reload that carries the session on) is told so by
   // ScriptBoard, which keeps it per session (ownPageHeld()).
   private volatile boolean ownPageHeld;
+  // When they count as gone, their page's socket having closed while it was out of touch
+  // (ScriptBoard.socketClosed), unless a page of theirs is back by then; 0 when no departure waits.
+  private final AtomicLong departureDue = new AtomicLong();
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
   private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
+  // What a page that took the seat by asking is told it counts as from then on, the time to give as
+  // its socket's bbPage (Connection.claimSeat; frontend/core, breadboard.ts).
+  static final String PAGE_CLAIM = "bbPage";
   private static final ObjectNode WATCHING = Json.newObject().put("bbWatching", true);
   private static final ObjectNode NOT_WATCHING = Json.newObject().put("bbWatching", false);
+
+  /**
+   * A page that pings (every 5 s) and has sent nothing for this long is out of touch: its network has
+   * gone, or the page is asleep (see Connection.outOfTouchSince).
+   */
+  public static final long OUT_OF_TOUCH_MS = 10000L;
+  /**
+   * What a page sent while it was out of touch comes through in one go as its network comes back,
+   * followed by the close of the socket the page has given up meanwhile. A close this soon after such
+   * a silence ended counts as one that came while the page was out of touch.
+   */
+  static final long CAUGHT_UP_MS = 3000L;
 
   /**
    * One socket of this participant: the page that holds the seat, or a researcher's preview watching
@@ -79,16 +98,67 @@ public class Client extends Model {
     // A researcher's preview (ClientController: a signed-in researcher, or a preview token), not the
     // participant's own page.
     public final boolean preview;
+    // When the page it belongs to was loaded, in the server's time (its /state said so, and it sends
+    // that back as it connects); 0 when unknown (a page loaded from an older version of the server).
+    // Of two pages of the participant's, the one loaded later is the one they opened last (see connect).
+    public final long pageLoadedAt;
+    // Its page asks for the seat (the participant chose "Use it here"), even from a page loaded later.
+    public final boolean takesSeat;
+    // Where its page stands among the participant's pages (see loadedBefore): when it was loaded, or,
+    // once it has taken the seat by asking (takesSeat), when it did, in the server's time (claimSeat).
+    private volatile long claim;
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile long lastHeard = System.currentTimeMillis();
     private volatile boolean pinged;
+    // The last silence of OUT_OF_TOUCH_MS or more between two of its frames, once it has pinged: when
+    // it began (the frame before) and when it ended (the frame after); 0 before there was one.
+    private volatile long quietFrom;
+    private volatile long quietUntil;
     // The text of the full view written last; null once any other frame has been written since.
     private String lastView;
 
     public Connection(WebSocket.In<JsonNode> in, ThrottledWebSocketOut out, boolean preview) {
+      this(in, out, preview, 0L, false);
+    }
+
+    public Connection(WebSocket.In<JsonNode> in, ThrottledWebSocketOut out, boolean preview, long pageLoadedAt,
+                      boolean takesSeat) {
       this.in = in;
       this.out = out;
       this.preview = preview;
+      this.pageLoadedAt = pageLoadedAt;
+      this.takesSeat = takesSeat;
+      this.claim = pageLoadedAt;
+    }
+
+    /**
+     * Whether its page counts as opened before that one's (both known): it was loaded before it, and
+     * hasn't taken the seat by asking since that one was loaded (claimSeat).
+     */
+    boolean loadedBefore(Connection other) {
+      long mine = claim;
+      long theirs = other.claim;
+      return mine > 0 && theirs > 0 && mine < theirs;
+    }
+
+    /**
+     * Its page took the seat by asking (takesSeat: "Use it here", or the page taking it back by itself
+     * once no page of the participant's held it): from now on it counts as the page they opened last,
+     * as of the server's time now. Otherwise the page they chose lost the seat again as soon as the
+     * newer one reconnected by itself in the background (its network back): that one counted as
+     * opened last, by when it was loaded. The page is told ({"bbPage": that time}) and says so as it
+     * reconnects (its socket's bbPage), so this holds over its own reconnections too; a page opened
+     * after this, by when it is loaded, is newer still.
+     */
+    void claimSeat(long now) {
+      long claimed = Math.max(claim, now);
+      claim = claimed;
+      writeAside(Json.newObject().put(PAGE_CLAIM, claimed));
+    }
+
+    /** Where its page stands among the participant's pages (see claimSeat), in the server's time; 0: unknown. */
+    public long claim() {
+      return claim;
     }
 
     public boolean isOpen() {
@@ -97,6 +167,10 @@ public class Client extends Model {
 
     /** It sent something at {@code now} (ms); {@code ping}: a {"action": "Ping"}. */
     public void heard(boolean ping, long now) {
+      if (pinged && now - lastHeard >= OUT_OF_TOUCH_MS) {
+        quietFrom = lastHeard;
+        quietUntil = now;
+      }
       lastHeard = now;
       if (ping) {
         pinged = true;
@@ -105,6 +179,25 @@ public class Client extends Model {
 
     public long lastHeard() {
       return lastHeard;
+    }
+
+    /**
+     * Since when its page was out of touch, as its socket closes at {@code now}: since it was last
+     * heard from, when that was OUT_OF_TOUCH_MS or more ago; or since a silence as long began, when
+     * that silence ended only just now (CAUGHT_UP_MS): what the page sent during it (its pings, a
+     * click) comes through as the network comes back, just before the close of the socket the page
+     * has given up. 0 when it was in touch, or never pinged (a page from before 3.1, whose silences
+     * mean nothing).
+     */
+    public long outOfTouchSince(long now) {
+      if (!pinged) {
+        return 0L;
+      }
+      if (now - lastHeard >= OUT_OF_TOUCH_MS) {
+        return lastHeard;
+      }
+      long until = quietUntil;
+      return until > 0 && now - until <= CAUGHT_UP_MS ? quietFrom : 0L;
     }
 
     /**
@@ -181,7 +274,12 @@ public class Client extends Model {
     /** It holds the seat: the participant is back, and the preview that held it watches from now on. */
     PREVIEW_WATCHES,
     /** A researcher's preview of a player whose own page holds the seat, or of a computer player: it only watches. */
-    WATCHING
+    WATCHING,
+    /**
+     * Turned away: a page of the participant's that was loaded before the one that holds the seat,
+     * reconnecting by itself. It was told so ({"bbClosed": "replaced"}) and closed.
+     */
+    REFUSED
   }
 
   /** Who is in the seat, as the session counts it (see ScriptBoard.recordConnection). */
@@ -265,6 +363,10 @@ public class Client extends Model {
     this.out = holder.out;
     if (!holder.preview) {
       ownPageHeld = true;
+      if (holder.takesSeat) {
+        // the participant chose this page: it is the newest claim to the seat from now on
+        holder.claimSeat(System.currentTimeMillis());
+      }
     }
   }
 
@@ -275,9 +377,15 @@ public class Client extends Model {
    * page of the participant, or a preview replaced by a preview, it is told ({"bbClosed": "replaced"})
    * and closed, so it doesn't reconnect and take the seat back, as two tabs used to, for ever; a
    * preview that held it for a participant who comes back watches from now on ({"bbWatching": true});
-   * a socket that had closed already is just left. Any socket of a computer player only watches
-   * what the computer does. A preview that takes the seat of someone whose own page has held it only
-   * stands in for them (see presence).
+   * a socket that had closed already is just left. Nor does a page of the participant's take the
+   * seat from one of theirs that was loaded after it, unless they asked for it there ("Use it here"):
+   * it is an older tab reconnecting by itself (its connection had dropped), and the newer page they
+   * opened meanwhile, which they are looking at, keeps the seat. The older page is told so and
+   * closed instead (Arrival.REFUSED). A page that took the seat by asking counts as opened last from
+   * then on (Connection.claimSeat), so the other page, reconnecting by itself, is refused in turn.
+   * Any socket of a computer player only watches what the computer
+   * does. A preview that takes the seat of someone whose own page has held it only stands in for
+   * them (see presence).
    */
   public Arrival connect(Connection incoming) {
     synchronized (seatLock) {
@@ -291,6 +399,10 @@ public class Client extends Model {
       }
       if (incoming.preview && !previous.preview) {
         return watch(incoming);
+      }
+      if (!incoming.preview && !previous.preview && !incoming.takesSeat && incoming.loadedBefore(previous)) {
+        incoming.close(REPLACED);
+        return Arrival.REFUSED;
       }
       take(incoming);
       if (previous.preview && !incoming.preview) {
@@ -414,6 +526,22 @@ public class Client extends Model {
 
   Object recordLock() {
     return recordLock;
+  }
+
+  /** Their page's socket closed while it was out of touch: they count as gone at {@code at}, unless back by then. */
+  void departAt(long at) {
+    departureDue.set(at);
+  }
+
+  /** A page of theirs (or a preview) has taken the seat: no departure waits. */
+  void cancelDeparture() {
+    departureDue.set(0L);
+  }
+
+  /** Whether a departure that waited (departAt) is due by {@code now}: true once, and it no longer waits. */
+  boolean departureDue(long now) {
+    long due = departureDue.get();
+    return due > 0 && now >= due && departureDue.compareAndSet(due, 0L);
   }
 
   // What was recorded last (null before the first record); {@code now} is from now on (under recordLock).

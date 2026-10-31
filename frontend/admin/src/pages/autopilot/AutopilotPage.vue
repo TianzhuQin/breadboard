@@ -136,7 +136,7 @@
           <div class="ap-sec__body">
             <BSwitch v-model="form.continuous" :disabled="readOnly">Open the next session when one finishes</BSwitch>
             <div class="ap-grid">
-              <BField label="Pause before the next session" :error="errors.nextSessionDelaySeconds" :hint="secondsHint(form.nextSessionDelaySeconds, 'Time for the server to save the data. 0 opens it at once.')">
+              <BField label="Pause before the next session" :error="errors.nextSessionDelaySeconds" :hint="secondsHint(form.nextSessionDelaySeconds, 'Time for the server to save the data. Restarting the experiment\'s scripts adds a second or so; 0 opens the next session a second or so after one finishes.')">
                 <template #default="{ id, describedby }">
                   <BInput
                     :id="id"
@@ -374,6 +374,7 @@ import { HttpError } from '@/lib/http'
 import { admin, experiments, graph } from '@/store/admin'
 import { describeError } from '../experiments/experiments'
 import { liveEventOf } from '../sessions/sessionData'
+import { mergeEvents } from '../session/events'
 import AutopilotStatus from './AutopilotStatus.vue'
 import { useUnsavedGuard } from './useUnsavedGuard'
 import {
@@ -453,9 +454,13 @@ const live = computed(() => {
 const activity = computed(() => {
   const inst = state.value?.status.instance
   if (!isCurrent.value || !inst) return []
-  // only what its own session recorded: pushes from every session reach this console
+  // only what its own session recorded: pushes from every session reach this console; with what it
+  // recorded before (in its User JSON), so a refresh of the page doesn't lose it
   const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
-  return autopilotActivity(admin.events.filter(e => liveEventOf(e, inst.id, live)))
+  const recorded = admin.instance && admin.instance.id === inst.id ? admin.instance.events : []
+  const events = mergeEvents(recorded, admin.events.filter(e => liveEventOf(e, inst.id, live)))
+  // (oldest first, as recorded)
+  return autopilotActivity(events.reverse().map(e => ({ name: e.name, datetime: new Date(e.at).toISOString(), data: e.data })))
 })
 
 // ---- loading -----------------------------------------------------------------------------------
@@ -550,13 +555,18 @@ async function refresh (byHand = false) {
 
 let poll: ReturnType<typeof setInterval> | undefined
 let soon: ReturnType<typeof setTimeout> | undefined
+// Toasts keep above the save bar at the bottom of this page (see .ap-lifts-toasts), rather than
+// landing on its Save button, under the pointer that just pressed it.
+const LIFT = 'ap-lifts-toasts'
 onMounted(() => {
   load()
   poll = setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 10000)
+  document.documentElement.classList.add(LIFT)
 })
 onBeforeUnmount(() => {
   clearInterval(poll)
   clearTimeout(soon)
+  document.documentElement.classList.remove(LIFT)
 })
 // a session opened, started or finished: look again (debounced, pushes come in bursts)
 watch(() => [admin.instance?.id, admin.instance?.status], () => {
@@ -631,7 +641,13 @@ async function save (takeOver = false) {
   if (Object.keys(errors.value).length) {
     notify.error('Check the highlighted settings', 'Some values need fixing before they can be saved.')
     await nextTick()
-    formEl.value?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+    const field = formEl.value?.querySelector<HTMLElement>('[aria-invalid="true"]')
+    if (field) {
+      // into the middle of the window, clear of the sticky save bar at its bottom (focus alone only
+      // scrolled it as far as the window's edge, behind the bar)
+      field.focus({ preventScroll: true })
+      if (typeof field.scrollIntoView === 'function') field.scrollIntoView({ block: 'center' })
+    }
     return
   }
   const next = toSettings(form.value)
@@ -801,6 +817,11 @@ useUnsavedGuard(dirty, {
 .ap-savebar__text { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--muted); }
 .ap-savebar.is-dirty .ap-savebar__text { color: var(--text); font-weight: 600; }
 .ap-savebar__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+/* toasts above the save bar (its bottom: 12px, about 60px tall), not on its buttons; on phones they
+   are at the top anyway */
+@media (min-width: 641px) {
+  html.ap-lifts-toasts .b-toasts { bottom: 88px; }
+}
 .ap-own__code { margin-top: 4px; }
 .ap-own__code summary { cursor: pointer; font-size: var(--text-xs); color: var(--muted); }
 .ap-own__code code { display: block; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

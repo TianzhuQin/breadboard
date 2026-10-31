@@ -35,7 +35,7 @@
           <dl class="live-ev__data">
             <template v-for="(v, k) in e.data" :key="k">
               <dt>{{ k }}</dt>
-              <dd>{{ formatValue(v, 4000) }}</dd>
+              <dd>{{ formatDataValue(String(k), v, 4000) }}</dd>
             </template>
           </dl>
         </details>
@@ -57,7 +57,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { Activity, ChevronDown, ListFilter } from 'lucide-vue-next'
 import { BBadge, BButton, BEmpty, BPanel, BSelect } from '@/ui'
 import EventRow from './EventRow.vue'
-import { FEED_CAP, eventNameCounts, filterEvents, formatValue, type FeedEvent } from './events'
+import { FEED_CAP, eventNameCounts, filterEvents, formatDataValue, type FeedEvent } from './events'
 
 const props = defineProps<{
   /** Newest first. */

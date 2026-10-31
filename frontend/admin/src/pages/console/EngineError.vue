@@ -47,7 +47,9 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ goto: [line: number, column?: number] }>()
 
 const parsed = computed(() => parseGroovyError(props.error))
-const places = computed(() => parsed.value.places.slice(0, 6))
+// Breadboard's own files (step.groovy, actions.groovy …) are no place a researcher can change: they
+// are under Full error only
+const places = computed(() => parsed.value.places.filter(p => p.kind !== 'library').slice(0, 6))
 const canGo = computed(() => props.fromLine != null)
 const showMessage = computed(() => !!parsed.value.message && parsed.value.message !== parsed.value.title)
 
@@ -59,9 +61,7 @@ function ownLabel (p: ErrorPlace) {
   return `Line ${line}${p.column ? `, column ${p.column}` : ''} of ${props.ownName}`
 }
 function whereText (kind: PlaceKind) {
-  if (kind === 'library') return 'Breadboard'
-  if (kind === 'other') return 'an earlier script or a step'
-  return ''
+  return kind === 'other' ? 'an earlier script or a step' : ''
 }
 </script>
 

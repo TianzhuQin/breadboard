@@ -160,16 +160,15 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* lost connection */
+/* lost connection: at the top of the page, in its flow, so it moves the page down instead of
+   covering its top (the timer, the round's heading); it stays in sight as the page scrolls */
 .bb-app .bb-connection.v-alert {
-  position: fixed;
-  top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: sticky;
+  top: 12px;
   z-index: 20;
   /* (wide enough for the usual message and its button on one line) */
   width: min(640px, calc(100% - 32px));
-  margin: 0;
+  margin: 12px auto 0;
   border-radius: 14px;
   background: #0f172a !important;
   color: #f8fafc !important;
@@ -177,11 +176,13 @@
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.28);
 }
 /* a researcher's preview that only watches: a quiet strip above the page rather than a box over
-   it, since it may stay for the whole session */
+   it, since it may stay for the whole session (across the whole top: side margins of auto would
+   shrink it to its text inside Vuetify's column) */
 .bb-app .bb-connection.bb-connection--watching.v-alert {
   position: static;
   transform: none;
   width: auto;
+  margin: 0;
   border-radius: 0;
   background: #e0f2fe !important;
   color: #075985 !important;

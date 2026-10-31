@@ -1,4 +1,5 @@
 import com.fasterxml.jackson.databind.type.TypeFactory;
+import groovy.lang.Closure;
 import groovy.lang.GroovyClassLoader;
 import groovy.lang.GroovySystem;
 import groovy.lang.MetaClass;
@@ -10,6 +11,7 @@ import org.junit.Test;
 
 import javax.script.ScriptEngine;
 import java.lang.ref.Reference;
+import java.lang.ref.SoftReference;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -19,7 +21,11 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
 
@@ -48,6 +54,110 @@ public class EngineCleanupTest {
         } finally {
             next.close();
         }
+    }
+
+    @Test
+    public void aReplacedEnginesClassesAreUnloadedWithoutAShortageOfMemory() throws Exception {
+        // Groovy's caches (and Java's of bean properties) held each engine's classes through soft
+        // references, which only a shortage of memory clears: the class space filled up, one engine's
+        // classes per session. A soft reference that outlives the collections below shows there was none.
+        JsonSetup.install();
+        replaced(played(new ScriptTestHarness(false)));
+        WeakReference<ClassLoader> classes = classesOfAReplacedEngine();
+        ScriptTestHarness next = played(new ScriptTestHarness(false));
+        try {
+            SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
+            assertTrue("the replaced engine's classes are still loaded", collected(classes, 20000));
+            assertNotNull("memory ran short: soft references were cleared", noShortage.get());
+        } finally {
+            next.close();
+        }
+    }
+
+    @Test
+    public void aReplacedEnginesClassesStillWorkWhenTheirCodeRunsAgain() throws Exception {
+        // A task of the old engine under way when its timers were cancelled can go on after the release:
+        // its classes, gone from Groovy's caches, still make objects (Groovy looks them up anew).
+        JsonSetup.install();
+        replaced(played(new ScriptTestHarness(false))); // (the JVM's first engines can stay: see above)
+        ScriptTestHarness engine = played(new ScriptTestHarness(false));
+        Closure<?> laterTask = (Closure<?>) engine.eval("{ -> new Note().text }");
+        WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
+        replaced(engine);
+        engine = null;
+        for (int i = 0; i < 3; i++) {
+            System.gc(); // (what Groovy holds weakly goes)
+            Thread.sleep(50);
+        }
+        assertEquals("an object of an experiment's own class", laterTask.call());
+        laterTask = null;
+        // That run put the classes it used back in Groovy's caches, which kept them, and so the whole
+        // engine, until memory ran short. The next release takes them out again.
+        replaced(played(new ScriptTestHarness(false)));
+        ScriptTestHarness next = played(new ScriptTestHarness(false));
+        try {
+            SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
+            assertTrue("the classes of an engine whose code ran again after its release are still loaded",
+                collected(classes, 20000));
+            assertNotNull("memory ran short: soft references were cleared", noShortage.get());
+        } finally {
+            next.close();
+        }
+    }
+
+    @Test
+    public void codeOfAnEngineAtWorkWhileItIsReleasedGoesOnWorking() throws Exception {
+        // A task of the old engine under way when it is replaced (a timer's task at a reload or a launch)
+        // goes on making objects of its scripts' own classes, during the release and after it. Every one
+        // of them used to fail from the release on: the task had put Groovy's entry for its class back in
+        // the class's own field during the release, and the release then emptied that entry.
+        JsonSetup.install();
+        replaced(played(new ScriptTestHarness(false))); // (the JVM's first engines can stay: see above)
+        ScriptTestHarness engine = played(new ScriptTestHarness(false));
+        WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
+        Task task = new Task((Closure<?>) engine.eval("class Work { int n; Work twice() { new Work(n: n * 2) } }\n"
+            + "def task = { int i -> new Work(n: i).twice().n }\n"
+            + "task"), 4);
+        try {
+            task.awaitCalls(1000);
+            replaced(engine);
+            engine = null;
+            task.awaitCalls(1000);
+            // The next release takes the classes the task uses out of Groovy's caches again.
+            replaced(played(new ScriptTestHarness(false)));
+            task.awaitCalls(1000);
+        } finally {
+            task.stop();
+        }
+        task.assertNoneFailed();
+        task = null;
+        // The engine still goes once the task is over, by the release after it.
+        replaced(played(new ScriptTestHarness(false)));
+        ScriptTestHarness next = played(new ScriptTestHarness(false));
+        try {
+            SoftReference<Object> noShortage = new SoftReference<Object>(new Object());
+            assertTrue("the classes of an engine whose code was at work during its release are still loaded",
+                collected(classes, 20000));
+            assertNotNull("memory ran short: soft references were cleared", noShortage.get());
+        } finally {
+            next.close();
+        }
+    }
+
+    @Test
+    public void replacingEnginesLeavesNothingBehindInJavasClassLoaders() throws Exception {
+        // Java's class loaders keep a lock object for every class name they are asked for, found or
+        // not, for good, and each engine asked them for about 250 names made up from its scripts' own
+        // (Script141$UP, Script141BeanInfo), new with every engine: a little memory per session that
+        // never came back.
+        replaced(played(new ScriptTestHarness(false)));
+        replaced(played(new ScriptTestHarness(false)));
+        int before = classLoaderLocks();
+        for (int i = 0; i < 3; i++) {
+            replaced(played(new ScriptTestHarness(false)));
+        }
+        int added = classLoaderLocks() - before;
+        assertTrue("3 more engines left " + added + " names in Java's class loaders", added < 30);
     }
 
     @Test
@@ -134,6 +244,90 @@ public class EngineCleanupTest {
         engine.close();
         EngineCleanup.release(engine.engine);
         return engine.engine;
+    }
+
+    /**
+     * A task of an engine at work: threads that call {@code body} with 1, 2, 3, ... until stopped, each
+     * call to give twice its number.
+     */
+    private static final class Task {
+        private final AtomicBoolean stopped = new AtomicBoolean();
+        private final AtomicLong calls = new AtomicLong();
+        private final AtomicLong failed = new AtomicLong();
+        private final AtomicReference<Throwable> firstFailure = new AtomicReference<Throwable>();
+        private final List<Thread> threads = new ArrayList<Thread>();
+
+        Task(final Closure<?> body, int threadCount) {
+            for (int t = 1; t <= threadCount; t++) {
+                Thread thread = new Thread(new Runnable() {
+                    public void run() {
+                        for (int i = 1; !stopped.get(); i++) {
+                            try {
+                                Object result = body.call(i);
+                                if (!Integer.valueOf(2 * i).equals(result)) {
+                                    throw new AssertionError("call " + i + " gave " + result);
+                                }
+                            } catch (Throwable e) {
+                                failed.incrementAndGet();
+                                firstFailure.compareAndSet(null, e);
+                            }
+                            calls.incrementAndGet();
+                        }
+                    }
+                }, "EngineCleanupTest task " + t);
+                thread.setDaemon(true);
+                threads.add(thread);
+                thread.start();
+            }
+        }
+
+        /** Waits for {@code n} more calls, for at most 30 seconds. */
+        void awaitCalls(long n) throws InterruptedException {
+            long until = System.currentTimeMillis() + 30000;
+            long target = calls.get() + n;
+            while (calls.get() < target && System.currentTimeMillis() < until) {
+                Thread.sleep(5);
+            }
+            assertTrue("the task made no more calls", calls.get() >= target);
+        }
+
+        void stop() throws InterruptedException {
+            stopped.set(true);
+            for (Thread thread : threads) {
+                thread.join(10000);
+            }
+        }
+
+        void assertNoneFailed() {
+            if (failed.get() > 0) {
+                AssertionError error = new AssertionError(failed.get() + " of the task's " + calls.get() + " calls failed");
+                error.initCause(firstFailure.get());
+                throw error;
+            }
+        }
+    }
+
+    /** The class loader of an engine played, then replaced (nothing else of it is kept here). */
+    private static WeakReference<ClassLoader> classesOfAReplacedEngine() throws Exception {
+        ScriptTestHarness engine = played(new ScriptTestHarness(false));
+        WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
+        replaced(engine);
+        return classes;
+    }
+
+    /**
+     * How many class names the class loaders above the engines (the server's classpath) keep a lock
+     * object for (ClassLoader.parallelLockMap).
+     */
+    private static int classLoaderLocks() throws Exception {
+        Field locks = ClassLoader.class.getDeclaredField("parallelLockMap");
+        locks.setAccessible(true);
+        int n = 0;
+        for (ClassLoader l = Thread.currentThread().getContextClassLoader(); l != null; l = l.getParent()) {
+            Map<?, ?> map = (Map<?, ?>) locks.get(l);
+            if (map != null) n += map.size();
+        }
+        return n;
     }
 
     /** Collects garbage until {@code ref} is cleared, for at most {@code timeoutMs}. */

@@ -92,9 +92,29 @@ public class ParticipantReconnectTest extends BaseTest {
         Global.markInterruptedSessions();
     }
 
+    /** The words of a screen, as the page shows them (the reload's page escapes the apostrophes). */
+    private static String words(JsonNode player) {
+        String text = player.get("text").asText();
+        return text.substring(text.indexOf("<p>") + 3, text.indexOf("</p>")).replace("'", "&#x27;");
+    }
+
+    /** Someone entered the session from Prolific (ClientLogin.prolificEntry records it so). */
+    private void enteredFromProlific(String clientId) {
+        Event entry = new Event();
+        entry.name = "prolificEntry";
+        entry.experimentInstance = instance;
+        EventData who = new EventData();
+        who.name = "clientId";
+        who.value = clientId;
+        entry.addEventData(who);
+        entry.save();
+    }
+
     @Test
-    public void aPageLeftOpenAcrossARestartIsToldTheSessionIsntRunning() throws Exception {
+    public void aPageLeftOpenAcrossARestartIsToldTheServerRestarted() throws Exception {
         String token = ParticipantAuth.claim(i, "P1");
+        String prolificToken = ParticipantAuth.claim(i, "PP1");
+        enteredFromProlific("PP1");
         restart();
         assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(instance.id).status);
 
@@ -105,20 +125,43 @@ public class ParticipantReconnectTest extends BaseTest {
         assertNull(page.frames.get(0).get("player"));
         JsonNode player = page.frames.get(0).path("sessionOver").get("player");
         assertNotNull(page.frames.toString(), player);
-        // the last screen of a session that is over for this page: it shows it and stops reconnecting
+        // the last screen of a session that is over for this page: it shows it and stops reconnecting.
+        // A crash (kill -9, a power cut) cut it short, which it says, as a normal stop told the pages.
         assertTrue(player.get("finished").asBoolean());
-        assertEquals("notRunning", player.get("ended").asText());
+        assertEquals("serverStopped", player.get("ended").asText());
         assertTrue("the new participant page shows text once it has _system", player.has("_system"));
         String text = player.get("text").asText();
-        assertTrue(text, text.contains("running right now"));
+        assertTrue(text, text.contains("It ended because the study's server was stopped or restarted."));
+        assertTrue(text, text.contains("If you were given a link to the study"));
 
         // The same words a reload of the page shows.
-        String words = text.substring(text.indexOf("<p>") + 3, text.indexOf("</p>"));
         Result reload = route(fakeRequest(GET, "/game/" + e + "/" + i + "/P1/connected"));
         assertEquals(OK, status(reload));
-        assertTrue(contentAsString(reload), contentAsString(reload).contains("running right now"));
-        assertTrue(contentAsString(reload), contentAsString(reload).contains(words));
+        assertTrue(contentAsString(reload), contentAsString(reload).contains(words(player)));
         assertFalse("no seat taken", ParticipantAuth.isClaimed(i, "P1"));
+
+        // A participant who came from Prolific reads what to do on Prolific, on the page and on a reload.
+        JsonNode prolific = reconnect("PP1", prolificToken).frames.get(0).path("sessionOver").get("player");
+        assertEquals("serverStopped", prolific.get("ended").asText());
+        assertTrue(prolific.toString(), prolific.get("text").asText().contains("open the study again from Prolific"));
+        Result prolificReload = route(fakeRequest(GET, "/game/" + e + "/" + i + "/PP1/connected"));
+        assertTrue(contentAsString(prolificReload), contentAsString(prolificReload).contains(words(prolific)));
+    }
+
+    @Test
+    public void aSessionResumedAfterTheRestartAndStoppedAgainIsJustNotRunning() throws Exception {
+        restart();
+        // The researcher resumed it, then stopped it: the restart is no longer why it isn't running.
+        ExperimentInstance resumed = ExperimentInstance.findById(instance.id);
+        Event again = new Event();
+        again.name = "sessionResumed";
+        again.experimentInstance = resumed;
+        again.save();
+        Page page = reconnect("P4", "a-token-from-before");
+        JsonNode player = page.frames.get(0).path("sessionOver").get("player");
+        assertEquals("notRunning", player.get("ended").asText());
+        assertTrue(player.get("text").asText().contains("running right now"));
+        assertTrue(contentAsString(route(fakeRequest(GET, "/game/" + e + "/" + i + "/P4/connected"))).contains("running right now"));
     }
 
     @Test

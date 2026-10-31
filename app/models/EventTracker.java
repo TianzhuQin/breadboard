@@ -55,19 +55,40 @@ public class EventTracker {
   }
 
   public void track(String name, LinkedHashMap<Object, Object> data) {
+    this.track(name, nameValues(data));
+  }
+
+  private static List<Map<String, String>> nameValues(LinkedHashMap<Object, Object> data) {
     List<Map<String, String>> nameValues = new ArrayList<>();
     if (data == null) {
-      data = new LinkedHashMap<Object, Object>();
+      return nameValues;
     }
-
     for (Object key : data.keySet()) {
       Map<String, String> dataMap = new HashMap<>();
       dataMap.put("name", String.valueOf(key));
       dataMap.put("value", (data.get(key) == null) ? "null" : data.get(key).toString());
       nameValues.add(dataMap);
     }
+    return nameValues;
+  }
 
-    this.track(name, nameValues);
+  /**
+   * Record an event in {@code instance} itself, whichever session the engine's tracker records into
+   * (if any), and whether it is still going: what the server notes about a session from outside its
+   * game (a participant's comment, sent after the game ended or once the next session has opened; a
+   * reload of the engine that carries it on). As track: never throws, a value too long for the
+   * database is kept cut short, and every open console gets the event live. Returns it, or null when
+   * it couldn't be saved.
+   */
+  public static Event record(ExperimentInstance instance, String name, LinkedHashMap<Object, Object> data) {
+    if (instance == null) {
+      return null;
+    }
+    Event event = save(name, nameValues(data), instance);
+    if (event != null) {
+      publish(event);
+    }
+    return event;
   }
 
   /**
