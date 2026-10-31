@@ -263,7 +263,10 @@ see [docs/install.md](docs/install.md#upgrading).
   session has opened: in View events and every download. It used to be lost. A finish screen left
   open can still send it a week after the session ended, also after many more sessions or a restart
   of the server, and when it can't be saved the screen says so, with **Try again**, instead of going
-  on to Prolific without it.
+  on to Prolific without it. When the server is slow to answer, the screen says the comment isn't
+  confirmed yet, and when the connection fails, that it may not have reached the researcher (not that
+  it is lost); it goes on to Prolific once the comment is kept, **Try again** waits for a late answer,
+  and the same comment sent again is kept once.
 - Preview shows the session's test players as soon as it opens, also after a reload and beside a
   player opened with Preview their screen; on a phone the player list folds away above them. Its
   tiles and player list say Watching where a preview only watches (a connected participant, a

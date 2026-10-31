@@ -521,7 +521,12 @@ and `text`, also once their game has ended and the next session has opened: find
 **View events** in **Sessions & data**, or in the data you download. A finish screen left open can
 still send it a week after the session has ended, also after many more sessions or a restart of the
 server. If it can't be saved, the screen says so, with **Try again** and **Return to Prolific
-without it**, instead of going on to Prolific without it.
+without it**, instead of going on to Prolific without it. When the server can't be reached, or
+fails with a server error, it says the comment may not have reached you (the server may have it all
+the same). When the server hasn't answered within 10 seconds, it says the comment isn't confirmed yet,
+with **Try again** and **Return to Prolific without waiting**, and goes on to Prolific by itself once
+the server has it. **Try again** waits for that answer, and sends the comment again only once that
+request has failed; the server keeps the same comment from the same participant once.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game

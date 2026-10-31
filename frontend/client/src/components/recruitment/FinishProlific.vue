@@ -12,8 +12,8 @@ const submitUrl = computed(() => {
   return `https://app.prolific.com/submissions/complete?cc=${data.value?.completionCode}`
 })
 
-// How long the comment may take to save, from the click, before the screen says it couldn't be (ms):
-// the request for a comment token it may have to make first included.
+// How long the comment may take to save, from the click, before the screen says it isn't confirmed yet
+// (ms): the request for a comment token it may have to make first included. Its request goes on.
 const SAVE_WAIT_MS = 10000
 // How long a request for a comment token may go unanswered before the screen stops it (ms): see
 // commentToken. At Finish, the comment then goes with the seat's token alone.
@@ -74,54 +74,108 @@ async function renewCommentToken () {
   if (newer) commentToken = newer
 }
 let refresh: ReturnType<typeof setInterval> | undefined
+// (once the screen has gone, a save that ends after that changes nothing: see send)
+let gone = false
 onMounted(async () => {
   if (!data.value || data.value.noFeedback) return
   refresh = setInterval(renewCommentToken, TOKEN_REFRESH_MS)
   await renewCommentToken()
 })
-onBeforeUnmount(() => clearInterval(refresh))
+onBeforeUnmount(() => {
+  gone = true
+  clearInterval(refresh)
+})
+
+const feedback = ref('')
+/**
+ * 'saving' the comment, 'leaving' for Prolific, or what kept the comment from being saved: the server
+ * 'refused' it, it is 'lost' for all the page can tell, or no answer has come in time ('unconfirmed';
+ * see Sent). The screen says so, and goes to Prolific only when the participant asks (it used to go all
+ * the same, and the comment was lost without anyone knowing), or, for a comment not confirmed yet, once
+ * the server has it after all.
+ */
+const state = ref<'ready' | 'saving' | 'leaving' | 'refused' | 'lost' | 'unconfirmed'>('ready')
+const busy = computed(() => state.value === 'saving' || state.value === 'leaving')
+const notSaved = computed(() => state.value === 'refused' || state.value === 'lost' || state.value === 'unconfirmed')
+let toldTheGame = false
 
 /**
- * The comment goes to the server on its own ('comment', POST, with the seat's token and the comment
+ * What became of one request with the comment: the server 'saved' it, or 'refused' it (an answer
+ * 4xx: it keeps nothing then), or it is 'lost' for all the page can tell (no answer at all, or a
+ * server error): the server may have kept it before the connection dropped, or before a proxy in front
+ * of it gave up waiting for it, so the screen doesn't say that the researcher won't get it.
+ */
+type Sent = 'saved' | 'refused' | 'lost'
+
+/**
+ * The comment last sent and its request (send), until the server's answer comes. Kept when no answer
+ * comes within SAVE_WAIT_MS: the server may have the comment already, its answer only late (a slow
+ * network, a server busy for a while). Try again waits for this request rather than sending the
+ * comment a second time, which the session's data would then have twice, and sends it again only once
+ * this one has failed; and the screen goes on to Prolific by itself once the server has it.
+ */
+let underway: { comment: string, sent: Promise<Sent> } | null = null
+
+/**
+ * Sends the comment to the server on its own ('comment', POST, with the seat's token and the comment
  * token), which keeps it in the participant's session's data (participantComment): this screen comes
  * once the game is over, when the page's live connection may be closed and the server may run the
  * next session already. Sent through the game only, it was lost. Without a comment token, one is
  * asked for first; when none comes (within TOKEN_WAIT_MS), the comment goes with the seat's token
- * alone, which the server takes for as long as it knows the seat. True once the server has it; false
- * when it doesn't (refused, no network, or no answer within SAVE_WAIT_MS of the click, that request
- * for a token included).
+ * alone, which the server takes for as long as it knows the seat. The server keeps the same comment
+ * from the same participant once, so sending it again is safe.
  */
-async function saveComment (comment: string): Promise<boolean> {
-  const send = async (): Promise<boolean> => {
-    if (!commentToken) await renewCommentToken()
-    const body: Record<string, string> = { text: comment }
-    if (commentToken) body.token = commentToken
-    const res = await fetch('comment', { method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify(body) })
-    return !!res && res.status >= 200 && res.status < 300
-  }
+function send (comment: string): Promise<Sent> {
+  const sent = (async (): Promise<Sent> => {
+    try {
+      if (!commentToken) await renewCommentToken()
+      const body: Record<string, string> = { text: comment }
+      if (commentToken) body.token = commentToken
+      const res = await fetch('comment', { method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify(body) })
+      if (res && res.status >= 200 && res.status < 300) return 'saved'
+      return res && res.status >= 400 && res.status < 500 ? 'refused' : 'lost'
+    } catch (e) {
+      return 'lost'
+    }
+  })()
+  const attempt = { comment, sent }
+  underway = attempt
+  sent.then(outcome => {
+    if (underway !== attempt) return
+    underway = null
+    // The answer came after the screen said the comment wasn't confirmed yet, with nothing waiting for
+    // it (Try again waits in saveComment). Saved after all, the screen goes on to Prolific, as Finish
+    // asked, at once (the click is long past), unless the comment has been changed since: then it is
+    // ready to send that. Not saved, the screen says so.
+    if (gone || state.value !== 'unconfirmed') return
+    if (outcome !== 'saved') state.value = outcome
+    else if (feedback.value.trim() === comment) leave(0)
+    else state.value = 'ready'
+  })
+  return sent
+}
+
+/**
+ * Saves the comment: what became of its request (Sent), or 'unconfirmed' when no answer has come within
+ * SAVE_WAIT_MS of the click, the request for a comment token included (that request goes on: see
+ * underway). The same comment's request still waiting for its answer is waited for, not sent again; the
+ * comment is sent again once that request has failed.
+ */
+async function saveComment (comment: string): Promise<Sent | 'unconfirmed'> {
   let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<'unconfirmed'>(resolve => { timer = setTimeout(() => resolve('unconfirmed'), SAVE_WAIT_MS) })
   try {
-    return await Promise.race([
-      send(),
-      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), SAVE_WAIT_MS) }),
-    ])
-  } catch (e) {
-    return false
+    if (underway && underway.comment === comment) {
+      const earlier = await Promise.race([underway.sent, late])
+      if (earlier === 'saved' || earlier === 'unconfirmed') return earlier
+    }
+    return await Promise.race([send(comment), late])
   } finally {
     clearTimeout(timer)
   }
 }
 
-const feedback = ref('')
-/**
- * 'saving' the comment, 'leaving' for Prolific, or the comment 'failed' to save: the screen says so,
- * and goes to Prolific only when the participant asks (it used to go all the same, and the comment
- * was lost without anyone knowing).
- */
-const state = ref<'ready' | 'saving' | 'leaving' | 'failed'>('ready')
-const busy = computed(() => state.value === 'saving' || state.value === 'leaving')
-let toldTheGame = false
-
+/** Goes to Prolific a second after the click (started), or at once when that is past. */
 function leave (started: number) {
   state.value = 'leaving'
   setTimeout(() => {
@@ -141,8 +195,9 @@ async function submit () {
   const comment = feedback.value.trim()
   if (comment) {
     state.value = 'saving'
-    if (!(await saveComment(comment))) {
-      state.value = 'failed'
+    const outcome = await saveComment(comment)
+    if (outcome !== 'saved') {
+      state.value = outcome
       return
     }
   }
@@ -172,15 +227,25 @@ function leaveWithoutIt () {
         <span class="bb-finish__label">Comments for the researcher (optional)</span>
         <textarea v-model="feedback" rows="3" />
       </label>
-      <p v-if="state === 'failed'" class="bb-finish__failed" role="alert">
+      <p v-if="state === 'refused'" class="bb-finish__failed" role="alert">
         Your comment couldn’t be saved, so the researcher won’t get it this way. Try again, or copy it and
         send it to the researcher through Prolific’s messages.
       </p>
+      <!-- (the server may have it in these two: nothing here says it is lost) -->
+      <p v-else-if="state === 'lost'" class="bb-finish__failed" role="alert">
+        Your comment may not have reached the researcher: the server couldn’t be reached, or didn’t confirm
+        it. Try again, or copy it and send it to the researcher through Prolific’s messages.
+      </p>
+      <p v-else-if="state === 'unconfirmed'" class="bb-finish__failed" role="alert">
+        Your comment hasn’t been confirmed yet: the server hasn’t answered. This page goes on to Prolific
+        by itself once the server has saved it. You can also try again, or copy your comment and send it
+        to the researcher through Prolific’s messages.
+      </p>
       <button type="button" class="bb-finish__btn" :disabled="busy" @click="submit">
-        {{ state === 'saving' ? 'Saving your comment…' : state === 'leaving' ? 'Returning to Prolific…' : state === 'failed' ? 'Try again' : 'Finish and return to Prolific' }}
+        {{ state === 'saving' ? 'Saving your comment…' : state === 'leaving' ? 'Returning to Prolific…' : notSaved ? 'Try again' : 'Finish and return to Prolific' }}
       </button>
-      <button v-if="state === 'failed'" type="button" class="bb-finish__btn bb-finish__btn--quiet" @click="leaveWithoutIt">
-        Return to Prolific without it
+      <button v-if="notSaved" type="button" class="bb-finish__btn bb-finish__btn--quiet" @click="leaveWithoutIt">
+        {{ state === 'unconfirmed' ? 'Return to Prolific without waiting' : 'Return to Prolific without it' }}
       </button>
       <p class="bb-finish__note">
         If nothing happens, open <a :href="submitUrl">{{ submitUrl }}</a>, or enter the code above on Prolific.

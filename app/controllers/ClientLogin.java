@@ -481,9 +481,11 @@ public class ClientLogin extends Controller {
    * comment token, which only the seat's own token gets: not a researcher's preview. The comment
    * token is good for a week, also once the server has forgotten the seat (ten more sessions have
    * ended since, or it restarted), which refused the comment: the finish screen then went on to
-   * Prolific, and the comment was lost without anyone knowing. Answers 204 (also for an empty
-   * comment, which records nothing), 403 without either token, 400 without a text, 404 for a session
-   * that isn't this experiment's.
+   * Prolific, and the comment was lost without anyone knowing. The same comment from the same
+   * participant again is kept once (alreadyKept): the finish screen sends it again (Try again) when the
+   * answer to the first was lost on the way, and the server may have kept that one. Answers 204 (also
+   * for an empty comment, which records nothing, and for one kept already), 403 without either token,
+   * 400 without a text, 404 for a session that isn't this experiment's.
    */
   public static Result comment(String experimentId, String experimentInstanceId, String clientId) {
     JsonNode body = request().body().asJson();
@@ -516,10 +518,59 @@ public class ClientLogin extends Controller {
     java.util.LinkedHashMap<Object, Object> data = new java.util.LinkedHashMap<Object, Object>();
     data.put("player", clientId);
     data.put("text", comment);
-    if (EventTracker.record(instance, "participantComment", data) == null) {
-      return internalServerError(commentRefused("The comment could not be saved."));
+    // (one at a time for each participant, so that the same comment twice at once is kept once too)
+    synchronized (commentLock(instance.id, clientId)) {
+      if (alreadyKept(instance.id, clientId, comment)) {
+        return noContent();
+      }
+      if (EventTracker.record(instance, "participantComment", data) == null) {
+        return internalServerError(commentRefused("The comment could not be saved."));
+      }
     }
     return noContent();
+  }
+
+  // What comment holds while it looks for a participant's comment and keeps it: one of these, by the
+  // session and the participant.
+  private static final Object[] COMMENT_LOCKS = new Object[32];
+  static {
+    for (int i = 0; i < COMMENT_LOCKS.length; i++) {
+      COMMENT_LOCKS[i] = new Object();
+    }
+  }
+
+  private static Object commentLock(Long instanceId, String clientId) {
+    return COMMENT_LOCKS[((instanceId + "/" + clientId).hashCode() & 0x7fffffff) % COMMENT_LOCKS.length];
+  }
+
+  /**
+   * Whether the session already keeps this comment from this participant (participantComment with
+   * this player and text, as comment keeps it): their finish screen sends it again (Try again) when
+   * the answer to the first was lost on the way (a connection that dropped while the server kept it),
+   * and the researcher got it twice. False when it can't be told: then it is kept again, not lost.
+   */
+  static boolean alreadyKept(Long instanceId, String clientId, String comment) {
+    try {
+      List<Event> kept = Event.find.fetch("eventData").where().eq("experimentInstance.id", instanceId)
+          .eq("name", "participantComment").findList();
+      for (Event event : kept) {
+        String player = null;
+        String text = null;
+        for (EventData d : event.eventData) {
+          if ("player".equals(d.name)) {
+            player = d.value;
+          } else if ("text".equals(d.name)) {
+            text = d.value;
+          }
+        }
+        if (clientId.equals(player) && comment.equals(text)) {
+          return true;
+        }
+      }
+    } catch (RuntimeException e) {
+      Logger.warn("Could not tell whether session " + instanceId + " already keeps this comment of " + clientId + ": " + e);
+    }
+    return false;
   }
 
   /**

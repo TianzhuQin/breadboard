@@ -128,6 +128,56 @@ public class ParticipantCommentTest extends BaseTest {
             .withJsonBody(text(withEmoji.toString())))));
         assertEquals(9999, value(comments(session).get(1), "text").length());
     }
+    /**
+     * The same comment from the same participant again is kept once: their finish screen sends it again
+     * (Try again) when the answer to the first was lost on the way, and the server had kept that one.
+     * Another comment of theirs is kept, and so are the same words from someone else or in another
+     * session; also once the seat is forgotten, with the comment token.
+     */
+    @Test
+    public void theSameCommentSentAgainIsKeptOnce() {
+        Experiment experiment = createExperiment("Comments again");
+        ExperimentInstance session = createInstance("s", experiment);
+        String token = ParticipantAuth.claim(session.id.toString(), "pc-again");
+        String someoneElse = ParticipantAuth.claim(session.id.toString(), "pc-else");
+
+        for (String sent : new String[] {"The second round was confusing.", "The second round was confusing.", "  The second round was confusing. "}) {
+            Result saved = route(post(experiment, session, "pc-again").withHeader(ParticipantAuth.HEADER, token).withJsonBody(text(sent)));
+            assertEquals(contentAsString(saved), NO_CONTENT, status(saved));
+        }
+        assertEquals(1, comments(session).size());
+        assertEquals("The second round was confusing.", value(comments(session).get(0), "text"));
+
+        // Another comment of theirs, one that differs only in case, and the same words from someone else.
+        assertEquals(NO_CONTENT, status(route(post(experiment, session, "pc-again").withHeader(ParticipantAuth.HEADER, token)
+            .withJsonBody(text("The second round was confusing!")))));
+        assertEquals(NO_CONTENT, status(route(post(experiment, session, "pc-again").withHeader(ParticipantAuth.HEADER, token)
+            .withJsonBody(text("the second round was confusing.")))));
+        assertEquals(NO_CONTENT, status(route(post(experiment, session, "pc-else").withHeader(ParticipantAuth.HEADER, someoneElse)
+            .withJsonBody(text("The second round was confusing.")))));
+        List<Event> kept = comments(session);
+        assertEquals(4, kept.size());
+        assertEquals("pc-else", value(kept.get(3), "player"));
+
+        // The same participant id in another session.
+        ExperimentInstance next = createInstance("next", experiment);
+        String nextToken = ParticipantAuth.claim(next.id.toString(), "pc-again");
+        assertEquals(NO_CONTENT, status(route(post(experiment, next, "pc-again").withHeader(ParticipantAuth.HEADER, nextToken)
+            .withJsonBody(text("The second round was confusing.")))));
+        assertEquals(1, comments(next).size());
+
+        // Sent again with the comment token once the server has forgotten the seat (it restarted): still once.
+        Result asked = tokenFor(experiment, session, "pc-again", token);
+        String commentToken = Json.parse(contentAsString(asked)).get("token").asText();
+        ParticipantAuth.reset();
+        assertEquals(NO_CONTENT, status(route(post(experiment, session, "pc-again")
+            .withJsonBody(text("The second round was confusing.", commentToken)))));
+        assertEquals(4, comments(session).size());
+        assertEquals(NO_CONTENT, status(route(post(experiment, session, "pc-again")
+            .withJsonBody(text("And one more thing.", commentToken)))));
+        assertEquals(5, comments(session).size());
+    }
+
     /** The finish screen's comment token for this participant: what GET .../comment answers their page. */
     private static Result tokenFor(Experiment experiment, ExperimentInstance session, String clientId, String seatToken) {
         FakeRequest request = fakeRequest(GET, "/game/" + experiment.id + "/" + session.id + "/" + clientId + "/comment");

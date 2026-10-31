@@ -525,6 +525,10 @@ restarts the running session.
   and a comment token it asks for as it appears and every hour after (`GET` on the same address,
   answered while the server knows the seat), signed with `application.secret` and good for a week: a
   comment sent once the server has forgotten the seat's token (ten more sessions have ended, or it
-  restarted) is kept too, until about a week after the session ended. When it isn't kept, or no
-  answer comes within 10 seconds of Finish, the screen says so and goes on to Prolific only when
-  asked.
+  restarted) is kept too, until about a week after the session ended. When it isn't kept (an answer
+  4xx), the screen says so and goes on to Prolific only when asked; with no answer at all, or a
+  server error, it says the comment may not have reached the researcher. When no answer comes within
+  10 seconds of Finish, it says the comment isn't confirmed yet, and goes on to Prolific by itself
+  once the answer says it is kept; its Try again waits for that answer, and sends the comment again
+  only once that request has failed. The server keeps the same comment (`text`) from the same
+  participant in a session once.
