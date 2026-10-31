@@ -486,8 +486,9 @@ Timestamps in the CSV files, the console's own exports included, are in UTC, wri
 wrote them, so existing analysis scripts keep working). The files saved from **View events** write
 them this way since 3.1; 3.0 wrote `2026-10-28T13:24:23.757Z` there. In R, `as.POSIXct(sub(":(\\d{3})Z$", ".\\1", x), format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")`
 reads them; in Python, `pandas.to_datetime(s, format="%Y-%m-%dT%H:%M:%S:%fZ", utc=True)`.
-Sort rows by `event_date`, not by `id`: ids are given out in blocks and don't follow the order
-events happened in. After a session finishes or is stopped, nothing more is recorded in it.
+Sort rows by `event_date`, then `id`. Since 3.1, ids follow the order events were recorded; in data
+recorded by earlier versions they were given out in blocks and can be out of order. After a session
+finishes or is stopped, nothing more is recorded in it.
 Values are written exactly as recorded. A spreadsheet may
 read a value that starts with `=`, `+`, `-` or `@` as a formula, so import the file as text when
 participants could type such values.
