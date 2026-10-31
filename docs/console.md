@@ -288,7 +288,9 @@ session is open** leads to this experiment's open session whose game hasn't star
 shared once and reused. With these two, participants type an ID to join: any name or number you
 give them (up to 64 characters, not starting with `_`), one seat per ID. **Prolific study URL** goes
 into Prolific. The links use the address you opened the console at, so open it at the server's
-public address before copying them.
+public address before copying them. With the console open at localhost, a note says where computers
+on the same network (the lab's) reach the first two links, and another, under the Prolific study
+URL, that Prolific needs the server's public address.
 
 ### Network
 

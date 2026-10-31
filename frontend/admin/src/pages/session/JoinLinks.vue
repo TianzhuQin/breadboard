@@ -1,7 +1,9 @@
 <template>
   <BPanel title="Links for participants" :subtitle="joinable ? 'Send one of these to the people taking part.' : 'Nobody can join until the session runs again.'">
     <div class="live-links">
-      <LocalOnlyNote />
+      <!-- about the links people type an ID into: computers on the lab's network can use them, from
+           the console opened at its address there. Prolific's has a note of its own, below it. -->
+      <LocalOnlyNote :what="lanLinks" />
       <div v-for="row in rows" :key="row.key" class="live-link">
         <div class="live-link__head">
           <component :is="row.icon" :size="15" class="live-link__icon" aria-hidden="true" />
@@ -38,6 +40,8 @@
           />
         </div>
         <p :id="`${base}-${row.key}-hint`" class="live-link__hint">{{ row.hint }}</p>
+        <!-- Prolific sends people from the internet: only the server's public address works for it -->
+        <LocalOnlyNote v-if="row.key === 'prolific'" what="This URL uses" internet compact />
       </div>
       <!-- the sign-in page asks for an ID, and a newcomer can't guess what to type -->
       <p class="live-links__ids">
@@ -94,6 +98,9 @@ const rows = computed<Row[]>(() => {
   })
   return out
 })
+
+/** How the lab-network note starts: it is about the links before Prolific's. */
+const lanLinks = computed(() => rows.value.filter(r => r.key !== 'prolific').length > 1 ? 'The first two links use' : 'The first link uses')
 
 const inputs = reactive<Record<string, any>>({})
 function select (key: string) {

@@ -440,6 +440,38 @@ describe('live session state', () => {
     w.unmount()
   })
 
+  // One note above all three links offered the lab's network for the Prolific study URL too, which
+  // Prolific's people, from the internet, can't use; Recruitment and the Autopilot page say so.
+  it('words the lab-network note as about the first two links, and puts the internet-only note under the Prolific study URL', async () => {
+    const { admin } = await import('@/store/admin') as any
+    admin.lanAddresses = ['http://10.0.0.5:9000']
+    const host = window.location.host
+    const JoinLinks = (await import('../src/pages/session/JoinLinks.vue')).default
+    const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })
+    try {
+      const notes = w.findAll('.local-note')
+      expect(notes).toHaveLength(2)
+      const lab = notes[0].text().replace(/\s+/g, ' ')
+      expect(lab).toContain(`The first two links use ${host}, which only works on this computer.`)
+      expect(lab).toContain('For people on the same network (say, the lab\'s computers), open the console at http://10.0.0.5:9000')
+      // the first note comes before the links, the second in the Prolific study URL's own block, after its hint
+      const blocks = w.findAll('.live-link')
+      expect(blocks.map(b => b.find('.live-link__label').text())).toEqual(['This session', 'Whichever session is open', 'Prolific study URL'])
+      expect(blocks[0].find('.local-note').exists()).toBe(false)
+      expect(blocks[1].find('.local-note').exists()).toBe(false)
+      const prolific = blocks[2].find('.local-note')
+      expect(prolific.element).toBe(notes[1].element)
+      expect(prolific.classes()).toContain('is-compact')
+      const text = prolific.text().replace(/\s+/g, ' ')
+      expect(text).toContain(`This URL uses ${host}, which only works on this computer.`)
+      expect(text).toContain('Prolific sends people from the internet, so it needs the server’s public address')
+      expect(text).not.toContain('same network')
+    } finally {
+      w.unmount()
+      admin.lanAddresses = []
+    }
+  })
+
   it('says a link for Prolific needs the server\'s public address, without the tip for the lab\'s network', async () => {
     const { admin } = await import('@/store/admin') as any
     admin.lanAddresses = ['http://10.0.0.5:9000']
