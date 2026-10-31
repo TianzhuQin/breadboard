@@ -526,29 +526,49 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * The researcher stopped this session: its participants' pages say so (instead of a game that
-   * no longer answers), and keep saying so if they reconnect. See endParticipants(Long, ObjectNode).
+   * no longer answers), each in the words for them (stoppedScreens), and keep saying so if they
+   * reconnect. See endParticipants(Long, ObjectNode).
    */
   static void endParticipants(Long instanceId) {
-    endParticipants(instanceId, stoppedScreen(SessionLanguage.of(instanceId)));
+    endParticipants(instanceId, stoppedScreens(instanceId));
   }
 
   /** What the participants of a session a researcher stopped see (in English). */
   static ObjectNode stoppedScreen() {
-    return stoppedScreen(null);
+    return stoppedScreen(false, null);
+  }
+
+  /** stoppedScreen(false, lang): the words for someone who didn't come from Prolific. */
+  static ObjectNode stoppedScreen(String lang) {
+    return stoppedScreen(false, lang);
   }
 
   /**
    * What the participants of a session a researcher stopped see, in the language of its texts
-   * ({@code lang}, SessionLanguage: Breadboard's own words follow it, see SystemTexts).
+   * ({@code lang}, SessionLanguage: Breadboard's own words follow it, see SystemTexts). A
+   * {@code prolific} participant is told to open the study again from Prolific, or to return it, as
+   * the other end screens tell them: "open the link you were given once more" left them without a
+   * word about Prolific, and with a submission still open there.
    */
-  static ObjectNode stoppedScreen(String lang) {
+  static ObjectNode stoppedScreen(boolean prolific, String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "stopped");
-    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.stoppedTitle"), SystemTexts.html(lang, "end.stopped")));
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.stoppedTitle"),
+        SystemTexts.html(lang, prolific ? "end.stoppedProlific" : "end.stopped")));
     return frame;
+  }
+
+  /** The stopped screens of a session's participants (stoppedScreen, per participant). */
+  static java.util.function.Function<Client, ObjectNode> stoppedScreens(Long sessionId) {
+    final String lang = SessionLanguage.of(sessionId);
+    return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
+      public ObjectNode apply(Boolean prolific) {
+        return stoppedScreen(prolific, lang);
+      }
+    });
   }
 
   private static boolean hasPlayer(String clientId) {
@@ -1262,7 +1282,7 @@ public class ScriptBoard extends UntypedActor {
       playerActions.turnAIOff();
     }
     stopSession(listener);
-    endParticipants(id, stoppedScreen(SessionLanguage.of(id)));
+    endParticipants(id, stoppedScreens(id));
     cancelEngineTimers();
     eventTracker.disable();
   }
@@ -5202,19 +5222,31 @@ public class ScriptBoard extends UntypedActor {
     sessionEnded(instanceId, screenFor);
     for (Client client : clients.values()) {
       if (client.experimentInstance != null && instanceId.equals(client.experimentInstance.id)) {
-        endParticipant(client, screenFor.apply(client));
+        endParticipant(client, screenFor);
       }
     }
   }
 
-  // One participant of endParticipants; nothing for one whose end is settled already (a page of theirs
-  // that came back while the server's stop ran settled it: see addClient).
-  private static void endParticipant(Client client, ObjectNode frame) {
-    // Their player is looked up before their Client's monitor is taken, never under it: the lookup
-    // waits for the graph's structureLock, whose holder may be updating this very participant's page
-    // (the lock order is written at structureLock, in groovy/graph.groovy). Looked up under the
-    // monitor, a Stop that came while the game added a tie deadlocked the engine.
+  // One participant of endParticipants, with the end screen {@code screenFor} gives them: worked out
+  // once their player has been looked up, and, as that lookup, outside their Client's monitor (it may
+  // look them up again: whether they came from Prolific, fromProlific).
+  private static void endParticipant(Client client, java.util.function.Function<Client, ObjectNode> screenFor) {
     Vertex player = enginePlayer(client.id);
+    endParticipant(client, player, screenFor.apply(client));
+  }
+
+  // One participant of endParticipants, with {@code frame} as their end screen.
+  private static void endParticipant(Client client, ObjectNode frame) {
+    endParticipant(client, enginePlayer(client.id), frame);
+  }
+
+  // Nothing for one whose end is settled already (a page of theirs that came back while the server's
+  // stop ran settled it: see addClient). Their {@code player} is looked up before their Client's
+  // monitor is taken, never under it: the lookup waits for the graph's structureLock, whose holder may
+  // be updating this very participant's page (the lock order is written at structureLock, in
+  // groovy/graph.groovy). Looked up under the monitor, a Stop that came while the game added a tie
+  // deadlocked the engine.
+  private static void endParticipant(Client client, Vertex player, ObjectNode frame) {
     JsonNode last;
     synchronized (client) {
       if (client.ended()) {

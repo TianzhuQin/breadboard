@@ -71,6 +71,7 @@
   "end.closeOrAsk": "You can close this page; if you have any questions, please contact the researcher.",
   "end.stoppedTitle": "This session has been stopped",
   "end.stopped": "The researcher stopped this session. If they start it again, open the link you were given once more. Otherwise, thank you for taking part: you can close this page.",
+  "end.stoppedProlific": "The researcher stopped this session. You can open the study again from Prolific in a few minutes to join the session that is open then. If no session is open, please return the study on Prolific, and message the researcher there if you have any questions.",
   "end.serverStopped": "It ended because the study's server was stopped or restarted.",
   "end.serverStoppedOther": "If you were given a link to the study, you can open it again in a few minutes to join the session that is open then; otherwise, thank you for taking part, and please contact the researcher if you have any questions.",
   "end.serverStoppedProlific": "You can open the study again from Prolific in a few minutes to join the session that is open then. If no session is open, please return the study on Prolific, and message the researcher there if you have any questions.",

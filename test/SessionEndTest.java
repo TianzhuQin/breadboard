@@ -352,6 +352,39 @@ public class SessionEndTest extends BaseTest {
         assertEquals("stopped", ended(connect("p1").frames.get(0)));
     }
 
+    @Test
+    public void someoneFromProlificIsToldHowToGoOnThereWhenTheSessionIsStopped() throws Throwable {
+        Page plain = connect("p1");
+        Page fromProlific = connect("p2");
+        engine().eval("recruitment.registerProlific(g.getVertex('p2')); null");
+        console.send("StopGame", "id", session.id);
+        await("both told", () -> plain.closed && fromProlific.closed);
+        assertEquals("stopped", ended(fromProlific.last()));
+        assertTrue(text(fromProlific.last()), text(fromProlific.last()).contains("open the study again from Prolific"));
+        assertTrue(text(fromProlific.last()), text(fromProlific.last()).contains("return the study on Prolific"));
+        // (the others, as before)
+        assertEquals("stopped", ended(plain.last()));
+        assertTrue(text(plain.last()), text(plain.last()).contains("open the link you were given once more"));
+        assertFalse(text(plain.last()), text(plain.last()).contains("Prolific"));
+        // and a page of theirs that comes back is told the same
+        assertTrue(text(connect("p2").frames.get(0)).contains("open the study again from Prolific"));
+        assertTrue(text(connect("p1").frames.get(0)).contains("open the link you were given once more"));
+    }
+
+    @Test
+    public void someoneFromProlificIsToldHowToGoOnThereWhenARebuildEndsTheSession() throws Throwable {
+        Page plain = connect("p1");
+        Page fromProlific = connect("p2");
+        engine().eval("recruitment.registerProlific(g.getVertex('p2')); null");
+        // Stop it and create
+        launchSession(console, "T");
+        await("both told", () -> plain.closed && fromProlific.closed);
+        assertEquals("stopped", ended(fromProlific.lastPlayer()));
+        assertTrue(text(fromProlific.lastPlayer()), text(fromProlific.lastPlayer()).contains("open the study again from Prolific"));
+        assertFalse(text(plain.lastPlayer()), text(plain.lastPlayer()).contains("Prolific"));
+        assertTrue(text(connect(session, "p2", false).frames.get(0)).contains("open the study again from Prolific"));
+    }
+
     // ---- a session a rebuild of the engine ends, ends as Stop ends it -----------------------------
 
     /**

@@ -44,8 +44,14 @@ public class EndScreensLanguageTest {
             text(ScriptBoard.sessionNotRunningScreen("zho")));
         assertEquals("<h3>实验已经开始了</h3><p>这场实验在你到达之前就开始了，不能再加入新的参与者。请联系研究者。</p>",
             text(ScriptBoard.sessionStartedScreen("zho")));
+        // someone from Prolific is told how to go on there, as on the other end screens
+        assertEquals("<h3>本场实验已被停止</h3><p>研究者停止了本场实验。你可以过几分钟从 Prolific 重新打开这项研究，加入那时开放的一场。"
+            + "如果没有开放的场次，请在 Prolific 上退回这项研究；如果有任何问题，请在 Prolific 上给研究者发消息。</p>",
+            text(ScriptBoard.stoppedScreen(true, "zho")));
+        assertEquals(text(ScriptBoard.stoppedScreen("zho")), text(ScriptBoard.stoppedScreen(false, "zho")));
         // what marks them stays the same
         assertEquals("stopped", ScriptBoard.stoppedScreen("zho").get("player").get("ended").asText());
+        assertEquals("stopped", ScriptBoard.stoppedScreen(true, "zho").get("player").get("ended").asText());
         assertEquals("sessionFull", ScriptBoard.sessionFullScreen(false, null, "zho").get("player").get("ended").asText());
     }
 
@@ -66,6 +72,10 @@ public class EndScreensLanguageTest {
             + "the link you were given once more. Otherwise, thank you for taking part: you can close this page.</p>",
             text(ScriptBoard.stoppedScreen()));
         assertEquals(text(ScriptBoard.stoppedScreen()), text(ScriptBoard.stoppedScreen("spa")));
+        assertEquals("<h3>This session has been stopped</h3><p>The researcher stopped this session. You can open the study again "
+            + "from Prolific in a few minutes to join the session that is open then. If no session is open, please return the "
+            + "study on Prolific, and message the researcher there if you have any questions.</p>",
+            text(ScriptBoard.stoppedScreen(true, null)));
         assertEquals("<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. It ended before the study "
             + "gave you a completion code, so please message the researcher on Prolific about your submission.</p>",
             text(ScriptBoard.outOfTimeScreen(true)));

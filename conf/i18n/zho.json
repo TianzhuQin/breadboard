@@ -71,6 +71,7 @@
   "end.closeOrAsk": "现在可以关闭这个页面；如果有任何问题，请联系研究者。",
   "end.stoppedTitle": "本场实验已被停止",
   "end.stopped": "研究者停止了本场实验。如果研究者重新开始，请再打开一次你收到的链接。否则，感谢你的参与，现在可以关闭这个页面了。",
+  "end.stoppedProlific": "研究者停止了本场实验。你可以过几分钟从 Prolific 重新打开这项研究，加入那时开放的一场。如果没有开放的场次，请在 Prolific 上退回这项研究；如果有任何问题，请在 Prolific 上给研究者发消息。",
   "end.serverStopped": "研究的服务器停止或重启了，所以本场实验结束了。",
   "end.serverStoppedOther": "如果你收到过这项研究的链接，可以过几分钟再打开它，加入那时开放的一场；否则，感谢你的参与，如果有任何问题，请联系研究者。",
   "end.serverStoppedProlific": "你可以过几分钟从 Prolific 重新打开这项研究，加入那时开放的一场。如果没有开放的场次，请在 Prolific 上退回这项研究；如果有任何问题，请在 Prolific 上给研究者发消息。",
