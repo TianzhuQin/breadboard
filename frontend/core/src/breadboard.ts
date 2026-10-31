@@ -316,6 +316,18 @@ export type ConnectionState = 'connecting' | 'open' | 'lost' | 'blocked' | 'else
 /** Emitted whenever `connection` may have changed */
 export const CONNECTION_EVENT = 'bb:connection'
 
+/**
+ * Emitted with the code when `language` changes: the language of the session's texts, which
+ * Breadboard's own words on the page follow
+ */
+export const LANGUAGE_EVENT = 'bb:language'
+
+/** The lang attribute of a page whose session's texts are in `code`: zh-CN for Chinese, else en */
+export function htmlLangOf (code: string | null | undefined): string {
+  const c = typeof code === 'string' ? code.trim().toLowerCase() : ''
+  return c === 'zho' || c === 'chi' || c === 'cmn' || c === 'zh' || /^zh[-_]/.test(c) ? 'zh-CN' : 'en'
+}
+
 export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /** The session is over for this page (stopped, not running, ...): it no longer reconnects */
@@ -377,6 +389,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    * fresh answer look old. Null before the first pong.
    */
   private serverOffset: number | null = null
+  /** See `language` */
+  private languageCode: string | null = null
 
   constructor () {
     super()
@@ -396,6 +410,16 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     if (this.isOpen) return this.watchingNow ? 'watching' : 'open'
     if (this.socket && (this.socket.blocked || this.liveBlocked)) return 'blocked'
     return this.dropped ? 'lost' : 'connecting'
+  }
+
+  /**
+   * The language of the session's texts, as its steps chose it (c.setDefaultLanguage), by the code the
+   * Content page shows ("zho", "eng", ...); null when they chose none. Breadboard's own words on the
+   * page (its banners, waiting screen, network and finish screens) follow it: Chinese for zho, English
+   * for any other. From the page's state, then from the server whenever it changes (LANGUAGE_EVENT).
+   */
+  get language (): string | null {
+    return this.languageCode
   }
 
   /** Whether the researcher console opened this page as a preview, rather than a participant */
@@ -441,6 +465,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         throw new Error(leavePage(login))
       }
       this.config = body
+      this.setLanguage(body && body.language)
       return this.config!
     } finally {
       release()
@@ -981,6 +1006,18 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
     return this.serverOffset === null ? null : Math.round(Date.now() + this.serverOffset)
   }
 
+  /** See `language`: the server says the session's texts are in `code` now */
+  private setLanguage (code: any) {
+    const next = typeof code === 'string' && code.trim() ? code.trim() : null
+    if (next === this.languageCode) return
+    this.languageCode = next
+    // (a participant's page: its lang, for screen readers and the fonts of Chinese text)
+    if (this.config && this.config.clientId && typeof document !== 'undefined' && document.documentElement) {
+      document.documentElement.lang = htmlLangOf(next)
+    }
+    this.emit(LANGUAGE_EVENT, next)
+  }
+
   private setLiveBlocked (blocked: boolean) {
     if (this.liveBlocked === blocked) return
     this.liveBlocked = blocked
@@ -1030,6 +1067,11 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
           this.emit(CONNECTION_EVENT)
         }
         return
+      }
+      if (data && typeof data === 'object' && 'bbLanguage' in data) {
+        // The language of the session's texts (sent as the page connects, and when it changes).
+        this.setLanguage(data.bbLanguage)
+        if (Object.keys(data).length === 1) return
       }
       if (data && data.reauth) {
         // The session runs, but the server has forgotten this page's seat (e.g. it restarted since):
