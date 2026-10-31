@@ -34,6 +34,11 @@ import static play.test.Helpers.*;
  * as they reconnect (they used to be told "it began before you arrived", and stopped trying), the
  * session takes newcomers as before its game, its data says so (engineReloaded: restarted, by), the
  * Prolific participants get their Prolific end again, and the autopilot goes on running its session.
+ * Once the rebuild has begun, the engine it replaces does nothing more: what participants, another
+ * researcher or that engine's own code do then is not taken, started, finished or recorded, so
+ * nothing of the old game comes after engineReloaded (also when the session is selected again, and
+ * when a new session or a Resume replaces the engine); and nothing of a stopped game comes after
+ * sessionStopped.
  */
 public class ReloadCarriesOnTest extends BaseTest {
 
