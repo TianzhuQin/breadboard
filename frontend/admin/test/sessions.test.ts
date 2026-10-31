@@ -661,6 +661,8 @@ describe('SessionsPage', () => {
     expect(rows[0].text()).toContain('Current')
     // the current session's launch parameters are open
     expect(w.find('#ss-details-3').text()).toContain('groups')
+    // (since 3.1 session IDs follow on, also after a crash: the tooltip no longer says they skip numbers)
+    expect(rows[0].find('.mono[title]').attributes('title')).toBe('The session\'s ID in the data')
     w.unmount()
   })
 
