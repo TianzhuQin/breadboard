@@ -256,18 +256,17 @@ export function resumeLabel (halt: 'paused' | 'done'): string {
 
 /**
  * Whether stopping this session pauses the autopilot (the server's Autopilot.sessionStopped): it is
- * the session the engine runs, of the autopilot's experiment. `status.instance` is the engine's
- * session of that experiment; a test session is left out of it, so `engineSessionId` (what the
- * console's engine info says the engine runs) covers that case. Already paused: nothing changes.
+ * the autopilot's session, `status.instance` (the one it opened, or was handed on Resume or a save).
+ * A session a researcher opened by hand, of its experiment or the test session, is theirs: stopping
+ * it leaves the autopilot running, and it opens its next session once the engine is free. Already
+ * paused: nothing changes.
  */
 export function stopPausesAutopilot (
   ap: Pick<AutopilotState, 'settings' | 'status'> | null,
-  session: { id: number, experimentId: number | null | undefined },
-  engineSessionId?: number | null,
+  session: { id: number },
 ): boolean {
   if (!ap || !ap.status.on || ap.status.paused) return false
-  if (ap.status.instance?.id === session.id) return true
-  return engineSessionId === session.id && session.experimentId != null && ap.settings.experimentId === session.experimentId
+  return ap.status.instance?.id === session.id
 }
 /** Said before stopping a session that would pause the autopilot (see stopPausesAutopilot). */
 export const STOP_PAUSES_AUTOPILOT = 'The autopilot runs this experiment, so stopping its session pauses it: it opens no new session, and its participant links (including Prolific’s) lead nowhere, until you press Resume on the Autopilot page.'

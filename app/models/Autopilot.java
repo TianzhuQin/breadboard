@@ -113,9 +113,10 @@ public final class Autopilot {
   private static volatile Long ownSession = null;
   // The autopilot's session, kept through a pause: the one it opened last (launchCarriedOut), or the
   // one of its experiment Resume or a save handed it (adoptLiveSession). The console calls it the
-  // autopilot's (status.instance), and the Autopilot page's waiting room and takeover replace the
-  // steps' own in it alone (AutopilotHooks). A session a researcher opens by hand is theirs, with the
-  // steps' own settings: any session of its experiment used to count as the autopilot's.
+  // autopilot's (status.instance), the Autopilot page's waiting room and takeover replace the steps'
+  // own in it alone (AutopilotHooks), and a researcher who ends it pauses the autopilot
+  // (sessionStopped). A session a researcher opens by hand is theirs, with the steps' own settings,
+  // and theirs to end: any session of its experiment used to count as the autopilot's.
   private static volatile Long openedSession = null;
 
   // ---- the guards of its own session (see guardOwnSession) ----
@@ -682,14 +683,16 @@ public final class Autopilot {
   /**
    * A researcher's action ends the session the engine runs: Stop, or selecting another session,
    * launching another session or reloading the engine (selecting another experiment leaves it
-   * running). If it is of the autopilot's experiment, the autopilot pauses: it opens no new session
-   * by itself until someone presses Resume (or saves the settings), rather than taking the engine
-   * back behind the researcher's back. Nothing for a session that had finished: no researcher ended
-   * it (Stop pressed on it paused the autopilot, which also called off the next session it was about
-   * to open). {@code how} says what happened, with %s for who did it. A session of its experiment that
-   * isn't the autopilot's (isAutopilotsSession: a researcher opened it by hand) is called what it is;
-   * while the autopilot is paused or done already, its ending leaves the reason as it was: it said
-   * "its session" of the researcher's own, in place of how the autopilot's had ended.
+   * running). If it is the autopilot's session (isAutopilotsSession: the one it opened, or was handed
+   * on Resume or a save), the autopilot pauses: it opens no new session by itself until someone
+   * presses Resume (or saves the settings), rather than taking the engine back behind the
+   * researcher's back. Nothing for a session that had finished: no researcher ended it (Stop pressed
+   * on it paused the autopilot, which also called off the next session it was about to open). Nothing
+   * either for a session a researcher opened by hand, even of its experiment (the test session
+   * included): it is theirs to end, and the autopilot opens its next session once the engine is free,
+   * as when such a session finishes. Ending one used to pause it too, which the console didn't warn of
+   * before a rebuild (it knows the autopilot's own session alone, GET /autopilot's status.instance).
+   * {@code how} says what happened, with %s for who did it.
    */
   static void sessionStopped(ExperimentInstance instance, User by, String how) {
     if (instance == null || instance.experiment == null || instance.id == null) {
@@ -711,14 +714,9 @@ public final class Autopilot {
       Logger.error("Autopilot: could not read its settings", ex);
       return;
     }
-    if (e.isOn() && e.settings.experimentId.equals(experimentId)) {
-      boolean its = isAutopilotsSession(id);
-      if (!its && (pausedBecause != null || doneBecause != null)) {
-        return;
-      }
+    if (e.isOn() && e.settings.experimentId.equals(experimentId) && isAutopilotsSession(id)) {
       String what = String.format(how, who);
-      setHalt(experimentId, (its ? "its session \"" + name + "\" " : "the session \"" + name + "\" of its experiment ") + what,
-          doneBecause);
+      setHalt(experimentId, "its session \"" + name + "\" " + what, doneBecause);
       Logger.info("Autopilot: session " + name + " " + what + "; pausing");
     }
   }

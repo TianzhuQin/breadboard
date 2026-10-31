@@ -662,6 +662,56 @@ public class AutopilotFlowTest extends BaseTest {
     }
 
     @Test
+    public void endingASessionOpenedByHandBetweenItsSessionsLeavesTheAutopilotRunning() throws Exception {
+        final User researcher = user("gap");
+        final Experiment experiment = experimentOf(researcher, "Between its sessions");
+        ObjectNode s = settings(experiment, 1, 1, 0);
+        s.put("nextSessionDelaySeconds", 600);
+        assertEquals(OK, status(post(researcher, s)));
+        final ExperimentInstance auto = openSession(experiment);
+        // Its game ends; its next session opens in 10 minutes.
+        engine().eval("gameListener.finish(); null");
+        await("finished", () -> ExperimentInstance.findById(auto.id).status == ExperimentInstance.Status.FINISHED);
+
+        // Meanwhile a researcher opens a session by hand: theirs, which the console calls nobody else's.
+        final AdminSocketsTest.Tab tab = console(researcher);
+        tab.send("SelectExperiment", "experimentId", experiment.id);
+        await("the selection", () -> selected(researcher, experiment));
+        tab.send("LaunchGame", "name", "By hand", "parameters", Json.newObject());
+        await("their session", () -> sessions(experiment).size() == 2
+            && sessions(experiment).get(1).status == ExperimentInstance.Status.RUNNING);
+        final ExperimentInstance byHand = sessions(experiment).get(1);
+        JsonNode st = autopilotStatus(researcher);
+        assertTrue(st.toString(), st.get("instance").isNull());
+        assertFalse(st.get("paused").asBoolean());
+
+        // They open another over it ("Stop it and create"): a rebuild of the engine that ends theirs.
+        // The console's question says nothing of the autopilot (status.instance names its own session
+        // alone), and the autopilot doesn't pause: it used to, and its links then led nowhere.
+        tab.send("LaunchGame", "name", "Another", "parameters", Json.newObject());
+        await("theirs ended, another running", () -> ExperimentInstance.findById(byHand.id).status == ExperimentInstance.Status.STOPPED
+            && sessions(experiment).size() == 3 && sessions(experiment).get(2).status == ExperimentInstance.Status.RUNNING);
+        Thread.sleep(300);
+        st = autopilotStatus(researcher);
+        assertFalse("paused for a session it didn't open: " + st, st.get("paused").asBoolean());
+        assertTrue(st.toString(), st.get("problem").isNull());
+
+        // Stopping that one doesn't pause it either, and once the pause between its sessions is over
+        // (here: now), it opens its next one.
+        final ExperimentInstance another = sessions(experiment).get(2);
+        tab.send("StopGame", "id", another.id);
+        await("stopped", () -> ExperimentInstance.findById(another.id).status == ExperimentInstance.Status.STOPPED);
+        Thread.sleep(300);
+        st = autopilotStatus(researcher);
+        assertFalse(st.toString(), st.get("paused").asBoolean());
+        assertTrue(st.toString(), st.get("problem").isNull());
+        setAutopilot("nextOpenAt", 0L);
+        watchdog();
+        await("its next session", () -> sessions(experiment).size() == 4 && Autopilot.openInstance(experiment.id) != null);
+        assertEquals(sessions(experiment).get(3).id, statusInstance(researcher));
+    }
+
+    @Test
     public void theFullScreenSaysWhatToDoOnProlificAndWhenNoNextSessionOpensByItself() throws Exception {
         final User researcher = user("fullwords");
         final Experiment experiment = experimentOf(researcher, "Full room words");

@@ -105,7 +105,9 @@ study URL.
   session to end; the page also offers to end it there and then.
 - Ending the autopilot's session from the console pauses the autopilot: stopping it, or anything
   that reloads the engine (launching or resuming another session, reloading). Selecting another
-  experiment, to edit it, doesn't: the autopilot's session keeps running. Press **Resume** on the
+  experiment, to edit it, doesn't: the autopilot's session keeps running. Nor does ending a session a
+  researcher opened by hand, even one of its experiment: the autopilot then opens its next session
+  as usual. Press **Resume** on the
   Autopilot page to let it open sessions again; after a run with **continuous** off, the button
   reads **Open another session**. Both work when the server's settings file (`conf/local.conf`)
   is in charge too, and a pause survives a server restart.

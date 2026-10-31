@@ -75,6 +75,23 @@ public class AutopilotSettingsTest extends BaseTest {
         Field builtFor = ScriptBoard.class.getDeclaredField("engineBuiltFor");
         builtFor.setAccessible(true);
         builtFor.set(null, null);
+        // Nor is an earlier test's session the autopilot's.
+        for (String name : new String[]{"ownSession", "openedSession"}) {
+            Field f = Autopilot.class.getDeclaredField(name);
+            f.setAccessible(true);
+            f.set(null, null);
+        }
+    }
+
+    /**
+     * The autopilot's own session, as when the engine actor has carried out its launch
+     * (Autopilot.launchCarriedOut): a researcher who ends it pauses the autopilot. (Ending a session
+     * a researcher opened by hand doesn't.)
+     */
+    private static void itsSession(ExperimentInstance instance) throws Exception {
+        java.lang.reflect.Method m = Autopilot.class.getDeclaredMethod("launchCarriedOut", Long.class);
+        m.setAccessible(true);
+        m.invoke(null, instance.id);
     }
 
     /** As a restart does: paused and done are gone from memory (the database keeps them). */
@@ -618,6 +635,7 @@ public class AutopilotSettingsTest extends BaseTest {
 
         // A researcher stopped its session: paused until the next save.
         ExperimentInstance ours = live("ours", experiment);
+        itsSession(ours);
         runInEngine(ours, user);
         ours.status = ExperimentInstance.Status.STOPPED;
         ours.save();
@@ -662,6 +680,7 @@ public class AutopilotSettingsTest extends BaseTest {
 
         // Paused by a researcher: a session that finishes then schedules nothing, and none is shown as due.
         ExperimentInstance ours = live("ours", experiment);
+        itsSession(ours);
         stoppedBy(ExperimentInstance.findById(ours.id), user);
         Autopilot.sessionFinished(ExperimentInstance.findById(ours.id));
         assertEquals(0L, due.get(null));
@@ -726,6 +745,7 @@ public class AutopilotSettingsTest extends BaseTest {
 
         // A researcher stopped its session: paused, and kept.
         ExperimentInstance ours = live("ours", experiment);
+        itsSession(ours);
         stoppedBy(ExperimentInstance.findById(ours.id), user);
         assertNotNull(AutopilotSettings.loadHalt());
 
