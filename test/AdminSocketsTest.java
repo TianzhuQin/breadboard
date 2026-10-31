@@ -69,8 +69,17 @@ public class AdminSocketsTest extends BaseTest {
 
         /** Frames from the {@code from}th on (a tab's sign-in replays whatever the shared engine held already). */
         int countSince(int from, Matcher m) {
+            return countSince(frames, from, m);
+        }
+
+        /**
+         * Counted in a copy of the frames: the socket's thread adds more meanwhile, and a sublist of the
+         * shared list throws ConcurrentModificationException once a frame has come since it was taken.
+         */
+        static int countSince(List<JsonNode> frames, int from, Matcher m) {
+            List<JsonNode> all = new ArrayList<>(frames);
             int n = 0;
-            for (JsonNode f : frames.subList(Math.min(from, frames.size()), frames.size())) if (m.matches(f)) n++;
+            for (JsonNode f : all.subList(Math.min(from, all.size()), all.size())) if (m.matches(f)) n++;
             return n;
         }
 
@@ -139,6 +148,37 @@ public class AdminSocketsTest extends BaseTest {
     private static void own(User user, Experiment experiment) {
         user.ownedExperiments.add(experiment);
         user.saveManyToManyAssociations("ownedExperiments");
+    }
+
+    // ---- a tab's frames, counted as they arrive ---------------------------------------------------
+
+    /**
+     * Counting a tab's frames while its socket's thread adds more never fails: counting them in a sublist
+     * of the shared list threw ConcurrentModificationException whenever a frame came between taking the
+     * sublist and going through it, which failed a test waiting for a count now and then.
+     */
+    @Test
+    public void framesAreCountedWhileMoreArrive() throws Exception {
+        final List<JsonNode> frames = new CopyOnWriteArrayList<>();
+        final JsonNode frame = Json.newObject().put("user", "u");
+        for (int i = 0; i < 10; i++) frames.add(frame);
+        final int more = 20000;
+        Thread socket = new Thread(() -> {
+            for (int i = 0; i < more; i++) frames.add(frame);
+        }, "fake-socket");
+        socket.start();
+        int last = 0;
+        try {
+            while (socket.isAlive()) {
+                int n = Tab.countSince(frames, 5, userJson());
+                assertTrue("counted " + n + " after " + last, n >= last);
+                last = n;
+            }
+        } finally {
+            socket.join();
+        }
+        assertEquals(5 + more, Tab.countSince(frames, 5, userJson()));
+        assertEquals(0, Tab.countSince(frames, frames.size() + 3, userJson()));
     }
 
     // ---- replies go to the asking socket ---------------------------------------------------------
