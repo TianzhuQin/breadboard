@@ -97,6 +97,23 @@ export interface User {
   engine: EngineInfo | null
 }
 
+/**
+ * A line of an engine error as newer servers name it ({"frames": [...]} beside the error's text,
+ * ScriptBoard.putFrames): the step whose code it is, the failing step's own line ("own"), and where it
+ * went wrong in another step's code, with the function it called there ("name"). See groovyError.
+ */
+export interface ErrorFrame {
+  /** As the error's text names it: "Script649.groovy". */
+  file: string
+  line: number
+  /** The step whose code it is; none when it is no step's (a script typed in the console, or the start of the game). */
+  step?: string
+  /** The failing step's own line: the innermost one in its code. */
+  own?: boolean
+  /** The function of another step that the failing step's own line called, where it went wrong (e.g. isHuman). */
+  name?: string
+}
+
 export interface OutputEntry {
   id: number
   kind: 'output' | 'error' | 'info' | 'input'
@@ -106,6 +123,8 @@ export interface OutputEntry {
   requestId?: string
   /** The step an engine error happened in (e.g. RoundStep), when the server knows it. */
   step?: string
+  /** An engine error's lines named by the step whose code each is (newer servers), see groovyError. */
+  frames?: ErrorFrame[]
   at: number
 }
 

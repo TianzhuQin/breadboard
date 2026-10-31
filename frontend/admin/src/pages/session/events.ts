@@ -1,5 +1,6 @@
 import type { EventItem, LiveEvent } from '@/store/types'
 import { aiName, playerName } from '@/network/players'
+import { failureWhere, stepLineAt } from '../console/groovyError'
 
 /**
  * The live event feed: what the session has recorded, newest first.
@@ -209,16 +210,15 @@ const KNOWN: Record<string, string> = {
   sessiontoolong: 'The game ran longer than the longest session allowed, so it was ended',
 }
 
-/** "RoundStep, line 72": a failure's step, and its line (its own `line`, or the "line 72: …" its error starts with). */
+/**
+ * "RoundStep, line 72": a failure's step, and its line (its own `line`, or the "line 72: …" its error
+ * starts with), and where it went wrong in another step's code it called: "RoundStep, line 14, in
+ * isHuman at InitStep line 30".
+ */
 function failurePlace (data: Record<string, unknown>): string {
   const step = typeof data.step === 'string' ? data.step.trim() : ''
-  const n = Number(data.line)
-  let line = Number.isInteger(n) && n > 0 ? n : null
-  if (line == null) {
-    const m = /^line (\d+):/.exec(String(data.error ?? ''))
-    if (m) line = Number(m[1])
-  }
-  return [step, line ? `line ${line}` : ''].filter(Boolean).join(', ')
+  const { line, in: where } = failureWhere(data)
+  return [step, line ? `line ${line}` : '', where ? stepLineAt(where) : ''].filter(Boolean).join(', ')
 }
 
 /** "25 s", "3 min": how long, from milliseconds; '' when it isn't a time. */

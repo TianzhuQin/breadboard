@@ -19,8 +19,8 @@ vi.mock('@/store/admin', async () => {
     engine: 'ready',
     output: [] as any[],
   })
-  const push = (kind: string, text: string, source?: string, requestId?: string) => {
-    admin.output.push({ id: ++seq, kind, text, source, at: Date.now(), ...(requestId ? { requestId } : {}) })
+  const push = (kind: string, text: string, source?: string, requestId?: string, extra?: Record<string, unknown>) => {
+    admin.output.push({ id: ++seq, kind, text, source, at: Date.now(), ...(requestId ? { requestId } : {}), ...(extra || {}) })
   }
   const actions = {
     runScript: vi.fn((script: string): string | null => { push('input', script); return `req-${++requestSeq}` }),
@@ -43,6 +43,14 @@ vi.mock('@/store/admin', async () => {
   }
 })
 
+// the Steps page, where a line of a step's code named in an error opens
+const routerPush = vi.hoisted(() => vi.fn())
+vi.mock('vue-router', async (orig) => ({
+  ...(await orig<any>()),
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ replace: vi.fn(), push: routerPush }),
+}))
+
 import * as store from '@/store/admin'
 
 // Node's own (file-less) localStorage shadows jsdom's here; use a plain in-memory one.
@@ -56,7 +64,8 @@ vi.stubGlobal('localStorage', {
 import {
   echoPrefix, expectReply, lastOutputId, matchReply, showsTags, splitValues, __resetReplies,
 } from '../src/pages/console/engineReplies'
-import { parseGroovyError, humanType } from '../src/pages/console/groovyError'
+import { failureWhere, parseGroovyError, humanType, placeLabel, readBrief } from '../src/pages/console/groovyError'
+import EngineError from '../src/pages/console/EngineError.vue'
 import {
   addToHistory, consoleState, initialBuffer, markHistory, runConsoleScript, sanitizeHistory, searchHistory, seedConsole,
   HISTORY_CAP, type HistoryItem,
@@ -67,7 +76,7 @@ import ConsolePage from '../src/pages/console/ConsolePage.vue'
 
 const admin = store.admin as any
 const actions = store.actions as any
-const push = (store as any).__push as (kind: string, text: string, source?: string, requestId?: string) => void
+const push = (store as any).__push as (kind: string, text: string, source?: string, requestId?: string, extra?: Record<string, unknown>) => void
 
 beforeEach(() => {
   __resetReplies()
@@ -348,6 +357,162 @@ describe('engine errors', () => {
   })
 })
 
+// The network game's steps, as the server names them (the "frames" beside an error's text): they load in name order,
+// so FinishStep is Script530, InitStep Script531, RoundStep Script534. InitStep defines isHuman, which RoundStep and
+// FinishStep call.
+describe('engine errors the server names by step', () => {
+  const kinds = (e: ReturnType<typeof parseGroovyError>) => e.places.filter(p => p.kind !== 'library').map(p => `${p.kind}: ${placeLabel(p)}`)
+
+  it('names the failing step\'s own line where it went wrong in its own code', () => {
+    // RoundStep's done, on its timer, at its line 66 (in its g.V.each at line 64)
+    const e = parseGroovyError('Caught error: MissingPropertyException: No such property: pickz for class: Script534\n' +
+      '  at Script534.groovy:66\n  at Script534.groovy:64\n  at step.groovy:200\n  at step.groovy:-1\n  at step.groovy:167\n', {
+      inStep: true,
+      frames: [{ file: 'Script534.groovy', line: 66, step: 'RoundStep', own: true }, { file: 'Script534.groovy', line: 64, step: 'RoundStep' }],
+    })
+    expect(e.title).toBe('Unknown name “pickz”')
+    expect(kinds(e)).toEqual(['own: Line 66', 'own: Line 64'])
+    expect(e.places[0]).toEqual({ file: 'Script534.groovy', line: 66, kind: 'own', step: 'RoundStep', primary: true })
+  })
+
+  it('names the failing step\'s own line, and where it went wrong in another step\'s function it called', () => {
+    // RoundStep's line 14 (in its g.V.each at line 12) calls InitStep's isHuman, which throws at InitStep's line 65;
+    // RoundStep's done at line 80 had started the round (as sent)
+    const raw = 'Caught error: IllegalStateException: isHumanStrict fails\n  at Script531.groovy:65\n  at Script534.groovy:14\n' +
+      '  at Script534.groovy:12\n  at step.groovy:64\n  at step.groovy:-1\n  at Script534.groovy:80\n  at step.groovy:200\n  at timer.groovy:76\n'
+    const frames = [
+      { file: 'Script531.groovy', line: 65, step: 'InitStep', name: 'isHuman' },
+      { file: 'Script534.groovy', line: 14, step: 'RoundStep', own: true },
+      { file: 'Script534.groovy', line: 12, step: 'RoundStep' },
+      { file: 'Script534.groovy', line: 80, step: 'RoundStep' },
+    ]
+    const e = parseGroovyError(raw, { inStep: true, frames })
+    expect(e.title).toBe('isHumanStrict fails')
+    expect(kinds(e)).toEqual(['own: Line 14', 'in: in isHuman (InitStep line 65)', 'own: Line 12', 'own: Line 80'])
+    expect(e.places[0]).toEqual({ file: 'Script534.groovy', line: 14, kind: 'own', step: 'RoundStep', primary: true })
+    expect(e.places[1]).toEqual({ file: 'Script531.groovy', line: 65, kind: 'in', step: 'InitStep', name: 'isHuman' })
+    // without the function's name, the step and line
+    expect(kinds(parseGroovyError(raw, { inStep: true, frames: [{ ...frames[0], name: undefined }, ...frames.slice(1)] }))[1])
+      .toBe('in: in InitStep line 65')
+    // An older message, without the names: the guess from the text, InitStep's line taken for RoundStep's
+    expect(parseGroovyError(raw, { inStep: true }).places[0]).toEqual({ file: 'Script531.groovy', line: 65, kind: 'own' })
+  })
+
+  it('names a step another step started, InitStep the waiting room started, and a step that failed as it loaded', () => {
+    // FinishStep failing at its line 5, started by RoundStep's finishStep.start() at its line 82
+    const finish = parseGroovyError('Caught error: IllegalStateException: FinishStep fails\n  at Script530.groovy:5\n  at step.groovy:64\n' +
+      '  at step.groovy:-1\n  at Script534.groovy:82\n  at step.groovy:200\n', {
+      inStep: true,
+      frames: [{ file: 'Script530.groovy', line: 5, step: 'FinishStep', own: true }, { file: 'Script534.groovy', line: 82, step: 'RoundStep' }],
+    })
+    expect(kinds(finish)).toEqual(['own: Line 5', 'other: RoundStep line 82'])
+    expect(finish.places[0].step).toBe('FinishStep')
+    // InitStep failing at its line 47 as the waiting room's initStep.start() (Script900, no step's) started the game
+    const room = parseGroovyError('Caught error: IllegalStateException: InitStep fails\n  at Script531.groovy:47\n  at step.groovy:64\n' +
+      '  at step.groovy:-1\n  at Script900.groovy:1\n  at autopilot.groovy:621\n', {
+      inStep: true,
+      frames: [{ file: 'Script531.groovy', line: 47, step: 'InitStep', own: true }, { file: 'Script900.groovy', line: 1 }],
+    })
+    expect(kinds(room)).toEqual(['own: Line 47', 'other: Script900.groovy, line 1'])
+    // RoundStep failing as it loads, at its line 2, where it calls isHuman; and a syntax error in its line 3, in the
+    // class the compiler gave the code that didn't compile
+    const loads = parseGroovyError('Caught error: ScriptException: java.lang.IllegalStateException: isHuman fails for p1\n' +
+      '  at Script531.groovy:6\n  at Script534.groovy:2\n', {
+      inStep: true,
+      frames: [{ file: 'Script531.groovy', line: 6, step: 'InitStep', name: 'isHuman' }, { file: 'Script534.groovy', line: 2, step: 'RoundStep', own: true }],
+    })
+    expect(kinds(loads)).toEqual(['own: Line 2', 'in: in isHuman (InitStep line 6)'])
+    const syntax = parseGroovyError('Caught error: ScriptException: org.codehaus.groovy.control.MultipleCompilationErrorsException: ' +
+      'startup failed:\nScript600.groovy: 3: unexpected token: } @ line 3, column 1.\n   }\n   ^\n\n1 error\n', {
+      inStep: true,
+      frames: [{ file: 'Script600.groovy', line: 3, step: 'RoundStep', own: true }],
+    })
+    expect(syntax.title).toBe('Syntax error')
+    expect(syntax.places).toEqual([{ file: 'Script600.groovy', line: 3, column: 1, kind: 'own', step: 'RoundStep', primary: true }])
+  })
+
+  it('keeps the script that was run as its own on the Script console and the Steps page, and names the rest by step', () => {
+    // the Script console ran roundStep.start() (Script950, its own), and RoundStep failed at its line 71
+    const typed = parseGroovyError('Caught error: MissingPropertyException: No such property: x for class: Script534\n' +
+      '  at Script534.groovy:71\n  at step.groovy:64\n  at Script950.groovy:1\n', {
+      frames: [{ file: 'Script534.groovy', line: 71, step: 'RoundStep', own: true }, { file: 'Script950.groovy', line: 1 }],
+    })
+    expect(kinds(typed)).toEqual(['own: Line 1', 'other: RoundStep line 71'])
+    // the Steps page ran RoundStep's code again (Script960), which called isHuman at its line 3
+    const run = parseGroovyError('Caught error: IllegalStateException: isHuman fails for p2\n  at Script531.groovy:6\n  at Script960.groovy:3\n', {
+      frames: [{ file: 'Script531.groovy', line: 6, step: 'InitStep', name: 'isHuman' }, { file: 'Script960.groovy', line: 3, step: 'RoundStep', own: true }],
+    })
+    expect(kinds(run)).toEqual(['own: Line 3', 'in: in isHuman (InitStep line 6)'])
+  })
+
+  it('reads where the server\'s brief words say a step failed', () => {
+    expect(readBrief('line 71: No such property: x')).toEqual({ line: 71, in: null, message: 'No such property: x' })
+    expect(readBrief('line 14, in isHuman (InitStep line 30): isHumanStrict fails: a: b')).toEqual({
+      line: 14, in: { step: 'InitStep', line: 30, name: 'isHuman' }, message: 'isHumanStrict fails: a: b',
+    })
+    expect(readBrief('line 14, in Init Step line 30: boom')).toEqual({ line: 14, in: { step: 'Init Step', line: 30, name: null }, message: 'boom' })
+    // the failing step's own line unknown: the innermost line, which is another step's
+    expect(readBrief('line 30 of InitStep: boom')).toEqual({ line: null, in: { step: 'InitStep', line: 30, name: null }, message: 'boom' })
+    expect(readBrief('boom (no line)')).toEqual({ line: null, in: null, message: 'boom (no line)' })
+    // the data: stepFailed's error, and sessionFailed's line and error
+    expect(failureWhere({ step: 'RoundStep', error: 'line 14, in isHuman (InitStep line 30): boom' }))
+      .toEqual({ line: 14, in: { step: 'InitStep', line: 30, name: 'isHuman' } })
+    expect(failureWhere({ step: 'RoundStep', line: '14', error: 'in isHuman (InitStep line 30): boom' }))
+      .toEqual({ line: 14, in: { step: 'InitStep', line: 30, name: 'isHuman' } })
+    expect(failureWhere({ step: 'RoundStep', line: '71', error: 'No such property: x' })).toEqual({ line: 71, in: null })
+  })
+
+  it('opens each line where it is: the failing step\'s, and the step whose function it called', async () => {
+    const raw = 'Caught error: IllegalStateException: isHumanStrict fails\n  at Script531.groovy:65\n  at Script534.groovy:14\n  at step.groovy:64\n' +
+      '  at Script534.groovy:80\n  at Script900.groovy:1\n'
+    const frames = [
+      { file: 'Script531.groovy', line: 65, step: 'InitStep', name: 'isHuman' },
+      { file: 'Script534.groovy', line: 14, step: 'RoundStep', own: true },
+      { file: 'Script534.groovy', line: 80, step: 'RoundStep' },
+      { file: 'Script900.groovy', line: 1 },
+    ]
+    // as Live session shows it: no step of its own, every line named by its step
+    const w = mount(EngineError, { props: { error: raw, frames, ownName: 'roundStep', fromLine: 1, inStep: true } })
+    expect(w.findAll('.eng-err__places li').map(li => li.text())).toEqual([
+      'Line 14 of RoundStep', 'in isHuman (InitStep line 65)', 'Line 80 of RoundStep', 'Script900.groovy, line 1 another script',
+    ])
+    const links = w.findAll('button.eng-err__place')
+    expect(links).toHaveLength(3)
+    for (const b of links) await b.trigger('click')
+    expect(w.emitted('goto')).toEqual([[14, undefined, 'RoundStep'], [65, undefined, 'InitStep'], [80, undefined, 'RoundStep']])
+    // as the Steps page shows a run of RoundStep's code (Script960, the newest), which called isHuman at its line 3:
+    // "this step", in its editor, and InitStep's line where it went wrong
+    const page = mount(EngineError, {
+      props: {
+        error: 'Caught error: IllegalStateException: isHuman fails for p2\n  at Script531.groovy:6\n  at Script960.groovy:3\n',
+        frames: [{ file: 'Script531.groovy', line: 6, step: 'InitStep', name: 'isHuman' }, { file: 'Script960.groovy', line: 3, step: 'RoundStep', own: true }],
+        ownName: 'this step',
+        ownStep: 'RoundStep',
+        fromLine: 1,
+      },
+    })
+    expect(page.findAll('.eng-err__places li').map(li => li.text())).toEqual(['Line 3 of this step', 'in isHuman (InitStep line 6)'])
+    for (const b of page.findAll('button.eng-err__place')) await b.trigger('click')
+    expect(page.emitted('goto')).toEqual([[3, undefined, undefined], [6, undefined, 'InitStep']])
+    // a line of a step's code is that step's line, never moved by where the script run from the editor began
+    const shifted = mount(EngineError, {
+      props: {
+        error: 'Caught error: boom\n  at Script534.groovy:71\n  at Script500.groovy:1\n',
+        frames: [{ file: 'Script534.groovy', line: 71, step: 'RoundStep', own: true }, { file: 'Script500.groovy', line: 1 }],
+        ownName: 'your script',
+        fromLine: 5,
+      },
+    })
+    expect(shifted.findAll('.eng-err__places li').map(li => li.text())[0]).toBe('Line 71 of RoundStep')
+    await shifted.find('button.eng-err__place').trigger('click')
+    expect(shifted.emitted('goto')![0]).toEqual([71, undefined, 'RoundStep'])
+    // an older message: as before
+    const old = mount(EngineError, { props: { error: raw, ownName: 'RoundStep', fromLine: 1, inStep: true } })
+    expect(old.findAll('.eng-err__places li').map(li => li.text())[0]).toBe('Line 65 of RoundStep')
+    expect(old.findAll('.eng-err__places li').map(li => li.text())).toContain('Script534.groovy, line 14 an earlier script or a step')
+  })
+})
+
 describe('history and the buffer', () => {
   it('keeps the newest run on top and counts repeats once', () => {
     let list: HistoryItem[] = []
@@ -557,6 +722,35 @@ describe('ConsolePage', () => {
     expect(w.find('.run.is-ok').exists()).toBe(true)
     expect(w.find('.run__value').text()).toBe('3')
     w.unmount()
+  })
+
+  it('opens a step\'s line its error names on the Steps page, and the script\'s own line in the editor', async () => {
+    seedConsole('r@lab.org', '')
+    consoleState.buffer = 'roundStep.start()'
+    consoleState.runs = []
+    admin.user = { ...admin.user, engine: { experimentId: 4, experimentName: 'Trust game' } }
+    const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
+    try {
+      await w.findAll('button').find(b => b.text() === 'Run script')!.trigger('click')
+      const id = actions.runScript.mock.results[0].value
+      // RoundStep (Script534) failed at its line 71, started by the script typed here (Script950, line 1)
+      push('error', 'Caught error: MissingPropertyException: No such property: x for class: Script534\n  at Script534.groovy:71\n' +
+        '  at step.groovy:64\n  at Script950.groovy:1\n', 'SendScript', id, {
+        step: 'RoundStep',
+        frames: [{ file: 'Script534.groovy', line: 71, step: 'RoundStep', own: true }, { file: 'Script950.groovy', line: 1 }],
+      })
+      await nextTick()
+      await flushPromises()
+      expect(w.findAll('.run .eng-err__places li').map(li => li.text())).toEqual(['Line 1 of your script', 'RoundStep line 71'])
+      routerPush.mockClear()
+      await w.findAll('.run button.eng-err__place')[1].trigger('click')
+      expect(routerPush).toHaveBeenCalledWith({ path: '/steps', query: { step: 'RoundStep', line: '71', experiment: '4' } })
+      await w.findAll('.run button.eng-err__place')[0].trigger('click')
+      expect(routerPush).toHaveBeenCalledTimes(1)
+    } finally {
+      admin.user = { ...admin.user, engine: undefined }
+      w.unmount()
+    }
   })
 
   it('does not run an empty editor', async () => {

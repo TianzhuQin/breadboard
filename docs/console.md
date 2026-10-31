@@ -279,9 +279,13 @@ how many people are here and the countdown. **Events** lists what the session re
 first, as it happens, with what the well-known ones mean (a researcher's preview signing in says
 so); click one to see its data. When the experiment's scripts report an error, a card at the top
 says what went wrong in plain words and on which line of which step (click it to open the step at
-that line); **Full error** has the rest, Breadboard's own code included. When the engine runs
-another experiment than the one you work on (the autopilot's, say), the card names it, and the
-Steps page asks to switch to it before opening the step.
+that line); **Full error** has the rest, Breadboard's own code included. When that line called a
+function another step defines and it went wrong there, the card says both, for example **Line 14 of
+RoundStep** and **in isHuman (InitStep line 30)**, and each opens its own step at its line; the
+other lines it lists are named by their step too (RoundStep line 80). The Steps page and the Script
+console name a run's lines the same way. When the engine runs another experiment than the one you
+work on (the autopilot's, say), the card names it, and the Steps page asks to switch to it before
+opening the step.
 
 Under **Links for participants**, **This session** works while this session runs. **Whichever
 session is open** leads to this experiment's open session whose game hasn't started, so it can be
@@ -454,15 +458,17 @@ its participants that it had to stop because of a problem with the study (those 
 Prolific, that they can open the study again from Prolific later or return it; someone who was given
 a completion code keeps it on screen), records a `sessionFailed` event (`step`, `line`, `error`),
 and pauses the autopilot, and this page names the step and line; so does an OnJoinStep that fails
-before the game starts when no waiting room is set. A failure that doesn't stall, such as a typo
-after the next round has started, is only recorded and shown, and the game goes on. In a session you
-run by hand nothing is ended. When **Start the game**, the waiting room or the OnJoinStep started a
-game that didn't get going, the start is taken back, so newcomers can join and **Start the game**
-works again once you fix the step; a start the experiment makes on a timer or after a choice is
-taken back only if InitStep itself fails, and otherwise the game counts as started. In the
-autopilot's own session, a **Start the game** that didn't get going ends the session and pauses the
-autopilot, as its waiting room's start does: once Start is pressed, its waiting room no longer
-starts the game.
+before the game starts when no waiting room is set. The line is the one in the failing step's own
+code; when it called a function another step defines and it went wrong there, the error says where
+first (`in isHuman (InitStep line 30): …`), and this page links to both lines. A failure that
+doesn't stall, such as a typo after the next round has started, is only recorded and shown, and the
+game goes on. In a session you run by hand nothing is ended. When **Start the game**, the waiting
+room or the OnJoinStep started a game that didn't get going, the start is taken back, so newcomers
+can join and **Start the game** works again once you fix the step; a start the experiment makes on a
+timer or after a choice is taken back only if InitStep itself fails, and otherwise the game counts
+as started. In the autopilot's own session, a **Start the game** that didn't get going ends the
+session and pauses the autopilot, as its waiting room's start does: once Start is pressed, its
+waiting room no longer starts the game.
 
 **Games that never end.** The autopilot's own session is also ended when its game has run for
 **Longest session**, at that moment, whatever keeps it going: its participants are told the session

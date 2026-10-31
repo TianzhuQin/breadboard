@@ -180,9 +180,12 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   to Prolific without it.
 - Engine errors on Live session and the Autopilot page are explained in plain words, as on the Steps
   page: "Line 71 of RoundStep", with a link that opens the step at that line (asking first to switch
-  to the experiment the engine runs), and **Full error** for the rest. The events lists say what the
-  well-known events mean, name the step and line of a failure, say when a researcher's preview signed
-  in, and show failures in red and warnings in amber.
+  to the experiment the engine runs), and **Full error** for the rest. The server names each line of
+  an error by the step whose code it is: when a step's line calls a function another step defines and
+  it goes wrong there, the console, the data (`stepFailed`, `sessionFailed`) and the log say both,
+  "line 14 of RoundStep, in isHuman (InitStep line 30)", and each opens its own step. The events
+  lists say what the well-known events mean, name the step and line of a failure, say when a
+  researcher's preview signed in, and show failures in red and warnings in amber.
 - Preview shows the session's test players as soon as it opens, also after a reload. Its tiles and
   player list say **Watching** where a preview only watches and **Away** where it stands in for
   someone who left, with what that means now; on a phone the player list folds away.

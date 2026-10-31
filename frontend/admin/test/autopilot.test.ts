@@ -321,6 +321,19 @@ describe('words and links', () => {
     expect(autopilotActivity([{ name: 'engineReloaded', datetime: at(5), data: { restarted: 'true', by: 'a@lab.org' } }])[0])
       .toMatchObject({ text: 'The engine was reloaded by a@lab.org; the game started again from the beginning', tone: 'info' })
   })
+
+  it('says where a failure went wrong in another step\'s function the failing step called', () => {
+    const at = (m: number) => `2026-10-30T10:${String(m).padStart(2, '0')}:00Z`
+    expect(autopilotActivity([
+      { name: 'stepFailed', datetime: at(2), data: { step: 'RoundStep', error: 'line 14, in isHuman (InitStep line 30): isHumanStrict fails' } },
+      { name: 'sessionFailed', datetime: at(2), data: { step: 'RoundStep', line: '14', error: 'in isHuman (InitStep line 30): isHumanStrict fails' } },
+    ]).map(a => a.text)).toEqual([
+      'Ended: RoundStep failed at line 14, in isHuman at InitStep line 30 and stalled the game',
+      'RoundStep failed at line 14, in isHuman at InitStep line 30',
+    ])
+    expect(autopilotActivity([{ name: 'stepsFailedToLoad', datetime: at(5), data: { error: 'RoundStep: line 2, in isHuman (InitStep line 6): isHuman fails for p1' } }])[0])
+      .toMatchObject({ text: 'Stopped before anyone joined: RoundStep failed at line 2, in isHuman at InitStep line 6 as the steps loaded' })
+  })
 })
 
 // ---- the page --------------------------------------------------------------------------------------
@@ -504,6 +517,7 @@ describe('Autopilot page', () => {
     expect(pauseFailure(loadFailed)).toEqual({
       step: 'InitStep',
       line: 24,
+      in: null,
       message: 'No such property: five',
       text: 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load, so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail,
     })
@@ -527,6 +541,34 @@ describe('Autopilot page', () => {
     expect(link.text()).toBe('Open InitStep at line 24')
     // (the step of the autopilot's experiment: the Steps page asks to switch when it is another one)
     expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24&experiment=12')
+    expect(box.findAll('a.apst__open-step')).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('links to the failing step\'s line and to where it went wrong in another step\'s function it called', async () => {
+    const tail = '. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    const stalled = 'It is paused: the step "RoundStep" failed during its session "A (1)" (line 14, in isHuman (InitStep line 30): isHumanStrict fails), so that session was stopped. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(stalled)).toEqual({
+      step: 'RoundStep',
+      line: 14,
+      in: { step: 'InitStep', line: 30, name: 'isHuman' },
+      message: 'isHumanStrict fails',
+      text: 'It is paused: the step "RoundStep" failed during its session "A (1)", so that session was stopped. Fix the step on the Steps page first' + tail,
+    })
+    const loads = 'It is paused: the steps of its session "S" didn\'t load (RoundStep: line 2, in InitStep line 6: isHuman fails for p1), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(loads)).toMatchObject({ step: 'RoundStep', line: 2, in: { step: 'InitStep', line: 6, name: null }, message: 'isHuman fails for p1' })
+
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem: stalled },
+    }))
+    const w = await mountPage()
+    const links = w.find('.apst__problem').findAll('a.apst__open-step')
+    expect(links.map(a => a.text())).toEqual(['Open RoundStep at line 14', 'Open InitStep at line 30, where it went wrong in isHuman'])
+    expect(links.map(a => a.attributes('href'))).toEqual([
+      '/steps?step=RoundStep&line=14&experiment=12', '/steps?step=InitStep&line=30&experiment=12',
+    ])
+    expect(w.find('.apst__problem').text()).toContain('isHumanStrict fails')
     w.unmount()
   })
 

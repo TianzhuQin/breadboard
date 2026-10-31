@@ -42,6 +42,35 @@ describe('admin store', () => {
     expect(admin.output.map(o => o.step)).toEqual(['RoundStep', undefined])
   })
 
+  it('keeps the lines of an engine error named by step, when the server names them, and only those well formed', () => {
+    __receive({
+      error: 'Caught error: boom\n',
+      step: 'RoundStep',
+      frames: [
+        { file: 'Script531.groovy', line: 65, step: 'InitStep', name: 'isHuman' },
+        { file: 'Script534.groovy', line: 14, step: 'RoundStep', own: true },
+        { file: 'Script900.groovy', line: 1, step: '' },
+        { file: 'graph.groovy', line: 3, step: 'InitStep' },
+        { file: 'Script534.groovy', line: 0 },
+        { file: 'Script534.groovy', line: '12', own: 'yes', name: 7 },
+        null,
+        'Script1.groovy:1',
+      ],
+    })
+    __receive({ error: 'Caught error: boom\n', frames: 'no' })
+    __receive({ error: 'Caught error: boom\n', frames: [{ file: 'x' }] })
+    expect(admin.output.map(o => o.frames)).toEqual([
+      [
+        { file: 'Script531.groovy', line: 65, step: 'InitStep', name: 'isHuman' },
+        { file: 'Script534.groovy', line: 14, step: 'RoundStep', own: true },
+        { file: 'Script900.groovy', line: 1 },
+        { file: 'Script534.groovy', line: 12 },
+      ],
+      undefined,
+      undefined,
+    ])
+  })
+
   it('keeps every output and error, and counts errors not yet seen', () => {
     __receive({ error: '', output: 'x\n\n==>1' })
     __receive({ error: 'Caught error: boom\n' })

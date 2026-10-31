@@ -228,9 +228,11 @@
             <EngineError
               v-if="cur.run.status === 'error' && cur.run.error"
               :error="cur.run.error"
+              :frames="cur.run.frames"
               :from-line="1"
               own-name="this step"
-              @goto="goto"
+              :own-step="cur.name"
+              @goto="gotoStep"
             />
           </div>
           <p v-else-if="runBlocked && !fileMode" class="steps__hint is-blocked" role="note">
@@ -433,6 +435,11 @@ function focusEditor () {
 function goto (line: number, column?: number) {
   const v = editorView()
   if (v) goToLine(v, line, column)
+}
+/** A line of a run's error: of this step, or of another step's code (`step`, which the server names), opened there. */
+function gotoStep (line: number, column?: number, step?: string) {
+  if (step && step !== current.value?.name) void openAt(step, line)
+  else goto(line, column)
 }
 
 // ---- opened at a step's line (/steps?step=RoundStep&line=71&experiment=4) -----------------------

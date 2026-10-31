@@ -51,10 +51,17 @@
           <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" />
           <!-- (a step of the autopilot's experiment, which needn't be the one this console works on: named then,
                and the Steps page asks to switch to it) -->
-          <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line, status.experimentId)">
-            Open {{ failure.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ failure.line ? ` at line ${failure.line}` : '' }}
-            <ArrowRight :size="14" aria-hidden="true" />
-          </RouterLink>
+          <div class="apst__open-steps">
+            <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line, status.experimentId)">
+              Open {{ failure.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ failure.line ? ` at line ${failure.line}` : '' }}
+              <ArrowRight :size="14" aria-hidden="true" />
+            </RouterLink>
+            <!-- where it went wrong, when that was in another step's code that line called (a function of InitStep's) -->
+            <RouterLink v-if="failure.in" class="apst__open-step" :to="stepAt(failure.in.step, failure.in.line, status.experimentId)">
+              Open {{ failure.in.step }} at line {{ failure.in.line }}, where it went wrong{{ failure.in.name ? ` in ${failure.in.name}` : '' }}
+              <ArrowRight :size="14" aria-hidden="true" />
+            </RouterLink>
+          </div>
         </template>
       </div>
     </div>
@@ -318,7 +325,8 @@ const noticeTime = computed(() => {
 .apst__problem-title { font-weight: 650; }
 .apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .apst__problem-err { margin-top: 6px; }
-.apst__open-step { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; font-weight: 600; color: inherit; }
+.apst__open-steps { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; }
+.apst__open-step { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: inherit; }
 .apst__live { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-soft-text); font-size: var(--text-sm); }
 .apst__local { margin: 6px 0 8px; }
 .apst__link { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
