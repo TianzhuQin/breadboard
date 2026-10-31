@@ -1,6 +1,6 @@
-@(title: String, message: String, retrySeconds: Int)
+@(title: String, message: String, retrySeconds: Int, texts: models.SystemTexts.Page)
 <!DOCTYPE html>
-<html lang="en">
+<html lang="@texts.lang()">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -17,7 +17,7 @@
       <p class="bb-lead">@message</p>
       <div class="bb-loading" role="status">
         <div class="bb-spinner" aria-hidden="true"></div>
-        <span>Checking every few seconds…</span>
+        <span>@texts.t("holding.checking")</span>
       </div>
     </main>
   </body>
