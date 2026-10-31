@@ -282,16 +282,22 @@ describe('asking before an engine rebuild', () => {
     settleConfirm(false)
     await answer
 
-    // paused already, or switched off (its session still open): nothing more to pause
-    for (const status of [{ ...live, paused: true }, { ...live, on: false }]) {
+    // paused already, done, or switched off (its session still open, maybe resumed by hand): nothing
+    // more to pause, and the session isn't the autopilot's, as the server still names it its session
+    // (status.instance), but the account's that runs it
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '',
+      engine: { experimentId: 3, experimentName: 'Trust', sessionId: 9, sessionName: 'Auto 3', owner: 'other@lab' } })
+    for (const status of [{ ...live, paused: true }, { ...live, done: true }, { ...live, on: false }]) {
       get.mockResolvedValue({ status })
       answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
       await vi.waitFor(() => expect(confirmState.open).toBe(true))
-      expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
+      expect(confirmState.req!.message).toContain('other@lab has session “Auto 3” of “Trust” running. This stops their session “Auto 3”')
+      expect(confirmState.req!.message).not.toContain('The autopilot has')
       expect(confirmState.req!.message).not.toContain('pauses the autopilot')
       settleConfirm(false)
       await answer
     }
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })
 
   it('names the session the engine runs, also another account\'s', async () => {
@@ -416,6 +422,17 @@ describe('what a reload or resume carries on', () => {
     expect(confirmState.req!.message).not.toContain('pauses the autopilot')
     settleConfirm(false)
     expect(await answer).toBe(false)
+
+    // the session the autopilot opened, which it no longer runs (switched off, paused or done: e.g.
+    // resumed by hand after a Stop): this account's session, not the autopilot's, and nothing pauses
+    for (const status of [{ on: false }, { on: true, paused: true }, { on: true, done: true }]) {
+      get.mockResolvedValue({ status: { ...status, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+      use = await engineUse(9)
+      expect(use.who).toBe('Your session “Auto 3” carries on, but its game is in progress: reloading starts the game again from the beginning. '
+        + 'The 2 people in it are disconnected for a moment and rejoin by themselves.')
+      expect(use.pausesAutopilot).toBe(false)
+      expect((await engineUse()).who).toMatch(/^Your session “Auto 3” is running\./)
+    }
 
     // this account's own session, before its game: asked while anyone is connected
     get.mockResolvedValue({ status: { on: false, instance: null } })

@@ -15,11 +15,11 @@ type Named = { id: number, name: string }
 type EngineSession = Named & { experimentName: string | null, owner: string | null }
 
 /**
- * What GET /autopilot says the engine runs right now: `auto`, its session of the autopilot's
- * experiment (status.instance), and `other`, its live session of any other experiment
- * (status.engineSession, with the account that runs it). Both null when it can't be asked; never fails.
- * `autopilotLive`: the autopilot is on, not paused, and `auto` is its session, so a researcher's
- * rebuild that ends it pauses the autopilot (the server's Autopilot.sessionStopped).
+ * What GET /autopilot says the engine runs right now: `auto`, the autopilot's session
+ * (status.instance) while the autopilot runs it (it is on, neither paused nor done), and `other`, its
+ * live session of any other experiment (status.engineSession, with the account that runs it). Both
+ * null when it can't be asked; never fails. `autopilotLive`: `auto` is set, so a researcher's rebuild
+ * that ends it pauses the autopilot (the server's Autopilot.sessionStopped).
  *
  * The server works these out when it is asked, so they also name a session started since this
  * console last heard what the engine runs (admin.user.engine is asked for once the engine says it
@@ -31,9 +31,13 @@ async function engineSessions (): Promise<{ auto: Named | null, other: EngineSes
     const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))
     const s = await Promise.race([answer, timeout])
     const status = s && s.status && typeof s.status === 'object' ? s.status : null
-    const auto = autopilotSession(status)
     const on = !!status && status.on === true
-    return { auto, other: otherSession(status), autopilotOn: on, autopilotLive: !!auto && on && status.paused !== true, known: !!status }
+    // The autopilot's session only while the autopilot runs it: switched on, neither paused nor done.
+    // A session it opened that a researcher resumed by hand while it was off or paused is theirs:
+    // a reload of it from their console said "The autopilot's session … carries on".
+    const runs = on && status.paused !== true && status.done !== true
+    const auto = runs ? autopilotSession(status) : null
+    return { auto, other: otherSession(status), autopilotOn: on, autopilotLive: !!auto, known: !!status }
   } catch (e) {
     return { auto: null, other: null, autopilotOn: false, autopilotLive: false, known: false }
   }
@@ -45,9 +49,9 @@ const idOf = (v: any): number | null => {
 }
 const textOf = (v: any): string | null => (typeof v === 'string' && v ? v : null)
 
-/** The engine's session of the autopilot's experiment, while it has not ended. */
+/** The engine's session of the autopilot's experiment that it opened (or was handed), while it has not ended. */
 function autopilotSession (status: any): Named | null {
-  // (turning the autopilot off leaves its running session open, so "on" does not matter here)
+  // (turning the autopilot off leaves its running session open: whether it still runs it, engineSessions says)
   const inst = status ? status.instance : null
   const id = inst && typeof inst === 'object' ? idOf(inst.id) : null
   if (id === null) return null
