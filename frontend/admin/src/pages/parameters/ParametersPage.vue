@@ -96,7 +96,7 @@
         </li>
         <li>
           <span class="pp-how__n" aria-hidden="true">2</span>
-          <div><strong>Choose values per session</strong><p>When you create a session, you are asked for every parameter, pre-filled with its default. The values are saved with the session's data.</p></div>
+          <div><strong>Choose values per session</strong><p>When you create a session, you are asked for every parameter: the first time filled in with its default, after that with the last session's values (<em>Use default</em> brings a default back). The autopilot's sessions get the defaults. The values are saved with the session's data.</p></div>
         </li>
         <li>
           <span class="pp-how__n" aria-hidden="true">3</span>
@@ -224,7 +224,8 @@ function onSaved (saved: Parameter) {
     else added.value = [...added.value, saved]
   }
   const found = list.value.find(p => p.id === saved.id) || null
-  if (editing.value) notify.success(`Saved ${saved.name}`, 'Sessions you create from now on use the new settings.')
+  // (New session fills in the last session's values, not a default changed since: Use default takes it)
+  if (editing.value) notify.success(`Saved ${saved.name}`, 'The autopilot’s next sessions get its default. New session fills in the last session’s value: press Use default there to take the new one.')
   else notify.success(`Created ${saved.name}`, 'Sessions you create from now on will ask for it.')
   if (found) flash(found)
   refresh()
