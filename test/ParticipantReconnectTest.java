@@ -183,7 +183,7 @@ public class ParticipantReconnectTest extends BaseTest {
         // a session that doesn't exist (any more)
         Page gone = reconnect(e, "987654", "P5", "a-token-from-before");
         String goneText = gone.frames.get(0).path("sessionOver").path("player").path("text").asText();
-        assertTrue(goneText, goneText.contains(controllers.ClientLogin.INVALID_LINK[0]));
+        assertTrue(goneText, goneText.contains(models.SystemTexts.text(null, "link.invalidTitle")));
         // a Mechanical Turk session: the worker is asked to return the HIT, as on a reload
         AMTHit hit = new AMTHit();
         hit.experimentInstance = instance;

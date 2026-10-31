@@ -26,6 +26,17 @@ public class ContentFetcher {
     }
 
     this.defaultLanguage = language;
+    // Breadboard's own words to the session's participants follow it (SessionLanguage).
+    ScriptBoard.contentLanguageChosen(this);
+  }
+
+  /**
+   * The code of the language chosen with setDefaultLanguage ("zho", ...), or null when none is: the
+   * language the session's texts are in, which Breadboard's own words to its participants follow.
+   */
+  public String languageCode() {
+    Language language = defaultLanguage;
+    return language == null ? null : language.getCode();
   }
 
   public String get(String name) {

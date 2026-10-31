@@ -49,7 +49,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
   - 测试玩家（他自己的页面从没在这一场连上过）由预览来玩：预览算他在线，预览里的选择就是他的选择。
   - 预览不会把人加进游戏：不在网络里的人（比如恢复场次后还没回来的人），预览上写着 **Not in the game right now**，等他回来后自动显示他的页面。恢复场次或重新加载引擎以后，这些规则照样适用。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；参与者看到的所有文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；游戏里的说明、提示和得分文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 例子的文字是英文写的，放在 Content 页面代码为 `eng` 的语言下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
 
@@ -57,8 +57,19 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 - 语言栏里每种语言的名字旁边都写着代码。新装的服务器用英文写语言的名字：`eng` 是 **English**，`zho` 是 **Chinese**，按钮是 **Copy from English**。从旧版本升级来的服务器，名字跟着当初建数据库那台电脑的语言，在中文系统上可能是“英文”“中文”，按钮也就是 **Copy from 英文**。认代码就不会错。
 - 还没翻译的文字，参与者看到的仍是英文，所以可以一段一段地翻译。
 - 参与者读哪种语言，由启动参数 `language` 决定，默认是你的 Default language。要让参与者看英文，在 **Parameters** 页把 `language` 的 **Default** 改成 `eng`，自动运行以后开的场次就用英文。自己新建一场时要注意：**New session** 会照上一场填好启动参数，不会自动换成新的 Default，所以要在 `language` 下点 **Use default**，确认是 `eng`，再点 **Create session**。
+- Breadboard 自己的文字也跟着 `language` 走，见下面。
 
-实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)。各页面的说明见 [console.md](console.md#building-an-experiment)。
+**让参与者看到的页面全是中文**：除了你在 **Content** 页面写的文字，参与者还会看到 Breadboard 自己的文字：登录页、等候室、网络图上的提示和确认框、可以做的修改列表、连接断开时的提示、各种结束页面、Prolific 的完成页面（完成码和 **完成，回到 Prolific** 按钮），以及“你已经参加过这项研究了”“现在没有开放的实验”“本场实验人数已满”和等下一场开放的等待页。
+
+这些文字跟着这一场的内容语言走，也就是实验步骤用 `c.setDefaultLanguage(...)` 选的语言：选了中文（`zho`），参与者从登录到结束看到的都是中文；选了英文、别的语言，或者没有选，就是英文。Breadboard 自带的只有英文和简体中文。
+
+- **用 Example: network game**：把启动参数 `language` 设成 `zho`（见上面），这些文字就都是中文；再把 **Content** 页面上的文字翻译成中文，整个页面就是中文了。只有颜色的名字 **Blue**、**Orange** 写在步骤代码 RoundStep 里，不在 **Content** 页面上：按钮上的字，和“你选了 Blue”这类文字里的颜色都是它，要换成中文得改代码。
+- **自己写的实验**：在 InitStep 里、`run` 外面写上 `c.setDefaultLanguage("zho")`，这样每一场的步骤一加载，就定下了这一场的语言。游戏进行中再调用一次（比如换成 `eng`），参与者开着的页面也会跟着换。`a.add` 里没写 `name` 的选项，按钮上显示为“选项 1”“选项 2”……，也跟着这一场的语言。
+- 开场前和两场之间看到的页面（等下一场的等待页、“现在没有开放的实验”、“你已经参加过这项研究了”），用的是它们要带人进入的那一场的语言；那一场还没开时，用这个实验最近一场的语言。这个实验还从没开过场时，是英文。
+- 这份指南里引用的参与者页面上的英文（比如 "No session is open right now"、**Finish and return to Prolific**），在中文的场次里都是对应的中文。
+- 仍然是英文的：控制台；预览里只给研究者看的提示（比如 **Watching only**）；用旧版参与者页面（AngularJS）的老实验；Mechanical Turk 的页面；实验性的模块（旧的 `waitingRoom` 等候室和分组）。数据里记下的原因（比如 `edgeEdit` 事件的 `reason`）也一直是英文，方便分析。预览一个不在游戏里的人时，小窗里显示的“不在游戏里”页面也跟着这一场的语言，只有小窗下面控制台的说明 **Not in the game right now** 是英文。
+
+实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)，Breadboard 自己的文字怎样跟着语言走，见 [whats-new.md](whats-new.md#texts-in-several-languages)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 
 ## 开一场实验并邀请参与者
 
@@ -132,7 +143,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
      ```
 
      不加这个判断也不会出错：对不是从 Prolific 来的人，它什么都不做，只在服务器日志里写一行原因。
-   - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场（用例子游戏时，确认 `prolificCode` 填的是你的完成码，不是的话点它下面的 **Use default**），然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮。
+   - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场（用例子游戏时，确认 `prolificCode` 填的是你的完成码，不是的话点它下面的 **Use default**），然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮（中文的场次里是 **完成，回到 Prolific**）。
 
 参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。这一页一直开着的话，这一场结束后一周之内都能把留言存下来，又过了很多场、服务器重启过也一样；万一存不下来，页面会直接告诉参与者，给出 **Try again** 和 **Return to Prolific without it** 两个按钮，不会不声不响地丢掉留言（连不上服务器、或者服务器出错时，页面说的是留言可能没送到，因为服务器也许已经存下了）；服务器 10 秒内没有回音时，页面会说留言还没确认存下（按钮是 **Try again** 和 **Return to Prolific without waiting**），等服务器存好了就自己回到 Prolific。**Try again** 会先等前一次的回音，前一次确实失败了才重发；同一个参与者发来的同一句留言，服务器也只存一次。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场；**From Prolific in every session** 按场次列出这个实验所有场次从 Prolific 来的人（最新的一场在最上面）：什么时候加入的、有没有完成、完成码和奖金，它的 **Copy bonus list** 会复制所有场次的奖金名单。游戏结束时没拿到完成码的人（比如例子实验的 `prolificCode` 还空着的时候），在两个列表里都算完成，标成 **No code**。等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
 

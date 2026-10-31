@@ -223,6 +223,7 @@ public class Global extends GlobalSettings {
       Logger.warn("Could not add the index on event data names (looking up returning Prolific participants is slower without it): " + e.getMessage());
     }
     addLongestSession();
+    addContentLanguage();
     uncacheSessionIds();
 
     markInterruptedSessions();
@@ -302,6 +303,22 @@ public class Global extends GlobalSettings {
       }
     } catch (Exception e) {
       Logger.warn("Could not add the autopilot's longest session to its settings (its sessions then have no time limit): " + e.getMessage());
+    }
+  }
+
+  /**
+   * Evolution 35, for databases from older releases: the language of each session's texts
+   * (SessionLanguage.ADD_COLUMN), which Breadboard's own words to its participants follow. Does nothing
+   * where the column is there. Without it, those words are in English.
+   */
+  static void addContentLanguage() {
+    try {
+      if (tableExists("experiment_instances")) {
+        Ebean.createSqlUpdate(models.SessionLanguage.ADD_COLUMN).execute();
+      }
+    } catch (Exception e) {
+      Logger.warn("Could not add the language of sessions' texts to the database (Breadboard's own words to "
+          + "participants are then in English): " + e.getMessage());
     }
   }
 

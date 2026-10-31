@@ -1,20 +1,20 @@
-@(clientId: String, continueUrl: String, otherUrl: String)
+@(clientId: String, continueUrl: String, otherUrl: String, texts: models.SystemTexts.Page)
 <!DOCTYPE html>
-<html lang="en">
+<html lang="@texts.lang()">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>You're already taking part</title>
+    <title>@texts.t("seat.title")</title>
     <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
     <link rel="stylesheet" href="/assets/css/participant.css?v=@models.AssetVersion.VALUE">
   </head>
   <body class="bb-page">
     <main class="bb-panel">
       @participantMark()
-      <h1>You're already taking part</h1>
-      <p class="bb-lead">This browser has a seat in the session as <strong>@clientId</strong>.</p>
-      <a class="bb-button" href="@continueUrl">Continue as @clientId</a>
-      <p class="bb-alt"><a href="@otherUrl">Join as someone else</a></p>
+      <h1>@texts.t("seat.title")</h1>
+      <p class="bb-lead">@texts.before("seat.lead", "id")<strong>@clientId</strong>@texts.after("seat.lead", "id")</p>
+      <a class="bb-button" href="@continueUrl">@texts.t("seat.continue", "id", clientId)</a>
+      <p class="bb-alt"><a href="@otherUrl">@texts.t("seat.other")</a></p>
     </main>
   </body>
 </html>

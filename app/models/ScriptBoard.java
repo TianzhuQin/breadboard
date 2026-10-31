@@ -515,11 +515,12 @@ public class ScriptBoard extends UntypedActor {
       // that stands for them.
       return ending.apply(new Client(clientId, null));
     }
+    String lang = SessionLanguage.of(instanceId);
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
-    player.put("text", "<h3>This session has ended</h3><p>Thank you for taking part. You can close this page.</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.title"), SystemTexts.html(lang, "end.thanks")));
     return frame;
   }
 
@@ -528,19 +529,25 @@ public class ScriptBoard extends UntypedActor {
    * no longer answers), and keep saying so if they reconnect. See endParticipants(Long, ObjectNode).
    */
   static void endParticipants(Long instanceId) {
-    endParticipants(instanceId, stoppedScreen());
+    endParticipants(instanceId, stoppedScreen(SessionLanguage.of(instanceId)));
   }
 
-  /** What the participants of a session a researcher stopped see. */
+  /** What the participants of a session a researcher stopped see (in English). */
   static ObjectNode stoppedScreen() {
+    return stoppedScreen(null);
+  }
+
+  /**
+   * What the participants of a session a researcher stopped see, in the language of its texts
+   * ({@code lang}, SessionLanguage: Breadboard's own words follow it, see SystemTexts).
+   */
+  static ObjectNode stoppedScreen(String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "stopped");
-    player.put("text", "<h3>This session has been stopped</h3><p>The researcher stopped this session. "
-        + "If they start it again, open the link you were given once more. Otherwise, thank you for "
-        + "taking part: you can close this page.</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.stoppedTitle"), SystemTexts.html(lang, "end.stopped")));
     return frame;
   }
 
@@ -574,17 +581,21 @@ public class ScriptBoard extends UntypedActor {
     return g instanceof Graph ? ((Graph) g).getVertex(clientId) : null;
   }
 
-  /** What someone gets whose session started while they were away, without them (see addClient). */
+  /** What someone gets whose session started while they were away, without them (see addClient), in English. */
   static ObjectNode missedStartScreen(boolean prolific) {
+    return missedStartScreen(prolific, null);
+  }
+
+  /** missedStartScreen, in the language of the session's texts ({@code lang}). */
+  static ObjectNode missedStartScreen(boolean prolific, String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "missedStart");
-    player.put("text", "<h3>The session started without you</h3><p>The session started while your connection was "
-        + "lost, so it went ahead without you, and it can't take you in any more. "
-        + (prolific ? "Please return the study on Prolific. You can then close this page."
-            : "You can close this page. If you have any questions, please contact the researcher.") + "</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.missedStartTitle"), SystemTexts.sentences(lang,
+        SystemTexts.html(lang, "end.missedStart"),
+        SystemTexts.html(lang, prolific ? "end.missedStartProlific" : "end.missedStartOther"))));
     return frame;
   }
 
@@ -645,15 +656,14 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
-  /** What someone new is sent when the game started before they arrived. */
-  static ObjectNode sessionStartedScreen() {
+  /** What someone new is sent when the game started before they arrived ({@code lang}: the session's texts'). */
+  static ObjectNode sessionStartedScreen(String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "notRunning");
-    player.put("text", "<h3>The session has already started</h3><p>It began before you arrived, so it can't "
-        + "take anyone new. Please contact the researcher.</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "started.title"), SystemTexts.html(lang, "started.screen")));
     return frame;
   }
 
@@ -661,27 +671,25 @@ public class ScriptBoard extends UntypedActor {
    * What a researcher's preview of someone who isn't in the game of a real session is sent (see
    * addClient): nothing is there to show, and the preview adds nobody.
    */
-  static ObjectNode notInGameScreen(String clientId) {
+  static ObjectNode notInGameScreen(String clientId, String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "notInGame");
-    player.put("text", "<h3>Not in the game</h3><p>" + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(clientId)
-        + " isn't in this session's game right now, so there is nothing to show. A preview adds nobody to the game: "
-        + "participants join from their own page. Reload this preview once they have joined.</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.notInGameTitle"),
+        SystemTexts.html(lang, "end.notInGame", "id", clientId)));
     return frame;
   }
 
   /** What a page of a session the engine doesn't run (now) is sent instead of joining a game. */
-  static ObjectNode sessionNotRunningScreen() {
+  static ObjectNode sessionNotRunningScreen(String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "notRunning");
-    player.put("text", "<h3>This session isn't running</h3><p>It may have ended, or it hasn't been opened yet. "
-        + "If you were given a link to the study, open it again; otherwise you can close this page.</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "notRunning.title"), SystemTexts.html(lang, "notRunning.text")));
     return frame;
   }
 
@@ -1043,20 +1051,30 @@ public class ScriptBoard extends UntypedActor {
   static final String STEPS_SOURCE = "Steps";
 
   /**
-   * Load the experiment's steps into the engine. Returns "<step>: <what went wrong>" for the first
-   * step that didn't load, or null when they all did.
+   * Load the experiment's steps into the engine, for {@code session} (null: none, so its test
+   * session). Returns "<step>: <what went wrong>" for the first step that didn't load, or null when
+   * they all did. The language their texts are in then (c.setDefaultLanguage) is recorded for the
+   * session (SessionLanguage), as Breadboard's own words to its participants follow it: for a new one,
+   * in place of the one it was given as it was created (startGame).
    */
-  private String loadSteps(Experiment experiment, ThrottledWebSocketOut out) {
+  private String loadSteps(Experiment experiment, ThrottledWebSocketOut out, ExperimentInstance session) {
     if (experiment == null) {
       return null;
     }
     String failed = null;
-    for (Step step : experiment.getSteps()) {
-      String problem = processScript(step.source + ";null;", out, step.name, "source", STEPS_SOURCE, null, true);
-      if (problem != null && failed == null) {
-        failed = step.name + ": " + problem;
+    loadingSteps = true;
+    try {
+      for (Step step : experiment.getSteps()) {
+        String problem = processScript(step.source + ";null;", out, step.name, "source", STEPS_SOURCE, null, true);
+        if (problem != null && failed == null) {
+          failed = step.name + ": " + problem;
+        }
       }
+    } finally {
+      loadingSteps = false;
     }
+    SessionLanguage.record(session == null || session.id == null ? Experiment.TEST_INSTANCE_ID : session.id,
+        experiment.contentFetcher.languageCode());
     EngineSteps.loaded(experiment);
     afterStepsLoaded(experiment);
     if (failed == null) {
@@ -1091,6 +1109,55 @@ public class ScriptBoard extends UntypedActor {
           AutopilotHooks.afterStepsLoaded(experiment, engine, instanceIdOf(engineGameListener));
         }
       };
+
+  // Whether the engine is loading an experiment's steps now (loadSteps): a language they choose
+  // (c.setDefaultLanguage) is recorded for the session they load for once they have loaded, which may
+  // not be the one the engine ran until then.
+  private static volatile boolean loadingSteps = false;
+
+  /**
+   * The steps chose the language of their texts (c.setDefaultLanguage) while the engine runs them,
+   * e.g. as the game starts, or from the Script console: the session the engine runs takes it
+   * (SessionLanguage), and its participants' pages follow. While the steps load, loadSteps records it.
+   */
+  static void contentLanguageChosen(ContentFetcher content) {
+    Long experimentId = engineExperimentId;
+    if (loadingSteps || content == null || content.selectedExperiment == null || experimentId == null
+        || !experimentId.equals(content.selectedExperiment.id)) {
+      return;
+    }
+    ExperimentInstance session = engineSession();
+    if (session != null && session.experiment != null && session.experiment.id != null
+        && !experimentId.equals(session.experiment.id)) {
+      return;
+    }
+    SessionLanguage.record(session == null || session.id == null ? Experiment.TEST_INSTANCE_ID : session.id,
+        content.languageCode());
+  }
+
+  /**
+   * Tell the pages of the session's participants the language of its texts ({@code {"bbLanguage":
+   * code}}, null: none chosen), which Breadboard's own words on them follow: it changed while they are
+   * open (SessionLanguage.record).
+   */
+  static void tellLanguage(Long instanceId, String code) {
+    if (instanceId == null) {
+      return;
+    }
+    ObjectNode frame = Json.newObject();
+    frame.put(LANGUAGE_KEY, code);
+    for (Client client : clients.values()) {
+      ExperimentInstance seat = client.experimentInstance;
+      if (seat != null && instanceId.equals(seat.id) && !client.ended()) {
+        for (Client.Connection connection : client.connections()) {
+          connection.writeAside(frame);
+        }
+      }
+    }
+  }
+
+  /** The key of the language of a session's texts in what its pages are sent (frontend/core). */
+  static final String LANGUAGE_KEY = "bbLanguage";
 
   /** The experiment whose steps the running engine loaded, or null. */
   static Experiment engineExperiment() {
@@ -1189,7 +1256,7 @@ public class ScriptBoard extends UntypedActor {
       playerActions.turnAIOff();
     }
     stopSession(listener);
-    endParticipants(id, stoppedScreen());
+    endParticipants(id, stoppedScreen(SessionLanguage.of(id)));
     cancelEngineTimers();
     eventTracker.disable();
   }
@@ -1539,7 +1606,8 @@ public class ScriptBoard extends UntypedActor {
         // (a stopped session counts as over here: its participants keep the screen it ended with)
         boolean over = experimentInstance.status != null
             && (!experimentInstance.status.isRunnable() || experimentInstance.status == ExperimentInstance.Status.STOPPED);
-        finalScreen(in, out, over ? endedSessionScreen(experimentInstance.id, clientId) : sessionNotRunningScreen());
+        finalScreen(in, out, over ? endedSessionScreen(experimentInstance.id, clientId)
+            : sessionNotRunningScreen(SessionLanguage.of(experimentInstance.id)));
         return;
       }
 
@@ -1565,7 +1633,7 @@ public class ScriptBoard extends UntypedActor {
         // has taken this one up since a restart). Its pages reconnect, and used to be put into
         // whatever game the engine was running.
         Logger.debug("addClient: instance " + experimentInstanceId + " is not the session the engine runs");
-        finalScreen(in, out, sessionNotRunningScreen());
+        finalScreen(in, out, sessionNotRunningScreen(SessionLanguage.of(experimentInstance.id)));
         return;
       }
 
@@ -1577,7 +1645,7 @@ public class ScriptBoard extends UntypedActor {
         // connected: the console's Preview page keeps its tiles across a Stop and Resume (or a reload
         // that carries the session on), so a waiting room could start with nobody but previews in it.
         // Someone the game left out, or took out after the start, is shown their last screen below.
-        finalScreen(in, out, notInGameScreen(clientId));
+        finalScreen(in, out, notInGameScreen(clientId, SessionLanguage.of(experimentInstance.id)));
         return;
       }
 
@@ -1586,7 +1654,7 @@ public class ScriptBoard extends UntypedActor {
         // so instead of leaving the page connecting for ever. Someone whose player is in the game
         // (a participant whose page is gone, a researcher's preview of a computer player) goes on.
         Logger.debug("New client trying to join after game has already started.");
-        finalScreen(in, out, sessionStartedScreen());
+        finalScreen(in, out, sessionStartedScreen(SessionLanguage.of(experimentInstance.id)));
         return;
       }
 
@@ -1682,9 +1750,11 @@ public class ScriptBoard extends UntypedActor {
         }
       }
 
-      // Update the client's state
+      // Update the client's state: the experiment's style, and the language of the session's texts,
+      // which Breadboard's own words on the page follow (it may have changed since the page loaded).
       ObjectNode jsonOutput = Json.newObject();
       jsonOutput.put("style", experimentInstance.experiment.getStyle());
+      jsonOutput.put(LANGUAGE_KEY, SessionLanguage.of(experimentInstance.id));
       Logger.debug("addClient, " + clientId);
       connection.writeAside(jsonOutput);
     } catch (NumberFormatException nfe) {
@@ -1932,7 +2002,7 @@ public class ScriptBoard extends UntypedActor {
       return;
     }
     Long instanceId = client.experimentInstance == null ? null : client.experimentInstance.id;
-    client.lastFrame = missedStartScreen(fromProlific(client, instanceId));
+    client.lastFrame = missedStartScreen(fromProlific(client, instanceId), SessionLanguage.of(instanceId));
     client.leftOut = true;
     if (eventTracker != null && eventTracker.sessionLive()) {
       LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
@@ -1968,7 +2038,7 @@ public class ScriptBoard extends UntypedActor {
     ExperimentInstance session = client.experimentInstance;
     Long instanceId = session == null ? null : session.id;
     Long experimentId = session == null || session.experiment == null ? null : session.experiment.id;
-    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId);
+    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId, SessionLanguage.of(instanceId));
     client.leftOut = true;
     client.end(screen);
     rememberLastScreens(Collections.singletonList(client));
@@ -2012,24 +2082,28 @@ public class ScriptBoard extends UntypedActor {
    * return the study.
    */
   static ObjectNode sessionFullScreen(boolean prolific, Long experimentId) {
+    return sessionFullScreen(prolific, experimentId, null);
+  }
+
+  /** sessionFullScreen, in the language of the session's texts ({@code lang}). */
+  static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang) {
     boolean next = experimentId != null && Autopilot.opensNextSoon(experimentId);
     String what;
     if (prolific) {
-      what = next ? "The next session opens as soon as this one has ended: open the study again from Prolific to join "
-          + "it (the page waits for it to open), or return the study on Prolific if you can't wait."
-          : "Please return the study on Prolific, and message the researcher there if you have any questions.";
+      what = SystemTexts.html(lang, next ? "end.fullNextProlific" : "end.fullProlific");
+    } else if (next) {
+      String link = "<a href=\"/play/" + experimentId + "/login\">" + SystemTexts.html(lang, "end.fullNextLink") + "</a>";
+      what = SystemTexts.html(lang, "end.fullNext", "link", new SystemTexts.Html(link));
     } else {
-      what = next ? "The next session opens as soon as this one has ended. <a href=\"/play/" + experimentId
-          + "/login\">Join the next session</a>: the page waits for it to open and takes you in."
-          : "You can close this page. If you have any questions, please contact the researcher.";
+      what = SystemTexts.html(lang, "end.fullOther");
     }
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "sessionFull");
-    player.put("text", "<h3>This session is full</h3><p>It started with as many people as it can take, so it "
-        + "can't take you in. " + what + "</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.fullTitle"),
+        SystemTexts.sentences(lang, SystemTexts.html(lang, "end.full"), what)));
     return frame;
   }
 
@@ -2436,7 +2510,7 @@ public class ScriptBoard extends UntypedActor {
           if (resumed != null) {
             bindLaunchParameters(resumed, changeExperiment.experiment);
           }
-          loadSteps(experiment, breadboardMessage.out);
+          loadSteps(experiment, breadboardMessage.out, resumed);
 
           //reset the instance
           if (resumed != null) {
@@ -2607,7 +2681,7 @@ public class ScriptBoard extends UntypedActor {
         if (accountsSession) {
           bindLaunchParameters(ei, selectedExperiment);
         }
-        loadSteps(selectedExperiment, breadboardMessage.out);
+        loadSteps(selectedExperiment, breadboardMessage.out, carriesOn ? own : (accountsSession ? ei : null));
         if (carriesOn) {
           reopenAfterRebuild(own);
         }
@@ -3316,7 +3390,7 @@ public class ScriptBoard extends UntypedActor {
       }
       // Re-run the Steps, then the autopilot settings over them: here, under the lock, so another
       // account's rebuild can't come between (queued, they used to run in whatever engine was there).
-      String failed = loadSteps(experiment, launchGame.out);
+      String failed = loadSteps(experiment, launchGame.out, instance);
       if (byAutopilot) {
         if (failed != null) {
           // The steps define its waiting room and game: participants would wait for a game that
@@ -3481,7 +3555,7 @@ public class ScriptBoard extends UntypedActor {
         bindLaunchParameters(target, experiment);
         Recruitment.restoreFor(target.id);
       }
-      loadSteps(experiment, selectInstance.out);
+      loadSteps(experiment, selectInstance.out, continuing != null ? target : null);
       user.setExperimentInstanceId(target.id);
       try {
         user.update();
@@ -3632,6 +3706,9 @@ public class ScriptBoard extends UntypedActor {
 
     selectedExperiment.instances.add(instance);
     selectedExperiment.save();
+    // Before it runs, and so takes people (the study's link leads to its sign-in page): the language of
+    // its texts until its steps have loaded and chosen one (loadSteps).
+    SessionLanguage.recordProvisional(instance.id, selectedExperiment.id);
 
     if (!onAccount) {
       return instance;
@@ -4889,31 +4966,32 @@ public class ScriptBoard extends UntypedActor {
    * What the participants of a session see when the server stops while it runs (ServerStop): its
    * game lived in the server's memory and ends with it, and the next start marks the session stopped.
    * The "stopped" screen said the researcher stopped it, also when the server was only restarted. It
-   * says what they can do, as the page for a session that isn't running does (ClientLogin.NOT_RUNNING):
+   * says what they can do, as the page for a session that isn't running does (ClientLogin.notRunning):
    * once the server is back, the study's link leads to the session open then, which takes someone cut
    * short. A {@code prolific} participant opens the study again from Prolific, or returns it.
    */
   public static ObjectNode serverStoppedScreen(boolean prolific) {
+    return serverStoppedScreen(prolific, null);
+  }
+
+  /** serverStoppedScreen, in the language of the session's texts ({@code lang}). */
+  public static ObjectNode serverStoppedScreen(boolean prolific, String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "serverStopped");
-    player.put("text", "<h3>" + SERVER_STOPPED_TITLE + "</h3><p>" + serverStoppedText(prolific) + "</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.title"), serverStoppedText(prolific, lang)));
     return frame;
   }
 
-  /** The heading of serverStoppedScreen (and of the page a reload shows, ClientLogin.notRunning). */
-  public static final String SERVER_STOPPED_TITLE = "This session has ended";
-
-  /** The words of serverStoppedScreen, as text (also on the page a reload shows). */
-  public static String serverStoppedText(boolean prolific) {
-    return "It ended because the study's server was stopped or restarted. "
-        + (prolific
-            ? "You can open the study again from Prolific in a few minutes to join the session that is open then. "
-                + "If no session is open, please return the study on Prolific, and message the researcher there if you have any questions."
-            : "If you were given a link to the study, you can open it again in a few minutes to join the session that is "
-                + "open then; otherwise, thank you for taking part, and please contact the researcher if you have any questions.");
+  /**
+   * The words of serverStoppedScreen (also on the page a reload shows, ClientLogin.notRunning, under the
+   * heading end.title), in the language of the session's texts ({@code lang}).
+   */
+  public static String serverStoppedText(boolean prolific, String lang) {
+    return SystemTexts.sentences(lang, SystemTexts.text(lang, "end.serverStopped"),
+        SystemTexts.text(lang, prolific ? "end.serverStoppedProlific" : "end.serverStoppedOther"));
   }
 
   /**
@@ -4977,9 +5055,11 @@ public class ScriptBoard extends UntypedActor {
    * step stuck as it loads for good), while the whole stop has Global.SHUTDOWN_LIMIT_MS.
    */
   static java.util.function.Function<Client, ObjectNode> stopForServerStop(final Long sessionId, final boolean askDatabase) {
+    // (in the language of the session's texts, as known in memory when the database isn't to be asked)
+    final String lang = askDatabase ? SessionLanguage.of(sessionId) : SessionLanguage.known(sessionId);
     java.util.function.Function<Client, ObjectNode> screens = new java.util.function.Function<Client, ObjectNode>() {
       public ObjectNode apply(Client client) {
-        return serverStoppedScreen(client != null && fromProlific(client, askDatabase ? sessionId : null));
+        return serverStoppedScreen(client != null && fromProlific(client, askDatabase ? sessionId : null), lang);
       }
     };
     if (sessionId == null) {
@@ -5005,17 +5085,18 @@ public class ScriptBoard extends UntypedActor {
    * say they took part already).
    */
   static ObjectNode outOfTimeScreen(boolean prolific) {
+    return outOfTimeScreen(prolific, null);
+  }
+
+  /** outOfTimeScreen, in the language of the session's texts ({@code lang}). */
+  static ObjectNode outOfTimeScreen(boolean prolific, String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "outOfTime");
-    player.put("text", "<h3>This session has ended</h3><p>It ran out of time. Thank you for taking part. "
-        + (prolific
-            ? "It ended before the study gave you a completion code, so please message the researcher on Prolific "
-                + "about your submission."
-            : "You can close this page; if you have any questions, please contact the researcher.")
-        + "</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.title"), SystemTexts.sentences(lang,
+        SystemTexts.html(lang, "end.outOfTime"), SystemTexts.html(lang, prolific ? "end.outOfTimeProlific" : "end.closeOrAsk"))));
     return frame;
   }
 
@@ -5027,18 +5108,18 @@ public class ScriptBoard extends UntypedActor {
    * says (the autopilot opens nothing until the researcher has fixed the study), or return it.
    */
   static ObjectNode problemScreen(boolean prolific) {
+    return problemScreen(prolific, null);
+  }
+
+  /** problemScreen, in the language of the session's texts ({@code lang}). */
+  static ObjectNode problemScreen(boolean prolific, String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "problem");
-    player.put("text", "<h3>This session has ended</h3><p>It had to stop because of a problem with the study. Thank you for "
-        + "taking part. "
-        + (prolific
-            ? "You can open the study again from Prolific later to join a new session, if one is open then. Otherwise, "
-                + "please return the study on Prolific, and message the researcher there if you have any questions."
-            : "You can close this page; if you have any questions, please contact the researcher.")
-        + "</p>");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.title"), SystemTexts.sentences(lang,
+        SystemTexts.html(lang, "end.problem"), SystemTexts.html(lang, prolific ? "end.problemProlific" : "end.closeOrAsk"))));
     return frame;
   }
 
@@ -5059,18 +5140,20 @@ public class ScriptBoard extends UntypedActor {
 
   /** The out-of-time screens of a session's participants (outOfTimeScreen, per participant). */
   static java.util.function.Function<Client, ObjectNode> outOfTimeScreens(Long sessionId) {
+    final String lang = SessionLanguage.of(sessionId);
     return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
       public ObjectNode apply(Boolean prolific) {
-        return outOfTimeScreen(prolific);
+        return outOfTimeScreen(prolific, lang);
       }
     });
   }
 
   /** The problem screens of a session's participants (problemScreen, per participant). */
   static java.util.function.Function<Client, ObjectNode> problemScreens(Long sessionId) {
+    final String lang = SessionLanguage.of(sessionId);
     return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
       public ObjectNode apply(Boolean prolific) {
-        return problemScreen(prolific);
+        return problemScreen(prolific, lang);
       }
     });
   }

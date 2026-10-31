@@ -16,14 +16,14 @@
           @keydown.esc.prevent="cancelProposal"
         >
           <span :id="uid('confirm-text')" class="bb-network__confirm-text">{{ proposalText }}</span>
-          <button ref="cancelButton" type="button" class="bb-network__btn bb-network__btn--ghost" @click="cancelProposal">Cancel</button>
+          <button ref="cancelButton" type="button" class="bb-network__btn bb-network__btn--ghost" @click="cancelProposal">{{ texts.cancel }}</button>
           <button
             type="button"
             class="bb-network__btn"
             :class="proposal.op === 'remove' ? 'bb-network__btn--danger' : 'bb-network__btn--primary'"
             :disabled="!canSend"
             @click="confirmProposal"
-          >{{ proposal.op === 'remove' ? 'Cut tie' : 'Connect' }}</button>
+          >{{ proposal.op === 'remove' ? texts.cutTie : texts.connect }}</button>
         </div>
         <div v-else-if="toast" key="toast" class="bb-network__toast" :class="{ 'bb-network__toast--error': !toast.ok }">{{ toast.text }}</div>
         <div v-else-if="hint" key="hint" class="bb-network__hint">{{ hint }}</div>
@@ -38,7 +38,7 @@
         :viewBox="viewBox"
         preserveAspectRatio="xMidYMid meet"
         role="group"
-        :aria-label="ariaLabel"
+        :aria-label="label"
         @pointermove="onPointerMove"
         @pointerleave="hoverPoint = null"
         @click.self="clearSelection"
@@ -112,7 +112,7 @@
             <circle class="bb-network__disc" :r="n.r" :fill="`url(#${n.gradient})`" :filter="`url(#${uid('shadow')})`" />
             <circle v-if="n.selected" class="bb-network__selection" :r="n.r + 7" />
             <slot name="node-content" :node="n.node" :radius="n.r" :is-ego="n.isEgo">
-              <text v-if="n.isEgo" class="bb-network__ego-label" :style="{ fill: n.ink }" text-anchor="middle" dominant-baseline="central">{{ egoLabel }}</text>
+              <text v-if="n.isEgo" class="bb-network__ego-label" :style="{ fill: n.ink }" text-anchor="middle" dominant-baseline="central">{{ egoText }}</text>
               <text v-else-if="n.initials" class="bb-network__initials" :style="{ fontSize: `${Math.round(n.r * 0.57)}px`, fill: n.ink }" text-anchor="middle" dominant-baseline="central">{{ n.initials }}</text>
             </slot>
             <text v-if="!n.isEgo && n.shortLabel" class="bb-network__label" :style="{ fontSize: `${labelSize}px` }" text-anchor="middle" :y="n.labelY">{{ n.shortLabel }}</text>
@@ -157,6 +157,7 @@
 <script lang="ts">
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force'
 import { LinkAware, computerPlayer } from '../lib/connection'
+import { t } from '../lib/texts'
 
 type Point = { x: number, y: number }
 type AnyNode = { id: string, data: any, [key: string]: any }
@@ -198,6 +199,9 @@ let instances = 0
  * While the connection is down nothing can be changed: a change sent then would arrive late, or
  * never. The bar says so, and a confirmation already open waits for the connection. Nor on a
  * researcher's preview that only watches the player (their own page is connected).
+ *
+ * Its own words (the hints, the confirmation, the list, the server's answers, "Person A", "You") are in
+ * the language of the session's texts (lib/texts); a researcher's preview's notes stay in English.
  */
 export default LinkAware.extend({
   name: 'BBNetwork',
@@ -214,7 +218,8 @@ export default LinkAware.extend({
     /** Small pill under the label, e.g. "5 ties · 3 R": a function (node, player) => string. */
     nodeBadge: { type: Function, default: null },
     nodeRadius: { type: [Number, Function], default: 30 },
-    egoLabel: { type: String, default: 'You' },
+    /** Label on the participant; by default (null) "You", in the language of the session's texts. */
+    egoLabel: { type: String, default: null },
     /** Offer the changes as a list too, under the picture. */
     showMoveList: { type: Boolean, default: true },
     /**
@@ -222,7 +227,8 @@ export default LinkAware.extend({
      * when a later round allows editing. Automatic once the server has sent player.edgeEdits.
      */
     editable: { type: Boolean, default: false },
-    ariaLabel: { type: String, default: 'Your network' },
+    /** What screen readers call the picture; by default (null) "Your network", in the language of the session's texts. */
+    ariaLabel: { type: String, default: null },
   },
   data () {
     return {
@@ -239,7 +245,8 @@ export default LinkAware.extend({
       destroyed: false,
       resizeObserver: null as any,
       animation: 0 as number,
-      fallbackNames: {} as Record<string, string>,
+      // the letter of each neighbor's stand-in name ("Person A"), in the order they first appeared
+      fallbackLetters: {} as Record<string, string>,
       hoverEdge: null as string | null,
       hoverPoint: null as Point | null,
       selectedNode: null as string | null,
@@ -260,6 +267,19 @@ export default LinkAware.extend({
     }
   },
   computed: {
+    // Breadboard's own words here (lib/texts): reactive, so they follow the session's language
+    texts (): Record<string, string> {
+      return { cancel: t('network.cancel'), cutTie: t('network.cutTie'), connect: t('network.connect') }
+    },
+    // (null stands for the built-in words; a page's own, even empty, is kept)
+    egoText (): string { return this.egoLabel != null ? this.egoLabel : t('network.egoLabel') },
+    label (): string { return this.ariaLabel != null ? this.ariaLabel : t('game.networkTitle') },
+    // Each unnamed neighbor's stand-in name: "Person A", "Person B", ...
+    fallbackNames (): Record<string, string> {
+      const names: Record<string, string> = {}
+      for (const id of Object.keys(this.fallbackLetters)) names[id] = t('network.person', { letter: this.fallbackLetters[id] })
+      return names
+    },
     egoId (): string { return this.player && this.player.id },
     nodes (): AnyNode[] { return (this.graph && this.graph.nodes) || [] },
     edges (): AnyEdge[] { return (this.graph && this.graph.edges) || [] },
@@ -392,19 +412,19 @@ export default LinkAware.extend({
         const r = isEgo ? Math.round(this.radiusFor(node) * 1.35) : this.radiusFor(node)
         const label = isEgo ? '' : this.labelFor(node)
         // what the participant hears and reads in the list, even when no label is drawn
-        const spoken = isEgo ? this.egoLabel : this.nameOf(node.id)
+        const spoken = isEgo ? this.egoText : this.nameOf(node.id)
         const selectable = this.nodeSelectable(node.id)
         const selected = this.selectedNode === node.id ||
           (!!this.proposal && this.proposal.op === 'add' && (this.proposal.a === node.id || this.proposal.b === node.id))
         const blockedReason = this.selectedNode && this.selectedNode !== node.id ? this.addBlockedReason(this.selectedNode, node.id) : null
-        const name = isEgo ? 'yourself' : spoken
+        const name = isEgo ? t('network.yourself') : spoken
         // a made-up name that doesn't fit is left out: the letter is on the disc anyway
         let shortLabel = shorten(label, this.labelRoom, this.labelSize)
         if (shortLabel !== label && label === this.fallbackNames[node.id]) shortLabel = ''
         // On the ring, people in the upper part get their name above them, so the line to the
         // participant in the middle doesn't run through it.
-        const t = this.targets[node.id]
-        const above = this.isRing && !isEgo && !!t && t.y < -0.25 * this.ringR
+        const spot = this.targets[node.id]
+        const above = this.isRing && !isEgo && !!spot && spot.y < -0.25 * this.ringR
         const labelY = above ? -(r + 10) : r + this.labelSize + 8
         const badgeY = above
           ? -(r + (label ? this.labelSize + 30 : 22))
@@ -416,7 +436,9 @@ export default LinkAware.extend({
           isEgo,
           label,
           shortLabel,
-          initials: !isEgo && spoken ? initialsOf(label || spoken) : '',
+          // (a stand-in name's letter: "A" for "Person A", in any language)
+          initials: !isEgo && spoken ? (this.fallbackLetters[node.id] && label === this.fallbackNames[node.id]
+            ? this.fallbackLetters[node.id] : initialsOf(label || spoken)) : '',
           labelY,
           badgeY,
           badge: this.nodeBadge ? this.nodeBadge(node, this.player) : '',
@@ -426,7 +448,7 @@ export default LinkAware.extend({
           selected,
           interactive: selectable,
           blockedReason,
-          title: blockedReason || (selectable ? (this.selectedNode ? `Connect with ${name}` : `Choose ${name} to introduce`) : (label !== shortLabel ? label : '')),
+          title: blockedReason || (selectable ? t(this.selectedNode ? 'network.connectWith' : 'network.chooseToIntroduce', { name }) : (label !== shortLabel ? label : '')),
           ariaLabel: spoken,
           classes: {
             'is-ego': isEgo,
@@ -454,10 +476,10 @@ export default LinkAware.extend({
         const removable = this.removeAllowed(a, b)
         const blocked = this.removeBlockedReason(a, b)
         const selected = !!this.proposal && this.proposal.op === 'remove' && pairKey(this.proposal.a, this.proposal.b) === key
-        const between = `${this.nameOf(a)} and ${this.nameOf(b)}`
+        const between = { a: this.nameOf(a), b: this.nameOf(b) }
         const title = blocked
-          ? `Tie between ${between}: ${blocked}`
-          : (removable ? `Cut the tie between ${between}` : '')
+          ? t('network.tieBetweenBlocked', { ...between, reason: blocked })
+          : (removable ? t('network.cutTieBetween', between) : '')
         states[String(edge.id)] = {
           id: String(edge.id),
           key,
@@ -468,7 +490,7 @@ export default LinkAware.extend({
           selected,
           interactive: removable || !!blocked,
           title,
-          ariaLabel: title || `Tie between ${between}`,
+          ariaLabel: title || t('network.tieBetween', between),
         }
       }
       return states
@@ -507,7 +529,7 @@ export default LinkAware.extend({
       const [first, second] = this.proposal.b === this.egoId ? [this.proposal.b, this.proposal.a] : [this.proposal.a, this.proposal.b]
       const a = this.nameOf(first)
       const b = this.nameOf(second)
-      return this.proposal.op === 'remove' ? `Cut the tie between ${a} and ${b}?` : `Connect ${a} and ${b}?`
+      return t(this.proposal.op === 'remove' ? 'network.confirmCut' : 'network.confirmConnect', { a, b })
     },
     // Changes that can be made right now, as the picture shows them.
     canCut (): boolean {
@@ -524,23 +546,25 @@ export default LinkAware.extend({
           ? 'Watching only: the computer plays this seat, so you can’t change its ties.'
           : 'Watching only: their own page is connected, so you can’t change their ties.'
       }
-      if (this.link === 'reconnecting') return 'Reconnecting… you can change ties once the connection is back.'
+      if (this.link === 'reconnecting') return t('network.reconnecting')
       // (nothing more on this page: the banner says why)
       if (!this.canSend) return ''
-      if (this.selectedNode) return `Now choose who ${this.nameOf(this.selectedNode)} should be connected with.`
+      if (this.selectedNode) return t('network.chooseSecond', { name: this.nameOf(this.selectedNode) })
       const parts: string[] = []
       const how: string[] = []
+      const press = t(this.press === 'tap' ? 'network.tap' : 'network.click')
       if (e.remove && this.canCut) {
-        parts.push(e.remainingRemoves != null ? `cut ${e.remainingRemoves} tie${e.remainingRemoves === 1 ? '' : 's'}` : 'cut ties')
-        how.push(`${this.press} a tie to cut it`)
+        parts.push(e.remainingRemoves != null ? t('network.cutN', { n: e.remainingRemoves }) : t('network.cutAny'))
+        how.push(t('network.howCut', { press }))
       }
       if (e.add && this.canConnect) {
-        parts.push(e.remainingAdds != null ? `make ${e.remainingAdds} new tie${e.remainingAdds === 1 ? '' : 's'}` : 'make new ties')
-        how.push(`${this.press} two people to connect them`)
+        parts.push(e.remainingAdds != null ? t('network.addN', { n: e.remainingAdds }) : t('network.addAny'))
+        how.push(t('network.howAdd', { press }))
       }
-      if (!parts.length) return e.add || e.remove ? 'There is no change you can make right now.' : 'You have made all the changes you can for now.'
-      const instructions = how.join('; ')
-      return `You can ${parts.join(' and ')}. ${instructions.charAt(0).toUpperCase()}${instructions.slice(1)}.`
+      if (!parts.length) return t(e.add || e.remove ? 'network.noChangeNow' : 'network.allChangesMade')
+      const instructions = how.join(t('network.howJoin'))
+      // ("You can cut 1 tie. Click a tie to cut it.")
+      return t('network.youCan', { what: parts.join(t('network.and')), how: instructions.charAt(0).toUpperCase() + instructions.slice(1) })
     },
     liveText (): string {
       if (this.toast) return this.toast.text
@@ -576,7 +600,7 @@ export default LinkAware.extend({
           ...m,
           key: `${m.op}:${pairKey(m.a, m.b)}`,
           available: m.op === 'add' ? this.addAllowed(m.a, m.b) : (this.connected(m.a, m.b) && this.removeAllowed(m.a, m.b)),
-          reason: c && c.available === false ? (c.reason || 'Not available') : '',
+          reason: c && c.available === false ? (c.reason || t('network.notAvailable')) : '',
           text: moveText(m.op, m.a === this.egoId ? m.b : m.a, m.a === this.egoId || m.b === this.egoId ? null : m.b, this.nameOf),
         }
       })
@@ -584,11 +608,11 @@ export default LinkAware.extend({
     // Worth opening: something can be done, or the experiment says why something can't.
     movesPossible (): boolean { return this.moves.some((m: any) => m.available || m.reason) },
     movesToggleText (): string {
-      if (this.movesOpen && this.moves.length) return 'Hide the list of changes'
-      if (!this.moves.length || !this.movesPossible) return 'No changes to list right now'
-      if (this.movesOpen) return 'Hide the list of changes'
+      if (this.movesOpen && this.moves.length) return t('network.hideList')
+      if (!this.moves.length || !this.movesPossible) return t('network.noList')
+      if (this.movesOpen) return t('network.hideList')
       const n = this.moves.filter(m => m.available).length
-      return `Show the changes as a list (${n} possible)`
+      return t('network.showList', { n })
     },
     // When anything a selection or proposal depends on changes, check they still make sense.
     editingKey (): string {
@@ -636,12 +660,12 @@ export default LinkAware.extend({
         if (!r) return
         if (r.op && r.a && r.b) this.$delete(this.pending, `${r.op}:${pairKey(r.a, r.b)}`)
         if (!r.ok) {
-          this.showToast(false, r.reason || 'That change was not made.')
+          this.showToast(false, r.reason || t('network.notMade'))
         } else if (r.applied === false) {
           // the experiment collects proposals instead of changing the network now
-          this.showToast(true, 'Your change was sent.')
+          this.showToast(true, t('network.sent'))
         } else {
-          this.showToast(true, r.op === 'remove' ? 'Tie cut.' : 'Connected.')
+          this.showToast(true, t(r.op === 'remove' ? 'network.cut' : 'network.connected'))
         }
       }
       bb.on('bb:edge-edit-result', this.resultHandler)
@@ -684,9 +708,9 @@ export default LinkAware.extend({
       return d.name || d.label || this.fallbackNames[node.id] || ''
     },
     nameOf (id: string): string {
-      if (id === this.egoId) return 'you'
+      if (id === this.egoId) return t('network.you')
       const n = this.nodeById[id]
-      return (n && this.labelFor(n)) || this.fallbackNames[id] || 'this person'
+      return (n && this.labelFor(n)) || this.fallbackNames[id] || t('network.thisPerson')
     },
     colorsFor (node: AnyNode): [string, string] {
       let c: any = this.nodeColor
@@ -705,19 +729,19 @@ export default LinkAware.extend({
     // appear, so they keep it for the whole session. It is used wherever they have no name or
     // label of their own (or a nodeLabel function returns none).
     nameUnnamed () {
-      let next = Object.keys(this.fallbackNames).length
+      let next = Object.keys(this.fallbackLetters).length
       let added = false
-      const names = { ...this.fallbackNames }
+      const names = { ...this.fallbackLetters }
       // On the ring, clockwise from the top: Person A at 12 o'clock, B next to them, and so on.
       const order = this.isRing ? this.ringOrder() : []
       const place = (id: string) => { const i = order.indexOf(id); return i < 0 ? Infinity : i }
       const unnamed = this.others.filter(n => !names[n.id]).sort((a, b) => place(a.id) - place(b.id))
       for (const node of unnamed) {
-        names[node.id] = `Person ${next < 26 ? String.fromCharCode(65 + next) : next + 1}`
+        names[node.id] = next < 26 ? String.fromCharCode(65 + next) : String(next + 1)
         next++
         added = true
       }
-      if (added) this.fallbackNames = names
+      if (added) this.fallbackLetters = names
     },
     // --- layout ---
     relayout () {
@@ -942,15 +966,15 @@ export default LinkAware.extend({
       const start = performance.now()
       const duration = 650
       const step = (now: number) => {
-        const t = Math.min(1, (now - start) / duration)
-        const k = 1 - Math.pow(1 - t, 3)
+        const done = Math.min(1, (now - start) / duration)
+        const k = 1 - Math.pow(1 - done, 3)
         const next: Record<string, Point> = {}
         for (const id of Object.keys(this.targets)) {
           const a = from[id], b = this.targets[id]
           next[id] = { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k }
         }
         this.current = next
-        if (t < 1) this.animation = requestAnimationFrame(step)
+        if (done < 1) this.animation = requestAnimationFrame(step)
       }
       this.animation = requestAnimationFrame(step)
     },
@@ -983,7 +1007,7 @@ export default LinkAware.extend({
     removeBlockedReason (a: string, b: string): string | null {
       if (!this.edits.enabled || !this.edits.remove || !this.candidates) return null
       const c = this.candidateFor('remove', a, b)
-      return c && c.available === false ? (c.reason || 'Not available') : null
+      return c && c.available === false ? (c.reason || t('network.notAvailable')) : null
     },
     connected (a: string, b: string): boolean {
       return !!this.edgeKeys[pairKey(a, b)]
@@ -1001,7 +1025,7 @@ export default LinkAware.extend({
       if (!this.edits.enabled || !this.edits.add) return null
       if (this.candidates) {
         const c = this.candidateFor('add', a, b)
-        if (c && c.available === false) return c.reason || 'Not available'
+        if (c && c.available === false) return c.reason || t('network.notAvailable')
       }
       return null
     },
@@ -1019,7 +1043,7 @@ export default LinkAware.extend({
         const partner = present && this.nodeSelectable(sel) && this.nodes.some(o => o.id !== sel && this.addAllowed(sel, o.id))
         if (!partner) {
           this.clearSelection()
-          if (present && this.edits.enabled && this.edits.add) this.showToast(false, `${this.nameOf(sel)} has no one left to connect with.`)
+          if (present && this.edits.enabled && this.edits.add) this.showToast(false, t('network.noOneLeft', { name: this.nameOf(sel) }))
         }
       }
       const p = this.proposal
@@ -1030,7 +1054,7 @@ export default LinkAware.extend({
         if (!still) {
           const hadFocus = this.focusInConfirm()
           this.proposal = null
-          if (this.edits.enabled) this.showToast(false, 'That change is no longer possible.')
+          if (this.edits.enabled) this.showToast(false, t('network.noLongerPossible'))
           if (hadFocus) this.returnFocus()
         }
       }
@@ -1233,8 +1257,8 @@ function initialsOf (label: string): string {
 // A lighter tint of a CSS colour for the gradient highlight (hex colours; others pass through).
 // "Cut your tie with Ana" / "Cut the tie between Ana and Ben"; "Connect with Ana" / "Connect Ana and Ben".
 function moveText (op: string, a: string, b: string | null, nameOf: (id: string) => string): string {
-  if (op === 'remove') return b == null ? `Cut your tie with ${nameOf(a)}` : `Cut the tie between ${nameOf(a)} and ${nameOf(b)}`
-  return b == null ? `Connect with ${nameOf(a)}` : `Connect ${nameOf(a)} and ${nameOf(b)}`
+  if (op === 'remove') return b == null ? t('network.cutYourTie', { name: nameOf(a) }) : t('network.cutTieBetween', { a: nameOf(a), b: nameOf(b) })
+  return b == null ? t('network.connectWith', { name: nameOf(a) }) : t('network.connectBoth', { a: nameOf(a), b: nameOf(b) })
 }
 
 function luminance (hex: string): number | null {
