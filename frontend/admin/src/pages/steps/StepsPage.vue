@@ -242,6 +242,8 @@
             <template v-if="autopilotsSession">
               Saved: the autopilot’s next session uses it. <strong>Run</strong> loads it into the session it has open now (it doesn't start the step).
             </template>
+            <!-- (with no session running there is nothing to load it into: the next session loads what is saved) -->
+            <template v-else-if="!sessionLive">Saved. The next session you open uses it.</template>
             <template v-else>Saved. The live engine isn't using this version yet: <strong>Run</strong> loads it now (it doesn't start the step).</template>
           </p>
           <p v-else class="steps__hint">

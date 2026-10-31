@@ -782,6 +782,28 @@ describe('StepsPage', () => {
     w.unmount()
   })
 
+  it('says under the editor that the next session uses a saved step while no session runs, and that Run loads it while one does', async () => {
+    const { w } = await open()
+    try {
+      const d = ensureBucket(7, false).drafts.find(x => x.name === 'InitStep')!
+      d.engineBehind = true
+      await flushPromises()
+      const hint = () => w.find('.steps__hint.is-behind').text().replace(/\s+/g, ' ')
+      // (nothing is running for Run to load it into: no call to press Run)
+      expect(hint()).toBe('Saved. The next session you open uses it.')
+      admin.instance = { id: 5, name: 'Pilot', status: 'STOPPED' }
+      await flushPromises()
+      expect(hint()).toBe('Saved. The next session you open uses it.')
+      admin.instance = { id: 5, name: 'Pilot', status: 'RUNNING' }
+      await flushPromises()
+      expect(hint()).toBe('Saved. The live engine isn\'t using this version yet: Run loads it now (it doesn\'t start the step).')
+      d.engineBehind = false
+    } finally {
+      admin.instance = null
+      w.unmount()
+    }
+  })
+
   it('says the autopilot\'s next session uses what is saved while its own session is open, with Reload as a secondary action', async () => {
     const { w } = await open()
     try {
