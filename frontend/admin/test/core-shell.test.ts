@@ -152,8 +152,14 @@ describe('the shell', () => {
         const notice = w.find('.conn-notice')
         expect(notice.attributes('role')).toBe('status')
         expect(notice.text()).toContain('Not connected to the server.')
-        expect(notice.text()).toContain('If Breadboard was stopped, start it again; the console reconnects by itself.')
+        expect(notice.text()).toContain('If Breadboard was stopped, start it again; the console reconnects by itself, within a few seconds of the server answering.')
       }
+      // or at once, when asked
+      const tryNow = vi.spyOn(connection, 'tryNow').mockImplementation(() => {})
+      const button = w.find('.conn-notice').findAll('button').find(b => b.text() === 'Try now')!
+      await button.trigger('click')
+      expect(tryNow).toHaveBeenCalledTimes(1)
+      expect(button.attributes('aria-busy')).toBe('true')
       // the chip keeps its words at every width (a short one on a phone)
       const chip = w.find('.topbar__conn')
       expect(chip.find('.topbar__conn-text').text()).toBe('Reconnecting…')

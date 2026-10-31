@@ -1,23 +1,36 @@
 <template>
   <!-- while the server can't be reached, what every page shows may be out of date -->
-  <p v-if="shown" class="conn-notice" role="status">
+  <div v-if="shown" class="conn-notice" role="status">
     <WifiOff :size="16" class="conn-notice__icon" aria-hidden="true" />
-    <span class="conn-notice__text">
+    <p class="conn-notice__text">
       <strong>Not connected to the server.</strong> The page shows what was last known, and what needs
       the server works again once the console reconnects. If Breadboard was stopped, start it again;
-      the console reconnects by itself.
-    </span>
-  </p>
+      the console reconnects by itself, within a few seconds of the server answering.
+    </p>
+    <BButton size="sm" :icon="RefreshCw" class="conn-notice__btn" :loading="trying" @click="tryNow">Try now</BButton>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { WifiOff } from 'lucide-vue-next'
-import { admin, connectionState } from '@/store/admin'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { RefreshCw, WifiOff } from 'lucide-vue-next'
+import { BButton } from '@/ui'
+import { admin, connectionState, reconnectNow } from '@/store/admin'
 
 // Once the first state has arrived: before that, the shell shows its own loading state (and the
 // sign-in page says when the server can't be reached at all).
 const shown = computed(() => admin.ready && connectionState.value !== 'open')
+
+/** Shown on the button for a moment: the attempt itself is quick, and the notice goes once it opens. */
+const trying = ref(false)
+let tryTimer: ReturnType<typeof setTimeout> | null = null
+function tryNow () {
+  reconnectNow()
+  trying.value = true
+  if (tryTimer) clearTimeout(tryTimer)
+  tryTimer = setTimeout(() => { trying.value = false }, 1500)
+}
+onBeforeUnmount(() => { if (tryTimer) clearTimeout(tryTimer) })
 </script>
 
 <style>
@@ -34,7 +47,11 @@ const shown = computed(() => admin.ready && connectionState.value !== 'open')
 .conn-notice__icon { flex: none; margin-top: 2px; }
 .conn-notice__text { flex: 1; min-width: 0; }
 .conn-notice__text strong { font-weight: 650; }
+.conn-notice__btn { flex: none; align-self: center; }
 @media (max-width: 900px) {
-  .conn-notice { padding: 9px 12px; }
+  .conn-notice { padding: 9px 12px; flex-wrap: wrap; }
+  /* (the text takes the line beside the icon, 16px and the 10px gap; the button goes below it) */
+  .conn-notice__text { flex: 1 1 calc(100% - 26px); }
+  .conn-notice__btn { margin-left: 26px; align-self: flex-start; }
 }
 </style>

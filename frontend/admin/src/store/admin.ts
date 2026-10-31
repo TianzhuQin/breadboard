@@ -898,6 +898,8 @@ const fileModeBlocked = computed(() => {
 
 export const admin = state
 export const connection = conn
+/** Try to reconnect now, rather than at the next attempt (the not-connected notice's Try now). */
+export function reconnectNow () { conn.tryNow() }
 export {
   graph, boot, login, logout, createFirstUser, adoptUid, actions, experiments, instances, running, engineInUse,
   engineElsewhere, reloadBlocked, runBlocked, fileModeBlocked, fileStepsWait, ensureConnected, nextMessage,

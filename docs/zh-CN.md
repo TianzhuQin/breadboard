@@ -207,7 +207,7 @@ breadboard.example.org {
 
 **服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次：参与者的页面会说明这一场因为研究服务器停止或重启而结束，并告诉他们几分钟后可以重新打开研究链接，加入那时开着的一场（从 Prolific 来的人：从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码）。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。之后回来的参与者（服务器崩溃后也一样）看到的也是这个说明；开着自动运行时，研究链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用：服务器正常时返回状态码 200 和 `{"status":"ok", "database":"ok", "diskFreeMb": …, "version": …, "uptimeSeconds": …}`，出问题时返回 503、`"status":"failing"` 和原因 `"reason"`；用 GET 或 HEAD 请求都可以。
 
-**控制台提示 "Not connected to the server"**：控制台和服务器断开了。每个页面的顶栏下面都会这样提示，顶栏上写着 **Reconnecting…**（手机上是 **Offline**），页面上显示的是断开前最后知道的情况。如果 Breadboard 被停止了，重新启动它就行，控制台会自己重新连上，不用刷新页面。
+**控制台提示 "Not connected to the server"**：控制台和服务器断开了。每个页面的顶栏下面都会这样提示，顶栏上写着 **Reconnecting…**（手机上是 **Offline**），页面上显示的是断开前最后知道的情况。如果 Breadboard 被停止了，重新启动它就行：服务器恢复后几秒内，控制台会自己重新连上，不用刷新页面；也可以点提示里的 **Try now** 马上重连。
 
 **控制台一直停在 "Loading your experiments…"，顶栏写着 Reconnecting…**：控制台从打开起就没连上服务器（手机上顶栏写的是 **Offline**），所以也不会出现上面那条提示。服务器明明开着却这样，多半是前面的反向代理没有转发 websocket，nginx 的配置见 [install.md](install.md#putting-it-on-a-server)。
 

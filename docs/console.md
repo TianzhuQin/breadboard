@@ -64,8 +64,9 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 
 Once the console has connected, a notice under the top bar says on every page when it loses the
 connection, and the top bar says **Reconnecting…** (**Offline** on a phone). Each page shows what
-was last known until the console reconnects, which it does by itself. If Breadboard was stopped,
-start it again. A console that has never connected shows no such notice: it stays on "Loading your
+was last known until the console reconnects, which it does by itself within a few seconds of the
+server answering again, and at once when you come back to its window; **Try now** on the notice
+tries at once. If Breadboard was stopped, start it again. A console that has never connected shows no such notice: it stays on "Loading your
 experiments…", with **Reconnecting…** in its top bar. Usually a proxy in front of Breadboard doesn't
 pass websockets: see [install.md](install.md#troubleshooting).
 
