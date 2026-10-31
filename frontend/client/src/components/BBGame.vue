@@ -4,7 +4,7 @@
          fade-out would stay up until the participant came back to the tab. -->
     <transition name="bb-game-fade">
       <div v-if="loading" key="loading" class="bb-game__loading" role="status">
-        <span class="bb-game__spinner" />Connecting…
+        <span class="bb-game__spinner" />{{ texts.connecting }}
       </div>
 
       <div
@@ -22,18 +22,18 @@
             </slot>
           </div>
 
-          <section v-else-if="networkShown" key="network" class="bb-card bb-game__network" aria-label="Network">
+          <section v-else-if="networkShown" key="network" class="bb-card bb-game__network" :aria-label="texts.network">
             <header class="bb-game__head">
               <div>
-                <div class="bb-game__eyebrow">{{ networkTitle }}</div>
+                <div class="bb-game__eyebrow">{{ title }}</div>
                 <div class="bb-game__meta">
-                  {{ tieCount }} {{ tieCount === 1 ? 'tie' : 'ties' }}
-                  <template v-if="amongCount"> · {{ amongCount }} between your neighbors</template>
+                  {{ ties }}
+                  <template v-if="amongCount"> · {{ betweenNeighbors }}</template>
                 </div>
               </div>
               <div v-if="amongCount" class="bb-game__legend" aria-hidden="true">
-                <span><i class="is-own" :class="{ 'is-editable': ownEditable }" />your ties</span>
-                <span><i class="is-among" />between others</span>
+                <span><i class="is-own" :class="{ 'is-editable': ownEditable }" />{{ texts.yourTies }}</span>
+                <span><i class="is-among" />{{ texts.betweenOthers }}</span>
               </div>
             </header>
             <div class="bb-game__canvas">
@@ -71,11 +71,8 @@
           <!-- Nothing to show yet (or between two screens): never a blank page. -->
           <div v-if="idle" key="idle" class="bb-game__idle" role="status">
             <span class="bb-game__idle-pulse" aria-hidden="true" />
-            <h2 class="bb-game__idle-title">{{ hadContent ? 'Please wait' : 'You\'re in' }}</h2>
-            <p class="bb-game__idle-text">
-              {{ hadContent ? 'The next part will appear here by itself.' : 'The study will begin shortly. This page will change by itself.' }}
-              Please keep it open.
-            </p>
+            <h2 class="bb-game__idle-title">{{ hadContent ? texts.pleaseWait : texts.youreIn }}</h2>
+            <p class="bb-game__idle-text">{{ idleText }}</p>
           </div>
           <PlayerChoices key="choices" :player="player" class="bb-game__choices" />
           <Form key="form" :player="player" />
@@ -88,6 +85,7 @@
 
 <script lang="ts">
 import Vue from 'vue'
+import { t, sentences } from '../lib/texts'
 
 /**
  * A complete participant page: the network on one side, and the experiment's text, timers, choices
@@ -104,6 +102,7 @@ import Vue from 'vue'
  *
  * Slots: network, text, panel-top, panel-bottom, and waiting ({ player, info }, replaces the
  * BBWaiting card; info is player._system.autopilot). Props for the network go in `networkProps`.
+ * Its own words are in the language of the session's texts (lib/texts).
  */
 export default Vue.extend({
   name: 'BBGame',
@@ -114,12 +113,36 @@ export default Vue.extend({
     networkProps: { type: Object, default: () => ({}) },
     /** true / false, or 'auto': show the network once the player has had a tie or may edit ties. */
     network: { type: [Boolean, String], default: 'auto' },
-    networkTitle: { type: String, default: 'Your network' },
+    /** The network's heading; by default "Your network", in the language of the session's texts. */
+    networkTitle: { type: String, default: null },
   },
   data () {
     return { hadTies: false, hadContent: false }
   },
   computed: {
+    // Breadboard's own words here (lib/texts): reactive, so they follow the session's language
+    texts (): Record<string, string> {
+      return {
+        connecting: t('game.connecting'),
+        network: t('game.network'),
+        yourTies: t('game.yourTies'),
+        betweenOthers: t('game.betweenOthers'),
+        pleaseWait: t('game.pleaseWait'),
+        youreIn: t('game.youreIn'),
+      }
+    },
+    title (): string {
+      return this.networkTitle || t('game.networkTitle')
+    },
+    ties (): string {
+      return t('game.ties', { n: this.tieCount })
+    },
+    betweenNeighbors (): string {
+      return t('game.betweenNeighbors', { n: this.amongCount })
+    },
+    idleText (): string {
+      return sentences(t(this.hadContent ? 'game.nextPart' : 'game.beginsShortly'), t('game.keepOpen'))
+    },
     // Pass clicks on people and ties on only when the page listens for them; a tie that nobody
     // listens to and that can't be edited shouldn't look clickable.
     networkListeners (): Record<string, Function> {
@@ -164,8 +187,8 @@ export default Vue.extend({
       return this.hadTies || this.edges.length > 0 || !!(edits && edits.enabled)
     },
     hasTimers (): boolean {
-      const t = this.player.timers
-      return !!t && Object.keys(t).length > 0
+      const timers = this.player.timers
+      return !!timers && Object.keys(timers).length > 0
     },
     hasChoices (): boolean {
       return !!this.player.choices && this.player.choices.length > 0

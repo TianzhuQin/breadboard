@@ -17,14 +17,14 @@
     <slot v-if="reconnecting" :time="time" :state="state" :tryNow="tryNow">
       <div class="bb-connection__body">
         <span class="bb-connection__text">{{ text }}</span>
-        <button type="button" class="bb-connection__btn" @click="tryNow">Try now</button>
+        <button type="button" class="bb-connection__btn" @click="tryNow">{{ tryNowText }}</button>
       </div>
     </slot>
     <!-- The study is open in another tab or window; `useHere` does what the button does -->
     <slot v-else-if="state === 'elsewhere'" name="elsewhere" :useHere="useHere">
       <div class="bb-connection__body">
         <span class="bb-connection__text">{{ text }}</span>
-        <button type="button" class="bb-connection__btn" @click="useHere">Use it here</button>
+        <button type="button" class="bb-connection__btn" @click="useHere">{{ useHereText }}</button>
       </div>
     </slot>
     <!-- The session is over, and the page shows no end of its own -->
@@ -42,18 +42,21 @@
 <script lang="ts">
   import Vue from 'vue'
   import { CONNECTION_EVENT } from '@human-nature-lab/breadboard-core'
+  import { t } from '../lib/texts'
 
   // On the page while the connection is down or done with: what the page shows may be out of date,
   // so it is dimmed. (Not while it watches: what it shows is live.)
   const DISCONNECTED = 'bb-disconnected'
 
+  // What the participant reads, in the language of the session's texts (lib/texts)
   const TEXTS: Record<string, string> = {
-    lost: 'Connection lost. Trying to reconnect… Please keep this page open.',
-    blocked: 'This page can’t open its live connection to the study; the network may block it. Please try another network (e.g. mobile data) or browser.',
-    elsewhere: 'This study is open in another tab or window.',
-    ended: 'This session is over. You can close this page.',
-    watching: 'Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.',
+    lost: 'connection.lost',
+    blocked: 'connection.blocked',
+    elsewhere: 'connection.elsewhere',
+    ended: 'connection.ended',
   }
+  // What only a researcher's preview says, in English, as the console does: it watches
+  const WATCHING = 'Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.'
   // What a researcher's preview says instead
   const PREVIEW_TEXTS: Record<string, string> = {
     elsewhere: 'This player is open in another preview or tab.',
@@ -113,7 +116,14 @@
       },
       text (): string {
         return (this.computer && COMPUTER_TEXTS[this.state]) || (this.preview && PREVIEW_TEXTS[this.state])
-          || TEXTS[this.state] || TEXTS.lost
+          || (this.state === 'watching' ? WATCHING : t(TEXTS[this.state] || TEXTS.lost))
+      },
+      tryNowText (): string {
+        return t('connection.tryNow')
+      },
+      // (a preview's own note is in English: so is its button)
+      useHereText (): string {
+        return this.preview && PREVIEW_TEXTS[this.state] ? 'Use it here' : t('connection.useHere')
       }
     },
     watch: {

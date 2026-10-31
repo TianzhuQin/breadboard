@@ -8,11 +8,13 @@
 <script lang="ts">
   import Vue from 'vue'
   import { computerPlayer } from '../lib/connection'
+  import { t } from '../lib/texts'
 
-  const TEXTS: Record<string, string> = {
-    reconnecting: 'Reconnecting… you can answer once the connection is back.',
-    // (only a researcher's preview watches)
-    watching: 'Watching only: their own page is connected, so you can’t answer for them.',
+  const TEXTS: Record<string, () => string> = {
+    // (in the language of the session's texts, lib/texts)
+    reconnecting: () => t('connection.reconnectingChoices'),
+    // (only a researcher's preview watches: in English, as the console)
+    watching: () => 'Watching only: their own page is connected, so you can’t answer for them.',
   }
   // A preview of a computer player watches what the computer does.
   const COMPUTER_WATCHING = 'Watching only: the computer plays this seat, so you can’t answer for it.'
@@ -31,7 +33,7 @@
     computed: {
       text (): string {
         if (this.link === 'watching' && computerPlayer()) return COMPUTER_WATCHING
-        return TEXTS[this.link] || ''
+        return TEXTS[this.link] ? TEXTS[this.link]() : ''
       }
     }
   })
