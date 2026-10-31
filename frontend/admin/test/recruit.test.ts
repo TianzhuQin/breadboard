@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { h } from 'vue'
 import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Node's own (file-less) localStorage shadows jsdom's here; use a plain in-memory one, before the
 // page modules read it on import.
@@ -428,6 +431,10 @@ describe('Prolific helpers', () => {
     expect(prolificBonusLines(players)).toBe('PID-B,1.26')
   })
 
+  // The finish screen's button as the participant page names it (conf/i18n/eng.json, which it reads), "Finish and
+  // return to Prolific": the card called it a Finish button.
+  const FINISH_BUTTON = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'conf', 'i18n', 'eng.json'), 'utf8'))['finish.submit']
+
   it('gives code that completes Prolific participants only, and says to use the step\'s own name for the participant', () => {
     expect(completionSnippet(' C7K2M9QX ')).toBe([
       '// p is the participant: use the name your step gives them (often player, or p in g.V.each { p -> ... })',
@@ -441,7 +448,7 @@ describe('Prolific helpers', () => {
     expect(completionSnippet('')).toContain("completionCode: 'YOUR-CODE',")
   })
 
-  it('says an experiment with a prolificCode parameter gives the code by itself, and offers no code to paste', async () => {
+  it('says an experiment with a prolificCode parameter gives the code by itself, and offers no code to paste; both name the finish button', async () => {
     const CompletionCard = (await import('@/pages/recruit/prolific/CompletionCard.vue')).default
     const router = makeRouter()
     const param = (defaultVal: string) => ({ id: 1, name: 'prolificCode', type: 'Text' as const, minVal: '', maxVal: '', defaultVal, description: '' })
@@ -449,6 +456,7 @@ describe('Prolific helpers', () => {
     const text = () => w.text().replace(/\s+/g, ' ')
     expect(text()).toContain('On the Parameters page, make that code the default of prolificCode. This experiment shows it to Prolific participants by itself when they finish: there is no code to add to its steps.')
     expect(w.find('.pl-code-now').text()).toBe('Now: C7K2M9QX')
+    expect(text()).toContain(`The participant sees a thank-you screen with the code and a ${FINISH_BUTTON} button; Prolific then marks their submission complete.`)
     expect(w.find('pre.rc-code').exists()).toBe(false)
     expect(w.findAll('button').some(b => b.text() === 'Copy code')).toBe(false)
     await w.findAll('button').find(b => b.text() === 'Parameters')!.trigger('click')
@@ -463,6 +471,7 @@ describe('Prolific helpers', () => {
     w = mount(CompletionCard, { props: { experimentId: 3, parameters: [] }, global: { plugins: [router] } })
     expect(w.find('pre.rc-code').text()).toContain('if (p._system?.recruitment?.source == "prolific") {')
     expect(w.findAll('button').some(b => b.text() === 'Copy code')).toBe(true)
+    expect(text()).toContain(`The participant sees a thank-you screen with the code and a ${FINISH_BUTTON} button; Prolific then marks their submission complete.`)
     w.unmount()
   })
 

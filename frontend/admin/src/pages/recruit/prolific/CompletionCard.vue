@@ -32,7 +32,7 @@
           <span class="pl-steps__n" aria-hidden="true">3</span>
           <div>
             <strong>The participant</strong> sees a thank-you screen with the code and a
-            <em>Finish</em> button that takes them to Prolific, which marks their submission complete.
+            <em>Finish and return to Prolific</em> button; Prolific then marks their submission complete.
           </div>
         </li>
       </ol>
@@ -75,7 +75,7 @@
           <span class="pl-steps__n" aria-hidden="true">3</span>
           <div>
             <strong>The participant</strong> sees a thank-you screen with the code and a
-            <em>Finish</em> button that takes them to Prolific, which marks their submission complete.
+            <em>Finish and return to Prolific</em> button; Prolific then marks their submission complete.
           </div>
         </li>
       </ol>
