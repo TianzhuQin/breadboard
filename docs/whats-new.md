@@ -139,13 +139,13 @@ Chinese used to show its participants English around its own texts.
   The server records it with the session once its steps have loaded (`content_language` in
   `experiment_instances`), and again when the steps choose another while it runs (from a step, or the
   Script console); it never asks the engine. Steps that fail to load before choosing one (an InitStep
-  that doesn't compile) leave the session's language as it was. A new session takes people a moment before its steps have
-  loaded: until then it has the experiment's most recent session's language, so the study's link
-  doesn't show its sign-in page in English meanwhile. The pages people see before a session opens, or
-  between two, use the language of the session they lead to, or else the experiment's most recent
-  session's; with none, English. So does the page for a participant link that was cut off or
-  mistyped ("This link isn't valid"): the language of the session it still names, or else of its
-  experiment's most recent session.
+  that doesn't compile) leave the session's language as it was. A new session takes people a moment
+  before its steps have loaded: until then it has the experiment's most recent session's language, so
+  the study's link doesn't show its sign-in page in English meanwhile. The pages people see before a
+  session opens, or between two, use the language of the session they lead to, or else the
+  experiment's most recent session's; with none, English. So does the page for a participant link
+  that was cut off or mistyped ("This link isn't valid"): the language of the session it still names,
+  or else of its experiment's most recent session.
 - The participant page gets it with its state (`/state`'s `language`) and, as it connects and whenever
   it changes, over its socket (`{"bbLanguage": "zho"}`): `Breadboard.language` is the code (null when
   none was chosen), and Breadboard emits `bb:language` (`LANGUAGE_EVENT`) with it when it changes. The
