@@ -69,6 +69,9 @@ public class Client extends Model {
 
   // The frames that tell a page what became of its socket (see connect and seatAWatcher).
   private static final ObjectNode REPLACED = Json.newObject().put("bbClosed", "replaced");
+  // What a page that took the seat by asking is told it counts as from then on, the time to give as
+  // its socket's bbPage (Connection.claimSeat; frontend/core, breadboard.ts).
+  static final String PAGE_CLAIM = "bbPage";
   private static final ObjectNode WATCHING = Json.newObject().put("bbWatching", true);
   private static final ObjectNode NOT_WATCHING = Json.newObject().put("bbWatching", false);
 
@@ -101,6 +104,9 @@ public class Client extends Model {
     public final long pageLoadedAt;
     // Its page asks for the seat (the participant chose "Use it here"), even from a page loaded later.
     public final boolean takesSeat;
+    // Where its page stands among the participant's pages (see loadedBefore): when it was loaded, or,
+    // once it has taken the seat by asking (takesSeat), when it did, in the server's time (claimSeat).
+    private volatile long claim;
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile long lastHeard = System.currentTimeMillis();
     private volatile boolean pinged;
@@ -122,11 +128,37 @@ public class Client extends Model {
       this.preview = preview;
       this.pageLoadedAt = pageLoadedAt;
       this.takesSeat = takesSeat;
+      this.claim = pageLoadedAt;
     }
 
-    /** Whether its page was loaded before that one's (both known). */
+    /**
+     * Whether its page counts as opened before that one's (both known): it was loaded before it, and
+     * hasn't taken the seat by asking since that one was loaded (claimSeat).
+     */
     boolean loadedBefore(Connection other) {
-      return pageLoadedAt > 0 && other.pageLoadedAt > 0 && pageLoadedAt < other.pageLoadedAt;
+      long mine = claim;
+      long theirs = other.claim;
+      return mine > 0 && theirs > 0 && mine < theirs;
+    }
+
+    /**
+     * Its page took the seat by asking (takesSeat: "Use it here", or the page taking it back by itself
+     * once no page of the participant's held it): from now on it counts as the page they opened last,
+     * as of the server's time now. Otherwise the page they chose lost the seat again as soon as the
+     * newer one reconnected by itself in the background (its network back): that one counted as
+     * opened last, by when it was loaded. The page is told ({"bbPage": that time}) and says so as it
+     * reconnects (its socket's bbPage), so this holds over its own reconnections too; a page opened
+     * after this, by when it is loaded, is newer still.
+     */
+    void claimSeat(long now) {
+      long claimed = Math.max(claim, now);
+      claim = claimed;
+      writeAside(Json.newObject().put(PAGE_CLAIM, claimed));
+    }
+
+    /** Where its page stands among the participant's pages (see claimSeat), in the server's time; 0: unknown. */
+    public long claim() {
+      return claim;
     }
 
     public boolean isOpen() {
@@ -331,6 +363,10 @@ public class Client extends Model {
     this.out = holder.out;
     if (!holder.preview) {
       ownPageHeld = true;
+      if (holder.takesSeat) {
+        // the participant chose this page: it is the newest claim to the seat from now on
+        holder.claimSeat(System.currentTimeMillis());
+      }
     }
   }
 
@@ -345,7 +381,9 @@ public class Client extends Model {
    * seat from one of theirs that was loaded after it, unless they asked for it there ("Use it here"):
    * it is an older tab reconnecting by itself (its connection had dropped), and the newer page they
    * opened meanwhile, which they are looking at, keeps the seat. The older page is told so and
-   * closed instead (Arrival.REFUSED). Any socket of a computer player only watches what the computer
+   * closed instead (Arrival.REFUSED). A page that took the seat by asking counts as opened last from
+   * then on (Connection.claimSeat), so the other page, reconnecting by itself, is refused in turn.
+   * Any socket of a computer player only watches what the computer
    * does. A preview that takes the seat of someone whose own page has held it only stands in for
    * them (see presence).
    */

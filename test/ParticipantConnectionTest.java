@@ -360,6 +360,55 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(1, events("clientDisconnected", "p1"));
     }
 
+    private static final AdminSocketsTest.Matcher CLAIM = f -> f.has("bbPage") && f.size() == 1;
+
+    /**
+     * The participant chooses the older page ("Use it here", or it takes the seat back by itself once the
+     * newer one has gone): from then on that page counts as the one they opened last, so the newer
+     * page, reconnecting by itself in the background as its network comes back, is refused and leaves
+     * the seat to it. It used to count as opened last by when it was loaded, and took the seat back.
+     */
+    @Test
+    public void thePageTheParticipantChoseKeepsTheSeatWhenTheNewerOneReconnectsByItself() throws Throwable {
+        String token = ParticipantAuth.claim(session.id.toString(), "p1");
+        Page older = handshake("p1", token, "bbPage=1000");
+        Page newer = handshake("p1", token, "bbPage=2000");
+        assertEquals(1, older.count(REPLACED));
+        // The newer page's connection is cut; on the older one they press "Use it here".
+        newer.hangUp();
+        long before = System.currentTimeMillis();
+        Page chosen = handshake("p1", token, "bbPage=1000&bbTake=1");
+        assertFalse(chosen.closed);
+        // It is told the time it counts as opened at, the server's now, to give as bbPage from now on.
+        assertEquals(chosen.frames.toString(), 1, chosen.count(CLAIM));
+        long claimed = chosen.frames.stream().filter(CLAIM::matches).findFirst().get().get("bbPage").asLong();
+        assertTrue(claimed + " >= " + before, claimed >= before && claimed <= System.currentTimeMillis());
+        // The newer page's network comes back and it reconnects by itself: refused, the chosen page keeps it.
+        Page back = handshake("p1", token, "bbPage=2000");
+        assertTrue(back.closed);
+        assertEquals(back.frames.toString(), 1, back.frames.size());
+        assertTrue(REPLACED.matches(back.frames.get(0)));
+        assertFalse("the tab the participant chose keeps the seat", chosen.closed);
+        assertEquals(0, chosen.count(REPLACED));
+        client("p1").send("still-here");
+        assertTrue("what the game sends reaches the chosen tab", chosen.last().has("eventName"));
+        assertEquals(1, back.frames.size());
+
+        // The chosen page's own connection drops in turn, and the newer one takes the free seat by
+        // itself; the chosen page, back with the time it was given, takes the seat from it.
+        chosen.hangUp();
+        Page newerAgain = handshake("p1", token, "bbPage=2000");
+        assertFalse(newerAgain.closed);
+        Page chosenAgain = handshake("p1", token, "bbPage=" + claimed);
+        assertFalse(chosenAgain.closed);
+        assertEquals(0, chosenAgain.count(CLAIM));
+        assertEquals(1, newerAgain.count(REPLACED));
+        // A page they open after all this is newer still, and takes it.
+        Page latest = handshake("p1", token, "bbPage=" + (System.currentTimeMillis() + 1));
+        assertFalse(latest.closed);
+        assertEquals(1, chosenAgain.count(REPLACED));
+    }
+
     @Test
     public void ofTwoPagesOfTheParticipantsTheOneLoadedLastHoldsTheSeat() {
         Client client = new Client("p1", session);

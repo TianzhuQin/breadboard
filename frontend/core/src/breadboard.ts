@@ -210,9 +210,10 @@ function showPreviewEnded () {
 }
 
 // What a participant's page adds to its socket's address (controllers.ClientController): when the
-// page was loaded, in the server's time (its state's loadedAt), and, when the participant asked for
-// the seat on this page ("Use it here"), that it takes it. Of two pages of a participant's, the one
-// they opened last keeps the seat: an older one that reconnects by itself is turned away.
+// page was loaded, in the server's time (its state's loadedAt; once it has taken the seat by asking,
+// the time the server gave it then), and, when the participant asked for the seat on this page ("Use
+// it here"), that it takes it. Of two pages of a participant's, the one they opened last, or chose
+// last, keeps the seat: an older one that reconnects by itself is turned away.
 const PAGE_LOADED_QUERY = 'bbPage'
 const TAKE_SEAT_QUERY = 'bbTake'
 
@@ -344,6 +345,13 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private checkingServer = false
   /** The participant asked for the seat on this page (useHere): the next connection takes it */
   private takingSeat = false
+  /**
+   * When the server counts this page as opened, once it has taken the seat by asking (useHere): the
+   * server's time then, which the server sends ({"bbPage": …}) and the page gives as its socket's
+   * bbPage from then on, in place of its state's loadedAt. The participant's newer page, reconnecting
+   * by itself, then leaves the seat to this one; it used to take the seat back. Null until then.
+   */
+  private claimedAt: number | null = null
   /** Where the participant's pages of this seat in this browser tell each other that one goes */
   private seatChannel: BroadcastChannel | null = null
   /** Asks the server, while 'elsewhere', whether the page that took the seat still holds it */
@@ -455,7 +463,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       // too) would answer the ping with an error.
       const url = socketUrl(config.connectSocket)
       this.socket = new Socket(
-        config.clientId ? () => withPageQuery(url, config.loadedAt, this.takingSeat) : url,
+        config.clientId ? () => withPageQuery(url, this.claimedAt ?? config.loadedAt, this.takingSeat) : url,
         undefined,
         config.clientId ? { ping: PING, isPong } : {})
       this.socket.on('close', () => { this.dropped = true })
@@ -504,6 +512,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
    */
   disconnect () {
     this.config = null
+    this.claimedAt = null
     this.unwatchSeat()
     if (!this.socket) return
     this.socket.close()
@@ -520,7 +529,9 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   /**
    * Take the seat back after another page took it (connection 'elsewhere'): connect again, once
    * (the other page is then told so), and go on as before. The connection asks for the seat, so
-   * the server gives it even when the other page was opened after this one.
+   * the server gives it even when the other page was opened after this one, and counts this page as
+   * the one opened last from then on (see claimedAt): the other page, reconnecting by itself, leaves
+   * the seat to it.
    */
   useHere () {
     if (!this.socket || this.ended || !this.replaced) return
@@ -994,6 +1005,11 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
           this.startSeatChecks()
           this.emit(CONNECTION_EVENT)
         }
+        return
+      }
+      if (data && typeof data.bbPage === 'number' && Object.keys(data).length === 1) {
+        // This page took the seat by asking: the server counts it as opened now (see claimedAt).
+        if (isFinite(data.bbPage) && data.bbPage > 0) this.claimedAt = data.bbPage
         return
       }
       if (data && data.bbWatching === true) {

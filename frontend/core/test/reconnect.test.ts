@@ -296,6 +296,30 @@ describe('a page whose study was opened in another tab or window', () => {
     expect(FakeSocket.all[3].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000')
   })
 
+  it('counts as the page opened last once it has taken the seat, as the server says', async () => {
+    // (so that the newer page, reconnecting by itself in the background, leaves the seat to this one)
+    const page = await openPage(stateAnswers([200, { ...CONFIG, connectSocket: SOCKET + '?bbt=tok', loadedAt: 1761800000000 }]))
+    FakeSocket.all[0].frame(REPLACED)
+    FakeSocket.all[0].drop()
+    page.Breadboard.useHere()
+    expect(FakeSocket.all[1].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800000000&bbTake=1')
+    FakeSocket.all[1].accept()
+    // the server takes it, and says when it counts this page as opened from now on: its time then
+    FakeSocket.all[1].frame({ bbPage: 1761800095000 })
+    expect(page.players).toEqual([])
+    FakeSocket.all[1].frame({ player: { _system: {}, text: 'Round 1' } })
+    expect(page.players.length).toBe(1)
+    // every later connection of this page says so, without asking for the seat
+    await reconnect(2)
+    expect(FakeSocket.all[2].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800095000')
+    expect(page.Breadboard.connection).toBe('open')
+    // (nothing else the server sends changes it)
+    FakeSocket.all[2].frame({ bbPage: 'soon' })
+    FakeSocket.all[2].frame({ bbPage: 5, player: { _system: {}, text: 'Round 2' } })
+    await reconnect(3)
+    expect(FakeSocket.all[3].url).toBe(SOCKET + '?bbt=tok&bbPage=1761800095000')
+  })
+
   it('leaves the socket\'s address as it is when its state doesn\'t say when it was loaded', async () => {
     const page = await openPage(stateAnswers([200, CONFIG]))
     FakeSocket.all[0].frame(REPLACED)
