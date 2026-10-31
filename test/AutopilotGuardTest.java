@@ -1174,13 +1174,16 @@ public class AutopilotGuardTest extends BaseTest {
         assertEquals(Boolean.TRUE, engineValue("autopilot.takeoverTimers.containsKey('stop-1')"));
         tab.send("StopGame", "id", session.id);
         await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
-        // The takeover comes 0.2 s after the stop (brought forward from its 30 s, so that it surely
-        // comes after). A script then hands the other seat to the computer.
+        // The takeover would come 0.2 s after the stop (brought forward from its 30 s, so that it surely
+        // comes after): nothing happens in a session that is over, so it doesn't (groovy/autopilot.groovy's
+        // sessionOver). A script then hands the other seat to the computer, which makes no pick either.
         engine().eval("autopilot.replace.afterSeconds = 0.2; autopilot.handleDeparture('stop-1', false); "
             + "a.ai.add(g.getVertex('stop-2'), picksAtOnce); null");
         Thread.sleep(1500);
         assertEquals("the computer made no pick", 0, engineValue("picks"));
-        assertEquals(Integer.valueOf(1), engineValue("g.getVertex('stop-1').ai"));
+        assertNull("no takeover once the session is over", engineValue("g.getVertex('stop-1').ai"));
+        assertEquals(Boolean.FALSE, engineValue("autopilot.takeoverTimers.containsKey('stop-1')"));
+        assertEquals(Integer.valueOf(1), engineValue("g.getVertex('stop-2').ai"));
         assertEquals("still stopped, so it can be resumed", ExperimentInstance.Status.STOPPED,
             ExperimentInstance.findById(session.id).status);
         assertTrue(second.closed);
