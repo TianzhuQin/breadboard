@@ -314,9 +314,10 @@ export function eventsToWideCsv (events: readonly SessionEvent[], keys?: readonl
 /** A name that every operating system accepts as a file name (spaces are kept, like before). */
 export function safeFileName (name: string, fallback = 'session'): string {
   // eslint-disable-next-line no-control-regex
-  // (letters in any script, digits, spaces and . _ ( ) - only: "Autopilot · Oct 28, 14:11 UTC"
-  // becomes "Autopilot - Oct 28- 14-11 UTC", easier in a shell or an analysis script)
-  const cleaned = (name || '').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
+  // (letters in any script, digits, spaces and . _ ( ) - only: "Autopilot · 2026-10-30 13:20:47 UTC"
+  // becomes "Autopilot - 2026-10-30 13-20-47 UTC", easier in a shell or an analysis script. Any space
+  // is a plain one first: the autopilot's names have no-break spaces, which became "-".)
+  const cleaned = (name || '').replace(/\s+/gu, ' ').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
   return (cleaned || fallback).slice(0, 120)
 }
 
