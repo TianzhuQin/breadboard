@@ -22,19 +22,21 @@ see [install.md](install.md).
 | Path | What |
 |---|---|
 | `app/` | The server: controllers, actors, models (the script engine, sessions, autopilot), security, response filters, and the Play views that load the front end. |
-| `conf/` | `routes`, the settings files (below), the database scripts in `evolutions/default/`, and the default participant page files in `defaults/`. |
+| `conf/` | `routes`, the settings files (below), the database scripts in `evolutions/default/`, the default participant page files in `defaults/`, and Breadboard's own words to participants in `i18n/` (one file per language, which the participant page reads too). |
 | `groovy/` | The script engine's own Groovy scripts, loaded each time the engine is built, and their tests (`*_test.groovy`). |
 | `test/` | The server's JUnit tests; `test/data/` holds experiment exports from older versions for the import tests. |
 | `frontend/` | The front end, a pnpm workspace (below). |
 | `public/` | Static files, served under `/assets`. The front-end builds write `public/admin/` and `public/bundles/`, which are not committed. |
 | `project/` | The sbt build: `Build.scala` (version, dependencies), `plugins.sbt`, `sbt-repositories`. |
-| `bin/` | `sbt8`, `run-local`, `make-dist`, `smoke-dist` (all described below). |
-| `release/` | The launchers (`breadboard.sh`, `breadboard.bat`) and the `README.md` that go into the release zip. |
+| `bin/` | `sbt8`, `run-local`, `make-dist`, `bundle-java`, `smoke-dist`, `smoke-dist.ps1` (all described below). |
+| `release/` | What goes into the release zip besides the server: the launchers (`breadboard.sh`, `breadboard.bat`, and `Start Breadboard.command` for macOS), `breadboard-task.xml` (the Windows Task Scheduler task that runs it for good), `logger.xml` (its `conf/logger.xml`) and the `README.md`. Also `jre.lock`, the Java runtimes `bin/bundle-java` puts into the downloads that carry their own Java. |
 | `docs/` | This documentation. |
 
 The settings files: `conf/application.conf` is what `bin/sbt8 run` and `bin/run-local` read,
 `conf/application-dev.conf` is for working with the webpack dev server, and
-`conf/application-prod.conf` is the one a release ships.
+`conf/application-prod.conf` is the one a release ships. It reads `conf/local.conf` last, the
+settings a researcher changes, which the launchers make at first start and which no release
+contains.
 
 The front end:
 
@@ -178,7 +180,9 @@ new push cancels the run still going for the same branch or pull request.
 |---|---|
 | Front end | Installs with `pnpm install --frozen-lockfile` on Node 22, runs `build:all`, type-checks the console and runs `test:all`. Keeps `public/admin` and `public/bundles` as the `frontend-build` artifact for 3 days. |
 | Server tests | Runs `bin/sbt8 test` on Zulu Java 8, with the sbt and Ivy caches kept between runs. |
-| Release package | After both pass: builds the release from the `frontend-build` artifact (`SKIP_FRONTEND=1 bin/make-dist`), then runs `bin/smoke-dist`. Keeps the zip and its `.sha256` as the `breadboard-release` artifact for 7 days. |
+| Release package | After both pass: builds the release from the `frontend-build` artifact (`SKIP_FRONTEND=1 bin/make-dist`) and runs `bin/smoke-dist` on it, then makes the downloads that carry their own Java (`bin/bundle-java`) and runs `bin/smoke-dist` on the Linux one. Keeps the zips and their `.sha256` files as the `breadboard-release` artifact for 7 days. |
+| macOS package | Runs `bin/smoke-dist` on the `-macos-arm64` zip, on its own Java. |
+| Windows package | Runs `bin/smoke-dist.ps1` on the `-windows-x64` zip: `breadboard.bat` on its own Java, the first account, a backup, the message when the port is taken (also by a program on `::1` only), the port and memory set in `conf\local.conf`, curly quotes in it named, a server that can't start not started again, nor one whose port another program took while `breadboard.bat` waited to start it again (which `logs\application.log` says too), nor one that runs out of memory while starting (with how to give it more: the `-Xmx` in `JAVA_OPTS`), and what Java itself says going into `logs\jvm-pid<N>.log`, not the window. |
 
 ## Making a release
 
@@ -197,32 +201,68 @@ new push cancels the run still going for the same branch or pull request.
    It builds the front end (`pnpm install --frozen-lockfile`, `build:all`; set
    `SKIP_FRONTEND=1` to use what is already in `public/`) and the server (`sbt dist`), then lays
    out `target/release/breadboard-<version>/`: the launchers (the `.bat` with Windows line
-   endings), the server's jars in `lib/` with `lib/classpath.txt` (their order in Play's own start
-   script, which the release leaves out: the launchers run Java themselves),
-   `conf/application-prod.conf`, the engine's Groovy scripts without tests, empty `db/` and
-   `logs/`, `release/README.md` as `README.md`, `LICENSE.md`, `CHANGELOG.md` and `docs/`. It writes
-   `breadboard-<version>.zip` and `breadboard-<version>.zip.sha256` next to it. The output is
-   not in `dist/` because Play copies whatever is in `dist/` into the package it builds.
-4. Check it:
+   endings), `breadboard-task.xml` (in UTF-16, as Windows saves one), the server's jars in `lib/`
+   with `lib/classpath.txt` (their order in Play's own start script, which the release leaves out:
+   the launchers run Java themselves), `conf/application-prod.conf` and `conf/logger.xml`, the
+   engine's Groovy scripts without tests, empty `db/` and `logs/`, `release/README.md` as
+   `README.md`, `LICENSE.md`, `CHANGELOG.md` and `docs/`. It writes `breadboard-<version>.zip` and
+   `breadboard-<version>.zip.sha256` next to it. The output is not in `dist/` because Play copies
+   whatever is in `dist/` into the package it builds.
+4. Make the downloads that carry their own Java: the Azul Zulu 8 JRE that `release/jre.lock` pins
+   for each platform, so that every build of a release carries the same one. Each is downloaded
+   once into `target/jre-cache` and checked against its SHA-256 in `release/jre.lock`.
 
    ```bash
-   bin/smoke-dist                                           # the newest zip in target/release/
+   bin/bundle-java                       # macos-arm64, macos-x64, linux-x64, windows-x64
+   ```
+
+   It writes `breadboard-<version>-<platform>.zip` (and `.sha256`) next to the plain zip: the
+   same files plus the runtime in `jre/` (with its licence files), without the launchers of the
+   other systems. `JRE_MACOS_ARM64=/path/to/archive` (and so on) uses an archive already on disk,
+   unchecked.
+
+   To move to newer JREs, on purpose: `bin/bundle-java --update` looks up the newest Zulu 8 JRE for
+   each platform in Azul's metadata API, with the SHA-256 Azul publishes, and writes them into
+   `release/jre.lock`. Then build the downloads, check them with `bin/smoke-dist`, and commit the
+   new `release/jre.lock`.
+5. Check them:
+
+   ```bash
+   bin/smoke-dist target/release/breadboard-vX.Y.Z.zip      # with JAVA8_HOME set
+   bin/smoke-dist target/release/breadboard-vX.Y.Z-macos-arm64.zip   # on its own Java
    bin/smoke-dist --db /path/to/old/db/breadboard.h2.db     # on a copy of an older database
    ```
 
    `bin/smoke-dist` unzips the release into a temporary folder and starts it with
    `breadboard.sh` on an empty database (port 19000, or `PORT`). It checks the release's layout
    and the generated `application.secret` (which must not show on the server's command line),
-   loads both consoles, the bundles and a participant
-   page, creates the first account and signs in, then restarts on the same database and checks
-   again. It fails if the server logs an error. With `--db` it starts on a copy of an older
-   release's database instead; when that database already has accounts, it only checks that
-   the server starts and serves its pages.
-5. Commit, tag and publish:
+   loads both consoles, the bundles, a participant page and `/health` (also with HEAD), creates the
+   first account and signs in, and checks that the database, its backups and the logs are the
+   server's account's only. Then it restarts on the same database, with a `conf/local.conf` (which
+   the launcher must make private, and whose `http.port` and `breadboard.memory` it must pass on to
+   Java) and a proxy set, and checks again. It also checks what the launcher says when it can't
+   start (a second copy, which in a terminal opens the running one's console instead; the port
+   taken, also by a program on `[::1]` only; curly quotes in `conf/local.conf`; a folder it can't
+   write to; a `conf/local.conf` it can't read, named before the port is looked at), that
+   keep-running doesn't start again a server that couldn't start (and `logs/start-errors.log` says
+   why), that it does start again one that ran out of memory while nobody read its window (a pipe
+   that is full), with what Java said about it in `logs/jvm-pid<N>.log` and how to give it more:
+   its `-Xmx` in `JAVA_OPTS`, which wins over `breadboard.memory` (this needs a `javac`, in
+   `JAVA8_HOME`, `JAVA_HOME` or on the PATH, to build the Java agent that fills the heap; without
+   one it says that it skips this), that it doesn't start again one that stopped by itself when,
+   while it waited to, another program took the port or Breadboard was started from its folder
+   (which `logs/application.log` says too), nor one that ran out of memory while starting, and says
+   how to give it more (the `-Xmx` given to `breadboard.sh`), and on macOS that the computer is kept
+   awake while the server runs. It fails if the server logs an error. With `--db` it starts on a
+   copy of an older release's database instead (and checks that it was backed up first); when that
+   database already has accounts, it only checks that the server starts and serves its pages. CI
+   runs the Windows zip through `bin/smoke-dist.ps1`.
+6. Commit, tag and publish (the platform zips can be taken from CI's `breadboard-release`
+   artifact):
 
    ```bash
    git tag vX.Y.Z && git push origin vX.Y.Z
-   gh release create vX.Y.Z target/release/breadboard-vX.Y.Z.zip target/release/breadboard-vX.Y.Z.zip.sha256
+   gh release create vX.Y.Z target/release/breadboard-vX.Y.Z*.zip target/release/breadboard-vX.Y.Z*.zip.sha256
    ```
 
    Use the version's `CHANGELOG.md` section as the release notes.

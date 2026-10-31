@@ -1,7 +1,9 @@
 package models;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -26,6 +28,54 @@ public final class ScriptBoardSupport {
         StringBuilder sb = new StringBuilder(headline(t));
         appendGroovyFrames(sb, t);
         return sb.toString();
+    }
+
+    /**
+     * What went wrong in a step, in one line a researcher can act on, e.g. "line 13: No such
+     * property: five" (the innermost cause's message, without Groovy's generated class names, and the
+     * line of the step it happened on, when known).
+     */
+    public static String briefError(Throwable t) {
+        if (t == null) {
+            return "unknown error";
+        }
+        Throwable inner = t;
+        Set<Throwable> seen = new HashSet<Throwable>();
+        while (inner.getCause() != null && seen.add(inner) && inner.getCause().getMessage() != null) {
+            inner = inner.getCause();
+        }
+        String message = inner.getMessage() == null ? inner.getClass().getSimpleName() : inner.getMessage();
+        // "startup failed:\nScript1205.groovy: 1: unexpected token: @ line 1, column 21.\n1 error"
+        java.util.regex.Matcher compile = java.util.regex.Pattern
+            .compile("Script\\d+\\.groovy: (\\d+): ([^\\n]*?)(?: @ line \\d+, column \\d+\\.)?\\s*(?:\\n|$)").matcher(message);
+        if (compile.find()) {
+            return "line " + compile.group(1) + ": " + compile.group(2).trim();
+        }
+        message = message.replaceAll("\\s+for class: Script\\d+", "").replaceAll("\\s+", " ").trim();
+        if (message.startsWith("javax.script.ScriptException: ")) {
+            message = message.substring("javax.script.ScriptException: ".length());
+        }
+        message = message.replaceFirst("^[a-z][\\w.]*\\.(\\w+(Exception|Error)): ", "");
+        // The line from the innermost cause first, where it went wrong: an outer exception's frames are
+        // where it was wrapped, which can be in another script (one that ran this one, e.g. a step
+        // that started the game).
+        List<Throwable> chain = new ArrayList<Throwable>();
+        for (Throwable cur = t; cur != null && !chain.contains(cur); cur = cur.getCause()) {
+            chain.add(cur);
+        }
+        Integer line = null;
+        for (int i = chain.size() - 1; i >= 0 && line == null; i--) {
+            for (StackTraceElement f : chain.get(i).getStackTrace()) {
+                if (f.getFileName() != null && f.getFileName().matches("Script\\d+\\.groovy") && f.getLineNumber() > 0) {
+                    line = f.getLineNumber();
+                    break;
+                }
+            }
+        }
+        if (message.length() > 300) {
+            message = message.substring(0, 300) + "…";
+        }
+        return line == null ? message : "line " + line + ": " + message;
     }
 
     private static String headline(Throwable t) {

@@ -9,7 +9,7 @@
       <BEmpty
         :icon="ServerCog"
         title="The autopilot needs a server update"
-        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in application.conf (breadboard.autopilot.*)."
+        text="This Breadboard server doesn't offer autopilot settings yet. Update Breadboard on the server and restart it, then come back. Until then the autopilot can be set in the server's settings file (breadboard.autopilot.*)."
       >
         <template #actions>
           <BButton :icon="RefreshCw" :loading="refreshing" @click="load()">Check again</BButton>
@@ -46,7 +46,7 @@
         <div>
           <p class="ap-banner__title">These settings come from the server's configuration file</p>
           <p class="ap-banner__text">
-            <code>application.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
+            <code>conf/local.conf</code> sets <code>breadboard.autopilot.experiment</code>, so the server follows that file
             and changes can't be made here. To manage the autopilot from this page, remove the
             <code>breadboard.autopilot.*</code> lines from the file and restart the server.
           </p>
@@ -99,8 +99,8 @@
               <Info :size="15" aria-hidden="true" />
               <span>
                 Its sessions use each launch parameter's default:
-                <template v-for="(p, i) in launchDefaults" :key="p.name"><code>{{ p.name }}</code> {{ p.value === '' ? '(empty)' : p.value }}{{ i < launchDefaults.length - 1 ? ', ' : '.' }} </template>
-                <template v-if="emptyDefaults.length">Check that {{ emptyDefaults.join(' and ') }} can be empty.</template>
+                <template v-for="(p, i) in launchDefaults" :key="p.name"><code>{{ p.name }}</code>{{ ' ' }}{{ p.value === '' ? '(empty)' : p.value }}{{ i < launchDefaults.length - 1 ? ', ' : '. ' }}</template>
+                <template v-if="emptyDefaults.length">{{ ' ' }}Check that {{ emptyDefaults.join(' and ') }} can be empty.</template>
                 Change them on the <RouterLink to="/parameters">Parameters</RouterLink> page; a session already open keeps the values it opened with.
               </span>
             </p>
@@ -130,13 +130,13 @@
             <span class="ap-sec__icon" aria-hidden="true"><Repeat :size="17" /></span>
             <div>
               <h2 id="ap-sec-sessions" class="ap-sec__title">One session after another</h2>
-              <p class="ap-sec__desc">Keep recruiting without you: when a session finishes (or is called off), the next one opens.</p>
+              <p class="ap-sec__desc">Keep recruiting without you: when a session finishes, is called off or runs out of time, the next one opens.</p>
             </div>
           </div>
           <div class="ap-sec__body">
             <BSwitch v-model="form.continuous" :disabled="readOnly">Open the next session when one finishes</BSwitch>
             <div class="ap-grid">
-              <BField label="Pause before the next session" :error="errors.nextSessionDelaySeconds" :hint="secondsHint(form.nextSessionDelaySeconds, 'Time for the server to save the data. 0 opens it at once.')">
+              <BField label="Pause before the next session" :error="errors.nextSessionDelaySeconds" :hint="secondsHint(form.nextSessionDelaySeconds, 'Time for the server to save the data. Restarting the experiment\'s scripts adds a second or so; 0 opens the next session a second or so after one finishes.')">
                 <template #default="{ id, describedby }">
                   <BInput
                     :id="id"
@@ -150,6 +150,25 @@
                     :aria-invalid="errors.nextSessionDelaySeconds ? 'true' : undefined"
                   >
                     <template #suffix><span class="ap-unit">seconds</span></template>
+                  </BInput>
+                </template>
+              </BField>
+              <BField label="Longest session" optional :error="errors.maxSessionMinutes" :hint="minutesHint(form.maxSessionMinutes, 'A game that runs longer is ended, and its participants are told it ran out of time. Empty: no limit.')">
+                <template #default="{ id, describedby }">
+                  <BInput
+                    :id="id"
+                    v-model="form.maxSessionMinutes"
+                    type="number"
+                    min="1"
+                    :max="MAX_SESSION_MINUTES"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="No limit"
+                    :disabled="readOnly"
+                    :aria-describedby="describedby"
+                    :aria-invalid="errors.maxSessionMinutes ? 'true' : undefined"
+                  >
+                    <template #suffix><span class="ap-unit">minutes</span></template>
                   </BInput>
                 </template>
               </BField>
@@ -170,17 +189,24 @@
             </div>
           </div>
           <div class="ap-sec__body">
-            <p v-if="ownRoom" class="ap-own">
+            <div v-if="ownRoom" class="ap-own">
               <Info :size="15" aria-hidden="true" />
-              <span>This experiment's steps set their own waiting room: <code>{{ ownRoom }}</code>.
-                {{ form.waitingRoom.enabled ? 'The settings below replace it.' : 'It is used as long as the switch is off.' }}</span>
-            </p>
+              <span>
+                This experiment's steps set their own waiting room.
+                {{ form.waitingRoom.enabled ? 'The settings below replace it.' : 'It is used as long as this switch is off.' }}
+                <details class="ap-own__code">
+                  <summary>Show what the steps say</summary>
+                  <code>{{ ownRoom }}</code>
+                </details>
+              </span>
+            </div>
             <p v-else-if="!form.waitingRoom.enabled" class="ap-own is-warn">
               <TriangleAlert :size="15" aria-hidden="true" />
               <span>This experiment's steps set no waiting room, so with the switch off its sessions wait for someone to press Start the game.</span>
             </p>
             <BSwitch v-model="form.waitingRoom.enabled" :disabled="readOnly">Use the waiting room set here</BSwitch>
-            <div class="ap-grid">
+            <!-- (hidden while the steps' own waiting room is used: these values would not be in effect) -->
+            <div v-if="form.waitingRoom.enabled || !ownRoom || readOnly" class="ap-grid">
               <BField label="Minimum players" :error="errors['waitingRoom.minPlayers']" hint="The game can start once this many people are here.">
                 <template #default="{ id, describedby }">
                   <BInput
@@ -348,12 +374,13 @@ import { HttpError } from '@/lib/http'
 import { admin, experiments, graph } from '@/store/admin'
 import { describeError } from '../experiments/experiments'
 import { liveEventOf } from '../sessions/sessionData'
+import { mergeEvents } from '../session/events'
 import AutopilotStatus from './AutopilotStatus.vue'
 import { useUnsavedGuard } from './useUnsavedGuard'
 import {
   autopilotActivity, describeEngineSession, describeWaitingRoom, fetchAutopilot, haltOf, humanSeconds, participantLinks,
-  resumeAutopilot, resumeLabel, sameForm, saveAutopilot, takeOverTarget, DEFAULTS, toForm, toSettings, validateAutopilot,
-  stepsCall, waitingRoomLive, type AutopilotForm, type AutopilotState, type EngineSession,
+  resumeAutopilot, resumeLabel, sameForm, saveAutopilot, takeOverTarget, DEFAULTS, MAX_SESSION_MINUTES, toForm, toSettings,
+  validateAutopilot, stepsCall, waitingRoomLive, type AutopilotForm, type AutopilotState, type EngineSession,
 } from './autopilot'
 
 type Phase = 'loading' | 'ready' | 'unavailable' | 'error'
@@ -427,9 +454,13 @@ const live = computed(() => {
 const activity = computed(() => {
   const inst = state.value?.status.instance
   if (!isCurrent.value || !inst) return []
-  // only what its own session recorded: pushes from every session reach this console
+  // only what its own session recorded: pushes from every session reach this console; with what it
+  // recorded before (in its User JSON), so a refresh of the page doesn't lose it
   const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
-  return autopilotActivity(admin.events.filter(e => liveEventOf(e, inst.id, live)))
+  const recorded = admin.instance && admin.instance.id === inst.id ? admin.instance.events : []
+  const events = mergeEvents(recorded, admin.events.filter(e => liveEventOf(e, inst.id, live)))
+  // (oldest first, as recorded)
+  return autopilotActivity(events.reverse().map(e => ({ name: e.name, datetime: new Date(e.at).toISOString(), data: e.data })))
 })
 
 // ---- loading -----------------------------------------------------------------------------------
@@ -438,9 +469,14 @@ const activity = computed(() => {
 const formExperiment = computed(() => experiments.value.find(e => e.id === form.value.experimentId) ||
   (admin.experiment && admin.experiment.id === form.value.experimentId ? admin.experiment : null))
 const ownRoom = computed(() => stepsCall(formExperiment.value?.steps, 'waitingRoom'))
-const launchDefaults = computed(() => (formExperiment.value?.parameters || []).map(p => ({ name: p.name, value: String(p.defaultVal ?? '') })))
-// (an empty text default is often a completion code someone forgot to fill in)
-const emptyDefaults = computed(() => launchDefaults.value.filter(p => p.value === '').map(p => p.name))
+const launchDefaults = computed(() => (formExperiment.value?.parameters || []).map(p => ({
+  name: p.name,
+  value: String(p.defaultVal ?? ''),
+  optional: /\b(optional|if|leave (it )?empty|may be empty|can be empty)\b/i.test(String(p.description ?? '')),
+})))
+// (an empty text default is often a completion code someone forgot to fill in; not one whose
+// description says it may stay empty)
+const emptyDefaults = computed(() => launchDefaults.value.filter(p => p.value === '' && !p.optional).map(p => p.name))
 const ownLeave = computed(() => stepsCall(formExperiment.value?.steps, 'replaceDisconnected'))
 
 /**
@@ -453,8 +489,23 @@ function suggested (s: AutopilotState): AutopilotForm {
   f.experimentId = admin.experiment.id
   if (stepsCall(admin.experiment.steps, 'waitingRoom')) f.waitingRoom.enabled = false
   if (stepsCall(admin.experiment.steps, 'replaceDisconnected')) f.replaceDisconnected.enabled = false
+  // a lone participant is told after ten minutes, rather than waiting for good
+  if (f.waitingRoom.enabled && f.waitingRoom.maxWaitSeconds == null) f.waitingRoom.maxWaitSeconds = 600
   return f
 }
+
+// Choosing another experiment here: its steps' own waiting room and takeover (if they set them)
+// stay in charge, unless the researcher has already changed those fields.
+watch(() => form.value.experimentId, (id) => {
+  // (not when settings are loaded: the form then matches what was saved)
+  if (readOnly.value || id == null || id === baseline.value.experimentId) return
+  const chosen = experiments.value.find(e => e.id === id)
+  if (!chosen) return
+  const untouched = sameForm({ ...form.value, experimentId: baseline.value.experimentId }, baseline.value)
+  if (!untouched) return
+  if (stepsCall(chosen.steps, 'waitingRoom')) form.value.waitingRoom.enabled = false
+  if (stepsCall(chosen.steps, 'replaceDisconnected')) form.value.replaceDisconnected.enabled = false
+})
 
 function adopt (s: AutopilotState, resetForm: boolean) {
   state.value = s
@@ -504,13 +555,18 @@ async function refresh (byHand = false) {
 
 let poll: ReturnType<typeof setInterval> | undefined
 let soon: ReturnType<typeof setTimeout> | undefined
+// Toasts keep above the save bar at the bottom of this page (see .ap-lifts-toasts), rather than
+// landing on its Save button, under the pointer that just pressed it.
+const LIFT = 'ap-lifts-toasts'
 onMounted(() => {
   load()
   poll = setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 10000)
+  document.documentElement.classList.add(LIFT)
 })
 onBeforeUnmount(() => {
   clearInterval(poll)
   clearTimeout(soon)
+  document.documentElement.classList.remove(LIFT)
 })
 // a session opened, started or finished: look again (debounced, pushes come in bursts)
 watch(() => [admin.instance?.id, admin.instance?.status], () => {
@@ -522,6 +578,10 @@ watch(() => [admin.instance?.id, admin.instance?.status], () => {
 
 function secondsHint (v: number | null, text: string) {
   return v != null && v >= 60 && Number.isInteger(v) ? `${text} (${humanSeconds(v)})` : text
+}
+
+function minutesHint (v: number | null, text: string) {
+  return v != null && v >= 60 && Number.isInteger(v) && v <= MAX_SESSION_MINUTES ? `${text} (${humanSeconds(v * 60)})` : text
 }
 
 function discard () {
@@ -545,6 +605,9 @@ async function resume () {
   try {
     const now = await resumeAutopilot()
     adopt(now, false)
+    // it opens its session a moment later: show it then, not at the next poll
+    clearTimeout(soon)
+    soon = setTimeout(() => refresh(), 1500)
     const name = now.status.experimentName || savedExperimentName.value || 'the experiment'
     const waitingFor = now.status.engineSession
     if (waitingFor && waitingFor.experimentId !== now.settings.experimentId) {
@@ -578,7 +641,13 @@ async function save (takeOver = false) {
   if (Object.keys(errors.value).length) {
     notify.error('Check the highlighted settings', 'Some values need fixing before they can be saved.')
     await nextTick()
-    formEl.value?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+    const field = formEl.value?.querySelector<HTMLElement>('[aria-invalid="true"]')
+    if (field) {
+      // into the middle of the window, clear of the sticky save bar at its bottom (focus alone only
+      // scrolled it as far as the window's edge, behind the bar)
+      field.focus({ preventScroll: true })
+      if (typeof field.scrollIntoView === 'function') field.scrollIntoView({ block: 'center' })
+    }
     return
   }
   const next = toSettings(form.value)
@@ -748,4 +817,12 @@ useUnsavedGuard(dirty, {
 .ap-savebar__text { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--muted); }
 .ap-savebar.is-dirty .ap-savebar__text { color: var(--text); font-weight: 600; }
 .ap-savebar__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+/* toasts above the save bar (its bottom: 12px, about 60px tall), not on its buttons; on phones they
+   are at the top anyway */
+@media (min-width: 641px) {
+  html.ap-lifts-toasts .b-toasts { bottom: 88px; }
+}
+.ap-own__code { margin-top: 4px; }
+.ap-own__code summary { cursor: pointer; font-size: var(--text-xs); color: var(--muted); }
+.ap-own__code code { display: block; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 </style>

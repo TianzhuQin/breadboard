@@ -28,13 +28,21 @@ public class Secured extends Security.Authenticator {
     ObjectNode result = Json.newObject();
     if (User.findRowCount() == 0) {
       result.put("status", "create-first-user");
+      // From another computer the first account needs the code the server prints (SetupCode).
+      boolean local = security.SetupCode.isLocal(ctx.request());
+      result.put("setupCodeRequired", !local);
+      if (!local) {
+        security.SetupCode.current();
+      }
     } else {
       result.put("status", "unauthorized");
       // This browser was signed in, but the account has signed out somewhere else since (or changed
       // its password), which ended this session: the console says so.
       String uid = ctx.session().get("uid");
       if (uid != null && !uid.trim().isEmpty()) {
-        result.put("reason", "ended");
+        // ... or another researcher removed the account.
+        String email = ctx.session().get("email");
+        result.put("reason", email != null && User.findByEmail(email) == null ? "removed" : "ended");
       }
     }
     result.put("message", "please login");

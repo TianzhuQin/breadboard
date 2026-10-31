@@ -71,7 +71,7 @@ import {
   type RenderTheme, type Scene, type SceneNode, type SceneLink, type LegendBlock, type LabelCandidate,
 } from './render'
 import {
-  NOISY_KEYS, NOISY_LINK_KEYS, formatValue, isAi, isTie, connectionOf, labelOf as labelFor, propertyTitle, statusOf, tieBetween, valueOf,
+  NOISY_KEYS, NOISY_LINK_KEYS, formatValue, idUnder, isAi, isTie, connectionOf, displayName, propertyTitle, statusOf, tieBetween, valueOf,
 } from './players'
 
 export type NetworkMode = 'view' | 'connect' | 'cut'
@@ -212,9 +212,9 @@ function fillOf (id: string, s: ColorScale | null, t: RenderTheme): string {
   return t.accent
 }
 function nameOf (id: string): string {
-  const label = labelFor(props.graph.nodes.get(id) || { id, data: {} }, props.labelBy, degreeOf)
-  // computer players (g.addAI's _1, _2, ...) read as "AI 1" where they would show their bare id
-  return label === id && /^_\d+$/.test(id) ? `AI ${id.slice(1)}` : label
+  // computer players (g.addAI's _1, _2, ...) read as "AI 1 (_1)" where they would show their bare id,
+  // as in the Players table and on the Preview page
+  return displayName(props.graph.nodes.get(id) || { id, data: {} }, props.labelBy, degreeOf)
 }
 const colorTitle = propertyTitle
 
@@ -1005,7 +1005,8 @@ const tooltip = computed(() => {
   }
   return {
     title: label,
-    sub: label !== id ? id : '',
+    // (not "AI 6 (_6)" and then "_6" again)
+    sub: idUnder(label, id),
     note: '',
     rows,
     color: fillOf(id, scale.value, theme),

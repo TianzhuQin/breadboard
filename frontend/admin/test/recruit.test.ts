@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { h } from 'vue'
 import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Node's own (file-less) localStorage shadows jsdom's here; use a plain in-memory one, before the
 // page modules read it on import.
@@ -41,7 +44,7 @@ vi.mock('@/store/admin', async () => {
 })
 
 import { http, HttpError } from '@/lib/http'
-import { admin as realAdmin, connection, connectionState, nextMessage } from '@/store/admin'
+import { admin as realAdmin, connection, connectionState, graph, nextMessage } from '@/store/admin'
 import {
   assignmentsCsv, bonusFromAnswers, bonusTotal, buildRequirement, csvCell, describeError, describeRequirement, hitCounts, mapPool,
   MASTERS_ID, newRequirement, parseAnnotation, parseAnswers, parseIntegerList, parseMoney, parseWorkerIds, toCsv, validateRequirement,
@@ -51,12 +54,16 @@ import { FORM_KEY, defaultHitForm, hitFormBody, loadHitForm, readSchedules, vali
 import { bonusToken, newRequestToken, TOKEN_RE } from '@/pages/recruit/mturk/bonusTokens'
 import { toasts } from '@/ui/toast'
 import { toRow } from '@/pages/recruit/mturk/rows'
-import { prolificBonusLines, prolificPlayers, prolificStudyUrl, prolificTarget, groovyString } from '@/pages/recruit/prolific/prolific'
+import {
+  completionSnippet, groupBySession, playersWithoutCode, prolificBonusLines, prolificFinished, prolificPlayers, prolificRecordsOf,
+  prolificStudyUrl, prolificTarget, groovyString,
+} from '@/pages/recruit/prolific/prolific'
 import BonusDialog from '@/pages/recruit/mturk/BonusDialog.vue'
 import CreateHitTab from '@/pages/recruit/mturk/CreateHitTab.vue'
 import RecruitPage from '@/pages/recruit/RecruitPage.vue'
 import HitDetail from '@/pages/recruit/mturk/HitDetail.vue'
 import AutopilotCard from '@/pages/recruit/prolific/AutopilotCard.vue'
+import { autopilotStatusOf } from '@/pages/session/autopilot'
 import { moneyState, settleMoney } from '@/pages/recruit/mturk/moneyConfirm'
 import { activeJobs, track } from '@/pages/recruit/mturk/jobs'
 import { confirmSignOut, unsavedTotal } from '@/shell/unsaved'
@@ -364,6 +371,53 @@ describe('Prolific helpers', () => {
     expect(w.find('.rc-note--success').text()).toMatch(/leads to Saturday/)
   })
 
+  it('says, while the autopilot opens the next session by itself, that the link holds newcomers until it opens', async () => {
+    const StudyLinkCard = (await import('@/pages/recruit/prolific/StudyLinkCard.vue')).default
+    const exp = { id: 12, name: 'Game', instances: [] }
+    const started = { id: 9, name: 'Autopilot 3', status: 'RUNNING', hasStarted: true }
+    const stubs = { RouterLink: { template: '<a><slot /></a>' } }
+    const w = mount(StudyLinkCard, { props: { experiment: exp as any, target: null, started: started as any, autopilot: true }, global: { stubs } })
+    const note = () => w.find('.rc-note--info').text().replace(/\s+/g, ' ')
+    expect(w.find('.rc-note--warning').exists()).toBe(false)
+    expect(note()).toBe('The game in Autopilot 3 has started. The autopilot opens the next session when it ends; until then, the link shows a page that waits for that session and takes newcomers in as soon as it opens.')
+    expect(w.text()).not.toContain('No session is open right now')
+    // between two of its sessions
+    await w.setProps({ started: null })
+    expect(note()).toMatch(/^The autopilot opens the next session in a moment; until then, the link shows a page that waits for it/)
+    // a session open to newcomers
+    await w.setProps({ target: { id: 10, name: 'Autopilot 4', status: 'RUNNING', hasStarted: false } as any })
+    expect(w.find('.rc-note--success').text().replace(/\s+/g, ' ')).toContain('Once its game has started, newcomers wait on a page that takes them into the autopilot’s next session as soon as it opens.')
+    w.unmount()
+  })
+
+  it('says, while something keeps the autopilot from opening its next session, that the link turns newcomers away meanwhile', async () => {
+    const StudyLinkCard = (await import('@/pages/recruit/prolific/StudyLinkCard.vue')).default
+    const exp = { id: 12, name: 'Game', instances: [] }
+    const stubs = { RouterLink: { template: '<a><slot /></a>' } }
+    // (the panel passes autopilot: false whenever it is held up)
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const w = mount(StudyLinkCard, { props: { experiment: exp as any, target: null, started: null, autopilot: false, heldUp: { by: 'session', session: other } }, global: { stubs } })
+    const note = () => w.find('.rc-note--warning').text().replace(/\s+/g, ' ')
+    expect(w.find('.rc-note--info').exists()).toBe(false)
+    // waiting for another experiment's session on the shared engine to end
+    expect(note()).toBe('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine, which every researcher on this server shares. The autopilot opens its next session once that one has ended. Until then, the link shows “No session is open right now” and asks people from Prolific to return the study, so pause recruiting on Prolific meanwhile.')
+    await w.setProps({ heldUp: { by: 'session', session: { id: 4, name: '', experimentId: null, experimentName: null, owner: null } } })
+    expect(note()).toMatch(/^Another experiment’s session, “Session #4”, is running on the script engine/)
+    // for a researcher who has the engine loaded with another experiment
+    await w.setProps({ heldUp: { by: 'engine' } })
+    expect(note()).toBe('The script engine, which every researcher on this server shares, has another experiment loaded for a researcher whose console is open (the Autopilot page says who). The autopilot opens its next session once they close the console. Until then, the link shows “No session is open right now” and asks people from Prolific to return the study, so pause recruiting on Prolific meanwhile.')
+    // a problem the Autopilot page shows (the last session reported an error, the disk is almost full, ...)
+    await w.setProps({ heldUp: { by: 'problem' } })
+    expect(note()).toBe('The Autopilot page shows a problem. While it does, the link shows “No session is open right now” instead of a page that waits for the autopilot’s next session, and asks people from Prolific to return the study: pause recruiting on Prolific until the problem is gone.')
+    await w.setProps({ started: { id: 9, name: 'Autopilot 3', status: 'RUNNING', hasStarted: true } as any })
+    expect(note()).toMatch(/^The game in Autopilot 3 has started, and the Autopilot page shows a problem\. While it does, the link shows “No session is open right now”/)
+    for (const text of [note(), w.text()]) {
+      expect(text).not.toContain('takes newcomers in')
+      expect(text).not.toContain('in a moment')
+    }
+    w.unmount()
+  })
+
   it('lists Prolific players and their bonuses', () => {
     const nodes = [
       { id: 'p1', data: { _system: { recruitment: { source: 'prolific', prolificPid: 'PID-B', completed: true, completionCode: 'C1', bonus: 1.255 } } } },
@@ -375,6 +429,50 @@ describe('Prolific helpers', () => {
     expect(players.map(p => p.prolificPid)).toEqual(['PID-A', 'PID-B'])
     expect(players[0].connected).toBe(false)
     expect(prolificBonusLines(players)).toBe('PID-B,1.26')
+  })
+
+  // The finish screen's button as the participant page names it (conf/i18n/eng.json, which it reads), "Finish and
+  // return to Prolific": the card called it a Finish button.
+  const FINISH_BUTTON = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'conf', 'i18n', 'eng.json'), 'utf8'))['finish.submit']
+
+  it('gives code that completes Prolific participants only, and says to use the step\'s own name for the participant', () => {
+    expect(completionSnippet(' C7K2M9QX ')).toBe([
+      '// p is the participant: use the name your step gives them (often player, or p in g.V.each { p -> ... })',
+      'if (p._system?.recruitment?.source == "prolific") {',
+      '  recruitment.completeProlific(p, [',
+      "    completionCode: 'C7K2M9QX',",
+      "    message: 'Thank you for taking part!'",
+      '  ])',
+      '}',
+    ].join('\n'))
+    expect(completionSnippet('')).toContain("completionCode: 'YOUR-CODE',")
+  })
+
+  it('says an experiment with a prolificCode parameter gives the code by itself, and offers no code to paste; both name the finish button', async () => {
+    const CompletionCard = (await import('@/pages/recruit/prolific/CompletionCard.vue')).default
+    const router = makeRouter()
+    const param = (defaultVal: string) => ({ id: 1, name: 'prolificCode', type: 'Text' as const, minVal: '', maxVal: '', defaultVal, description: '' })
+    let w = mount(CompletionCard, { props: { experimentId: 3, parameters: [param('C7K2M9QX')] }, global: { plugins: [router] } })
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('On the Parameters page, make that code the default of prolificCode. This experiment shows it to Prolific participants by itself when they finish: there is no code to add to its steps.')
+    expect(w.find('.pl-code-now').text()).toBe('Now: C7K2M9QX')
+    expect(text()).toContain(`The participant sees a thank-you screen with the code and a ${FINISH_BUTTON} button; Prolific then marks their submission complete.`)
+    expect(w.find('pre.rc-code').exists()).toBe(false)
+    expect(w.findAll('button').some(b => b.text() === 'Copy code')).toBe(false)
+    await w.findAll('button').find(b => b.text() === 'Parameters')!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/parameters')
+    w.unmount()
+    // not set yet: said, as Prolific participants would get no code
+    w = mount(CompletionCard, { props: { experimentId: 3, parameters: [param('')] }, global: { plugins: [router] } })
+    expect(w.find('.pl-code-now').text()).toBe('Empty for now, so Prolific participants finish without a code.')
+    w.unmount()
+    // without one: the guarded code to copy
+    w = mount(CompletionCard, { props: { experimentId: 3, parameters: [] }, global: { plugins: [router] } })
+    expect(w.find('pre.rc-code').text()).toContain('if (p._system?.recruitment?.source == "prolific") {')
+    expect(w.findAll('button').some(b => b.text() === 'Copy code')).toBe(true)
+    expect(text()).toContain(`The participant sees a thank-you screen with the code and a ${FINISH_BUTTON} button; Prolific then marks their submission complete.`)
+    w.unmount()
   })
 
   it('writes completion codes as safe Groovy strings', () => {
@@ -427,6 +525,181 @@ describe('Recruitment page', () => {
     expect(vi.mocked(http.get)).toHaveBeenCalledWith('/amtadmin/getAccountBalance?sandbox=true')
     expect(w.text()).toContain('Connect Breadboard to Mechanical Turk')
     expect(w.text()).toContain('AMT_ACCESS_KEY')
+    // the keys go in the server's own settings file, not in conf/application-prod.conf, which each
+    // release replaces and anyone can read; a new release comes without conf/local.conf, so the note
+    // says to copy it over
+    expect(w.text()).toContain('conf/local.conf')
+    expect(w.text()).toContain('copy conf/local.conf into each new release when you upgrade')
+    expect(w.text()).not.toContain('application-prod.conf')
+    w.unmount()
+  })
+})
+
+describe('Recruitment page with the autopilot', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.mocked(http.get).mockReset()
+    admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [{ id: 7, name: 'Autopilot 7', status: 'RUNNING', hasStarted: true, hits: [] }] }
+    admin.instance = { id: 7, name: 'Autopilot 7', status: 'RUNNING', hasStarted: true, hits: [] }
+  })
+
+  async function page (autopilot: any) {
+    vi.mocked(http.get).mockImplementation(async (url: string) => {
+      if (url === '/autopilot') return autopilot
+      throw new HttpError(404, 'Not found')
+    })
+    const router = makeRouter()
+    router.push('/recruit')
+    await router.isReady()
+    const w = mount({ render: () => h(RouterView) }, { global: { plugins: [router], stubs: { teleport: true } }, attachTo: document.body })
+    await flushPromises()
+    return w
+  }
+
+  it('says the autopilot opens the next session when this game ends, and that late arrivals wait for it', async () => {
+    const w = await page({ settings: { continuous: true, nextSessionDelaySeconds: 10 }, status: { on: true, experimentId: 3, experimentName: 'Trust game', instance: { id: 7, name: 'Autopilot 7', status: 'RUNNING' } } })
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('The game in Autopilot 7 has started. The autopilot opens the next session when it ends')
+    expect(text()).toContain('Late arrivals wait for the next session.')
+    expect(text()).not.toContain('let Autopilot keep one open')
+    w.unmount()
+  })
+
+  /** What the page promises newcomers who find no session open, as the study link's pages do then. */
+  function promises (w: any) {
+    const text = w.text().replace(/\s+/g, ' ')
+    return {
+      text,
+      holds: ['takes newcomers in', 'wait on a page', 'Late arrivals wait for the next session.'].some(t => text.includes(t)),
+      turnsAway: text.includes('Otherwise they see “No session is open right now”.') && text.includes('Late arrivals are turned away politely.'),
+    }
+  }
+
+  it('says, while the autopilot waits for another experiment’s session to end, that the link turns newcomers away until then', async () => {
+    admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [{ id: 6, name: 'Autopilot 6', status: 'FINISHED', hasStarted: true, hits: [] }] }
+    admin.instance = { id: 6, name: 'Autopilot 6', status: 'FINISHED', hasStarted: true, hits: [] }
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const w = await page({
+      settings: { continuous: true, nextSessionDelaySeconds: 10 },
+      status: {
+        on: true, experimentId: 3, experimentName: 'Trust game', instance: null, engineSession: other, problemKind: 'waiting',
+        problem: 'Another session is running: "pilot 3" (a@lab.org). The autopilot opens its own session once that one has ended and the engine is free.',
+      },
+    })
+    const { text, holds, turnsAway } = promises(w)
+    expect(text).toContain('Another experiment’s session, “pilot 3” of “Ultimatum” (run by a@lab.org), is running on the script engine')
+    expect(text).toContain('The autopilot opens its next session once that one has ended. Until then, the link shows “No session is open right now” and asks people from Prolific to return the study, so pause recruiting on Prolific meanwhile.')
+    expect(text).not.toContain('in a moment')
+    // as the study link's pages say then (Autopilot.opensNextSoon): no session is open
+    expect(holds).toBe(false)
+    expect(turnsAway).toBe(true)
+    w.unmount()
+  })
+
+  it('says, while a researcher has another experiment loaded in the engine, that the link turns newcomers away until the autopilot can open its session', async () => {
+    admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [] }
+    admin.instance = null
+    const w = await page({
+      settings: { continuous: true, nextSessionDelaySeconds: 10 },
+      status: {
+        on: true, experimentId: 3, experimentName: 'Trust game', instance: null, engineSession: null, problemKind: 'waiting',
+        problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open, so the autopilot leaves the engine to them.',
+      },
+    })
+    const { text, holds, turnsAway } = promises(w)
+    expect(text).toContain('has another experiment loaded for a researcher whose console is open')
+    expect(text).toContain('Until then, the link shows “No session is open right now” and asks people from Prolific to return the study')
+    expect(holds).toBe(false)
+    expect(turnsAway).toBe(true)
+    w.unmount()
+  })
+
+  it('says, while the Autopilot page shows a problem, that the link turns newcomers away, also during the autopilot’s own game', async () => {
+    const w = await page({
+      settings: { continuous: true, nextSessionDelaySeconds: 10 },
+      status: {
+        on: true, experimentId: 3, experimentName: 'Trust game', instance: { id: 7, name: 'Autopilot 7', status: 'RUNNING' }, engineSession: null,
+        problemKind: 'error', problem: 'The last session it opened reported an error: RoundStep failed at line 72',
+      },
+    })
+    const { text, holds, turnsAway } = promises(w)
+    expect(text).toContain('The game in Autopilot 7 has started, and the Autopilot page shows a problem. While it does, the link shows “No session is open right now”')
+    expect(text).not.toContain('The autopilot opens the next session when it ends')
+    expect(holds).toBe(false)
+    expect(turnsAway).toBe(true)
+    w.unmount()
+  })
+
+  it('asks the server again while the page is open, and as the engine starts another session, so what it promises follows', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      admin.experiment = { id: 3, uid: 'uid-3', name: 'Trust game', parameters: [], instances: [] }
+      admin.instance = null
+      const free = { settings: { continuous: true, nextSessionDelaySeconds: 10 }, status: { on: true, experimentId: 3, experimentName: 'Trust game', instance: null } }
+      const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+      const waiting = {
+        settings: free.settings,
+        status: { ...free.status, engineSession: other, problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).' },
+      }
+      let answer: any = free
+      const w = await page(null)
+      vi.mocked(http.get).mockImplementation(async (url: string) => {
+        if (url === '/autopilot') return answer
+        throw new HttpError(404, 'Not found')
+      })
+      const asked = () => vi.mocked(http.get).mock.calls.filter(([u]) => u === '/autopilot').length
+      // the side card's badge follows the same answers (it used to be asked for once, as the page opened)
+      const badge = () => w.find('.pl-ap__status .b-badge').text()
+      // (the page asked once as it opened, before the answer above was set: ask again now)
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(promises(w).text).toContain('The autopilot opens the next session in a moment')
+      expect(promises(w).holds).toBe(true)
+      expect(badge()).toBe('On for this experiment')
+      // another experiment's session opens on the engine: every console hears, and the page asks again
+      answer = waiting
+      const before = asked()
+      admin.user = { engine: { experimentId: 5, experimentName: 'Ultimatum', sessionId: 4, sessionName: 'pilot 3', owner: 'a@lab.org' } }
+      await flushPromises()
+      expect(asked()).toBe(before + 1)
+      expect(promises(w).holds).toBe(false)
+      expect(promises(w).turnsAway).toBe(true)
+      expect(badge()).toBe('On, but held up for now')
+      // what no console hears of (the autopilot's session reported an error, say): the next ask finds it
+      answer = free
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(promises(w).holds).toBe(true)
+      expect(badge()).toBe('On for this experiment')
+      answer = { settings: free.settings, status: { ...free.status, problemKind: 'error', problem: 'There is no admin account to open sessions as.' } }
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(promises(w).holds).toBe(false)
+      expect(promises(w).text).toContain('The Autopilot page shows a problem.')
+      expect(badge()).toBe('On, but held up for now')
+      // and paused, as the Study URL card says by then
+      answer = { settings: free.settings, status: { ...free.status, paused: true, problemKind: 'paused', problem: 'It is paused: its session "Autopilot 7" was stopped.' } }
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(badge()).toBe('Paused for this experiment')
+      expect(promises(w).turnsAway).toBe(true)
+      w.unmount()
+      // and stops asking once the page is closed
+      const after = asked()
+      vi.advanceTimersByTime(30000)
+      await flushPromises()
+      expect(asked()).toBe(after)
+    } finally {
+      delete admin.user
+      vi.useRealTimers()
+    }
+  })
+
+  it('says the link leads nowhere while the autopilot is paused', async () => {
+    const w = await page({ settings: { continuous: true }, status: { on: true, paused: true, problemKind: 'paused', experimentId: 3, instance: { id: 7, name: 'Autopilot 7', status: 'RUNNING' } } })
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('has already started, so right now the link shows “No session is open right now”')
+    expect(text()).toContain('Late arrivals are turned away politely.')
     w.unmount()
   })
 })
@@ -474,23 +747,240 @@ describe('Bonus dialog', () => {
   })
 })
 
-describe('Prolific autopilot card', () => {
-  it('says when the autopilot of this experiment is paused', async () => {
-    vi.mocked(http.get).mockResolvedValueOnce({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game', paused: true } })
-    const w = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
-    await flushPromises()
-    expect(w.text()).toContain('Paused for this experiment')
-    vi.mocked(http.get).mockResolvedValueOnce({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game' } })
-    const w2 = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
-    await flushPromises()
-    expect(w2.text()).toContain('On for this experiment')
+describe('Prolific participants of every session', () => {
+  const answer = {
+    participants: [
+      { sessionId: 12, sessionName: 'Autopilot 2', sessionStatus: 'RUNNING', player: 'pp-c', prolificPid: 'PID-C', studyId: 's', prolificSessionId: 'x', joinedAt: '2026-10-30T13:27:11.000Z', completed: true, completedAt: '2026-10-30T13:29:00.000Z', completionCode: 'C7K2M9QX', bonus: 0.5, finishedWithoutCode: false },
+      { sessionId: 12, sessionName: 'Autopilot 2', sessionStatus: 'RUNNING', player: 'pp-d', prolificPid: 'PID-D', studyId: 's', prolificSessionId: 'y', joinedAt: '2026-10-30T13:27:20.000Z', completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: false },
+      { sessionId: 11, sessionName: 'Autopilot 1', sessionStatus: 'FINISHED', player: 'pp-a', prolificPid: 'PID-A', studyId: 's', prolificSessionId: 'z', joinedAt: '2026-10-30T13:20:47.000Z', completed: true, completedAt: '2026-10-30T13:23:00.000Z', completionCode: 'C7K2M9QX', bonus: 1.255, finishedWithoutCode: false },
+      { sessionId: 11, sessionName: 'Autopilot 1', sessionStatus: 'FINISHED', player: 'pp-b', prolificPid: 'PID-B', studyId: 's', prolificSessionId: 'w', joinedAt: '2026-10-30T13:20:50.000Z', completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: true },
+      { sessionId: 11, sessionName: 'Autopilot 1', sessionStatus: 'FINISHED', player: 'pp-e', prolificPid: 'PID-E', studyId: 's', prolificSessionId: 'v', joinedAt: '2026-10-30T13:21:00.000Z', completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: false },
+      // anything else is left out
+      null, { sessionId: 9 },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.mocked(http.get).mockReset()
+    admin.experiment = { id: 3, name: 'Network game', parameters: [], instances: [] }
+    admin.instance = null
   })
-  it('says when its one session has finished, so the Prolific link leads nowhere', async () => {
-    vi.mocked(http.get).mockResolvedValueOnce({ source: 'config', status: { on: true, experimentId: 3, experimentName: 'Trust game', done: true } })
-    const w = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
+
+  it('reads the server\'s list, groups it by session, and adds up one participant\'s bonuses for Prolific', () => {
+    const records = prolificRecordsOf(answer)
+    expect(records.map(r => r.player)).toEqual(['pp-c', 'pp-d', 'pp-a', 'pp-b', 'pp-e'])
+    expect(records[1]).toMatchObject({ completed: false, completionCode: '', bonus: null, finishedWithoutCode: false })
+    expect(groupBySession(records).map(g => [g.sessionName, g.joined, g.finished])).toEqual([['Autopilot 2', 2, 1], ['Autopilot 1', 3, 2]])
+    expect(prolificBonusLines(records)).toBe('PID-C,0.50\nPID-A,1.26')
+    // the same person paid in two sessions: one line, the amounts added up
+    expect(prolificBonusLines([{ prolificPid: 'PID-A', bonus: 1.25 }, { prolificPid: 'PID-B', bonus: null }, { prolificPid: 'PID-A', bonus: 0.5 }, { prolificPid: '', bonus: 2 }])).toBe('PID-A,1.75')
+    expect(prolificRecordsOf(null)).toEqual([])
+  })
+
+  it('lists who joined and who finished in every session, with codes, bonuses and Copy bonus list', async () => {
+    vi.mocked(http.get).mockImplementation(async (url: string) => {
+      if (url === '/experiment/3/prolific') return answer
+      throw new HttpError(404, 'Not found')
+    })
+    const ProlificHistory = (await import('@/pages/recruit/prolific/ProlificHistory.vue')).default
+    const written: string[] = []
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t: string) => { written.push(t) } }, configurable: true })
+    const w = mount(ProlificHistory, { props: { experimentId: 3 } })
     await flushPromises()
+    const text = () => w.text().replace(/\s+/g, ' ')
+    expect(text()).toContain('5 joined · 3 finished (1 without a code) · in 2 sessions')
+    expect(w.findAll('.pl-hist__session').map(r => r.text().replace(/\s+/g, ' '))).toEqual([
+      'Autopilot 2 Running 2 joined · 1 finished',
+      'Autopilot 1 Finished 3 joined · 2 finished',
+    ])
+    const rows = w.findAll('tbody tr:not(.pl-hist__session)').map(r => r.findAll('td').map(td => td.text().replace(/\s+/g, ' ')))
+    expect(rows.map(r => [r[0], r[2], r[3], r[4]])).toEqual([
+      ['PID-C Player pp-c', 'Finished', 'C7K2M9QX', '0.50'],
+      ['PID-D Player pp-d', 'Not yet', '', ''],
+      ['PID-A Player pp-a', 'Finished', 'C7K2M9QX', '1.26'],
+      ['PID-B Player pp-b', 'No code', '', ''],
+      ['PID-E Player pp-e', 'No', '', ''],
+    ])
+    await w.findAll('button').find(b => b.text() === 'Copy bonus list')!.trigger('click')
+    await flushPromises()
+    expect(written).toEqual(['PID-C,0.50\nPID-A,1.26'])
+    w.unmount()
+  })
+
+  it('says when nobody came from Prolific yet, and when the list can\'t be loaded', async () => {
+    const ProlificHistory = (await import('@/pages/recruit/prolific/ProlificHistory.vue')).default
+    vi.mocked(http.get).mockResolvedValueOnce({ participants: [] })
+    let w = mount(ProlificHistory, { props: { experimentId: 3 } })
+    await flushPromises()
+    expect(w.text()).toContain('Nobody has joined this experiment from Prolific yet.')
+    expect(w.find('table').exists()).toBe(false)
+    w.unmount()
+    vi.mocked(http.get).mockRejectedValueOnce(new HttpError(500, 'Database unavailable'))
+    w = mount(ProlificHistory, { props: { experimentId: 3 } })
+    await flushPromises()
+    expect(w.text()).toContain('Couldn\'t load the Prolific participants')
+    vi.mocked(http.get).mockResolvedValueOnce(answer)
+    await w.findAll('button').find(b => b.text().includes('Try again'))!.trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('5 joined · 3 finished')
+    w.unmount()
+  })
+})
+
+describe('Prolific participants of this session', () => {
+  const node = (id: string, recruitment: any, connected?: boolean) =>
+    ({ id, data: { _system: { recruitment: { source: 'prolific', ...recruitment }, ...(connected === undefined ? {} : { connected }) } } })
+  const noCode = (id: number, player: string) =>
+    ({ id, name: 'noCompletionCode', datetime: '2026-10-31 01:41:00,0', eventData: [{ name: 'player', value: player }] })
+
+  beforeEach(() => {
+    admin.experiment = { id: 1, name: 'Game A', parameters: [], instances: [] }
+    admin.instance = null
+    admin.events = []
+    graph.nodes.clear()
+  })
+
+  it('reads who finished without a code from the session\'s events, recorded and pushed', () => {
+    const ids = playersWithoutCode(
+      [noCode(1, 'pp-a'), { id: 2, name: 'prolificEntry', datetime: '', eventData: [{ name: 'clientId', value: 'pp-x' }] }, null as any, { id: 3, name: 'noCompletionCode', datetime: '', eventData: null } as any],
+      [{ name: 'noCompletionCode', datetime: '', data: { player: 'pp-b' } }, { name: 'stepFailed', datetime: '', data: { player: 'pp-y' } }, { name: 'noCompletionCode', datetime: '', data: {} }],
+    )
+    expect([...ids].sort()).toEqual(['pp-a', 'pp-b'])
+    expect(playersWithoutCode(null, undefined).size).toBe(0)
+    const players = prolificPlayers([node('pp-a', { prolificPid: 'PID-A' }), node('pp-c', { prolificPid: 'PID-C', completed: true, completionCode: 'C1' })], new Set(['pp-a', 'pp-c']))
+    // (someone given a code finished with it, whatever else was recorded)
+    expect(players.map(p => [p.playerId, p.completed, p.finishedWithoutCode, prolificFinished(p)])).toEqual([['pp-a', false, true, true], ['pp-c', true, false, true]])
+    expect(prolificPlayers([node('pp-a', {})])[0].finishedWithoutCode).toBe(false)
+  })
+
+  it('shows those the game ended for without a code as finished, as the list of every session does, and nobody as playing once the session has ended', async () => {
+    const ProlificPlayers = (await import('@/pages/recruit/prolific/ProlificPlayers.vue')).default
+    // two from Prolific played Game A's session to its end; its prolificCode was empty
+    graph.nodes.set('pp-c4', node('pp-c4', { prolificPid: '5f00aa11bb22cc33dd44ee01' }, true))
+    graph.nodes.set('pp-d9', node('pp-d9', { prolificPid: '5f00aa11bb22cc33dd44ee02' }, true))
+    graph.version.value++
+    admin.instance = { id: 4, name: 'Autopilot 4', status: 'RUNNING', hasStarted: true, events: [noCode(40, 'pp-c4')], hits: [] }
+    const w = mount(ProlificPlayers, { props: { hasSession: true } })
+    const sum = () => w.find('.pl-players__sum').text().replace(/\s+/g, ' ')
+    const badges = () => w.findAll('.pl-players__row').map(r => r.find('.b-badge').text())
+    expect(sum()).toBe('2 joined · 1 finished (1 without a code)')
+    expect(badges()).toEqual(['No code', 'Playing'])
+    // the other one's, pushed as it was recorded
+    admin.events = [{ id: 41, experimentInstanceId: 4, name: 'noCompletionCode', datetime: '2026-10-31T01:41:00.100Z', data: { player: 'pp-d9' } }]
+    await flushPromises()
+    expect(sum()).toBe('2 joined · 2 finished (2 without a code)')
+    expect(badges()).toEqual(['No code', 'No code'])
+    expect(w.find('.pl-players__row .b-badge').attributes('title')).toBe('The game ended for them, but no completion code was set')
+
+    // the list of every session counts them the same way, from the sessions' data
+    vi.mocked(http.get).mockReset()
+    const seat = (player: string, pid: string) => ({ sessionId: 4, sessionName: 'Autopilot 4', sessionStatus: 'FINISHED', player, prolificPid: pid, studyId: 's', prolificSessionId: 'x', joinedAt: null, completed: false, completedAt: null, completionCode: null, bonus: null, finishedWithoutCode: true })
+    vi.mocked(http.get).mockResolvedValue({ participants: [seat('pp-c4', '5f00aa11bb22cc33dd44ee01'), seat('pp-d9', '5f00aa11bb22cc33dd44ee02')] })
+    const ProlificHistory = (await import('@/pages/recruit/prolific/ProlificHistory.vue')).default
+    const every = mount(ProlificHistory, { props: { experimentId: 1 } })
+    await flushPromises()
+    expect(every.find('.pl-players__sum').text().replace(/\s+/g, ' ')).toBe('2 joined · 2 finished (2 without a code) · in 1 session')
+    every.unmount()
+
+    // someone who neither finished nor left: playing while the session runs (away when their page is gone) ...
+    graph.nodes.set('pp-e2', node('pp-e2', { prolificPid: '5f00aa11bb22cc33dd44ee03' }, false))
+    graph.version.value++
+    await flushPromises()
+    expect(sum()).toBe('3 joined · 2 finished (2 without a code)')
+    expect(badges()).toEqual(['No code', 'No code', 'Away'])
+    // ... and not finished once it has ended, not playing on
+    admin.instance = { ...admin.instance, status: 'FINISHED' }
+    await flushPromises()
+    expect(badges()).toEqual(['No code', 'No code', 'Not finished'])
+    expect(w.text()).not.toContain('Playing')
+    w.unmount()
+  })
+
+  it('lists nobody from another session the engine runs now, nor says nobody joined an ended session, and says where its participants are', async () => {
+    const ProlificPlayers = (await import('@/pages/recruit/prolific/ProlificPlayers.vue')).default
+    // Game A's session 4 has finished; the engine now runs Game B's "Session 1", with someone from Prolific
+    admin.instance = { id: 4, name: 'Autopilot 4', status: 'FINISHED', hasStarted: true, events: [], hits: [] }
+    admin.engineInfoCurrent = true
+    admin.user = { engine: { experimentId: 2, experimentName: 'Game B', sessionId: 8, sessionName: 'Session 1', owner: 'r1@example.org' } }
+    graph.nodes.set('pp-b1', node('pp-b1', { prolificPid: 'PID-OF-GAME-B' }, true))
+    graph.version.value++
+    try {
+      const w = mount(ProlificPlayers, { props: { hasSession: true } })
+      const text = () => w.text().replace(/\s+/g, ' ')
+      expect(text()).toContain('The engine now runs “Session 1” of “Game B”, so this list can’t show who came to this session: From Prolific in every session lists them.')
+      expect(text()).not.toContain('PID-OF-GAME-B')
+      expect(text()).not.toContain('Nobody has joined')
+      // another experiment loaded, with no session
+      admin.user = { engine: { experimentId: 2, experimentName: 'Game B', sessionId: null, sessionName: null, owner: 'r1@example.org' } }
+      await flushPromises()
+      expect(text()).toContain('The engine now runs “Game B”, so this list can’t show who came to this session')
+      // a newer session of this experiment (the console shows the older one)
+      admin.user = { engine: { experimentId: 1, experimentName: 'Game A', sessionId: 6, sessionName: 'Autopilot 6', owner: 'r1@example.org' } }
+      await flushPromises()
+      expect(text()).toContain('The engine now runs “Autopilot 6”, so this list can’t show who came to this session')
+      // the engine holds this session (or, once it has finished, no session of this experiment): its players are listed
+      for (const engine of [{ experimentId: 1, sessionId: 4 }, { experimentId: 1, sessionId: null }]) {
+        admin.user = { engine: { experimentName: 'Game A', sessionName: null, owner: 'r1@example.org', ...engine } }
+        await flushPromises()
+        expect(text()).toContain('PID-OF-GAME-B')
+        expect(text()).not.toContain('The engine now runs')
+      }
+      // what the engine runs isn't known (a reload under way): as before
+      admin.user = { engine: { experimentId: 2, experimentName: 'Game B', sessionId: 8, sessionName: 'Session 1', owner: null } }
+      admin.engineInfoCurrent = false
+      await flushPromises()
+      expect(text()).not.toContain('The engine now runs')
+      // an ended session whose players the engine no longer has (after a restart, say): nobody "has joined yet"
+      graph.nodes.clear()
+      graph.version.value++
+      await flushPromises()
+      expect(text()).toContain('This session has ended. From Prolific in every session lists who came to it.')
+      expect(text()).not.toContain('Nobody has joined')
+      admin.instance = { ...admin.instance, status: 'RUNNING' }
+      await flushPromises()
+      expect(text()).toContain('Nobody has joined from Prolific yet.')
+      w.unmount()
+    } finally {
+      delete admin.user
+      delete admin.engineInfoCurrent
+    }
+  })
+})
+
+describe('Prolific autopilot card', () => {
+  // (as the Recruitment page passes it: GET /autopilot, read by autopilotStatusOf)
+  const card = (answer: any) => mount(AutopilotCard, {
+    props: { experimentId: 3, status: autopilotStatusOf({ settings: { continuous: true }, ...answer }) },
+    global: { plugins: [makeRouter()] },
+  })
+  it('says when the autopilot of this experiment is paused', () => {
+    const w = card({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game', paused: true } })
+    expect(w.text()).toContain('Paused for this experiment')
+    expect(w.find('.b-badge').classes()).toContain('b-badge--warning')
+    const w2 = card({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game' } })
+    expect(w2.text()).toContain('On for this experiment')
+    expect(w2.find('.b-badge').classes()).toContain('b-badge--success')
+  })
+  it('says when its one session has finished, so the Prolific link leads nowhere', () => {
+    const w = card({ source: 'config', status: { on: true, experimentId: 3, experimentName: 'Trust game', done: true } })
     expect(w.text()).toContain('Done: it opens no more sessions')
+    expect(w.text()).toContain('Set in the server’s configuration')
     expect(w.text()).not.toContain('On for this experiment')
+  })
+  it('says when something holds it up, and promises nothing the study link may not do', () => {
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const w = card({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game', engineSession: other, problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).' } })
+    expect(w.find('.b-badge').text()).toBe('On, but held up for now')
+    expect(w.find('.b-badge').classes()).toContain('b-badge--warning')
+    const text = w.text().replace(/\s+/g, ' ')
+    expect(text).not.toContain('always find one')
+    expect(text).toContain('The Study URL card says when something keeps it from opening one.')
+    expect(card({ source: 'admin', status: { on: true, experimentId: 5, experimentName: 'Ultimatum' } }).text()).toContain('On for Ultimatum')
+    expect(card({ source: 'off', status: { on: false, experimentId: null } }).text()).toContain('Off')
+    // not known (yet): no badge, the way to the Autopilot page all the same
+    const unknown = mount(AutopilotCard, { props: { experimentId: 3, status: null }, global: { plugins: [makeRouter()] } })
+    expect(unknown.find('.b-badge').exists()).toBe(false)
+    expect(unknown.text()).toContain('Open Autopilot')
   })
 })
 

@@ -49,8 +49,11 @@ public class ClientController extends Controller
         if (!returning && (experimentInstance == null || experiment == null || experimentInstance.status != ExperimentInstance.Status.RUNNING)) {
           // Mechanical Turk workers are asked to return the HIT; everyone else gets the general notice.
           return ok(experimentInstance != null && experimentInstance.getHit() != null
-              ? amtError.render() : ClientLogin.notRunning(experimentId, experimentInstanceId));
+              ? amtError.render() : ClientLogin.notRunning(experimentId, experimentInstanceId, clientId));
         }
+
+        // Breadboard's own words here are in the language of the session's texts (SessionLanguage).
+        String lang = SessionLanguage.of(experimentInstanceId);
 
         // A signed invitation link claims the seat, then redirects to the plain page URL so the
         // signature doesn't linger in the address bar or browser history.
@@ -58,33 +61,27 @@ public class ClientController extends Controller
         if (invite != null) {
           boolean amt = experimentInstance.getHit() != null;
           if (!ParticipantAuth.verifyInvite(experimentInstanceId, clientId, invite)) {
-            return forbidden(amt ? amtError.render() : participantMessage.render("This link isn't valid",
-                "This invitation link isn't valid. Please check the link you were given, or contact the researcher."));
+            return forbidden(amt ? amtError.render() : ClientLogin.message(lang, "link.invalidTitle", "link.invalidInvite"));
           }
           if (!amt && !ScriptBoard.runsSession(experimentId, experimentInstanceId)) {
             // As at sign-in: a session the engine doesn't run (e.g. since a restart) takes no one.
-            return ok(ClientLogin.notRunning());
+            return ok(ClientLogin.notRunning(lang));
           }
           if (ClientLogin.closedToNewcomers(experimentInstanceId, clientId)) {
-            return ok(amt ? amtGameStarted.render() : participantMessage.render("The session has already started",
-                "This session began before you arrived, so it takes no one new. Please contact the researcher."));
+            return ok(amt ? amtGameStarted.render() : ClientLogin.message(lang, "started.title", "started.invite"));
           }
           String token = ParticipantAuth.claim(experimentInstanceId, clientId);
           if (token == null) {
             Form<ClientLogin.CLogin> form = Form.form(ClientLogin.CLogin.class);
-            form.reject("This invitation link has already been used.");
-            return forbidden(clientLogin.render(experimentId, experimentInstanceId, form));
+            form.reject("signIn.inviteUsed");
+            return forbidden(ClientLogin.signInPage(experimentId, experimentInstanceId, form));
           }
           return ClientLogin.enterGame(experimentId, experimentInstanceId, clientId, token, connectionSpeed);
         }
 
         // The page itself carries nothing private; /state and the websocket check the token.
         String assetsRoot = play.Play.application().configuration().getString("breadboard.assetsRoot", "/assets");
-        if (assetsRoot != null) {
-            return ok(client.render(assetsRoot));
-        } else {
-            return ok(client.render(""));
-        }
+        return ok(client.render(assetsRoot == null ? "" : assetsRoot, SystemTexts.page(lang)));
     }
 
     /**
@@ -115,6 +112,14 @@ public class ClientController extends Controller
         return uid != null && User.findByUID(uid) != null;
     }
 
+    /**
+     * Whether the request presents the participant's own seat token: it comes from their page, not a
+     * researcher's (a preview token, or the researcher's sign-in), whatever else it carries.
+     */
+    static boolean presentsSeatToken(String experimentInstanceId, String clientId) {
+        return ParticipantAuth.verify(experimentInstanceId, clientId, ParticipantAuth.presentedToken(request(), experimentInstanceId));
+    }
+
     public static Result getState(String experimentId, String experimentInstanceId, String clientId, String connectionSpeed){
         // A preview runs in an opaque origin (see PREVIEW_SANDBOX), so its request for this is
         // cross-origin. Any origin may read the answer, but never with credentials: a page elsewhere
@@ -127,6 +132,15 @@ public class ClientController extends Controller
             error.put("login", routes.ClientLogin.login(experimentId, experimentInstanceId).url());
             return unauthorized(error);
         }
+        if (request().getQueryString(SEAT_QUERY) != null) {
+            // A page that another one took the seat from asks whether a page still holds it: once none
+            // does, it takes the seat back (frontend/core). The participant's own page counts only
+            // theirs; a researcher's page, any (ScriptBoard.seatHeld).
+            ObjectNode seat = Json.newObject();
+            seat.put("seatHeld", ScriptBoard.seatHeld(experimentId, experimentInstanceId, clientId,
+                !presentsSeatToken(experimentInstanceId, clientId)));
+            return ok(seat);
+        }
         // Only what the page needs. This used to echo every request header back to page
         // JavaScript (including the Cookie header), plus the IP address and full request URI.
         ObjectNode result = Json.newObject();
@@ -136,6 +150,9 @@ public class ClientController extends Controller
         result.put("experimentInstanceId", experimentInstanceId);
         result.put("clientGraph", getClientGraph(experimentId));
         result.put("clientHtml", getClientHtml(experimentId));
+        // The language of the session's texts (null: none chosen), which Breadboard's own words on the
+        // page follow (frontend/core: Breadboard.language).
+        result.put("language", SessionLanguage.of(experimentInstanceId));
         String socketUrl = routes.ClientController.connectClient(experimentId, experimentInstanceId, clientId)
             .webSocketURL(request(), play.Play.application().configuration().getString("breadboard.wsUrl", "").contains("wss://"));
         if (!ParticipantAuth.presentedViaCookie(request())) {
@@ -147,6 +164,9 @@ public class ClientController extends Controller
             }
         }
         result.put("connectSocket", socketUrl);
+        // When this page was loaded, in the server's time: its socket says so as it connects, so that
+        // of two pages of the participant's, the one opened last keeps the seat (Client.connect).
+        result.put("loadedAt", System.currentTimeMillis());
         return ok(result);
     }
 
@@ -217,17 +237,9 @@ public class ClientController extends Controller
         return ok(result);
     }
 
-    // The account's own experiments, and the one it has selected.
+    // Every researcher works on every experiment on the server (User.experiments).
     private static boolean canSee(User user, Experiment experiment) {
-        if (user.selectedExperiment != null && experiment.id.equals(user.selectedExperiment.id)) {
-            return true;
-        }
-        for (Experiment owned : user.ownedExperiments) {
-            if (experiment.id.equals(owned.id)) {
-                return true;
-            }
-        }
-        return false;
+        return user != null && experiment != null;
     }
 
     /** A JSON whole number, or one written as text ("12"); else null. */
@@ -293,6 +305,27 @@ public class ClientController extends Controller
         return experiment.getClientHtml();
     }
 
+    // What a participant's page adds to its socket's address (frontend/core, breadboard.ts): when it
+    // was loaded (its /state's loadedAt), and, when the participant chose "Use it here", that it takes
+    // the seat.
+    static final String PAGE_LOADED_QUERY = "bbPage";
+    static final String TAKE_SEAT_QUERY = "bbTake";
+    // What the page adds to its state's address to ask only whether a page of the participant's holds
+    // their seat now (getState).
+    static final String SEAT_QUERY = "seat";
+
+    /** A whole number written as text, or 0. */
+    private static long wholeNumberOrZero(String text) {
+        if (text == null) {
+            return 0L;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(text.trim()));
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
     /**
     * Handle the client websocket.
     */
@@ -302,8 +335,11 @@ public class ClientController extends Controller
         // thread without access to the request.
         final boolean authorized = isAuthorized(experimentId, experimentInstanceId, clientId);
         // A researcher looking through the player's eyes, not the participant: the data says so.
-        final boolean byResearcher = authorized && !ParticipantAuth.verify(experimentInstanceId, clientId,
-            ParticipantAuth.presentedToken(request(), experimentInstanceId));
+        final boolean byResearcher = authorized && !presentsSeatToken(experimentInstanceId, clientId);
+        // When the page was loaded (its /state's loadedAt), and whether the participant asked for the
+        // seat there ("Use it here"): see Client.Connection.
+        final long pageLoadedAt = wholeNumberOrZero(request().getQueryString(PAGE_LOADED_QUERY));
+        final boolean takesSeat = "1".equals(request().getQueryString(TAKE_SEAT_QUERY));
         return new WebSocket<JsonNode>() 
         {
             // Called when the Websocket Handshake is done.
@@ -311,13 +347,13 @@ public class ClientController extends Controller
             {
                 Logger.debug("ClientController.connectClient.onReady");
                 if (!authorized) {
-                    Logger.info("Refused websocket for client " + clientId + " in instance " + experimentInstanceId + ": no valid token");
-                    out.close();
+                    refuse(experimentId, experimentInstanceId, clientId, out);
                     return;
                 }
                 try
                 {
-                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE), byResearcher);
+                    ScriptBoard.addClient(experimentId, experimentInstanceId, clientId, in, new ThrottledWebSocketOut(out, Breadboard.WEBSOCKET_RATE), byResearcher,
+                        pageLoadedAt, takesSeat);
                 }
                 catch (Exception ex)
                 {
@@ -325,5 +361,72 @@ public class ClientController extends Controller
                 }
             }
         };
+    }
+
+    /**
+     * Turn away a participant page whose socket holds no valid credentials. Most often the page was
+     * open while the server restarted: seat tokens live only in memory, so its token is gone. Closed
+     * without a word, the page took it for a dropped connection and retried every few seconds for
+     * ever, so it is told why first: the session isn't running (it then shows what a reload would
+     * show, and stops reconnecting), or the session runs and the page has to sign in again. Only at
+     * debug level: each open page used to add a line to the log every few seconds.
+     */
+    private static void refuse(String experimentId, String experimentInstanceId, String clientId, WebSocket.Out<JsonNode> out) {
+        Logger.debug("Refused websocket for client " + clientId + " in instance " + experimentInstanceId + ": no valid token");
+        try {
+            out.write(ScriptBoard.runsSession(experimentId, experimentInstanceId) ? signInAgain()
+                : notRunningScreen(experimentId, experimentInstanceId, clientId));
+        } catch (RuntimeException e) {
+            // (then closed without a word, as before)
+            Logger.debug("Could not tell client " + clientId + " why its websocket was refused: " + e);
+        } finally {
+            out.close();
+        }
+    }
+
+    /**
+     * The last screen of a page whose session the engine doesn't run (any more), with the words a
+     * reload of the page shows (index: the notice for a Mechanical Turk HIT, for a session that
+     * doesn't exist, for one a restart of the server cut short (ScriptBoard.serverStoppedScreen, in
+     * the words for Prolific to {@code clientId} if they came from there), or ClientLogin.notRunning()),
+     * marked finished and ended like the screens of sessions that have ended. Under "sessionOver", not
+     * "player": pages from before 3.1 (and the AngularJS client) render every player frame, and a
+     * completion code on their screen would be replaced; they ignore this and go on retrying quietly,
+     * as they did.
+     */
+    static ObjectNode notRunningScreen(String experimentId, String experimentInstanceId, String clientId) {
+        String[] words;
+        ExperimentInstance instance = null;
+        try {
+            instance = ExperimentInstance.findById(Long.valueOf(experimentInstanceId));
+        } catch (NumberFormatException ignored) {}
+        // (in the language of the session's texts, as everything Breadboard itself tells its participants)
+        String lang = SessionLanguage.of(experimentInstanceId);
+        if (instance != null && instance.getHit() != null) {
+            // (Mechanical Turk's words are English)
+            words = ClientLogin.AMT_NOT_RUNNING;
+        } else if (!ClientLogin.sessionExists(experimentId, experimentInstanceId)) {
+            words = new String[]{SystemTexts.html(lang, "link.invalidTitle"), SystemTexts.html(lang, "link.invalid")};
+        } else if (ScriptBoard.interruptedByRestart(experimentInstanceId)) {
+            ObjectNode frame = Json.newObject();
+            frame.put("sessionOver", ScriptBoard.serverStoppedScreen(ScriptBoard.enteredFromProlific(instance.id, clientId), lang));
+            return frame;
+        } else {
+            words = new String[]{SystemTexts.html(lang, "notRunning.pageTitle"), SystemTexts.html(lang, "notRunning.page")};
+        }
+        ObjectNode frame = Json.newObject();
+        ObjectNode player = frame.putObject("sessionOver").putObject("player");
+        player.putObject("_system");
+        player.put("finished", true);
+        player.put("ended", "notRunning");
+        player.put("text", "<h3>" + words[0] + "</h3><p>" + words[1] + "</p>");
+        return frame;
+    }
+
+    /** For a page whose session runs but whose token no longer opens its seat: it signs in again. */
+    private static ObjectNode signInAgain() {
+        ObjectNode frame = Json.newObject();
+        frame.put("reauth", true);
+        return frame;
     }
 }

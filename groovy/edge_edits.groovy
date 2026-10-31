@@ -37,11 +37,22 @@ import java.util.concurrent.ConcurrentHashMap
 final EDGE_EDIT_EVENT = "bb:edge-edit"
 final EDGE_EDIT_RESULT = "bb:edge-edit-result"
 
+// One of Breadboard's own reasons for refusing a change (conf/i18n, edgeEdit.*): recorded in the data
+// in English, as before, and told to the participant in the language of the session's texts. A reason
+// the experiment gives (validate, candidates) is its own, and goes as it is.
+class BuiltInRefusal {
+  String key
+  String toString() { models.SystemTexts.text("eng", key) }
+}
+
 class EdgeEdits {
   def g
   def eventTracker
   String editEvent
   String resultEvent
+  // closure: Breadboard's own words to participants, in the language of the session's texts
+  // (util.groovy's bbText); English when not given
+  def texts = { String key, Map params = [:] -> models.SystemTexts.text(null, key, params) }
   Map<String, Map> rules = new ConcurrentHashMap<String, Map>()
   boolean warnedTiesHidden = false
   // Each allow() is a new turn. The page sends the turn it offered a change in, so a change
@@ -107,9 +118,9 @@ class EdgeEdits {
       throw new IllegalArgumentException("adminEdit needs two different existing players")
     }
     def reason = applyDefault(op, v1, v2)
-    log("admin", op, v1, v2, reason == null, reason)
+    log("admin", op, v1, v2, reason == null, reason?.toString())
     if (reason != null) {
-      throw new IllegalStateException(reason)
+      throw new IllegalStateException(reason.toString())
     }
     refreshAll()
     return true
@@ -163,7 +174,7 @@ class EdgeEdits {
     def reason = check(player, op, v1, v2)
     // (Pages from before turns were sent send none, and are taken at their word.)
     if (reason == null && data?.turn != null && data.turn.toString() != rule.turn.toString()) {
-      reason = "Time was up for that change, so it wasn't made."
+      reason = refusal("tooLate")
     }
     if (reason == null) {
       if (rule.onEdit != null) {
@@ -176,56 +187,68 @@ class EdgeEdits {
         if (op == "remove" && rule.remainingRemoves != null) rule.remainingRemoves -= 1
       }
     }
-    log(player.id.toString(), op, v1, v2, reason == null, reason)
-    // applied: the network changed now. False when onEdit took the edit instead (e.g. to apply
-    // proposals later), so the client can say "sent" rather than "done".
-    player.send(resultEvent, [ok: reason == null, applied: reason == null && rule?.onEdit == null,
-                              op: op, a: data?.a, b: data?.b, reason: reason])
+    log(player.id.toString(), op, v1, v2, reason == null, reason?.toString())
+    // applied: the network changed now. False when onEdit only took the edit (e.g. to apply proposals
+    // later), so the client can say "sent" rather than "done"; true when onEdit made the change itself
+    // (the network game example does, to record a cut as its own TieCut event).
+    boolean applied = reason == null && (rule?.onEdit == null || g.hasEdge(v1, v2) == (op == "add"))
+    player.send(resultEvent, [ok: reason == null, applied: applied,
+                              op: op, a: data?.a, b: data?.b, reason: told(reason)])
     refreshAll()
+  }
+
+  // One of Breadboard's own reasons (see BuiltInRefusal).
+  def refusal(String key) {
+    return new BuiltInRefusal(key: "edgeEdit." + key)
+  }
+
+  // A reason as the participant reads it: Breadboard's own in the language of the session's texts.
+  def told(reason) {
+    return reason instanceof BuiltInRefusal ? texts(reason.key) : reason
   }
 
   // null if the edit is allowed, otherwise the reason it isn't.
   def check(Vertex player, String op, Vertex v1, Vertex v2) {
     def rule = rules[player.id.toString()]
-    if (rule == null) return "Editing ties is not possible right now."
-    if (!(op in ["add", "remove"])) return "Unknown edit."
-    if (op == "add" && !rule.add) return "Adding ties is not possible."
-    if (op == "remove" && !rule.remove) return "Cutting ties is not possible."
-    if (op == "add" && rule.remainingAdds != null && rule.remainingAdds <= 0) return "No more ties can be added."
-    if (op == "remove" && rule.remainingRemoves != null && rule.remainingRemoves <= 0) return "No more ties can be cut."
-    if (v1 == null || v2 == null || v1 == v2) return "Choose two different people."
+    if (rule == null) return refusal("notNow")
+    if (!(op in ["add", "remove"])) return refusal("unknown")
+    if (op == "add" && !rule.add) return refusal("noAdding")
+    if (op == "remove" && !rule.remove) return refusal("noCutting")
+    if (op == "add" && rule.remainingAdds != null && rule.remainingAdds <= 0) return refusal("noMoreAdds")
+    if (op == "remove" && rule.remainingRemoves != null && rule.remainingRemoves <= 0) return refusal("noMoreCuts")
+    if (v1 == null || v2 == null || v1 == v2) return refusal("twoPeople")
 
     if (rule.candidates != null) {
       def match = currentCandidates(player, rule).find { c ->
         c.op == op && ((c.a == v1 && c.b == v2) || (c.a == v2 && c.b == v1))
       }
-      if (match == null) return "That change is not on offer."
-      if (match.available == false) return match.reason ?: "That change is not available."
+      if (match == null) return refusal("notOnOffer")
+      if (match.available == false) return match.reason ?: refusal("notAvailable")
     } else {
       def neighbors = player.getVertices(Direction.BOTH, "connected").collect { it.id.toString() } as Set
       def visible = neighbors + [player.id.toString()]
       def ids = [v1.id.toString(), v2.id.toString()]
       switch (rule.scope) {
         case "amongNeighbors":
-          if (!(neighbors.containsAll(ids))) return "Both people must be among your connections."
+          if (!(neighbors.containsAll(ids))) return refusal("amongNeighbors")
           break
         case "own":
-          if (!ids.contains(player.id.toString())) return "You can only change your own ties."
-          if (!visible.containsAll(ids)) return "You can only change ties with people you can see."
+          if (!ids.contains(player.id.toString())) return refusal("ownOnly")
+          if (!visible.containsAll(ids)) return refusal("withVisible")
           break
         case "visible":
-          if (!visible.containsAll(ids)) return "You can only change ties between people you can see."
+          if (!visible.containsAll(ids)) return refusal("betweenVisible")
           break
       }
     }
 
     boolean tied = g.hasEdge(v1, v2)
-    if (op == "add" && tied) return "They are already connected."
-    if (op == "remove" && !tied) return "They are not connected."
+    if (op == "add" && tied) return refusal("alreadyConnected")
+    if (op == "remove" && !tied) return refusal("notConnected")
 
     if (rule.validate != null) {
       def verdict = rule.validate(player, op, v1, v2)
-      if (verdict == false) return "That change is not allowed."
+      if (verdict == false) return refusal("notAllowed")
       if (verdict instanceof String) return verdict
     }
     return null
@@ -239,16 +262,16 @@ class EdgeEdits {
   // Apply an edit to the graph; null on success, otherwise why it couldn't be applied.
   def applyDefault(String op, Vertex v1, Vertex v2) {
     if (op == "add") {
-      if (g.hasEdge(v1, v2)) return "They are already connected."
+      if (g.hasEdge(v1, v2)) return refusal("alreadyConnected")
       g.addTrackedEdge(v1, v2, "connected")
       return null
     }
     if (op == "remove") {
       def e = g.getEdge(v1, v2)
-      if (e == null) return "They are not connected."
-      return g._removeEdge(e, true) ? null : "They are not connected."
+      if (e == null) return refusal("notConnected")
+      return g._removeEdge(e, true) ? null : refusal("notConnected")
     }
-    return "Unknown edit."
+    return refusal("unknown")
   }
 
   def log(String actor, String op, Vertex v1, Vertex v2, boolean accepted, String reason) {
@@ -265,4 +288,5 @@ class EdgeEdits {
   }
 }
 
-edgeEdits = new EdgeEdits(g: g, eventTracker: eventTracker, editEvent: EDGE_EDIT_EVENT, resultEvent: EDGE_EDIT_RESULT)
+edgeEdits = new EdgeEdits(g: g, eventTracker: eventTracker, editEvent: EDGE_EDIT_EVENT, resultEvent: EDGE_EDIT_RESULT,
+    texts: bbText)

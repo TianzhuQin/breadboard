@@ -4,6 +4,7 @@ import actors.FileWatcherActor;
 import actors.FileWatcherActorProtocol;
 import akka.actor.ActorRef;
 import akka.actor.Props;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.nio.file.SensitivityWatchEventModifier;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.filefilter.DirectoryFileFilter;
@@ -15,6 +16,7 @@ import scala.concurrent.duration.Duration;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +33,7 @@ public class FileWatcher {
   static ActorRef fileWatcherActor;
   private WatchService watcher;
   private Map<WatchKey, Path> watchKeys;
+  private final Path devPath;
 
   public FileWatcher(List<Admin> adminListeners) {
     this.adminListeners = adminListeners;
@@ -43,7 +46,7 @@ public class FileWatcher {
     if (!devDir.isDirectory()) {
       devDir.mkdirs();
     }
-    Path devPath = devDir.toPath();
+    devPath = devDir.toPath();
     this.watchKeys = new HashMap<>();
     try {
       this.watcher = FileSystems.getDefault().newWatchService();
@@ -80,18 +83,9 @@ public class FileWatcher {
     return this.adminListeners;
   }
 
-  /** The first open admin socket, or null when no console is open. */
-  public Admin firstAdmin() {
-    for (Admin admin : adminListeners) {
-      return admin;
-    }
-    return null;
-  }
-
-  /** The experiment selected by the first open admin socket, or null. */
-  public Experiment getExperiment() {
-    Admin admin = firstAdmin();
-    return (admin == null || admin.getUser() == null) ? null : admin.getUser().selectedExperiment;
+  /** The dev/ folder the experiments in file mode are read from. */
+  public Path getDevPath() {
+    return devPath;
   }
 
   public void incrementUpdateIteration() {
@@ -110,10 +104,103 @@ public class FileWatcher {
     return this.watchKeys;
   }
 
-  public void loadStep(String source, ThrottledWebSocketOut out, String name) {
-    // Step code: it defines steps, so mentioning initStep.start() starts nothing (see processScript).
-    ScriptBoard.processScript(source, out, name, "source", ScriptBoard.STEPS_SOURCE, null, true);
-    // A reloaded step may have set up the autopilot itself; the console's settings win again.
-    ScriptBoard.afterStepsLoaded(ScriptBoard.engineExperiment());
+  /**
+   * A file was created or saved under {@code devDir}. When it is in the folder of an experiment in
+   * file mode, that experiment is returned (its consoles then show its files again), and a step file
+   * goes to the engine (ScriptBoard.stepFileSaved), which runs it only while it runs that experiment.
+   * Null for any other file. It used to run any step file of the experiment the first open console
+   * had selected, in whatever the engine ran: with that experiment edited while another one's session
+   * runs, in that session's game.
+   */
+  public static Experiment fileSaved(Path devDir, Path file) {
+    Experiment experiment = experimentOf(devDir, file);
+    if (experiment == null) {
+      return null;
+    }
+    // (the folder the experiment's steps are read from: "Steps", or "steps" made by hand)
+    Path steps = Experiment.fileModeStepsDirectory(devDir.resolve(folderName(experiment)).toFile()).toPath();
+    Path folder = file.getParent();
+    try {
+      if (folder != null && Files.isDirectory(steps) && Files.isSameFile(folder, steps)) {
+        String source = FileUtils.readFileToString(file.toFile());
+        ScriptBoard.stepFileSaved(experiment, source, file.getFileName().toString());
+      }
+    } catch (IOException ioe) {
+      Logger.error("Unable to read contents of Step " + file.getFileName() + " check your permissions.");
+    }
+    return experiment;
+  }
+
+  /**
+   * The experiment in file mode whose folder (dev/&lt;name&gt;_&lt;id&gt;/) holds this file, or null. Whole
+   * folder names must match: matching part of one took dev/Big-Trust_12/ for dev/Trust_1/. The folder
+   * can be more than one deep: a name with a "/" in it (older databases and the API took them) makes
+   * dev/Pilot-A/B_7/, whose step files were never loaded when only the first folder was compared. When
+   * two folders hold the file, the deeper one is the experiment's.
+   */
+  static Experiment experimentOf(Path devDir, Path file) {
+    Path relative;
+    try {
+      relative = devDir.toAbsolutePath().normalize().relativize(file.toAbsolutePath().normalize());
+    } catch (IllegalArgumentException elsewhere) {
+      return null;
+    }
+    if (relative.getNameCount() < 2 || relative.startsWith("..")) {
+      return null;
+    }
+    Experiment found = null;
+    int depth = 0;
+    for (Experiment experiment : Experiment.find.where().eq("fileMode", true).findList()) {
+      Path folder;
+      try {
+        folder = devDir.getFileSystem().getPath(folderName(experiment)).normalize();
+      } catch (InvalidPathException notAFolderName) {
+        continue;
+      }
+      if (folder.isAbsolute() || folder.startsWith("..") || folder.getNameCount() <= depth) {
+        continue;
+      }
+      // (a file inside the folder, not the folder itself)
+      if (relative.getNameCount() > folder.getNameCount() && relative.startsWith(folder)) {
+        found = experiment;
+        depth = folder.getNameCount();
+      }
+    }
+    return found;
+  }
+
+  /**
+   * The experiment's folder under dev/. Its files are written to "dev/" + getDirectoryName(), so a name
+   * starting with "/" (older databases and the API took them) makes dev//Rooted_7/, which is
+   * dev/Rooted_7/: the separators it starts with are left out. Kept, such a folder never matched.
+   */
+  static String folderName(Experiment experiment) {
+    String name = experiment.getDirectoryName();
+    int start = 0;
+    while (start < name.length() && (name.charAt(start) == '/' || name.charAt(start) == File.separatorChar)) {
+      start++;
+    }
+    return name.substring(start);
+  }
+
+  /** The consoles working on one of these experiments get their User JSON again, to show its files. */
+  public void showFilesOf(Collection<Long> experimentIds) {
+    Map<String, ObjectNode> userJson = new HashMap<>();
+    for (Admin admin : adminListeners) {
+      User user = admin.getUser();
+      if (user == null || user.email == null) {
+        continue;
+      }
+      String email = user.email.toLowerCase();
+      if (!userJson.containsKey(email)) {
+        User fresh = User.findByEmail(user.email);
+        boolean workingOnIt = fresh != null && fresh.selectedExperiment != null && experimentIds.contains(fresh.selectedExperiment.id);
+        userJson.put(email, workingOnIt ? fresh.toJson() : null);
+      }
+      ObjectNode json = userJson.get(email);
+      if (json != null) {
+        admin.write(json);
+      }
+    }
   }
 }

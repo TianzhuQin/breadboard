@@ -35,7 +35,7 @@
             @click="newestFirst = !newestFirst"
           />
           <BButton size="sm" variant="ghost" :icon="RotateCw" :loading="loading" aria-label="Load again" title="Load again" @click="load" />
-          <BButton size="sm" :icon="Download" :disabled="!filtered.length || loading" :loading="exporting" title="Save the events listed here as a CSV file" @click="exportView">
+          <BButton size="sm" :icon="Download" :disabled="!filtered.length || loading" :loading="exporting" :title="`Save the events listed here as a CSV file${csvForExcel ? ' for Excel' : ''}`" @click="exportView">
             Export {{ isFiltered ? 'filtered' : 'all' }}
           </BButton>
         </div>
@@ -116,6 +116,7 @@
                   >
                     {{ e.name }}
                   </button>
+                  <span v-if="describeEvent(e.name)" class="sev__plain">{{ describeEvent(e.name) }}</span>
                 </td>
                 <td class="sev__data">
                   <span v-for="(d, j) in e.data" :key="j" class="sev__kv">
@@ -152,7 +153,7 @@
             <div v-if="openGroups.has(g.name)" :id="groupId(g.name)" class="sev__gbody">
               <div class="sev__gtools">
                 <BButton size="sm" variant="ghost" :icon="ListFilter" @click="showInTimeline(g.name)">Show in timeline</BButton>
-                <BButton size="sm" :icon="Sheet" :disabled="loading" :loading="exporting" title="One row per event, one column per data name" @click="exportGroup(g.name)">Export as table</BButton>
+                <BButton size="sm" :icon="Sheet" :disabled="loading" :loading="exporting" :title="`One row per event, one column per data name${csvForExcel ? ' (for Excel)' : ''}`" @click="exportGroup(g.name)">Export as table</BButton>
               </div>
               <div class="sev__gscroll">
                 <table class="sev__table is-wide">
@@ -193,7 +194,7 @@ import {
   ArrowDownUp, ChevronRight, CircleAlert, Download, ListFilter, RotateCw, ScrollText, Search, SearchX, Sheet,
 } from 'lucide-vue-next'
 import { BBadge, BButton, BDialog, BEmpty, BInput, BSelect, BSpinner, BTabs, notify, type TabItem } from '@/ui'
-import { saveText } from '@/lib/http'
+import { csvForExcel, saveCsv } from '@/lib/csvFiles'
 import { admin } from '@/store/admin'
 import type { Instance } from '@/store/types'
 import {
@@ -201,6 +202,7 @@ import {
   groupEvents, liveEventOf, mergeEvents, normalizeEvent, safeFileName, sameDay, sortEvents, type EventGroup, type SessionEvent,
 } from './sessionData'
 import { loadSessionEvents } from './eventsLoader'
+import { describeEvent } from '../session/events'
 
 const props = defineProps<{ open: boolean, session: Instance | null }>()
 const emit = defineEmits<{ 'update:open': [value: boolean], download: [session: Instance] }>()
@@ -363,7 +365,7 @@ async function exportView () {
   const list = filtered.value
   if (!list.length) return
   const file = `${baseName()}_events${isFiltered.value ? '_filtered' : ''}.csv`
-  saveText(file, eventsToCsv(list))
+  saveCsv(file, eventsToCsv(list))
   notify.success(`Saved ${file}`, `${list.length.toLocaleString()} ${list.length === 1 ? 'event' : 'events'}, one row per data item. Times are in UTC.`)
 }
 async function exportGroup (name: string) {
@@ -371,7 +373,7 @@ async function exportGroup (name: string) {
   const g = groups.value.find(x => x.name === name)
   if (!g) return
   const file = `${baseName()}_${safeFileName(g.name, 'event')}.csv`
-  saveText(file, eventsToWideCsv(g.events, g.keys))
+  saveCsv(file, eventsToWideCsv(g.events, g.keys))
   notify.success(`Saved ${file}`, `${g.events.length.toLocaleString()} “${g.name}” events, one column per data name.`)
 }
 </script>
@@ -428,6 +430,7 @@ async function exportGroup (name: string) {
 .sev__col-name { width: 1%; }
 .sev__time { white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--text-soft); }
 .sev__day { color: var(--muted); margin-right: 6px; font-family: var(--font); }
+.sev__plain { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--muted); line-height: 1.35; }
 .sev__name {
   max-width: 220px;
   padding: 1px 7px;

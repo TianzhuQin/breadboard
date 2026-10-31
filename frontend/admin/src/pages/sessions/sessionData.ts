@@ -142,14 +142,23 @@ export function sortSessions<T extends Pick<Instance, 'id' | 'name' | 'status' |
   return [...list].sort((a, b) => sign * cmp(a, b))
 }
 
+/**
+ * Text as the search compares it: lower case, and every run of spaces of any kind one plain space. The
+ * autopilot's session names have no-break spaces ("Autopilot · 2026-10-30 13:20:47 UTC"), which
+ * typing the name, or pasting it (browsers copy them as plain spaces), never matched.
+ */
+function searchable (text: unknown): string {
+  return `${text ?? ''}`.replace(/\s+/gu, ' ').toLowerCase()
+}
+
 /** Search by name, id ("12" or "#12") or a launch parameter's name or value. */
 export function matchesSession (s: Pick<Instance, 'id' | 'name' | 'data'>, query: string): boolean {
-  const q = query.trim().toLowerCase()
+  const q = searchable(query).trim()
   if (!q) return true
   const idq = q.startsWith('#') ? q.slice(1) : q
   if (String(s.id) === idq) return true
-  if ((s.name || '').toLowerCase().includes(q)) return true
-  return (s.data || []).some(d => `${d.name}`.toLowerCase().includes(q) || `${d.value}`.toLowerCase().includes(q))
+  if (searchable(s.name).includes(q)) return true
+  return (s.data || []).some(d => searchable(d.name).includes(q) || searchable(d.value).includes(q))
 }
 
 // ---- events -----------------------------------------------------------------------------------
@@ -283,30 +292,36 @@ export function toCsv (rows: readonly (readonly unknown[])[]): string {
   return rows.map(r => r.map(csvField).join(',')).join('\n') + '\n'
 }
 
-function isoTime (e: SessionEvent): string {
-  return e.time ? e.time.toISOString() : e.raw
+/**
+ * An event's time as the server's CSV files write it (Timestamps.csv): UTC, with a colon before the
+ * milliseconds, "2026-10-28T13:24:23:757Z", so one way of reading the times reads every file. These
+ * files used to write "2026-10-28T13:24:23.757Z", which a script for the server's files can't read.
+ */
+export function csvTime (e: SessionEvent): string {
+  return e.time ? e.time.toISOString().replace(/\.(\d{3})Z$/, ':$1Z') : e.raw
 }
 
 /**
  * The same columns and values as the server's event file (GET /csv/data/:id), so analysis scripts
- * read both: one row per data item. Unlike the server's file, events without data keep a row.
+ * read both: one row per data item, and, as there, a row with empty data columns for an event
+ * without data.
  */
 export function eventsToCsv (events: readonly SessionEvent[]): string {
   const rows: unknown[][] = [['id', 'event', 'event_date', 'data_name', 'data_value']]
   for (const e of events) {
-    if (!e.data.length) rows.push([e.id ?? '', e.name, isoTime(e), '', ''])
-    for (const d of e.data) rows.push([e.id ?? '', e.name, isoTime(e), d.name, d.value])
+    if (!e.data.length) rows.push([e.id ?? '', e.name, csvTime(e), '', ''])
+    for (const d of e.data) rows.push([e.id ?? '', e.name, csvTime(e), d.name, d.value])
   }
   return toCsv(rows)
 }
 
-/** One row per event, one column per data name: handy for a single kind of event. */
+/** One row per event, one column per data name: handy for a single kind of event. Times as in eventsToCsv. */
 export function eventsToWideCsv (events: readonly SessionEvent[], keys?: readonly string[]): string {
   const cols = keys ? [...keys] : groupEvents(events).flatMap(g => g.keys).filter((k, i, all) => all.indexOf(k) === i)
   const rows: unknown[][] = [['id', 'event', 'event_date', ...cols]]
   for (const e of events) {
     const byName = new Map(e.data.map(d => [d.name, d.value]))
-    rows.push([e.id ?? '', e.name, isoTime(e), ...cols.map(c => byName.get(c) ?? '')])
+    rows.push([e.id ?? '', e.name, csvTime(e), ...cols.map(c => byName.get(c) ?? '')])
   }
   return toCsv(rows)
 }
@@ -314,9 +329,10 @@ export function eventsToWideCsv (events: readonly SessionEvent[], keys?: readonl
 /** A name that every operating system accepts as a file name (spaces are kept, like before). */
 export function safeFileName (name: string, fallback = 'session'): string {
   // eslint-disable-next-line no-control-regex
-  // (letters in any script, digits, spaces and . _ ( ) - only: "Autopilot · Oct 28, 14:11 UTC"
-  // becomes "Autopilot - Oct 28- 14-11 UTC", easier in a shell or an analysis script)
-  const cleaned = (name || '').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
+  // (letters in any script, digits, spaces and . _ ( ) - only: "Autopilot · 2026-10-30 13:20:47 UTC"
+  // becomes "Autopilot - 2026-10-30 13-20-47 UTC", easier in a shell or an analysis script. Any space
+  // is a plain one first: the autopilot's names have no-break spaces, which became "-".)
+  const cleaned = (name || '').replace(/\s+/gu, ' ').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
   return (cleaned || fallback).slice(0, 120)
 }
 

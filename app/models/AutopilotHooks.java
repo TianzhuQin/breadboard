@@ -13,24 +13,29 @@ import java.util.Map;
  * <p>{@link #afterStepsLoaded} runs every time an experiment's steps have been loaded into the
  * engine (selecting an experiment or a session, launching, reloading, re-running a step, a file-mode
  * step change), after the steps themselves, so settings saved in the console override what the
- * experiment's own scripts set up (e.g. {@code autopilot.waitingRoom(...)} in groovy/autopilot.groovy).
- * ScriptBoard calls it inside a try/catch that logs, so a failure here never stops a load.
+ * experiment's own scripts set up (e.g. {@code autopilot.waitingRoom(...)} in groovy/autopilot.groovy)
+ * in the autopilot's own session. ScriptBoard calls it inside a try/catch that logs, so a failure
+ * here never stops a load.
  */
 public final class AutopilotHooks {
 
   private AutopilotHooks() {}
 
   /**
-   * Called right after {@code experiment}'s steps were loaded into {@code engine}. When the autopilot
-   * is on for this experiment with settings saved in the console, its waiting room and the takeover
-   * of disconnected seats are set up from them (each only when switched on there; otherwise what the
-   * experiment's scripts set up stays).
+   * Called right after {@code experiment}'s steps were loaded into {@code engine} for {@code session}.
+   * When that is the autopilot's session (Autopilot.isAutopilotsSession: it opened it, or was handed
+   * it on Resume or a save) and the autopilot is on for this experiment with settings saved in the
+   * console, its waiting room and the takeover of disconnected seats are set up from them (each only
+   * when switched on there; otherwise what the experiment's scripts set up stays). A session a
+   * researcher opens by hand (the test session too) keeps what the steps set up: the console's
+   * settings used to apply to every session of the experiment.
    *
    * @param experiment the experiment whose steps were loaded; null when the engine has none loaded
    * @param engine     the engine they were loaded into
+   * @param session    the id of the session the engine runs; null when it runs none
    */
-  public static void afterStepsLoaded(Experiment experiment, ScriptEngine engine) {
-    if (experiment == null || experiment.id == null || engine == null) {
+  public static void afterStepsLoaded(Experiment experiment, ScriptEngine engine, Long session) {
+    if (experiment == null || experiment.id == null || engine == null || !Autopilot.isAutopilotsSession(session)) {
       return;
     }
     Autopilot.Effective effective = Autopilot.effective();
@@ -43,9 +48,11 @@ public final class AutopilotHooks {
   }
 
   /**
-   * Call {@code autopilot.waitingRoom([...])} and {@code autopilot.replaceDisconnected([...])} with
+   * Call {@code autopilot.replaceWaitingRoom([...])} and {@code autopilot.replaceDisconnected([...])} with
    * the saved values. What the console can't set is kept from the experiment's own call, if it made
-   * one: the onStart / onCancel callbacks, a custom waiting text and the AI behavior.
+   * one: the onStart / onCancel callbacks, a custom waiting text, departureGraceSeconds and the AI
+   * behavior. People already waiting (who came while the experiment's own room was set up) get the
+   * new room's timers: replaceWaitingRoom times them again.
    */
   static void apply(ScriptEngine engine, AutopilotSettings settings) {
     Object bound = engine.get("autopilot");
@@ -55,7 +62,7 @@ public final class AutopilotHooks {
     }
     GroovyObject autopilot = (GroovyObject) bound;
     if (settings.waitingRoomEnabled) {
-      autopilot.invokeMethod("waitingRoom", new Object[]{waitingRoomOptions(settings, autopilot.getProperty("room"))});
+      autopilot.invokeMethod("replaceWaitingRoom", new Object[]{waitingRoomOptions(settings, autopilot.getProperty("room"))});
     }
     if (settings.replaceEnabled) {
       autopilot.invokeMethod("replaceDisconnected", new Object[]{replaceOptions(settings, autopilot.getProperty("replace"))});
@@ -74,6 +81,8 @@ public final class AutopilotHooks {
       Map<?, ?> room = (Map<?, ?>) scriptRoom;
       options.put("onStart", room.get("onStart"));
       options.put("onCancel", room.get("onCancel"));
+      // (the console has no setting for how long a departure takes to count)
+      options.put("departureGraceSeconds", room.get("departureGraceSeconds"));
       // Only a text the experiment chose itself (null included: "keep the experiment's own text").
       if (Boolean.TRUE.equals(room.get("customText"))) {
         options.put("waitingText", room.get("waitingText"));

@@ -5,14 +5,24 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import play.Logger;
 import play.libs.Json;
 
+import java.sql.SQLException;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public class EventTracker {
 
-  /** Longer event values are cut to this many characters in the live feed (the database keeps them whole). */
+  /** Longer event values are cut to this many characters in the live feed (the database keeps them whole, up to VALUE_LIMIT). */
   static final int LIVE_VALUE_LIMIT = 2000;
+
+  /**
+   * The longest event value the database keeps whole: event_data.value holds this many characters
+   * (Global.widenEventValues; it was varchar(255)). A longer one is kept cut short, marked as such.
+   */
+  public static final int VALUE_LIMIT = 1048576;
+
+  /** Event names and data names, and values where event_data.value couldn't be widened: varchar(255). */
+  static final int NARROW_LIMIT = 255;
 
   private static final DateTimeFormatter ISO_UTC =
       DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
@@ -21,66 +31,243 @@ public class EventTracker {
   private ExperimentInstance experimentInstance;
   private boolean enabled = true;
 
+  // An engine's own tracker (forEngine) records into the server's tracker, this, until it is retired;
+  // null for the server's tracker (and one a test makes), which records itself.
+  private final EventTracker server;
+  // An engine's own tracker: held shared while it records, and exclusively by retire().
+  private final java.util.concurrent.locks.ReadWriteLock recording;
+  private volatile boolean retired = false;
+
+  public EventTracker() {
+    this(null);
+  }
+
+  private EventTracker(EventTracker server) {
+    this.server = server;
+    this.recording = server == null ? null : new java.util.concurrent.locks.ReentrantReadWriteLock();
+  }
+
+  /**
+   * A tracker for one script engine's scripts (bound as their "eventTracker"): what they track is
+   * recorded as this tracker would record it, into the session it records into, until the engine is
+   * replaced or its game ends (retire). Every engine used to be given the server's tracker itself, so
+   * a replaced engine whose code ran on (a participant's choice made while the engine was rebuilt)
+   * recorded its game into the session the new engine runs.
+   */
+  public EventTracker forEngine() {
+    return new EventTracker(server == null ? this : server);
+  }
+
+  /**
+   * Nothing this engine's tracker is given is recorded from now on: its engine is being replaced, or
+   * its game has ended. Waits for a recording of it that is under way, so none lands after what the
+   * caller records next (engineReloaded, sessionStopped). Nothing for the server's own tracker.
+   */
+  public void retire() {
+    if (recording == null) {
+      return;
+    }
+    recording.writeLock().lock();
+    try {
+      retired = true;
+    } finally {
+      recording.writeLock().unlock();
+    }
+  }
+
   public ExperimentInstance getExperimentInstance() {
-    return experimentInstance;
+    return server != null ? server.getExperimentInstance() : experimentInstance;
   }
 
   public void enable() {
+    if (server != null) {
+      server.enable();
+      return;
+    }
     enabled = true;
   }
 
   public void disable() {
+    if (server != null) {
+      server.disable();
+      return;
+    }
     enabled = false;
   }
 
   /** Whether events go to a session that is still going (not finished, stopped or archived). */
   public boolean sessionLive() {
+    if (server != null) {
+      return !retired && server.sessionLive();
+    }
     ExperimentInstance i = experimentInstance;
     return enabled && i != null && (i.status == null || i.status == ExperimentInstance.Status.RUNNING
         || i.status == ExperimentInstance.Status.TESTING);
   }
 
   public void setExperimentInstance(ExperimentInstance experimentInstance) {
+    if (server != null) {
+      server.setExperimentInstance(experimentInstance);
+      return;
+    }
     this.experimentInstance = experimentInstance;
   }
 
   public void track(String name, LinkedHashMap<Object, Object> data) {
-    List<Map<String, String>> nameValues = new ArrayList<>();
+    this.track(name, nameValues(data));
+  }
 
+  private static List<Map<String, String>> nameValues(LinkedHashMap<Object, Object> data) {
+    List<Map<String, String>> nameValues = new ArrayList<>();
+    if (data == null) {
+      return nameValues;
+    }
     for (Object key : data.keySet()) {
       Map<String, String> dataMap = new HashMap<>();
-      dataMap.put("name", key.toString());
+      dataMap.put("name", String.valueOf(key));
       dataMap.put("value", (data.get(key) == null) ? "null" : data.get(key).toString());
       nameValues.add(dataMap);
     }
-
-    this.track(name, nameValues);
+    return nameValues;
   }
 
+  /**
+   * Record an event in {@code instance} itself, whichever session the engine's tracker records into
+   * (if any), and whether it is still going: what the server notes about a session from outside its
+   * game (a participant's comment, sent after the game ended or once the next session has opened; a
+   * reload of the engine that carries it on). As track: never throws, a value too long for the
+   * database is kept cut short, and every open console gets the event live. Returns it, or null when
+   * it couldn't be saved.
+   */
+  public static Event record(ExperimentInstance instance, String name, LinkedHashMap<Object, Object> data) {
+    if (instance == null) {
+      return null;
+    }
+    Event event = save(name, nameValues(data), instance);
+    if (event != null) {
+      publish(event);
+    }
+    return event;
+  }
+
+  /**
+   * Record an event in the session. Never throws into the experiment's script: an event that can't
+   * be saved is logged (with its name) and left out; one with a value too long for the database is
+   * kept with that value cut short and marked (see {@link #cut}).
+   */
   public void track(String name, List<Map<String, String>> nameValues) {
+    if (server != null) {
+      recording.readLock().lock();
+      try {
+        if (!retired) {
+          server.track(name, nameValues);
+        }
+      } finally {
+        recording.readLock().unlock();
+      }
+      return;
+    }
     if (!enabled) {
       return;
     }
-    if (experimentInstance == null) {
+    ExperimentInstance instance = experimentInstance;
+    if (instance == null) {
       Logger.warn("No experimentInstance. Skips event tracking.");
       return;
     }
+    Event event = save(name, nameValues, instance);
+    if (event != null) {
+      publish(event);
+    }
+  }
+
+  /** The event as saved, or null when it couldn't be. */
+  private static Event save(String name, List<Map<String, String>> nameValues, ExperimentInstance instance) {
+    Event event = null;
+    try {
+      event = event(name, nameValues, instance, VALUE_LIMIT);
+      event.save();
+      return event;
+    } catch (Exception e) {
+      if (event == null || !tooLong(e)) {
+        Logger.error("Could not record the event \"" + name + "\" in session " + instance.id + ": " + reason(e));
+        return null;
+      }
+    }
+    // A value didn't fit: event_data.value is still varchar(255) here (it couldn't be widened). A new
+    // event (the failed one may have been given an id), with every value cut to fit.
+    try {
+      event = event(name, nameValues, instance, NARROW_LIMIT);
+      event.save();
+      Logger.warn("The event \"" + name + "\" in session " + instance.id + " had a value longer than " + NARROW_LIMIT
+          + " characters, which this database can't keep: it was kept cut short, ending in \"…[truncated from N characters]\"");
+      return event;
+    } catch (Exception e) {
+      Logger.error("Could not record the event \"" + name + "\" in session " + instance.id + ": " + reason(e));
+      return null;
+    }
+  }
+
+  private static Event event(String name, List<Map<String, String>> nameValues, ExperimentInstance instance, int valueLimit) {
     Event event = new Event();
-    event.name = name;
-    event.experimentInstance = experimentInstance;
+    event.name = cut(name, NARROW_LIMIT);
+    event.experimentInstance = instance;
     for (Map<?, ?> nameValue : nameValues) {
       EventData eventData = new EventData();
       // Scripts pass Groovy maps, whose values need not be strings (a number used to throw here).
-      eventData.name = text(nameValue.get("name"));
-      eventData.value = text(nameValue.get("value"));
+      eventData.name = cut(text(nameValue.get("name")), NARROW_LIMIT);
+      eventData.value = cut(text(nameValue.get("value")), valueLimit);
       event.addEventData(eventData);
     }
-    event.save();
-    publish(event);
+    return event;
   }
 
   private static String text(Object value) {
     return value == null ? null : value.toString();
+  }
+
+  /**
+   * The text, or when it is longer than {@code limit} characters its start, marked with how long it
+   * was ("...[truncated from 2000 characters]"), within {@code limit} in all.
+   */
+  static String cut(String text, int limit) {
+    if (text == null || text.length() <= limit) {
+      return text;
+    }
+    String mark = "…[truncated from " + text.length() + " characters]";
+    int keep = Math.max(0, limit - mark.length());
+    // never half of a character outside the Basic Multilingual Plane (an emoji)
+    if (keep > 0 && Character.isHighSurrogate(text.charAt(keep - 1))) {
+      keep--;
+    }
+    return text.substring(0, keep) + mark;
+  }
+
+  /** Whether the database refused a value as too long for its column (SQLSTATE 22001). */
+  static boolean tooLong(Throwable e) {
+    for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+      for (SQLException s = t instanceof SQLException ? (SQLException) t : null; s != null; s = s.getNextException()) {
+        if ("22001".equals(s.getSQLState())) {
+          return true;
+        }
+      }
+      String message = String.valueOf(t.getMessage()).toLowerCase(Locale.ROOT);
+      if (message.contains("value too long") || message.contains("data too long")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The deepest cause's message, first line only (H2 adds the statement after it). */
+  private static String reason(Throwable e) {
+    Throwable root = e;
+    while (root.getCause() != null && root.getCause() != root) {
+      root = root.getCause();
+    }
+    String message = String.valueOf(root.getMessage());
+    int end = message.indexOf('\n');
+    return end > 0 ? message.substring(0, end).trim() : message;
   }
 
   /**

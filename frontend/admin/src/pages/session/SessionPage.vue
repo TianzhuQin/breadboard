@@ -9,10 +9,20 @@
       <CircleAlert class="live-err__icon" :size="18" aria-hidden="true" />
       <div class="live-err__body">
         <p id="live-err-title" class="live-err__title">
-          The experiment's scripts reported an error
+          {{ errorExperiment.elsewhere && errorExperiment.name ? `The scripts of “${errorExperiment.name}” reported an error` : 'The experiment\'s scripts reported an error' }}
           <span class="live-err__time">at {{ clock(latestError.at) }}</span>
         </p>
-        <pre class="live-err__text">{{ errorPreview }}</pre>
+        <!-- "Line 71 of RoundStep", which opens that step at that line, when the server names the step (in the
+             experiment the engine runs, which the Steps page asks to switch to when it isn't the one worked on):
+             the line in that step's own code, also when another step started it (in-step) -->
+        <EngineError
+          class="live-err__text"
+          :error="latestError.text"
+          :own-name="latestError.step || 'a step'"
+          :from-line="latestError.step ? 1 : null"
+          :in-step="!!latestError.step"
+          @goto="(line: number) => latestError?.step && router.push(stepAt(latestError.step, line, errorExperiment.id))"
+        />
       </div>
       <div class="live-err__actions">
         <BButton size="sm" :icon="PanelBottom" @click="openOutput = true">Open output</BButton>
@@ -34,7 +44,7 @@
             </div>
             <h2 id="live-hero-name" class="live-hero__name">{{ inst.name }}</h2>
             <p class="live-hero__meta">
-              <span>{{ inst.id > 0 ? `Session #${inst.id} · created ${createdText}` : `Created ${createdText}` }}</span>
+              <span>{{ inst.id > 0 ? `ID ${inst.id} · created ${createdText}` : `Created ${createdText}` }}</span>
               <span v-if="admin.engine === 'loading'" class="live-hero__loading" role="status">
                 <span aria-hidden="true"><BSpinner :size="12" /></span> Restarting the experiment's scripts…
               </span>
@@ -50,7 +60,7 @@
                 :icon="Play"
                 :loading="busy.start"
                 :disabled="!!startBlocked"
-                :title="startBlocked || 'Runs initStep.start()'"
+                :title="startBlocked || 'Lets everyone who is waiting in, and the experiment begins'"
                 @click="onStart"
               >Start the game</BButton>
               <span v-else class="live-hero__started">
@@ -146,7 +156,7 @@
             :instance-id="inst.id"
             :joinable="isRunning"
           />
-          <NetworkPreview :people="stats.people" :ties="stats.ties" />
+          <NetworkPreview :people="stats.people" :ties="stats.ties" :ended="!isRunning" />
           <SessionParams :data="inst.data" :parameters="admin.experiment?.parameters" />
         </div>
       </div>
@@ -166,6 +176,7 @@ import { BBadge, BButton, BPage, BSpinner } from '@/ui'
 import { admin, engineElsewhere, graph, isResearcherRun } from '@/store/admin'
 import { stepsCall } from '../autopilot/autopilot'
 import { openOutput } from '@/shell/output'
+import EngineError from '../console/EngineError.vue'
 import NewSessionDialog from './NewSessionDialog.vue'
 import NoSession from './NoSession.vue'
 import EventFeed from './EventFeed.vue'
@@ -174,10 +185,11 @@ import NetworkPreview from './NetworkPreview.vue'
 import SessionParams from './SessionParams.vue'
 import { FEED_CAP, fromLive, fromSeed, mergeFeed, parseServerTime, participantsSeen } from './events'
 import {
-  cleanError, detectGameStarted, engineElsewhereText, engineGameFlag, formatDuration, formatWhen, networkStats, waitingRoom,
+  detectGameStarted, engineElsewhereText, engineGameFlag, formatDuration, formatWhen, networkStats, waitingRoom,
 } from './live'
 import { busy, dismissedErrorId, downloadData, resumeSession, startGame, stopSession } from './controls'
 import { autopilotRuns, useAutopilotStatus } from './autopilot'
+import { stepAt } from '../steps/stepsModel'
 
 const route = useRoute()
 const router = useRouter()
@@ -338,7 +350,10 @@ const explanation = computed(() => {
     : ap.halted === 'paused'
       ? ' Autopilot is paused: it opens no new session until someone presses Resume on the Autopilot page.'
       : ap.continuous && !ap.halted
-        ? ` Autopilot opens the next session ${ap.nextSessionDelaySeconds ? `about ${ap.nextSessionDelaySeconds} seconds after one finishes` : 'right after one finishes'}.`
+        // (restarting the experiment's scripts for it takes a second or so too)
+        ? ap.nextSessionDelaySeconds
+          ? ` Autopilot opens the next session about ${ap.nextSessionDelaySeconds} seconds after one finishes, plus a second or so to restart the experiment's scripts.`
+          : ' Autopilot opens the next session a second or so after one finishes, once the experiment\'s scripts have restarted.'
         : ''
   if (i.status === 'ARCHIVED') return `This session is archived. Its data is kept.${next}`
   return `${gaveUp ? 'The waiting room gave up because not enough people joined. ' : 'This session has finished. '}Its data is saved: download it now, or find it later under Sessions & data.${next}`
@@ -360,12 +375,15 @@ const latestError = computed(() => {
   }
   return null
 })
-const errorPreview = computed(() => {
-  const e = latestError.value
-  if (!e) return ''
-  const lines = e.text.trim().split('\n')
-  lines[0] = cleanError(lines[0]) || lines[0]
-  return lines.slice(0, 6).join('\n') + (lines.length > 6 ? '\n…' : '')
+
+/**
+ * The experiment the error is in: the one the engine runs (errors from before it last reloaded aren't
+ * shown), which can be another than the one this console works on, e.g. the autopilot's.
+ */
+const errorExperiment = computed(() => {
+  const e = admin.user?.engine
+  const id = e?.experimentId ?? null
+  return { id, name: e?.experimentName ?? null, elsewhere: id !== null && id !== admin.experiment?.id }
 })
 
 function clock (at: number) {
@@ -388,6 +406,8 @@ function clock (at: number) {
 .live-err__body { flex: 1; min-width: 0; }
 .live-err__title { font-weight: 650; color: var(--danger-soft-text); }
 .live-err__time { font-weight: 400; color: var(--muted); font-size: var(--text-sm); margin-left: 4px; }
+/* (no height limit here: EngineError is a flex column, so a cap squeezed its message and its "Full
+   error" to a few pixels; the message limits its own height) */
 .live-err__text {
   margin: 6px 0 0;
   font-size: var(--text-xs);
@@ -395,8 +415,6 @@ function clock (at: number) {
   color: var(--text-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 120px;
-  overflow: auto;
 }
 .live-err__actions { display: flex; gap: 6px; flex: none; }
 
@@ -488,7 +506,8 @@ function clock (at: number) {
 }
 .live-stat__label { display: flex; align-items: center; gap: 7px; order: 0; font-size: var(--text-xs); font-weight: 600; color: var(--muted); }
 .live-stat__value { order: 1; margin: 6px 0 0; font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; color: var(--text); }
-.live-stat__sub { order: 2; margin: 3px 0 0; font-size: var(--text-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* (wrapped, not cut: "5 AI players · 2 taken over" lost its end on a phone) */
+.live-stat__sub { order: 2; margin: 3px 0 0; font-size: var(--text-xs); color: var(--muted); overflow-wrap: anywhere; }
 
 /* ---- layout ---- */
 .live-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }

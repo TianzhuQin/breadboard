@@ -46,6 +46,38 @@ public class ScriptBoardEndedSessionTest {
     }
 
     @Test
+    public void aResumeForgetsEveryLastScreenButTheParticipantsOwnEnds() {
+        ObjectNode code = Json.newObject();
+        code.putObject("player").putObject("_system").putObject("recruitment").put("completed", true);
+        ObjectNode finished = Json.newObject();
+        ObjectNode last = finished.putObject("player");
+        last.put("finished", true);
+        last.put("text", "Thank you, that was the last round");
+        ObjectNode round = Json.newObject();
+        round.putObject("player").put("text", "Round 3");
+        ScriptBoard.rememberLastScreens(Arrays.asList(clientOf(9004L, "stopped", ScriptBoard.stoppedScreen()),
+            clientOf(9004L, "outOfTime", ScriptBoard.outOfTimeScreen(false)),
+            clientOf(9004L, "outOfTimeProlific", ScriptBoard.outOfTimeScreen(true)),
+            clientOf(9004L, "problemProlific", ScriptBoard.problemScreen(true)),
+            clientOf(9004L, "full", ScriptBoard.sessionFullScreen(false, null)),
+            clientOf(9004L, "leftOut", ScriptBoard.missedStartScreen(true)),
+            clientOf(9004L, "playing", round),
+            clientOf(9004L, "coded", code),
+            clientOf(9004L, "finished", finished)));
+
+        ScriptBoard.sessionRunsAgain(9004L);
+
+        assertSame(code, ScriptBoard.endedSessionScreen(9004L, "coded"));
+        assertSame(finished, ScriptBoard.endedSessionScreen(9004L, "finished"));
+        for (String forgotten : new String[]{"stopped", "outOfTime", "outOfTimeProlific", "problemProlific", "full",
+            "leftOut", "playing"}) {
+            ObjectNode screen = ScriptBoard.endedSessionScreen(9004L, forgotten);
+            assertEquals(forgotten, "", screen.path("player").path("ended").asText());
+            assertTrue(forgotten, screen.path("player").path("text").asText().contains("This session has ended"));
+        }
+    }
+
+    @Test
     public void onlyTheLastFewSessionsAreKept() {
         for (long id = 9100L; id < 9100L + 30; id++) {
             ObjectNode frame = Json.newObject();

@@ -19,6 +19,9 @@ This is a maintained fork of [human-nature-lab/breadboard](https://github.com/hu
 - **Autopilot**: sessions open, fill a waiting room, start, replace people who drop out with
   computer players and finish, with no researcher present. One sign-in link, or one Prolific
   study URL, leads participants to whichever session is open.
+- **Participant pages in Chinese**: in a study whose texts are in Chinese, Breadboard's own words to
+  participants (sign-in, waiting room, network, end screens) are in Chinese too.
+- **A lab's researchers**: an account for each, all working on the same experiments.
 - **Security fixes**: nobody can take over another participant's page by knowing its address,
   and previews can't act with the researcher's sign-in.
 - **Fixes to the engine**: steps with time limits, games closed to latecomers once started,
@@ -26,15 +29,12 @@ This is a maintained fork of [human-nature-lab/breadboard](https://github.com/hu
 
 ## Getting started
 
-Download the zip from the [latest release](https://github.com/TianzhuQin/breadboard/releases/latest),
-unzip it, and with Java 8 installed:
-
-```bash
-./breadboard.sh          # Windows: breadboard.bat
-```
-
-Open <http://localhost:9000> and create the researcher account. [docs/install.md](docs/install.md)
-covers putting it on a server, HTTPS, backups and upgrading from v2.
+From the [latest release](https://github.com/TianzhuQin/breadboard/releases/latest), download the
+zip for your computer (`-macos-arm64`, `-macos-x64`, `-windows-x64` or `-linux-x64`: they include
+Java) and unzip it. Then double-click `Start Breadboard.command` (macOS) or `breadboard.bat`
+(Windows), or run `./breadboard.sh` (Linux). The console opens in your browser: create your
+researcher account, and add your colleagues' in Settings. [docs/install.md](docs/install.md) covers
+putting it on a server, HTTPS, backups, starting it again by itself, and upgrading from v2.
 
 ## Documentation
 
@@ -44,7 +44,7 @@ covers putting it on a server, HTTPS, backups and upgrading from v2.
 | [The researcher console](docs/console.md) | Building an experiment, running sessions, recruiting, data |
 | [What's new for experiment authors](docs/whats-new.md) | Script API additions: visibility, tie editing, timed steps, autopilot, the participant page |
 | [Developing Breadboard](docs/development.md) | Building from source, tests, CI, making a release |
-| [中文快速上手](docs/zh-CN.md) | 安装、建实验、自动运行、导出数据 |
+| [中文快速上手](docs/zh-CN.md) | 安装、建实验、开场、自动运行、用 Prolific 招募、导出数据 |
 
 The [original Breadboard wiki](https://github.com/human-nature-lab/breadboard/wiki) still
 describes the experiment language (steps, `g`, `a`, content), which is unchanged.

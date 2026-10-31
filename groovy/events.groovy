@@ -19,13 +19,11 @@ log = { Object ...vals ->
   }
 }
 
-Vertex.metaClass.playerEvents = [].toSet()
 Vertex.metaClass.on = { String eventName, Closure cb ->
   log("vertex.on", delegate.id, eventName)
   try {
     def globalEventName = makePlayerEventHash(delegate.id, eventName)
-    delegate.playerEvents.add(eventName)
-    events.on(globalEventName, cb)
+    events.onForPlayer(delegate.id.toString(), globalEventName, cb)
   } catch (Exception e) {
     e.printStackTrace()
   }
@@ -44,17 +42,11 @@ Vertex.metaClass.once = { String eventName, Closure cb ->
 // Method overloads
 Vertex.metaClass.off = { String eventName, Closure cb ->
   wasRemoved = events.off(makePlayerEventHash(delegate.id, eventName), cb)
-  if (wasRemoved) {
-    delegate.playerEvents.remove(eventName)
-  }
   log("vertex.off 1", delegate.id, eventName, wasRemoved)
   return wasRemoved
 }
 Vertex.metaClass.off << { String eventName ->
   wasRemoved = events.off(makePlayerEventHash(delegate.id, eventName))
-  if (wasRemoved) {
-    delegate.playerEvents.remove(eventName)
-  }
   log("vertex.off 2", delegate.id, eventName, wasRemoved)
   return wasRemoved
 }
@@ -62,12 +54,12 @@ Vertex.metaClass.send = { String eventName, Object ...data ->
   log("vertex.send", delegate.id, eventName)
   events.emit(SEND_EVENT, delegate.id, eventName, data)
 }
+// Every listener on this player's events, whoever put it there (a form, the chat, the experiment).
+// It used to go by a set of event names that every vertex shared, which off() took names out of: once
+// one player's form was done, everyone else's listeners of that form were missed.
 Vertex.metaClass.clearListeners = {
   log("vertex.clearListeners", delegate.id)
-  playerId = delegate.id
-  delegate.playerEvents.toList().each{ String event ->
-    delegate.off(event)
-  }
+  events.offPlayer(delegate.id.toString(), makePlayerEventHash(delegate.id, ""))
 }
 
 clearAllPlayerListeners = {

@@ -104,7 +104,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { BookOpen, Check, Copy, Ellipsis, Eraser, History, Info, PanelBottom, Play, WifiOff } from 'lucide-vue-next'
 import { BButton, BDialog, BMenu, confirm, notify, toast, type MenuItem } from '@/ui'
 import BCodeEditor from '@/ui/BCodeEditor.vue'
-import { admin, connectionState, ensureConnected, graph, running } from '@/store/admin'
+import { admin, connectionState, engineElsewhere, ensureConnected, graph, running } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import ConsoleResults from './ConsoleResults.vue'
 import ConsoleLibrary from './ConsoleLibrary.vue'
@@ -154,6 +154,9 @@ const runHint = computed(() => {
 const ctxTone = computed(() => admin.engine === 'loading' ? 'busy' : running.value ? 'live' : 'idle')
 const ctxText = computed(() => {
   if (admin.engine === 'loading') return 'The engine is reloading'
+  // (the server refuses this experiment's scripts then; the notice above says why and what to do)
+  const e = engineElsewhere.value
+  if (e) return `The engine is running ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'}, not this one: scripts can’t run here now`
   const i = admin.instance
   if (running.value && i) return `Runs in the live session “${i.name}”: changes apply at once`
   return 'No session is running: scripts run in the experiment\'s engine'

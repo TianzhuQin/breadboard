@@ -1,0 +1,246 @@
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.avaje.ebean.Ebean;
+import com.avaje.ebean.SqlRow;
+import com.fasterxml.jackson.databind.JsonNode;
+import models.*;
+import org.junit.Test;
+import org.slf4j.LoggerFactory;
+import play.libs.Json;
+import play.mvc.Result;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.zip.ZipFile;
+
+import static org.junit.Assert.*;
+import static play.test.Helpers.*;
+
+/**
+ * Database backups (models.Backups, Settings → Backups), GET /health, and what a restart does to
+ * the sessions that were running.
+ */
+public class BackupsAndHealthTest extends BaseTest {
+
+    @Test
+    public void healthSaysOkWithoutASignIn() {
+        Result health = route(fakeRequest(GET, "/health"));
+        assertEquals(OK, status(health));
+        JsonNode body = Json.parse(contentAsString(health));
+        assertEquals("ok", body.get("status").asText());
+        assertEquals("ok", body.get("database").asText());
+        assertFalse("no reason while it is well", body.has("reason"));
+        assertTrue(body.toString(), body.get("diskFreeMb").isIntegralNumber());
+        assertTrue(body.toString(), body.get("diskFreeMb").asLong() >= 100);
+        assertTrue(body.has("version"));
+        assertTrue(body.has("uptimeSeconds"));
+    }
+
+    /** Uptime monitors and proxies that check with HEAD get GET's status and headers, without the body. */
+    @Test
+    public void healthAnswersHeadAsItAnswersGetWithoutTheBody() {
+        Result get = route(fakeRequest(GET, "/health"));
+        Result head = route(fakeRequest("HEAD", "/health"));
+        assertNotNull("HEAD /health has a route", head);
+        assertEquals(OK, status(head));
+        assertEquals("no body", "", contentAsString(head));
+        assertEquals(contentType(get), contentType(head));
+        assertEquals("no-store", header("Cache-Control", head));
+        // the length of the body GET sends (its uptime and free space may have changed a digit meanwhile)
+        int length = Integer.parseInt(header("Content-Length", head));
+        assertTrue(length + " for " + contentAsString(get), Math.abs(length - contentAsBytes(get).length) <= 2);
+    }
+
+    @Test
+    public void eachHealthCheckWritesItsHeartbeatRow() throws Exception {
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        SqlRow first = Ebean.createSqlQuery("select count(*) as row_count, max(checked_at) as checked_at from health_check").findUnique();
+        assertEquals("one row, however many checks", 1, first.getInteger("row_count").intValue());
+        Thread.sleep(20);
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        SqlRow second = Ebean.createSqlQuery("select count(*) as row_count, max(checked_at) as checked_at from health_check").findUnique();
+        assertEquals(1, second.getInteger("row_count").intValue());
+        assertTrue("updated by the second check", second.getTimestamp("checked_at").after(first.getTimestamp("checked_at")));
+    }
+
+    /**
+     * A full disk left H2 holding a lock it never released ("Timeout trying to lock table USERS"),
+     * while select 1 still answered: here another connection holds the accounts locked.
+     */
+    @Test
+    public void healthFailsWhileTheDatabaseKeepsTheAccountsLocked() throws Exception {
+        Language lang = createLanguage("eng", "English");
+        createUser("pi@lab.org", "PI", "password123", lang);
+        // well first, so that the failure below is a change, which the log notes
+        assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
+        Logger log = (Logger) LoggerFactory.getLogger("application");
+        ListAppender<ILoggingEvent> logged = new ListAppender<>();
+        logged.start();
+        log.addAppender(logged);
+        Level level = log.getLevel();
+        log.setLevel(Level.INFO);
+        try (Connection stuck = DriverManager.getConnection("jdbc:h2:mem:breadboard-test;MODE=MYSQL;DB_CLOSE_DELAY=-1", "", "")) {
+            stuck.setAutoCommit(false);
+            try (Statement s = stuck.createStatement()) {
+                s.executeUpdate("update users set name = name");
+            }
+            long started = System.currentTimeMillis();
+            Result health = route(fakeRequest(GET, "/health"));
+            long took = System.currentTimeMillis() - started;
+            assertEquals(contentAsString(health), SERVICE_UNAVAILABLE, status(health));
+            JsonNode body = Json.parse(contentAsString(health));
+            assertEquals("failing", body.get("status").asText());
+            assertEquals("failing", body.get("database").asText());
+            // Fixed words: /health needs no sign-in, and the database's own message names its tables
+            // (and, on a full disk, its file's path).
+            assertEquals(body.toString(), "the database could not be written", body.get("reason").asText());
+            String said = logged.list.stream().map(ILoggingEvent::getFormattedMessage).collect(Collectors.joining("\n"));
+            assertTrue(said, said.contains("Health check: failing"));
+            assertTrue("the details are in the log: " + said, said.toLowerCase().contains("lock"));
+            assertTrue("it doesn't hang: " + took + " ms", took < 8000);
+            Result head = route(fakeRequest("HEAD", "/health"));
+            assertEquals("HEAD says so too", SERVICE_UNAVAILABLE, status(head));
+            assertEquals("", contentAsString(head));
+            stuck.rollback();
+        } finally {
+            log.detachAppender(logged);
+            log.setLevel(level);
+        }
+        Result again = route(fakeRequest(GET, "/health"));
+        assertEquals(contentAsString(again), OK, status(again));
+    }
+
+    @Test
+    public void theBackupListNeedsASignIn() {
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/backups"))));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/backups"))));
+        assertEquals(UNAUTHORIZED, status(route(fakeRequest(GET, "/backups/breadboard-2026-10-28-120000.zip"))));
+
+        Language lang = createLanguage("eng", "English");
+        User me = createUser("pi@lab.org", "PI", "password123", lang);
+        Result list = route(fakeRequest(GET, "/backups").withSession("uid", me.uid));
+        assertEquals(OK, status(list));
+        assertFalse("an in-memory database isn't backed up", Json.parse(contentAsString(list)).get("enabled").asBoolean());
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(POST, "/backups").withSession("uid", me.uid))));
+        assertEquals(NOT_FOUND, status(route(fakeRequest(GET, "/backups/..%2Fconf%2Fapplication.conf").withSession("uid", me.uid))));
+    }
+
+    @Test
+    public void aBackupIsAZipOfTheDatabaseAndOnlyTheNewestAreKept() throws Exception {
+        File dir = Files.createTempDirectory("bb-backups").toFile();
+        File folder = new File(dir, "backups");
+        try (Connection db = DriverManager.getConnection("jdbc:h2:" + new File(dir, "breadboard").getAbsolutePath() + ";MODE=MYSQL", "", "")) {
+            try (Statement s = db.createStatement()) {
+                s.execute("create table things (id int primary key, name varchar(20))");
+                s.execute("insert into things values (1, 'kept')");
+            }
+            File first = Backups.backUpTo(db, folder, null, 2);
+            assertTrue(first.getName(), Backups.NAME.matcher(first.getName()).matches());
+            try (ZipFile zip = new ZipFile(first)) {
+                assertNotNull("the zip holds the database file", zip.getEntry("breadboard.h2.db"));
+            }
+            // twice more (each in a second of its own, for a name of its own): only the newest two stay
+            Backups.backUpTo(db, folder, null, 2);
+            File third = Backups.backUpTo(db, folder, null, 2);
+            List<File> kept = Backups.list(folder);
+            assertEquals(2, kept.size());
+            assertEquals("newest first", third, kept.get(0));
+            assertFalse("the oldest went", first.exists());
+        }
+        assertNotNull(Backups.find(folder, Backups.list(folder).get(0).getName()));
+        assertNull(Backups.find(folder, "../breadboard.h2.db"));
+        assertNull(Backups.find(folder, "breadboard-2026-10-28-120000.zip"));
+    }
+
+    /** An empty file named as a backup, made at {@code stamp} (yyyy-MM-dd-HHmmss) for {@code why}. */
+    private static File backupFile(File folder, String stamp, String why) throws Exception {
+        File file = new File(folder, "breadboard-" + stamp + (why == null ? "" : "-" + why) + ".zip");
+        assertTrue(file.createNewFile());
+        return file;
+    }
+
+    /**
+     * Backing up by hand, however often, leaves the regular (daily) backups and the one made before an
+     * upgrade alone: each kind keeps its own newest ones.
+     */
+    @Test
+    public void backupsMadeByHandPushOutOnlyOlderOnesMadeByHand() throws Exception {
+        File dir = Files.createTempDirectory("bb-backups").toFile();
+        File folder = new File(dir, "backups");
+        assertTrue(folder.mkdirs());
+        File upgrade = backupFile(folder, "2026-10-19-120000", "upgrade");
+        File daily1 = backupFile(folder, "2026-10-20-120000", null);
+        File daily2 = backupFile(folder, "2026-10-21-120000", null);
+        File manual1 = backupFile(folder, "2026-10-22-120000", "manual");
+        File manual2 = backupFile(folder, "2026-10-23-120000", "manual");
+        File manual3 = backupFile(folder, "2026-10-24-120000", "manual");
+        try (Connection db = DriverManager.getConnection("jdbc:h2:" + new File(dir, "breadboard").getAbsolutePath() + ";MODE=MYSQL", "", "")) {
+            File manual4 = Backups.backUpTo(db, folder, "manual", 2);
+            assertTrue(manual4.getName(), manual4.getName().endsWith("-manual.zip"));
+            assertTrue(manual4.exists());
+            assertTrue(manual3.exists());
+            assertFalse("older ones made by hand go", manual2.exists());
+            assertFalse(manual1.exists());
+            assertTrue("the daily ones stay", daily1.exists() && daily2.exists());
+            assertTrue("the one made before an upgrade stays", upgrade.exists());
+
+            // a regular one pushes out the oldest regular one, and nothing else
+            File daily3 = Backups.backUpTo(db, folder, null, 2);
+            assertTrue(daily3.exists() && daily2.exists());
+            assertFalse(daily1.exists());
+            assertTrue(manual4.exists() && manual3.exists() && upgrade.exists());
+        }
+        assertEquals(5, Backups.list(folder).size());
+    }
+
+    /**
+     * A backup's time is the one in its name, also for a copy whose file time is the copy's (an
+     * upgrade copies backups/ into the new release's folder); a name whose time can't be read gives
+     * the file's time.
+     */
+    @Test
+    public void aBackupWasMadeWhenItsNameSays() throws Exception {
+        File folder = Files.createTempDirectory("bb-backups").toFile();
+        File copied = backupFile(folder, "2026-10-30-133336", "upgrade");
+        File daily = backupFile(folder, "2026-10-30-133858", null);
+        long copiedAt = System.currentTimeMillis() / 1000 * 1000;
+        assertTrue(copied.setLastModified(copiedAt));
+        assertTrue(daily.setLastModified(copiedAt));
+
+        assertEquals("2026-10-30T13:33:36.000Z", Backups.row(copied).get("createdAt").asText());
+        assertEquals("2026-10-30T13:38:58.000Z", Backups.row(daily).get("createdAt").asText());
+        assertEquals(copied.getName(), Backups.row(copied).get("name").asText());
+        assertEquals("newest first, by the time in their names", daily, Backups.list(folder).get(0));
+
+        File unreadable = backupFile(folder, "2026-13-45-996199", "manual");
+        assertTrue(unreadable.setLastModified(copiedAt));
+        assertEquals(copiedAt, Backups.madeAt(unreadable));
+    }
+
+    @Test
+    public void sessionsRunningWhenTheServerStoppedAreMarkedStoppedWithAReason() {
+        Experiment experiment = createExperiment("Restarted");
+        ExperimentInstance running = createInstance("live", experiment);
+        running.status = ExperimentInstance.Status.RUNNING;
+        running.update();
+        ExperimentInstance finished = createInstance("done", experiment);
+        finished.status = ExperimentInstance.Status.FINISHED;
+        finished.update();
+
+        Global.markInterruptedSessions();
+
+        assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(running.id).status);
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(finished.id).status);
+        List<Event> events = Event.find.where().eq("experimentInstance.id", running.id).findList();
+        assertEquals(1, events.size());
+        assertEquals("sessionInterrupted", events.get(0).name);
+        assertEquals(0, Event.find.where().eq("experimentInstance.id", finished.id).findRowCount());
+    }
+}

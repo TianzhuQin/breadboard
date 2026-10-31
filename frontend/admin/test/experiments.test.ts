@@ -29,13 +29,23 @@ vi.mock('@/store/admin', async () => {
   Object.defineProperty(store.running, 'value', { get: () => running.value, set: (v) => { running.value = v } })
   const admin = reactive({ experiment: null as any, instance: null as any, email: 'r@lab.org', events: [], user: null as any, requestError: null as any })
   ;(store as any).admin = admin
+  // what the engine runs when that is another experiment than the selected one (engineGuard reads it)
+  const engineElsewhere = ref<any>(null)
+  ;(store as any).engineElsewhere = engineElsewhere
+  const graph = { nodes: new Map() }
+  ;(store as any).graph = graph
+  // why file mode can't be switched on now ('' when it can)
+  const fileModeBlocked = ref('')
+  ;(store as any).fileModeBlocked = fileModeBlocked
   return {
     admin,
     actions: store.actions,
     experiments: computed(() => list),
     running,
+    engineElsewhere,
+    fileModeBlocked,
     ensureConnected: () => true,
-    graph: { nodes: new Map() },
+    graph,
   }
 })
 
@@ -51,6 +61,7 @@ import {
 import { HttpError } from '../src/lib/http'
 import ImportExperimentDialog from '../src/pages/experiments/ImportExperimentDialog.vue'
 import NewExperimentDialog from '../src/pages/experiments/NewExperimentDialog.vue'
+import RenameExperimentDialog from '../src/pages/experiments/RenameExperimentDialog.vue'
 import { switchToNew } from '../src/pages/experiments/switchTo'
 import { toasts } from '../src/ui/toast'
 
@@ -143,7 +154,8 @@ describe('import name handling', () => {
     expect(importNameFromFile('no-extension')).toBe('no-extension')
     expect(importNameFromFile('notes.txt')).toBe('notes')
     expect(importNameFromFile('')).toBe('')
-    expect(uniqueName('Network game', ['network GAME', 'Network game 2'])).toBe('Network game 3')
+    expect(uniqueName('Network game', ['network GAME'])).toBe('Network game (copy)')
+    expect(uniqueName('Network game', ['network GAME', 'Network game (COPY)', 'Network game (copy 2)'])).toBe('Network game (copy 3)')
     expect(uniqueName('Fresh', ['Other'])).toBe('Fresh')
   })
   it('encodes the name in the import URL (the old console sent it raw)', () => {
@@ -307,28 +319,55 @@ describe('Import dialog', () => {
     w.unmount()
   })
 
-  it('asks before switching to the import while someone uses the engine', async () => {
+  it('switches to the import without asking while another account\'s session runs (it keeps running)', async () => {
     http.post.mockResolvedValue({ id: 44, name: 'Shared' })
     ;(store as any).admin.user = { engine: { experimentId: 1, experimentName: 'Existing', sessionId: 41, sessionName: 'live run', owner: 'boss@lab.org' } }
     confirmMock.mockClear()
-    confirmMock.mockResolvedValueOnce(false)
     try {
       const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Shared.zip'))
       submit().click()
       await flushPromises()
-      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Shared” now?', danger: true })
-      expect(store.actions.selectExperiment).not.toHaveBeenCalled()
-      // the new experiment still shows up in the list
-      expect(store.actions.refresh).toHaveBeenCalled()
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(44)
       w.unmount()
     } finally {
       ;(store as any).admin.user = null
     }
   })
 
+  it('asks before switching to the import when that would empty a network nobody can account for', async () => {
+    http.post.mockResolvedValue({ id: 45, name: 'Unsure' })
+    // players in the network, and the server can't say whose (GET /autopilot doesn't answer)
+    ;(store as any).graph.nodes.set('p1', { id: 'p1', data: {} })
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(false)
+    try {
+      const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Unsure.zip'))
+      submit().click()
+      await flushPromises()
+      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Unsure” now?', danger: true })
+      expect(confirmMock.mock.calls[0][0].message).toContain('1 player is in the network right now')
+      expect(store.actions.selectExperiment).not.toHaveBeenCalled()
+      // the new experiment still shows up in the list
+      expect(store.actions.refresh).toHaveBeenCalled()
+      w.unmount()
+    } finally {
+      ;(store as any).graph.nodes.clear()
+    }
+  })
+
   it('uses the name recorded in the zip when there is one', async () => {
     const w = await openWith(new File([makeZip(EXPORTED) as BlobPart], 'Public-goods_12.zip'))
     expect(input().value).toBe('Public goods')
+    w.unmount()
+  })
+
+  // The export of an experiment on this server, imported again: it was "Public goods 2", which read
+  // as if 2 were its id where it came from.
+  it('adds (copy) to the recorded name when an experiment here has it already', async () => {
+    store.exps.push({ id: 2, name: 'Public goods', instances: [], steps: [], languages: [] })
+    const w = await openWith(new File([makeZip(EXPORTED) as BlobPart], 'Public-goods_2.zip'))
+    expect(input().value).toBe('Public goods (copy)')
     w.unmount()
   })
 
@@ -344,14 +383,14 @@ describe('Import dialog', () => {
   it('suggests a free name, and refuses a duplicate one typed in before uploading', async () => {
     const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'existing.zip'))
     const name = document.querySelector<HTMLInputElement>('.b-dialog input[maxlength="120"]')!
-    expect(name.value).toMatch(/ 2$/)
-    name.value = name.value.replace(/ 2$/, '')
+    expect(name.value).toBe('existing (copy)')
+    name.value = name.value.replace(/ \(copy\)$/, '')
     name.dispatchEvent(new Event('input'))
     await flushPromises()
     submit().click()
     await flushPromises()
     expect(http.post).not.toHaveBeenCalled()
-    expect(document.body.textContent).toMatch(/already have an experiment called/)
+    expect(document.body.textContent).toMatch(/already an experiment called/)
     w.unmount()
   })
 
@@ -366,14 +405,16 @@ describe('Import dialog', () => {
     w.unmount()
   })
 
-  it('only refreshes the list when a session is running (switching would disconnect people)', async () => {
+  it('works on the import even while a session runs (switching leaves it running)', async () => {
     store.running.value = true
     http.post.mockResolvedValue({ id: 43, name: 'Later' })
     const w = await openWith(new File([makeZip(EXPORTED.slice(1)) as BlobPart], 'Later.zip'))
+    const tick = document.querySelector<HTMLInputElement>('.b-dialog input[type="checkbox"]')!
+    expect(tick.checked).toBe(true)
+    expect(tick.disabled).toBe(false)
     submit().click()
     await flushPromises()
-    expect(store.actions.selectExperiment).not.toHaveBeenCalled()
-    expect(store.actions.refresh).toHaveBeenCalled()
+    expect(store.actions.selectExperiment).toHaveBeenCalledWith(43)
     w.unmount()
   })
 })
@@ -386,6 +427,37 @@ describe('New experiment dialog', () => {
     store.actions.selectExperiment.mockClear()
     store.running.value = false
     document.body.innerHTML = ''
+  })
+
+  it('offers the ready-to-run example first when there is no experiment yet', async () => {
+    store.exps.splice(0, store.exps.length)
+    http.put.mockResolvedValue({ id: 6, name: 'Network game' })
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    expect(http.put).toHaveBeenCalledWith('/experiment', expect.objectContaining({ newExperimentName: 'Network game', example: 'network-game' }))
+    w.unmount()
+  })
+
+  it('says, once the example is made, that each tab joins with an ID of its own', async () => {
+    store.exps.splice(0, store.exps.length)
+    http.put.mockResolvedValue({ id: 6, name: 'Network game' })
+    const admin = (store as any).admin
+    store.actions.selectExperiment.mockImplementationOnce(async () => { admin.experiment = { id: 6, name: 'Network game' }; return null })
+    toasts.splice(0, toasts.length)
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    await w.setProps({ open: true })
+    await flushPromises()
+    document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
+    await flushPromises()
+    const created = toasts.find(t => t.title === 'Created “Network game”')!
+    expect(created.detail).toBe('It runs as it is: open a session, then join it from two tabs with its sign-in link, typing an ID in each (any name or number; one seat per ID).')
+    expect(created.action!.label).toBe('Open a session')
+    admin.experiment = null
+    w.unmount()
   })
 
   it('creates from the template with copyExperimentId -1 and asks for the new list', async () => {
@@ -403,30 +475,42 @@ describe('New experiment dialog', () => {
     w.unmount()
   })
 
-  it('asks before switching to it while someone uses the engine, and stays put on Cancel', async () => {
+  it('works on it while another account\'s session runs, and says that session keeps running', async () => {
     http.put.mockResolvedValue({ id: 6, name: 'Fresh' })
-    ;(store as any).admin.user = { engine: { experimentId: 5, experimentName: 'Base', sessionId: 40, sessionName: 'their run', owner: 'boss@lab.org' } }
+    const engine = { experimentId: 5, experimentName: 'Base', sessionId: 40, sessionName: 'their run', owner: 'boss@lab.org' }
+    const admin = (store as any).admin
+    admin.user = { engine }
     confirmMock.mockClear()
-    confirmMock.mockResolvedValueOnce(false)
+    toasts.splice(0)
+    // the server's answer: the new experiment selected, the engine still running the other one
+    store.actions.selectExperiment.mockImplementationOnce(async () => {
+      admin.experiment = { id: 6, name: 'Fresh', instances: [], steps: [], languages: [] }
+      ;(store as any).engineElsewhere.value = engine
+      return null
+    })
     try {
       const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
       await w.setProps({ open: true })
+      const tick = document.querySelector<HTMLInputElement>('.b-dialog input[type="checkbox"]')!
+      expect(tick.checked).toBe(true)
+      expect(tick.disabled).toBe(false)
       const name = document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!
       name.value = 'Fresh'
       name.dispatchEvent(new Event('input'))
       document.querySelector<HTMLButtonElement>('.b-dialog__foot button[type="submit"]')!.click()
       await flushPromises()
       expect(http.put).toHaveBeenCalledTimes(1)
-      expect(confirmMock).toHaveBeenCalledTimes(1)
-      expect(confirmMock.mock.calls[0][0]).toMatchObject({ title: 'Work on “Fresh” now?', danger: true })
-      expect(confirmMock.mock.calls[0][0].message).toContain('boss@lab.org has session “their run” of “Base” running.')
-      expect(store.actions.selectExperiment).not.toHaveBeenCalled()
-      // created all the same, so the dialog closes
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(6)
+      const said = toasts.find(t => t.title === 'Created “Fresh”')
+      expect(said?.detail).toBe('You are now working on it. The engine keeps running “Base” (session “their run”), untouched. Edit this experiment and see its data here; to run it, end that session first.')
       const opened = w.emitted('update:open') || []
       expect(opened[opened.length - 1]).toEqual([false])
       w.unmount()
     } finally {
-      ;(store as any).admin.user = null
+      admin.user = null
+      admin.experiment = null
+      ;(store as any).engineElsewhere.value = null
     }
   })
 
@@ -464,6 +548,21 @@ describe('New experiment dialog', () => {
     w.unmount()
   })
 
+  it('names the example again each time it opens with the example chosen', async () => {
+    store.exps.splice(0, store.exps.length)
+    const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
+    const name = () => document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(name()!.value).toBe('Network game')
+    await w.setProps({ open: false })
+    await flushPromises()
+    await w.setProps({ open: true })
+    await flushPromises()
+    expect(name()!.value).toBe('Network game')
+    w.unmount()
+  })
+
   it('does not send an empty name', async () => {
     const w = mount(NewExperimentDialog, { props: { open: false }, attachTo: document.body })
     await w.setProps({ open: true })
@@ -475,6 +574,24 @@ describe('New experiment dialog', () => {
   })
 })
 
+
+describe('Rename dialog', () => {
+  beforeEach(() => {
+    store.exps.splice(0, store.exps.length, { id: 7, name: 'Trust game', instances: [], steps: [], languages: [] })
+    document.body.innerHTML = ''
+  })
+
+  it('names the settings file an autopilot set up by name is in', async () => {
+    const w = mount(RenameExperimentDialog, { props: { open: false, exp: store.exps[0] }, attachTo: document.body })
+    await w.setProps({ open: true })
+    await flushPromises()
+    const said = document.querySelector('.b-dialog')!.textContent!
+    // conf/local.conf, which the researcher keeps; not conf/application-prod.conf, which each release replaces
+    expect(said).toContain('server\'s settings file (conf/local.conf) needs the new name there too')
+    expect(said).not.toContain('application-prod.conf')
+    w.unmount()
+  })
+})
 
 describe('Experiments page', () => {
   const A: any = { id: 300, name: 'Alpha', fileMode: false, instances: [{ id: 1, name: 's1', status: 'FINISHED', creationTime: '2026-10-01 10:00:00,0' }], steps: [{}], content: [], parameters: [], languages: [{ code: 'eng', name: 'English' }] }
@@ -544,6 +661,39 @@ describe('Experiments page', () => {
     w.unmount()
   })
 
+  it('won\'t switch file mode on while another experiment\'s session runs in the engine, and says why', async () => {
+    const FileModeDialog = (await import('../src/pages/experiments/FileModeDialog.vue')).default
+    const why = 'The engine is running “Live study”’s session “Wave 2”. In file mode a step file you save runs at once, which it can’t while that session runs. Switch file mode on once it has ended.'
+    ;(store as any).fileModeBlocked.value = why
+    store.actions.toggleFileMode.mockClear()
+    const admin = (store as any).admin
+    try {
+      const w = mount(FileModeDialog, { props: { open: true }, attachTo: document.body })
+      await flushPromises()
+      expect(document.querySelector('.xfm__blocked')!.textContent).toBe(why)
+      const go = [...document.querySelectorAll<HTMLButtonElement>('.b-dialog button')].find(b => /Switch to file mode/.test(b.textContent || ''))!
+      expect(go.disabled).toBe(true)
+      go.click()
+      await flushPromises()
+      expect(store.actions.toggleFileMode).not.toHaveBeenCalled()
+      // and the dialog says when a saved file runs
+      expect(document.querySelector('.xfm__list')!.textContent).toContain('it runs at once in the engine (while the engine runs this experiment)')
+      w.unmount()
+
+      // Leaving file mode doesn't touch the engine: that stays possible.
+      admin.experiment = B
+      const back = mount(FileModeDialog, { props: { open: true }, attachTo: document.body })
+      await flushPromises()
+      expect(document.querySelector('.xfm__blocked')).toBe(null)
+      const leave = [...document.querySelectorAll<HTMLButtonElement>('.b-dialog button')].find(b => /Import the files and switch/.test(b.textContent || ''))!
+      expect(leave.disabled).toBe(false)
+      back.unmount()
+    } finally {
+      ;(store as any).fileModeBlocked.value = ''
+      admin.experiment = A
+    }
+  })
+
   it('opens the New dialog from ?action=new and clears the query', async () => {
     const { w, router } = await mountAt('/experiments?action=new')
     expect(document.querySelector('.b-dialog__title')!.textContent).toBe('New experiment')
@@ -554,6 +704,30 @@ describe('Experiments page', () => {
   it('opens the Import dialog from ?action=import', async () => {
     const { w } = await mountAt('/experiments?action=import')
     expect(document.querySelector('.b-dialog__title')!.textContent).toBe('Import an experiment')
+    w.unmount()
+  })
+
+  // A newcomer's first look at the page didn't say that a ready-to-run example exists.
+  it('points a server without experiments to the ready-to-run example, which New experiment names', async () => {
+    store.exps.splice(0, store.exps.length)
+    ;(store as any).admin.experiment = null
+    const { w } = await mountAt('/experiments')
+    expect(w.find('.xempty').text()).toContain('start from Example: network game, a complete study that runs as it is')
+    expect(w.find('.xempty strong').text()).toBe('Example: network game')
+    await w.find('.xempty').findAll('button').find(b => b.text() === 'New experiment')!.trigger('click')
+    await flushPromises()
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input[value="example"]')!.checked).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
+    w.unmount()
+  })
+
+  // Opened with the page (the switcher's New), the dialog chose the example but left its name empty.
+  it('names the example when the New dialog opens with the page', async () => {
+    store.exps.splice(0, store.exps.length)
+    ;(store as any).admin.experiment = null
+    const { w } = await mountAt('/experiments?action=new')
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input[value="example"]')!.checked).toBe(true)
+    expect(document.querySelector<HTMLInputElement>('.b-dialog input.b-input__el')!.value).toBe('Network game')
     w.unmount()
   })
 
@@ -602,10 +776,54 @@ describe('Experiments page', () => {
     w.unmount()
   })
 
-  it('asks before switching while another account\'s session runs on the shared engine', async () => {
+  it('switches without asking while a session runs on the shared engine, which keeps running', async () => {
     store.actions.selectExperiment.mockClear()
-    // not this account's session: the engine info in the User JSON says who runs what
-    ;(store as any).admin.user = { engine: { experimentId: 300, experimentName: 'Alpha', sessionId: 2, sessionName: 'lab manager run', owner: 'boss@lab.org' } }
+    // another account's session (the engine info in the User JSON says who runs what)
+    const engine = { experimentId: 300, experimentName: 'Alpha', sessionId: 2, sessionName: 'lab manager run', owner: 'boss@lab.org' }
+    const admin = (store as any).admin
+    admin.user = { engine }
+    toasts.splice(0)
+    store.actions.selectExperiment.mockImplementationOnce(async () => {
+      admin.experiment = B
+      ;(store as any).engineElsewhere.value = engine
+      return null
+    })
+    try {
+      const { w } = await mountAt('/experiments')
+      await workOn(w, 1).trigger('click')
+      await flushPromises()
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(301)
+      const said = toasts.find(t => t.title === 'Now working on “Beta”')
+      expect(said?.detail).toBe('The engine keeps running “Alpha” (session “lab manager run”), untouched. Edit this experiment and see its data here; to run it, end that session first.')
+      w.unmount()
+    } finally {
+      admin.user = null
+      ;(store as any).engineElsewhere.value = null
+    }
+  })
+
+  it('switches without asking while this account\'s own session runs (no more “Stop the running session first”)', async () => {
+    store.actions.selectExperiment.mockClear()
+    store.running.value = true
+    ;(store as any).admin.instance = { id: 1, name: 's1', status: 'RUNNING' }
+    toasts.splice(0)
+    try {
+      const { w } = await mountAt('/experiments')
+      await workOn(w, 1).trigger('click')
+      await flushPromises()
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(store.actions.selectExperiment).toHaveBeenCalledWith(301)
+      expect(toasts.some(t => /Stop the running session|autopilot is running/.test(t.title))).toBe(false)
+      w.unmount()
+    } finally {
+      ;(store as any).admin.instance = null
+    }
+  })
+
+  it('asks before a switch that would empty a network nobody can account for', async () => {
+    store.actions.selectExperiment.mockClear()
+    ;(store as any).graph.nodes.set('p1', { id: 'p1', data: {} })
     confirmMock.mockResolvedValueOnce(false)
     try {
       const { w } = await mountAt('/experiments')
@@ -613,11 +831,11 @@ describe('Experiments page', () => {
       await flushPromises()
       expect(confirmMock).toHaveBeenCalledTimes(1)
       expect(confirmMock.mock.calls[0][0]).toMatchObject({ danger: true, title: 'Switch to “Beta”?', confirmLabel: 'Switch anyway' })
-      expect(confirmMock.mock.calls[0][0].message).toContain('boss@lab.org has session “lab manager run” of “Alpha” running.')
+      expect(confirmMock.mock.calls[0][0].message).toContain('1 player is in the network right now')
       expect(store.actions.selectExperiment).not.toHaveBeenCalled()
       w.unmount()
     } finally {
-      ;(store as any).admin.user = null
+      ;(store as any).graph.nodes.clear()
     }
   })
 

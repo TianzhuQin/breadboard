@@ -134,6 +134,28 @@ test("the result says whether the edit was applied or only handed to onEdit") {
   edgeEdits.disallow(m.me)
 }
 
+test("an onEdit that makes the change itself is answered as made, so the page says the tie was cut") {
+  // (the network game example cuts the tie in onEdit, to record the cut as an event of its own; the
+  // page said "Your change was sent." as for a proposal kept for later)
+  def n = triangle('ee-own')
+  def made = []
+  edgeEdits.allow(n.me, [add: true, remove: true, onEdit: { p, op, a, b ->
+    if (op == "remove") g.removeConnectedEdge(a, b) else g.addEdge(a, b, "connected")
+    made << op
+  }])
+  def x2 = g.addPlayer('ee-own-x2')
+  g.addEdge(n.me, x2)
+  def sent = sentResults {
+    edit(n.me, "remove", n.x, n.y)
+    edit(n.me, "add", n.y, x2)
+  }
+  assert made == ["remove", "add"]
+  assert !g.hasEdge(n.x, n.y) && g.hasEdge(n.y, x2)
+  assert sent.size() == 2
+  assert sent.every { it.ok == true && it.applied == true }
+  edgeEdits.disallow(n.me)
+}
+
 test("ties hidden by the default visibility only bring a warning, nothing else changes") {
   def n = triangle('ee-ego')
   g.setVisibility("ego")

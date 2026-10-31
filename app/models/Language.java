@@ -38,14 +38,18 @@ public class Language extends Model {
   }
 
   @JsonIgnore
-  public static Language findByIso3(String iso3) { return find.where().eq("code", iso3).findUnique(); }
+  /** The language with this code; the oldest, should two have it (findUnique threw then). */
+  public static Language findByIso3(String iso3) {
+    java.util.List<Language> found = find.where().eq("code", iso3).orderBy("id").findList();
+    return found.isEmpty() ? null : found.get(0);
+  }
 
   @JsonIgnore
   public static Language fromIso3(String iso3) {
     Locale locale = new Locale(iso3);
     Language language = new Language();
     language.setCode(iso3);
-    language.setName(locale.getDisplayName());
+    language.setName(locale.getDisplayName(Locale.ENGLISH));
     return language;
   }
 

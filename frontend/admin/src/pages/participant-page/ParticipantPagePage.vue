@@ -138,7 +138,7 @@ import {
   serverDiffers, type PartKey,
 } from './participantPage'
 import { claimDocs, docDirty, docs, type PageDoc } from './pageDocs'
-import { DEFAULT_CLIENT_GRAPH, DEFAULT_CLIENT_HTML } from './templates'
+import { DEFAULT_CLIENT_GRAPH, DEFAULT_CLIENT_HTML, isNewParticipantPage } from './templates'
 
 const route = useRoute()
 const router = useRouter()
@@ -371,7 +371,7 @@ async function revert (k: PartKey) {
 const legacy = computed(() => current.value?.status === 'ready' && isLegacyPage(current.value.value))
 const isDefaultHtml = computed(() => {
   const p = doc.value?.parts.clientHtml
-  return !!p && normalize(p.value).trim() === normalize(DEFAULT_CLIENT_HTML).trim()
+  return !!p && isNewParticipantPage(p.value)
 })
 const isDefaultGraph = computed(() => {
   const p = doc.value?.parts.clientGraph

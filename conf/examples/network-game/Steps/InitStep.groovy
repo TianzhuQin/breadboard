@@ -7,16 +7,30 @@
 //     round, everyone may also cut one of their ties, right on the network.
 //  4. Everyone sees their score. The session ends, and the autopilot (if it is on) opens the next.
 //
-// The number of rounds and their length are launch parameters (see Parameters). Change anything
-// here, or use it as the starting point of your own design.
+// The size of the network, the waiting room, and the number and length of rounds are launch
+// parameters: change them on the Parameters page. Change anything else here, or use it as the
+// starting point of your own design.
 
-NETWORK_SIZE = 8   // people on the network, computer players included
+// A launch parameter's value. They exist once a session opens; the steps also load without one
+// (a reload of the engine), and then the default here is used.
+paramOr = { String name, fallback ->
+  def value = null
+  try { value = binding.getVariable(name) } catch (MissingPropertyException noSessionOpen) { }
+  value != null ? value : fallback
+}
+
+NETWORK_SIZE = paramOr("networkSize", 8) as Integer   // people on the network, computer players included
 NEAREST = 2        // everyone starts tied to the NEAREST people on each side of a ring
 COLORS = [Blue: "#2563eb", Orange: "#ea580c"]   // the choices, and the people on the network
 
-// Start without a researcher: as soon as 2 people are here, wait 20 seconds for more (or start
-// right away with NETWORK_SIZE), then count down 5 seconds. Give up after 10 minutes.
-autopilot.waitingRoom([minPlayers: 2, maxPlayers: NETWORK_SIZE, waitSeconds: 20,
+// The language of the texts participants read (on the Content page, by its code there, e.g. "zho"):
+// the language launch parameter. A text not yet written in it is shown in English.
+c.setDefaultLanguage(paramOr("language", "eng"))
+
+// Start without a researcher: as soon as minPlayers people are here, wait waitSeconds for more (or
+// start right away with NETWORK_SIZE), then count down 5 seconds. Give up after 10 minutes.
+autopilot.waitingRoom([minPlayers: paramOr("minPlayers", 2) as Integer, maxPlayers: NETWORK_SIZE,
+                       waitSeconds: paramOr("waitSeconds", 20) as Integer,
                        maxWaitSeconds: 600, countdownSeconds: 5])
 // Someone who drops out is played by the computer after 30 seconds, until they come back.
 autopilot.replaceDisconnected([afterSeconds: 30, returnToHuman: true])

@@ -145,11 +145,21 @@ public class User extends Model {
   }
 
   public Experiment getExperimentByName(String name) {
-    for (Experiment e : ownedExperiments) {
+    for (Experiment e : experiments()) {
       if (e.name.equals(name))
         return e;
     }
     return null;
+  }
+
+  /**
+   * The experiments this account works on: every experiment on the server. Researchers on one
+   * server work together (a lab's PI and assistants): any account can run any code on the server
+   * from the script console, so separate lists never kept one account's studies from another's.
+   * Run separate servers to keep studies apart. (ownedExperiments is still kept up to date.)
+   */
+  public List<Experiment> experiments() {
+    return Experiment.findAll();
   }
 
   @JsonValue
@@ -165,7 +175,7 @@ public class User extends Model {
 
     //user.put("experiments", Json.toJson(experimentNames));
     ArrayNode experiments = user.putArray("experiments");
-    for (Experiment experiment: ownedExperiments) {
+    for (Experiment experiment: experiments()) {
       experiments.add(experiment.toJson());
     }
 
@@ -188,10 +198,16 @@ public class User extends Model {
     } else if (experimentInstanceId != null && experimentInstanceId != -1L) {
       ExperimentInstance ei = ExperimentInstance.findById(experimentInstanceId);
       Logger.debug("experimentInstanceId = " + experimentInstanceId.toString() + (ei == null ? " is null" : ""));
-      if (ei != null) {
+      Long of = ei == null || ei.experiment == null ? null : ei.experiment.id;
+      if (ei == null) {
+        experimentInstanceId = -1L;
+        breadboard.put("experimentInstance", "");
+      } else if (selectedExperiment != null && selectedExperiment.id.equals(of)) {
         breadboard.put("experimentInstance", ei.toJson());
       } else {
-        experimentInstanceId = -1L;
+        // A session of another experiment than the selected one (selecting leaves a live session
+        // running, as the account's): it is sent again once that experiment is selected. Sent here,
+        // the previous console showed it, and acted on it, as the selected experiment's.
         breadboard.put("experimentInstance", "");
       }
     } else {

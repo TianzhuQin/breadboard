@@ -40,7 +40,7 @@
           </li>
           <li>
             <Zap :size="15" aria-hidden="true" />
-            <span>When a file in <code>Steps/</code> is saved on the server, it runs at once and the console updates.</span>
+            <span>When a file in <code>Steps/</code> is saved on the server, it runs at once in the engine (while the engine runs this experiment) and the console updates.</span>
           </li>
         </template>
         <template v-else>
@@ -82,7 +82,7 @@
 import { computed, ref, watch } from 'vue'
 import { Database, Download, FolderOpen, HardDrive, Lock, Pencil, TriangleAlert, Zap } from 'lucide-vue-next'
 import { BButton, BDialog, notify } from '@/ui'
-import { admin, actions, running } from '@/store/admin'
+import { admin, actions, fileModeBlocked, running } from '@/store/admin'
 import { devDirName } from './experiments'
 
 const props = defineProps<{ open: boolean }>()
@@ -94,9 +94,12 @@ const turningOn = ref(true)
 const busy = ref(false)
 const error = ref('')
 const dir = computed(() => exp.value ? devDirName(exp.value) : '')
-const blocked = computed(() => running.value
-  ? 'A session is running. Stop it first, so its participants keep the steps and content they started with.'
-  : '')
+const blocked = computed(() => {
+  if (running.value) return 'A session is running. Stop it first, so its participants keep the steps and content they started with.'
+  // (another experiment's session holds the engine: the server refuses this too)
+  if (turningOn.value && fileModeBlocked.value) return fileModeBlocked.value
+  return ''
+})
 
 // Freeze the direction when the dialog opens, so the push that follows doesn't flip the wording.
 watch(() => props.open, (open) => {

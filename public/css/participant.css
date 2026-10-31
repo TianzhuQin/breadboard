@@ -126,6 +126,10 @@ body.bb-page { margin: 0; }
 }
 .bb-page .bb-button:hover { background: var(--bb-accent-hover); }
 .bb-page .bb-button:active { transform: translateY(1px); }
+/* a link that looks like the button (participantSeat) */
+.bb-page a.bb-button { text-align: center; text-decoration: none; box-sizing: border-box; }
+.bb-page .bb-panel .bb-alt { margin-top: 16px; text-align: center; font-size: 15px; }
+.bb-page .bb-alt a { color: var(--bb-accent); font-weight: 600; }
 
 /* (.bb-panel in the selectors: ".bb-page .bb-panel p" would otherwise win and turn them grey) */
 .bb-page .bb-panel .bb-alert {
@@ -158,3 +162,30 @@ body.bb-page { margin: 0; }
 }
 @keyframes bb-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .bb-page .bb-spinner { animation-duration: 3s; } }
+
+/* A completion code given again (participantTakenPart): set apart, and selected whole with one click
+   for copying. Same look as the participant client's Prolific end card. */
+.bb-page .bb-code {
+  margin: 4px 0 20px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #eef2ff;
+  text-align: center;
+}
+.bb-page .bb-code__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bb-text-soft);
+}
+.bb-page .bb-code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #312e81;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.bb-page .bb-panel .bb-note { margin: 14px 0 0; font-size: 13.5px; text-align: center; }

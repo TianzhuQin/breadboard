@@ -7,8 +7,9 @@ GET         /                                                                   
 GET         /legacy-admin                                                        controllers.Application.legacyAdmin()
 GET         /state                                                               controllers.Application.getState()
 GET         /connect                                                             controllers.Application.connect()
-GET         /csv/instances/:experimentId                                         controllers.Application.dataCsv(experimentId: Long)
-GET         /csv/data/:experimentInstanceId                                      controllers.Application.eventCsv(experimentInstanceId: Long)
+GET         /csv/instances/:experimentId                                         controllers.Application.dataCsv(experimentId: Long, excel: Boolean ?= false)
+GET         /csv/data/:experimentInstanceId                                      controllers.Application.eventCsv(experimentInstanceId: Long, excel: Boolean ?= false)
+GET         /csv/experiment/:experimentId/data                                   controllers.Application.experimentDataCsv(experimentId: Long, ids: String ?= "", excel: Boolean ?= false)
 GET         /images/:id                                                          controllers.ImagesController.getImage(id: Long)
 GET         /images/:experimentId/:fileName                                      controllers.ImagesController.getImageByFileName(experimentId: Long, fileName: String)
 GET         /thumbs/:id                                                          controllers.ImagesController.getImageThumb(id: Long)
@@ -19,6 +20,9 @@ GET         /game/:experimentId/:experimentInstanceId/:clientId/state           
 # A researcher's preview runs in an opaque origin and sends its token in a header: the CORS preflight
 OPTIONS     /game/:experimentId/:experimentInstanceId/:clientId/state            controllers.ClientController.stateOptions(experimentId: String, experimentInstanceId: String, clientId: String)
 GET         /game/:experimentId/:experimentInstanceId/:clientId/connect          controllers.ClientController.connectClient(experimentId: String, experimentInstanceId: String, clientId: String)
+POST        /game/:experimentId/:experimentInstanceId/:clientId/comment          controllers.ClientLogin.comment(experimentId: String, experimentInstanceId: String, clientId: String)
+# The token the finish screen sends its comment with later, also once the seat is forgotten (security.CommentTokens)
+GET         /game/:experimentId/:experimentInstanceId/:clientId/comment          controllers.ClientLogin.commentToken(experimentId: String, experimentInstanceId: String, clientId: String)
 # A token for the console to show a participant's page as that player (security.PreviewTokens)
 POST        /preview-token                                                       controllers.ClientController.previewToken()
 
@@ -48,6 +52,7 @@ PUT         /amtadmin/addQualificationType/:experimentUid                       
 
 # AMT Workers Controller
 GET         /experiment/:experimentId/amtassignments                             controllers.AMTAssignmentController.getAMTAssignments(experimentId: Long, sandbox: Boolean ?= false)
+GET         /experiment/:experimentId/prolific                                   controllers.ProlificController.participants(experimentId: Long)
 
 # Customize dialog
 GET         /customize/clientHtml/:experimentId                                  controllers.CustomizeController.getClientHtml(experimentId: Long)
@@ -104,6 +109,21 @@ POST        /login                                                              
 #GET         /createFirstUser                                                     controllers.Application.createFirstUser()
 POST        /createFirstUser                                                     controllers.Application.addFirstUser()
 POST        /logout                                                              controllers.Application.logout()
+
+# For uptime monitors and service managers
+GET         /health                                                              controllers.HealthController.health()
+HEAD        /health                                                              controllers.HealthController.healthHead()
+
+# Database backups (Settings → Backups)
+GET         /backups                                                             controllers.BackupsController.list()
+POST        /backups                                                             controllers.BackupsController.backUp()
+GET         /backups/:name                                                       controllers.BackupsController.download(name: String)
+
+# Researcher accounts (Settings → Researchers)
+GET         /researchers                                                         controllers.ResearchersController.list()
+POST        /researchers                                                         controllers.ResearchersController.add()
+POST        /researchers/remove                                                  controllers.ResearchersController.remove()
+POST        /researchers/password                                                controllers.ResearchersController.resetPassword()
 
 POST        /defaultLanguage                                                     controllers.Application.saveDefaultLanguage()
 POST        /saveUserSettings                                                    controllers.Application.saveUserSettings()

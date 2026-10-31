@@ -47,3 +47,89 @@ export async function changePassword (email: string, p: PasswordChange): Promise
   const uid = res && typeof res.uid === 'string' && res.uid ? res.uid : undefined
   return { success: !!(res && res.success), error: res?.error, ...(uid ? { uid } : {}) }
 }
+
+// ---- researcher accounts (controllers.ResearchersController) ------------------------------------
+
+export interface Researcher {
+  email: string
+  name: string
+  /** the account signed in here */
+  you: boolean
+}
+
+function researcherList (res: any): Researcher[] {
+  const rows = res && Array.isArray(res.researchers) ? res.researchers : []
+  return rows
+    .filter((r: any) => r && typeof r.email === 'string')
+    .map((r: any) => ({ email: r.email, name: typeof r.name === 'string' && r.name ? r.name : r.email, you: !!r.you }))
+}
+
+/** Looks like an email address: something@something.something, no spaces (as User.looksLikeEmail). */
+export function looksLikeEmail (email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || '').trim())
+}
+
+export const researchers = {
+  async list (): Promise<Researcher[]> {
+    return researcherList(await http.get('/researchers', { quiet401: true }))
+  },
+  /** Adds an account; resolves to the list and the account's first password (shown once). */
+  async add (email: string): Promise<{ list: Researcher[], email: string, password: string }> {
+    const res = await http.post<any>('/researchers', { email: email.trim() })
+    return { list: researcherList(res), email: res.email, password: res.password }
+  },
+  async remove (email: string): Promise<Researcher[]> {
+    return researcherList(await http.post('/researchers/remove', { email }))
+  },
+  /** Gives another account a new password; resolves to it (shown once). */
+  async resetPassword (email: string): Promise<{ email: string, password: string }> {
+    const res = await http.post<any>('/researchers/password', { email })
+    return { email: res.email, password: res.password }
+  },
+}
+
+// ---- database backups (controllers.BackupsController) -------------------------------------------
+
+export interface Backup {
+  name: string
+  size: number
+  createdAt: string
+}
+export interface BackupStatus {
+  enabled: boolean
+  folder: string
+  keep: number
+  everyHours: number
+  problem: string | null
+  backups: Backup[]
+}
+
+function backupStatus (res: any): BackupStatus {
+  const rows = res && Array.isArray(res.backups) ? res.backups : []
+  return {
+    enabled: !!res?.enabled,
+    folder: typeof res?.folder === 'string' ? res.folder : '',
+    keep: Number(res?.keep) || 0,
+    everyHours: Number(res?.everyHours) || 0,
+    problem: typeof res?.problem === 'string' && res.problem ? res.problem : null,
+    backups: rows.filter((b: any) => b && typeof b.name === 'string')
+      .map((b: any) => ({ name: b.name, size: Number(b.size) || 0, createdAt: String(b.createdAt || '') })),
+  }
+}
+
+export const backups = {
+  async status (): Promise<BackupStatus> {
+    return backupStatus(await http.get('/backups', { quiet401: true }))
+  },
+  async backUpNow (): Promise<BackupStatus> {
+    return backupStatus(await http.post('/backups'))
+  },
+  url: (name: string) => `/backups/${encodeURIComponent(name)}`,
+}
+
+/** 1536 → "1.5 KB", 5_400_000 → "5.1 MB" */
+export function fileSize (bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}

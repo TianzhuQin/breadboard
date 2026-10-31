@@ -13,6 +13,10 @@ class ChatManager extends BaseChatManager {
   private chatLocks = [:]
   public CHAT_KEY = "chatState"
   public CHAT_EVENT = "chat"
+  // The listener put on a player whose chat is on, made once: off() takes away only the very
+  // closure on() was given, and every this.&chatHandler is a new one (no two are equal), so a chat
+  // switched off went on listening.
+  private final Closure chatListener = this.&chatHandler
 
   private withMut(Closure cb) {
     this.mut.lock()
@@ -113,7 +117,10 @@ class ChatManager extends BaseChatManager {
           messages: []
         ]
         
-        v.on(self.CHAT_EVENT, self.&chatHandler)
+        // (taken off first: chat switched on again, e.g. with other recipients, would handle every
+        // message twice)
+        v.off(self.CHAT_EVENT, self.chatListener)
+        v.on(self.CHAT_EVENT, self.chatListener)
       } catch (err) {
         println err.getMessage()
         throw err
@@ -125,10 +132,16 @@ class ChatManager extends BaseChatManager {
   public disableTextChat (Vertex v, removeExisting = true) {
     def self = this
     return this.withPlayerChatLock(v.id) {
-      if (removeExisting && "private" in v && self.CHAT_KEY in v.private) {
+      // (v.private: "private" in v asked whether the vertex equals "private", never true, so a chat
+      // switched off kept its state)
+      if (removeExisting && v.private != null && self.CHAT_KEY in v.private) {
         v.private.remove(self.CHAT_KEY)
+      } else if (v.private != null && v.private[self.CHAT_KEY] instanceof Map) {
+        // The messages stay on their screen, but the page no longer offers to write one: nothing
+        // listens any more, so what was sent would be lost. A new map, so the page is sent it.
+        v.private[self.CHAT_KEY] = v.private[self.CHAT_KEY] + [isEnabled: false]
       }
-      v.off(self.CHAT_EVENT, self.&chatHandler)
+      v.off(self.CHAT_EVENT, self.chatListener)
       self.addEvent("chat-removed", [player: v.id])
     }
   }

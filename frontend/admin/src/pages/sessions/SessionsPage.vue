@@ -1,6 +1,7 @@
 <template>
   <BPage v-if="exp" intro="Every session of this experiment. Resume or stop one, see what happened in it, and download its data.">
     <template #actions>
+      <BCheckbox v-model="csvForExcel" class="ss__excel" :title="EXCEL_TITLE">For Excel</BCheckbox>
       <BButton
         :icon="FileSpreadsheet"
         :loading="sessionActions.isBusy('list', exp.id)"
@@ -9,6 +10,17 @@
         @click="sessionActions.downloadList(exp)"
       >
         Download list
+      </BButton>
+      <BButton
+        :icon="Download"
+        :loading="sessionActions.isBusy('all', exp.id)"
+        :disabled="!filtered.length"
+        :title="filtered.length === all.length
+          ? 'Every session’s events in one file, each row with its session and launch parameters'
+          : `The events of the ${filtered.length} sessions listed, in one file`"
+        @click="sessionActions.downloadAllData(exp, filtered.map(s => s.id))"
+      >
+        {{ filtered.length === all.length ? 'Download all data' : `Download data (${filtered.length})` }}
       </BButton>
       <BButton variant="primary" :icon="Plus" @click="router.push('/session?new=1')">New session</BButton>
     </template>
@@ -77,7 +89,7 @@
                     <BBadge v-if="isCurrent(s)" tone="accent" class="ss__current">Current</BBadge>
                   </div>
                   <div class="ss__sub">
-                    <span class="mono">#{{ s.id }}</span>
+                    <span class="mono" title="The session's ID in the data (IDs are given out in blocks, so they skip numbers)">ID {{ s.id }}</span>
                     <span class="ss__sub-narrow">{{ createdText(s) }}</span>
                     <BBadge class="ss__sub-narrow" :tone="statusMeta(s.status).tone" dot :pulse="statusMeta(s.status).pulse">{{ statusMeta(s.status).label }}</BBadge>
                   </div>
@@ -161,7 +173,7 @@
       <div class="ss__foot">
         <span>{{ footText }}</span>
         <BButton v-if="filtered.length > limit" size="sm" @click="limit += PAGE">Show {{ Math.min(PAGE, filtered.length - limit) }} more</BButton>
-        <span class="ss__foot-note">Times are the server’s local time; the CSV files use UTC.</span>
+        <span class="ss__foot-note">Times are in your computer’s time zone; the CSV files use UTC.</span>
       </div>
     </BPanel>
 
@@ -180,7 +192,8 @@ import {
   ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, Database, Download, FileSpreadsheet, Play, Plus, ScrollText, Search,
   SearchX, Square, X,
 } from 'lucide-vue-next'
-import { BBadge, BButton, BEmpty, BInput, BPage, BPanel, BTabs, type TabItem } from '@/ui'
+import { BBadge, BButton, BCheckbox, BEmpty, BInput, BPage, BPanel, BTabs, type TabItem } from '@/ui'
+import { csvForExcel } from '@/lib/csvFiles'
 import { admin, instances } from '@/store/admin'
 import type { Instance } from '@/store/types'
 import {
@@ -195,6 +208,11 @@ import SessionEventsDrawer from './SessionEventsDrawer.vue'
 const router = useRouter()
 const route = useRoute()
 const sessionActions = useSessionActions()
+
+/** The CSV files of this page (and Live session's data, and the Players page's) for Excel: see lib/csvFiles. */
+const EXCEL_TITLE = 'Download the CSV files with a byte-order mark, so that Excel and WPS show Chinese and other ' +
+  'non-English text correctly: those of this page, Live session\'s data and the Players page\'s. Leave it off for R, ' +
+  'Python and analysis scripts, which read the files as they are. Remembered in this browser.'
 
 const PAGE = 100
 const exp = computed(() => admin.experiment)
@@ -350,6 +368,7 @@ watch(eventsOpen, (open) => {
 
 <style>
 .ss { overflow: hidden; }
+.ss__excel { margin-right: 4px; font-size: var(--text-sm); }
 .ss__empty { padding: 24px 0; }
 .ss__bar {
   display: flex;
@@ -416,9 +435,11 @@ watch(eventsOpen, (open) => {
 .ss__chev:hover { background: var(--surface-hover); color: var(--text); }
 .ss__chev svg { transition: transform var(--duration) var(--ease); }
 .ss__row.is-open .ss__chev svg { transform: rotate(90deg); }
-.ss__name { min-width: 160px; max-width: 360px; }
-.ss__name-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ss__name-text { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Long names (the autopilot's "Autopilot · Oct 28, 22:42:41 UTC") wrap rather than widen the
+   table past the page at laptop widths. */
+.ss__name { min-width: 160px; max-width: 300px; }
+.ss__name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
+.ss__name-text { font-weight: 600; color: var(--text); overflow-wrap: anywhere; min-width: 0; }
 .ss__current { flex: none; }
 .ss__sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 1px; font-size: var(--text-xs); color: var(--muted); white-space: nowrap; }
 .ss__sub .mono { font-size: 11px; }
@@ -432,6 +453,9 @@ watch(eventsOpen, (open) => {
 .ss__quick { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
 .ss__quick-gap { display: inline-block; width: 28px; }
 .ss__details > td { padding: 0 !important; background: var(--surface-sunken); border-bottom: 1px solid var(--border); }
+/* the details stay in view when the table scrolls sideways */
+.ss__details > td > * { position: sticky; left: 0; max-width: calc(100vw - var(--sidebar-width) - 64px); }
+@media (max-width: 900px) { .ss__details > td > * { max-width: calc(100vw - 32px); } }
 .ss__row.is-current + .ss__details > td { box-shadow: inset 3px 0 0 var(--accent); }
 
 .ss__foot {

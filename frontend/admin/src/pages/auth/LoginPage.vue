@@ -2,8 +2,17 @@
   <AuthCard title="Sign in to Breadboard" subtitle="The researcher's console">
     <form novalidate @submit.prevent="submit">
       <p v-if="error" class="auth__error" role="alert">{{ error }}</p>
+      <p v-if="forgot" class="auth__note">
+        Forgot your password? Another researcher can give you a new one in Settings → Researchers. Or whoever
+        runs the server can stop Breadboard and start it once with
+        <code>-Dbreadboard.resetPassword=your@email</code> (see “Troubleshooting” in docs/install.md).
+      </p>
+      <p v-else-if="admin.signOutReason === 'removed'" class="auth__note" role="status">
+        You were signed out because another researcher removed this account. Ask them to add it
+        again if you still need it.
+      </p>
       <p v-else-if="admin.signOutReason === 'ended'" class="auth__note" role="status">
-        You were signed out because this account signed out, or changed its password, in another
+        You were signed out because this account signed out, or its password was changed, in another
         browser or tab. Sign in again to continue here.
       </p>
       <BField label="Email">
@@ -35,6 +44,8 @@ const email = ref(admin.signOutReason ? admin.email : '')
 const password = ref('')
 const busy = ref(false)
 const error = ref('')
+// after a wrong password: how to get a new one
+const forgot = ref(false)
 
 async function submit () {
   error.value = ''
@@ -46,7 +57,12 @@ async function submit () {
   try {
     await login(email.value.trim(), password.value)
   } catch (e: any) {
-    error.value = e && e.status === 400 ? 'That email and password don\'t match an account.' : (e?.message || 'Could not sign in.')
+    if (e && e.status === 400) {
+      error.value = 'That email and password don\'t match an account.'
+      forgot.value = true
+    } else {
+      error.value = e?.message || 'Could not sign in.'
+    }
   } finally {
     busy.value = false
   }

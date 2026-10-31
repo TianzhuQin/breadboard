@@ -143,6 +143,40 @@ describe('BBNetwork layout', () => {
     expect((w.vm as any).targets).toEqual(before)
   })
 
+  it('keeps everyone where they are when a tie between neighbors is cut', async () => {
+    const node = (id: string) => ({ id, x: 0, y: 0, data: {} })
+    const me = node('me'), a = node('a'), b = node('b'), c = node('c'), d = node('d')
+    const edge = (id: number, s: any, t: any) => ({ id, source: s, target: t, data: {} })
+    const graph = { nodes: [me, a, b, c, d], edges: [edge(1, me, a), edge(2, me, b), edge(3, me, c), edge(4, me, d), edge(5, a, c), edge(6, b, d)] }
+    const w = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph } })
+    const before = { ...(w.vm as any).targets }
+    graph.edges.splice(4, 1)
+    await w.vm.$nextTick()
+    expect((w.vm as any).targets).toEqual(before)
+  })
+
+  it('closes the gap when someone leaves, keeping the order, and seats a newcomer next to whom they are tied to', async () => {
+    const node = (id: string) => ({ id, x: 0, y: 0, data: {} })
+    const me = node('me'), a = node('a'), b = node('b'), c = node('c'), d = node('d'), e = node('e')
+    const edge = (id: number, s: any, t: any) => ({ id, source: s, target: t, data: {} })
+    const graph = { nodes: [me, a, b, c, d], edges: [edge(1, me, a), edge(2, me, b), edge(3, me, c), edge(4, me, d)] }
+    const w = mount(BBNetwork, { propsData: { player: { id: 'me' }, graph } })
+    const first: string[] = (w.vm as any).ring.slice()
+    // the participant cuts their tie to the second person around the ring, who leaves their view
+    const gone = first[1]
+    graph.nodes = graph.nodes.filter(n => n.id !== gone)
+    graph.edges = graph.edges.filter(x => x.target.id !== gone)
+    await w.vm.$nextTick()
+    expect((w.vm as any).ring).toEqual(first.filter(id => id !== gone))
+    // someone new, tied to the last person around the ring
+    const last = first[3]
+    graph.nodes.push(e)
+    graph.edges.push(edge(7, me, e), edge(8, e, graph.nodes.find(n => n.id === last)!))
+    await w.vm.$nextTick()
+    const ring: string[] = (w.vm as any).ring
+    expect(ring.indexOf('e')).toBe(ring.indexOf(last) + 1)
+  })
+
   it('curves a tie between neighbors who are not next to each other around the outside', () => {
     // a ring of five neighbors where a and c are tied but b sits between them
     const node = (id: string) => ({ id, x: 0, y: 0, data: {} })
@@ -573,5 +607,83 @@ describe('BBNetwork editing', () => {
     // that cut is pending, so its button is gone from the list
     expect(document.activeElement).toBe(w.find('.bb-network__moves-toggle').element)
     w.destroy()
+  })
+})
+
+// Changes sent while the connection was down used to wait in a queue and arrive much later, or never.
+describe('BBNetwork while the connection is down', () => {
+  /** The page's connection changes (Breadboard's CONNECTION_EVENT) */
+  async function become (w: any, state: string) {
+    ;(window as any).Breadboard.connection = state
+    handlers['bb:connection']()
+    await w.vm.$nextTick()
+  }
+
+  it('offers no change, says why, and lets a confirmation wait for the connection', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    expect(w.find('.bb-network__confirm').text()).toContain('Cut the tie between Ana and Ben?')
+
+    await become(w, 'lost')
+    const confirm = w.find('.bb-network__confirm .bb-network__btn--danger')
+    expect((confirm.element as HTMLButtonElement).disabled).toBe(true)
+    ;(w.vm as any).confirmProposal()
+    expect(sendEdgeEdit).not.toHaveBeenCalled()
+    await w.find('.bb-network__confirm .bb-network__btn--ghost').trigger('click')
+    expect(w.find('.bb-network__hint').text()).toBe('Reconnecting… you can change ties once the connection is back.')
+    // nothing to click on, nor in the list
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+    expect(nodeWithId(w, 'nz').classes()).not.toContain('is-selectable')
+    expect((w.vm as any).moves.every((m: any) => !m.available)).toBe(true)
+    ;(w.vm as any).propose('remove', 'nx', 'ny')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+
+    await become(w, 'open')
+    expect(w.find('.bb-network__hint').text()).not.toContain('Reconnecting')
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    await w.find('.bb-network__confirm .bb-network__btn--danger').trigger('click')
+    expect(sendEdgeEdit).toHaveBeenCalledWith('remove', 'nx', 'ny')
+  })
+
+  it('offers no change on a researcher\'s preview that only watches the player, and says why', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    expect(w.find('.bb-network__confirm').exists()).toBe(true)
+    // their own page comes back: the question can't be answered here any more
+    await become(w, 'watching')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+    ;(w.vm as any).confirmProposal()
+    expect(sendEdgeEdit).not.toHaveBeenCalled()
+    expect(w.find('.bb-network__hint').text()).toBe('Watching only: their own page is connected, so you can’t change their ties.')
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+    expect((w.vm as any).moves.every((m: any) => !m.available)).toBe(true)
+  })
+
+  it('says on a preview of a computer player that the computer plays the seat', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    ;(window as any).Breadboard.computerPlayer = true
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await become(w, 'watching')
+    expect(w.find('.bb-network__hint').text()).toBe('Watching only: the computer plays this seat, so you can’t change its ties.')
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+  })
+
+  it('says nothing of reconnecting once the page is done with (another page has the seat)', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    await become(w, 'elsewhere')
+    expect(w.find('.bb-network__confirm').exists()).toBe(false)
+    expect(w.find('.bb-network__hint').exists()).toBe(false)
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+  })
+
+  it('is editable as before where no page connection says otherwise', async () => {
+    const w = mountNetwork({ enabled: true, remove: true, scope: 'amongNeighbors' })
+    await clickableHit(w, 'nx', 'ny').trigger('click')
+    await w.find('.bb-network__confirm .bb-network__btn--danger').trigger('click')
+    expect(sendEdgeEdit).toHaveBeenCalledWith('remove', 'nx', 'ny')
   })
 })

@@ -47,7 +47,7 @@ export const SNIPPETS: Snippet[] = [
   { id: 'kick', group: 'Players', title: 'Send a player away', text: 'Tells this player\'s page that they have been removed from the study.', code: 'kickPlayers({p1})', changes: true },
 
   // ---- session
-  { id: 'start', group: 'Session & data', title: 'Start the game', text: 'The same as Start game: runs InitStep once and closes the session to newcomers.', code: 'initStep.start()', changes: true },
+  { id: 'start', group: 'Session & data', title: 'Start the game', text: 'The same as Start the game on the Live session page: runs InitStep once and closes the session to newcomers.', code: 'initStep.start()', changes: true },
   { id: 'note', group: 'Session & data', title: 'Write a note into the data', text: 'Saved with the session\'s events, so it appears in the data download.', code: 'a.addEvent("researcherNote", [text: "Paused for a fire alarm"])', changes: true },
   { id: 'timers', group: 'Session & data', title: 'Stop every timer', text: 'Cancels all running timers, such as step countdowns.', code: 'timers.cancel()', changes: true },
 

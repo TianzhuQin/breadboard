@@ -1,10 +1,7 @@
 <template>
   <BPanel title="Links for participants" :subtitle="joinable ? 'Send one of these to the people taking part.' : 'Nobody can join until the session runs again.'">
     <div class="live-links">
-      <p v-if="local" class="live-links__warn" role="note">
-        <TriangleAlert :size="15" aria-hidden="true" />
-        <span>These links use <b>{{ host }}</b>, which only works on this computer. Participants need your server's public address.</span>
-      </p>
+      <LocalOnlyNote />
       <div v-for="row in rows" :key="row.key" class="live-link">
         <div class="live-link__head">
           <component :is="row.icon" :size="15" class="live-link__icon" aria-hidden="true" />
@@ -42,6 +39,11 @@
         </div>
         <p :id="`${base}-${row.key}-hint`" class="live-link__hint">{{ row.hint }}</p>
       </div>
+      <!-- the sign-in page asks for an ID, and a newcomer can't guess what to type -->
+      <p class="live-links__ids">
+        <IdCard :size="15" aria-hidden="true" />
+        <span>With the first two links, participants type an ID to join: any name or number you give them, one seat per ID. People from Prolific don't type one.</span>
+      </p>
       <p class="sr-only" role="status" aria-live="polite">{{ status }}</p>
     </div>
   </BPanel>
@@ -49,17 +51,16 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, type Component } from 'vue'
-import { Copy, Check, ExternalLink, TriangleAlert, LogIn, Repeat, Users } from 'lucide-vue-next'
+import { Copy, Check, ExternalLink, IdCard, LogIn, Repeat, Users } from 'lucide-vue-next'
 import { BButton, BInput, BPanel, notify } from '@/ui'
 import { uid } from '@/ui/uid'
-import { isLocalOrigin, joinLinks } from './live'
+import { joinLinks } from './live'
+import LocalOnlyNote from './LocalOnlyNote.vue'
 
 const props = defineProps<{ experimentId: number, instanceId: number | null, joinable: boolean }>()
 
 const base = uid('live-link')
 const origin = typeof window !== 'undefined' ? window.location.origin : ''
-const local = isLocalOrigin(origin)
-const host = (() => { try { return new URL(origin).host } catch (e) { return origin } })()
 
 interface Row { key: string, label: string, url: string, hint: string, icon: Component, open: boolean }
 const rows = computed<Row[]>(() => {
@@ -144,18 +145,6 @@ async function copy (key: string, url: string) {
 
 <style>
 .live-links { display: flex; flex-direction: column; gap: 16px; }
-.live-links__warn {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 9px 11px;
-  border-radius: var(--radius-sm);
-  background: var(--warning-soft);
-  color: var(--warning-soft-text);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-}
-.live-links__warn svg { flex: none; margin-top: 1px; }
 .live-link { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .live-link__head { display: flex; align-items: center; gap: 7px; }
 .live-link__icon { color: var(--muted); }
@@ -163,4 +152,6 @@ async function copy (key: string, url: string) {
 .live-link__box { display: flex; gap: 6px; min-width: 0; }
 .live-link__box .b-input { flex: 1; min-width: 0; }
 .live-link__hint { font-size: var(--text-xs); color: var(--muted); line-height: 1.45; }
+.live-links__ids { display: flex; align-items: flex-start; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); font-size: var(--text-sm); color: var(--text-soft); line-height: 1.45; }
+.live-links__ids svg { flex: none; margin-top: 2px; color: var(--muted); }
 </style>

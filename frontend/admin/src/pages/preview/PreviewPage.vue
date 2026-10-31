@@ -4,7 +4,7 @@
     intro="See the participant page exactly as each player sees it, live. Choose whose pages to show, then click one to open it full size."
   >
     <template v-if="isRunning" #actions>
-      <BButton :icon="UserPlus" :href="joinLink" target="_blank" rel="noopener" title="Opens the sign-up page in a new tab, as a newcomer sees it">
+      <BButton :icon="UserPlus" :href="joinLink" target="_blank" rel="noopener" title="Opens the sign-in page in a new tab, as a newcomer sees it: type an ID there (any name or number; one seat per ID)">
         Join as a new participant
       </BButton>
     </template>
@@ -18,7 +18,7 @@
       >
         <template #actions>
           <BButton variant="primary" :icon="Plus" @click="router.push('/session?new=1')">New session</BButton>
-          <BButton :icon="Database" @click="router.push('/sessions')">Resume an earlier one</BButton>
+          <BButton v-if="hasStopped" :icon="Database" @click="router.push('/sessions')">Resume an earlier one</BButton>
         </template>
       </BEmpty>
     </BPanel>
@@ -51,8 +51,10 @@
         <Info :size="18" class="pv__notice-icon" aria-hidden="true" />
         <div class="pv__notice-text">
           <strong>Previews are live.</strong>
-          Each one signs in as that player, just as their own browser would: it counts as them being connected, and what you click is a real choice, recorded with the session’s data.
-          If the player’s own browser is open, the two keep taking the connection from each other, so preview test or computer players, or people who have left.
+          What you click is a real choice for that player, recorded with the session’s data.
+          A player whose own page is connected, and a computer player, are shown read-only: you see their screen, and their page (or the computer) carries on.
+          A test player, whose own page hasn’t been in the session, is played here: the preview counts as them being connected until their own page comes back.
+          Anyone else (someone who left, or whose seat the computer took) can be answered for here, but counts as away, as anyone who leaves does: the computer takes their seat as usual, or goes on playing it.
         </div>
         <BButton size="sm" variant="ghost" @click="dismissNotice">Got it</BButton>
       </div>
@@ -61,9 +63,9 @@
         <BSpinner :size="14" /> The engine is restarting. Previews reconnect by themselves when it is back.
       </div>
 
-      <div class="pv">
+      <div class="pv" :style="{ '--pv-list': `${PLAYER_LIST_WIDTH}px` }">
         <aside class="pv__side" :class="{ 'is-collapsed': !pickerOpen }">
-          <button type="button" class="pv__side-toggle" :aria-expanded="pickerOpen ? 'true' : 'false'" aria-controls="pv-picker" @click="pickerOpen = !pickerOpen">
+          <button type="button" class="pv__side-toggle" :aria-expanded="pickerOpen ? 'true' : 'false'" aria-controls="pv-picker" @click="togglePicker">
             <Users :size="16" aria-hidden="true" />
             <span>Players · {{ memory.ids.length }} of {{ players.length }} shown</span>
             <ChevronDown :size="16" class="pv__side-chev" aria-hidden="true" />
@@ -127,9 +129,10 @@
                 :interactive="memory.interactive"
                 :test="isTestPlayer(t)"
                 :ai="isAIPlayer(t)"
+                :role="t.missing ? null : previewRole(t)"
                 :paused="focusId === t.id ? 'focus' : tabbed.has(t.id) ? 'tab' : null"
                 :frame-key="`${globalNonce}-${nonces[t.id] || 0}`"
-                :note="t.missing && admin.engine !== 'loading' ? 'Not in the network right now, so the page may show nothing.' : ''"
+                :note="noteOf(t)"
                 @focus="focusId = t.id"
                 @reload="reload(t.id)"
                 @open-tab="openTab(t.id)"
@@ -147,6 +150,9 @@
         :index="focusIndex"
         :count="tiles.length"
         :initial-device="memory.device"
+        :reload-key="focusId ? nonces[focusId] || 0 : 0"
+        :role="focusTile && !focusTile.missing ? previewRole(focusTile) : null"
+        :note="focusTile ? noteOf(focusTile) : ''"
         @close="closeFocus"
         @step="step"
         @open-tab="focusId && openTab(focusId)"
@@ -162,17 +168,22 @@ import {
   Bot, ChevronDown, Database, FlaskConical, Info, ListOrdered, Monitor, MonitorOff, MonitorSmartphone, Play, Plus,
   RotateCw, Smartphone, UserPlus, Users, UsersRound,
 } from 'lucide-vue-next'
-import { BButton, BEmpty, BPage, BPanel, BSpinner, BSwitch, BTabs, confirm, notify, type TabItem } from '@/ui'
+import { BButton, BEmpty, BPage, BPanel, BSpinner, BSwitch, BTabs, notify, type TabItem } from '@/ui'
 import { admin, graph } from '@/store/admin'
+import { playerName } from '@/network/players'
 import { describeError } from '../experiments/experiments'
 import { canResume } from '../sessions/sessionData'
+import { autopilotNow } from '../autopilot/autopilot'
+import { detectGameStarted, engineGameFlag } from '../session/live'
+import { fromLive } from '../session/events'
 import { useSessionActions } from '../sessions/useSessionActions'
 import PlayerPicker from './PlayerPicker.vue'
 import PreviewTile from './PreviewTile.vue'
 import PreviewFocus from './PreviewFocus.vue'
 import {
-  MAX_PREVIEWS, isAIPlayer, isConnected, isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, quickPick,
-  sortPlayers, tileWidth, wouldDisplace, type PlayerLike, type PreviewTarget, type QuickPick,
+  FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, PLAYER_LIST_WIDTH, autoPicked, awayText, isAIPlayer, isComputerPlayer,
+  isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, previewRole, quickPick, shownReadOnly, sortPlayers, tileWidth,
+  type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 
@@ -183,6 +194,8 @@ const exp = computed(() => admin.experiment)
 const inst = computed(() => admin.instance)
 const isRunning = computed(() => inst.value?.status === 'RUNNING')
 const statusWord = computed(() => (inst.value?.status || '').toLowerCase())
+/** The experiment has a stopped session to resume. */
+const hasStopped = computed(() => (exp.value?.instances || []).some(i => i.status === 'STOPPED'))
 
 const joinLink = computed(() => exp.value && inst.value ? joinUrl(exp.value.id, inst.value.id) : '')
 /** Whose page a tile or link shows: each one fetches its own preview token for it. */
@@ -207,62 +220,132 @@ const tiles = computed(() => {
   }))
 })
 
+/** What a tile says under the page: they aren't in the game, or they are away and the preview stands in. */
+function noteOf (t: { id: string, data: Record<string, any>, missing: boolean }): string {
+  if (t.missing) return admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''
+  if (previewRole(t) !== 'away') return ''
+  const known = takeover.value?.instanceId === inst.value?.id ? takeover.value : null
+  return awayText(t, { gameStarted: gameStarted.value, takeoverSeconds: known?.seconds ?? null, returnToHuman: known?.returnToHuman ?? null })
+}
+
+/**
+ * The session's game has started, as Live session says it: the engine's own word, when it runs this
+ * session. (The session's hasStarted alone said a waiting room still counted, mid-game, when people
+ * may join late: breadboard.allowLateJoin leaves it unset.)
+ */
+const gameStarted = computed(() => detectGameStarted({
+  hasStarted: inst.value?.hasStarted,
+  events: admin.events.filter(Boolean).map(fromLive),
+  output: admin.output,
+  since: admin.engineReloadedAt,
+  engine: engineGameFlag(admin.user?.engine, admin.engineInfoCurrent, inst.value?.id, admin.engineInfoAt),
+}).started)
+
+// What the computer does with the seat of someone away, said on their tile, when the console knows
+// it: in the autopilot's own session, with its takeover switched on, how long it waits before it
+// takes the seat and whether it gives the seat back when they return (otherwise the steps decide).
+// Asked once per session, when the first such tile shows.
+const takeover = ref<{ instanceId: number, seconds: number | null, returnToHuman: boolean | null } | null>(null)
+let takeoverAsked: number | null = null
+watch(() => [inst.value?.id, tiles.value.some(t => !t.missing && previewRole(t) === 'away')] as const, async ([id, away]) => {
+  if (id == null || !away || takeoverAsked === id) return
+  takeoverAsked = id
+  const state = await autopilotNow()
+  const s = state?.status
+  const own = !!state && !!s && s.on && s.instance?.id === id && state.settings.replaceDisconnected.enabled
+  const replace = own ? state!.settings.replaceDisconnected : null
+  takeover.value = { instanceId: id, seconds: replace ? replace.afterSeconds : null, returnToHuman: replace ? replace.returnToHuman : null }
+}, { immediate: true })
+
 // ---- choosing ---------------------------------------------------------------------------------
 
 const listKey = ref(0)
+
+// On narrow screens the list sits above the previews. Once some are chosen it is folded away: when
+// the page opens with previews chosen, and when the page chooses them (the first look, or a player
+// opened from the player panel), unless the researcher has opened or closed the list themselves.
+const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
+const pickerOpen = ref(true)
+let pickerToggled = false
+function togglePicker () {
+  pickerToggled = true
+  pickerOpen.value = !pickerOpen.value
+}
+function foldPicker () {
+  if (narrow && !pickerToggled && memory.ids.length) pickerOpen.value = false
+}
 
 function tooMany () {
   notify.warning(`Up to ${MAX_PREVIEWS} previews at a time`, 'Each preview is a whole participant page; more would slow your browser down. Remove some first.')
 }
 
-async function askToDisplace (list: PlayerLike[]): Promise<boolean> {
-  const one = list.length === 1
-  return confirm({
-    title: one ? `${list[0].id} is connected right now` : `${list.length} of these players are connected right now`,
-    message: `${one ? 'Their' : 'These players’'} own browser is open. A preview takes over the player’s connection: their page is disconnected and keeps reconnecting, taking the seat back from your preview, for as long as the preview is open. Choices made in the preview count as theirs.\n\nPreview ${one ? 'them' : 'them too'} anyway?`,
-    confirmLabel: one ? 'Preview anyway' : 'Include them',
-    cancelLabel: one ? 'Cancel' : 'Leave them out',
-    danger: true,
-  })
+/**
+ * A preview never takes the seat of a player whose own page is connected, nor of a computer player:
+ * it only watches. Said as they are added, so a researcher isn't left wondering why nothing there can
+ * be clicked.
+ */
+function noteReadOnly (list: PlayerLike[]) {
+  const people = list.filter(p => !isComputerPlayer(p))
+  const computers = list.filter(isComputerPlayer)
+  if (people.length) {
+    const one = people.length === 1
+    notify.info(
+      one ? `${playerName(people[0].id)} is connected right now` : `${people.length} of these players are connected right now`,
+      `${one ? 'Their preview is' : 'Their previews are'} read-only: you see what they see, but can’t answer for them. Their own page is left alone.`,
+    )
+  }
+  if (computers.length) {
+    const one = computers.length === 1
+    notify.info(
+      one ? `${playerName(computers[0].id)} is a computer player` : `${computers.length} of these are computer players`,
+      `${one ? 'Its preview is' : 'Their previews are'} read-only: you see what the computer does, and it goes on playing.`,
+    )
+  }
 }
 
-async function toggle (id: string, on: boolean) {
+function toggle (id: string, on: boolean) {
   if (!on) { remove(id); return }
-  const p = players.value.find(x => x.id === id)
-  if (!p || selected.value.has(id)) return
-  if (memory.ids.length >= MAX_PREVIEWS) { tooMany(); listKey.value++; return }
-  if (isConnected(p) && !await askToDisplace([p])) { listKey.value++; return }
-  memory.ids = [...memory.ids, id]
+  if (add(id)) chosenByHand()
 }
 
-/** A quick pick replaces what is shown (players already shown stay without asking again). */
-async function pick (kind: QuickPick, n?: number) {
+/** Shows one more player's page; false if it isn't added (no such player, already shown, too many). */
+function add (id: string): boolean {
+  const p = players.value.find(x => x.id === id)
+  if (!p || selected.value.has(id)) return false
+  if (memory.ids.length >= MAX_PREVIEWS) { tooMany(); listKey.value++; return false }
+  noteReadOnly(shownReadOnly([p], selected.value))
+  memory.ids = [...memory.ids, id]
+  return true
+}
+
+/** A quick pick replaces what is shown. */
+function pick (kind: QuickPick, n?: number) {
   let chosen = quickPick(players.value, kind, n ?? 4)
   if (!chosen.length) {
     notify.info(kind === 'test' ? 'No test players' : kind === 'ai' ? 'No computer players' : 'Nobody to show')
     return
   }
-  const displaced = wouldDisplace(chosen, selected.value)
-  if (displaced.length && !await askToDisplace(displaced)) {
-    chosen = chosen.filter(p => !displaced.includes(p))
-  }
   if (chosen.length > MAX_PREVIEWS) {
     tooMany()
     chosen = chosen.slice(0, MAX_PREVIEWS)
   }
+  noteReadOnly(shownReadOnly(chosen, selected.value))
   memory.ids = chosen.map(p => p.id)
   listKey.value++
+  chosenByHand()
 }
 
 function remove (id: string) {
   memory.ids = memory.ids.filter(x => x !== id)
   tabbed.delete(id)
   if (focusId.value === id) focusId.value = null
+  chosenByHand()
 }
 function clearAll () {
   memory.ids = []
   tabbed.clear()
   focusId.value = null
+  chosenByHand()
 }
 
 // ---- showing ----------------------------------------------------------------------------------
@@ -302,6 +385,7 @@ function reloadAll () { globalNonce.value++ }
 const tabbed = reactive(new Set<string>())
 const focusId = ref<string | null>(null)
 const focusIndex = computed(() => tiles.value.findIndex(t => t.id === focusId.value))
+const focusTile = computed(() => tiles.value[focusIndex.value] || null)
 function step (delta: number) {
   const next = tiles.value[focusIndex.value + delta]
   if (next) {
@@ -312,17 +396,22 @@ function step (delta: number) {
 function closeFocus () {
   const id = focusId.value
   focusId.value = null
-  if (id && oneLook.has(id)) {
-    // a look at a connected participant's screen ends here, so their own page gets its seat back
-    oneLook.delete(id)
-    remove(id)
-    notify.info(`Stopped previewing ${id}`, 'Their own page has their seat back.')
-    return
-  }
   // the tile connects again in place of the full-size page
   if (id) reload(id)
 }
 watch(focusId, (id) => { if (id) tabbed.delete(id) })
+
+// A player who isn't in the network (the session was resumed, or its engine reloaded, and they
+// haven't joined again yet) is shown as not in the game: a preview of a real session adds nobody, and
+// its page stops there. Once they are in the network again, their page is loaded again, to show them.
+const wasMissing = new Set<string>()
+watch(tiles, (list) => {
+  for (const t of list) {
+    if (t.missing) wasMissing.add(t.id)
+    else if (wasMissing.delete(t.id)) reload(t.id)
+  }
+  for (const id of [...wasMissing]) if (!list.some(t => t.id === id)) wasMissing.delete(id)
+}, { immediate: true })
 
 async function openTab (id: string) {
   const target = targetOf(id)
@@ -349,15 +438,49 @@ async function openTab (id: string) {
     try { w.close() } catch (err) { /* already gone */ }
     // nothing opened: the tile shows the page again
     tabbed.delete(id)
-    notify.error(`Couldn’t open ${id}’s page in a new tab`, describeError(e))
+    notify.error(`Couldn’t open ${playerName(id)}’s page in a new tab`, describeError(e))
   }
 }
 
 // ---- following the session ---------------------------------------------------------------
 
-// A new session starts from a clean slate; on the first look the test players are shown, as in
-// the old Testing panel (but not ones whose own browser is open, which a preview would disturb).
-watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
+// A new session starts from a clean slate. The first look at it shows its test players, as the old
+// Testing panel did (but not those whose seat is connected: see autoPicked), however the page was
+// reached. It is taken once the network has come in: the server sends each player before their
+// properties, so a look taken at the first players seen found no test players on a direct load or a
+// reload. There it waits until the network has been quiet a moment (FIRST_LOOK_QUIET_MS), but when
+// the page opens on a network that came in before (from the sidebar, say), it is taken at once.
+// A session without test players gets its first look when the first ones appear. Whatever the
+// researcher chooses first (a tick, a quick pick, Clear) is the first look; a player opened from the
+// player panel isn't (the test players are shown beside them).
+let firstLookTimer: ReturnType<typeof setTimeout> | null = null
+let firstPlayersAt = 0
+/** The watch below hasn't run yet: what it first finds was there when the page opened. */
+let opening = true
+function cancelFirstLook () {
+  if (firstLookTimer) clearTimeout(firstLookTimer)
+  firstLookTimer = null
+  firstPlayersAt = 0
+}
+function chosenByHand () {
+  memory.autoPicked = true
+  cancelFirstLook()
+}
+function takeFirstLook () {
+  firstLookTimer = null
+  firstPlayersAt = 0
+  if (memory.autoPicked) return
+  // none yet: the look waits for the first test players
+  if (!testCount.value) return
+  memory.autoPicked = true
+  const tests = autoPicked(players.value).filter(p => !selected.value.has(p.id))
+  if (!tests.length) return
+  memory.ids = [...memory.ids, ...tests.map(p => p.id)].slice(0, MAX_PREVIEWS)
+  foldPicker()
+}
+watch(() => [inst.value?.id, graph.version.value] as const, ([id]) => {
+  const opened = opening
+  opening = false
   if (id == null) return
   if (memory.instanceId !== id) {
     memory.instanceId = id
@@ -365,37 +488,43 @@ watch(() => [inst.value?.id, players.value.length] as const, ([id]) => {
     memory.autoPicked = false
     tabbed.clear()
     focusId.value = null
+    cancelFirstLook()
   }
-  if (!memory.autoPicked && players.value.length) {
-    memory.autoPicked = true
-    const tests = quickPick(players.value, 'test').filter(p => !isConnected(p)).slice(0, MAX_PREVIEWS)
-    if (tests.length && !memory.ids.length) memory.ids = tests.map(p => p.id)
-  }
+  if (memory.autoPicked || !players.value.length) return
+  const now = Date.now()
+  if (!firstPlayersAt) firstPlayersAt = now
+  if (firstLookTimer) clearTimeout(firstLookTimer)
+  firstLookTimer = null
+  // Each change of the network puts the look off until it has been quiet a moment, but not for
+  // longer than FIRST_LOOK_MAX_MS. A network sent longer ago than that when the page opened had come
+  // in by then, though it may never be quiet in a game.
+  const wait = opened && now - graph.clearedAt >= FIRST_LOOK_MAX_MS
+    ? 0
+    : Math.min(FIRST_LOOK_QUIET_MS - (now - graph.changedAt), firstPlayersAt + FIRST_LOOK_MAX_MS - now)
+  if (wait > 0) firstLookTimer = setTimeout(takeFirstLook, wait)
+  else takeFirstLook()
 }, { immediate: true })
+onBeforeUnmount(cancelFirstLook)
 
-// Connected participants shown for one look from the player panel: the preview ends with that look.
-const oneLook = new Set<string>()
-
-// "Preview their screen" from the player panel links here with ?player=<id>: show that player full size.
-watch(() => [route.query.player, players.value.length] as const, async ([q]) => {
+// "Preview their screen" from the player panel links here with ?player=<id>: show that player full
+// size (added as the page's choice, not the researcher's: the first look still shows the test players).
+watch(() => [route.query.player, players.value.length] as const, ([q]) => {
   const id = typeof q === 'string' ? q : ''
   const p = players.value.find(x => x.id === id)
   if (!id || !p) return
   router.replace({ query: { ...route.query, player: undefined } })
-  if (!selected.value.has(id)) {
-    const connected = isConnected(p)
-    await toggle(id, true)
-    if (connected && selected.value.has(id)) oneLook.add(id)
-  }
+  if (add(id)) foldPicker()
   if (selected.value.has(id)) focusId.value = id
 }, { immediate: true })
 
 // ---- the panel and the notice -----------------------------------------------------------------
 
-// On narrow screens the list sits above the previews; once some are chosen it starts folded away.
-const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches
-const pickerOpen = ref(!(narrow && memory.ids.length))
-const NOTICE_KEY = 'bb.preview.liveNoticeSeen'
+// the list starts folded away on narrow screens once some previews are chosen (see foldPicker)
+foldPicker()
+// (a new key whenever what previews do changes, so the notice is shown once more: previews of
+// connected players became read-only, then those of computer players, then a preview of someone who
+// left stopped counting as them)
+const NOTICE_KEY = 'bb.preview.liveNoticeSeen.4'
 const noticeSeen = ref(readFlag(NOTICE_KEY))
 function dismissNotice () {
   noticeSeen.value = true
@@ -407,7 +536,8 @@ function readFlag (key: string) {
 </script>
 
 <style>
-.pv { display: grid; grid-template-columns: 296px minmax(0, 1fr); gap: 20px; align-items: start; }
+/* (the list's width, PLAYER_LIST_WIDTH, leaves room for two Medium tiles in a row at 1280 px: test/preview.test.ts) */
+.pv { display: grid; grid-template-columns: var(--pv-list, 296px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .pv__side {
   position: sticky;
   top: 16px;

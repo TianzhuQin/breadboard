@@ -1,5 +1,5 @@
 <template>
-  <header class="topbar">
+  <header class="topbar" :class="{ 'is-offline': connectionState !== 'open' }">
     <button
       ref="menuBtn"
       type="button"
@@ -32,9 +32,12 @@
         </template>
       </BMenu>
 
-      <span v-if="connectionState !== 'open'" class="topbar__chip is-warn" role="status">
+      <!-- (in words at every width: on a phone it used to be an icon nobody could read; the notice
+           under the top bar says more) -->
+      <span v-if="connectionState !== 'open'" class="topbar__chip is-warn topbar__conn" role="status">
         <WifiOff :size="15" aria-hidden="true" />
-        <span class="topbar__chip-text">{{ connectionState === 'retrying' ? 'Reconnecting…' : 'Connecting…' }}</span>
+        <span class="topbar__conn-text">{{ connectionState === 'retrying' ? 'Reconnecting…' : 'Connecting…' }}</span>
+        <span class="topbar__conn-short" aria-hidden="true">Offline</span>
       </span>
 
       <button
@@ -57,9 +60,10 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Menu, WifiOff, PanelBottom, Cpu, CircleCheck, TriangleAlert, RotateCw } from 'lucide-vue-next'
-import { BMenu, BSpinner, confirm, type MenuItem } from '@/ui'
-import { admin, actions, connectionState, ensureConnected } from '@/store/admin'
+import { BMenu, BSpinner, confirm, notify, type MenuItem } from '@/ui'
+import { admin, actions, connectionState, ensureConnected, reloadBlocked } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse, reloadKeeps } from '@/store/engineGuard'
+import { autopilotRunsSession } from '@/pages/session/autopilot'
 
 defineProps<{ outputOpen: boolean, navOpen?: boolean }>()
 const emit = defineEmits<{ menu: [], 'toggle-output': [] }>()
@@ -86,18 +90,41 @@ const sessionTitle = computed(() => admin.instance ? `Session "${admin.instance.
 
 // (With no experiment chosen yet, e.g. right after creating the first account, the engine's loading
 // means nothing to the researcher: it just says Engine.)
-const engineState = computed(() => admin.experiment ? admin.engine : 'ready')
-const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', stale: 'Reload needed' }[engineState.value]))
-const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, stale: TriangleAlert }[engineState.value]))
-const engineTitle = computed(() => admin.engine === 'stale'
-  ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')
-  : 'The script engine that runs the experiment')
+// Steps saved since the last load matter only to a running session (and to the Script console):
+// the next session loads what is saved, so with none running the chip just says they are saved. So
+// it does while the session is the autopilot's own: its next session loads them. (As the server
+// says with what the engine runs, which every console hears when the autopilot is switched off.)
+const autopilotsSession = computed(() => autopilotRunsSession(admin.user?.engine, admin.instance))
+const engineState = computed(() => {
+  if (!admin.experiment) return 'ready'
+  const live = admin.instance?.status === 'RUNNING' || admin.instance?.status === 'TESTING'
+  if (admin.engine === 'stale' && !admin.engineProblem && (!live || autopilotsSession.value)) return 'saved'
+  return admin.engine
+})
+const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', saved: 'Steps saved', stale: 'Reload needed' }[engineState.value]))
+const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, saved: CircleCheck, stale: TriangleAlert }[engineState.value]))
+const engineTitle = computed(() => engineState.value === 'saved'
+  ? autopilotsSession.value
+    // (a reload carries the autopilot's session on only for the account it runs as)
+    ? `Saved: the autopilot’s next session uses it. ${reloadKeeps() === admin.instance?.id
+      ? 'Reload the engine only to use the saved steps in its session now, whose game then starts again.'
+      : 'Reloading the engine from your account would end its session and pause the autopilot.'}`
+    : 'The next session you open uses the saved steps. Reload the engine only to try them now (Script console, Preview).'
+  : admin.engine === 'stale'
+    ? (admin.engineProblem || 'The steps changed since the engine loaded them. Reload it to use the new steps.')
+    : 'The script engine that runs the experiment')
 const engineHeading = computed(() => {
   if (admin.engine !== 'stale') return 'Script engine'
+  if (engineState.value === 'saved') return autopilotsSession.value ? 'Saved: the autopilot’s next session uses it' : 'Steps saved since the last load'
   return admin.engineProblem ? 'The last reload may not have finished' : 'Steps changed since the last load'
 })
 
 async function reload () {
+  // not over another experiment's live session, which a reload would end (the server refuses it too)
+  if (reloadBlocked.value) {
+    notify.info('The engine can’t be reloaded now', reloadBlocked.value)
+    return
+  }
   if (!ensureConnected()) return
   // the engine is shared by every account and the autopilot, so the people in it may not be ours
   // (this account's own running session carries on through a reload)
@@ -182,6 +209,7 @@ const engineItems = computed<MenuItem[]>(() => [
 .topbar__chip.is-loaded { color: var(--success); }
 .topbar__chip.is-stale { color: var(--warning-soft-text); background: var(--warning-soft); }
 .topbar__chip.is-warn { color: var(--warning-soft-text); background: var(--warning-soft); cursor: default; }
+.topbar__conn-short { display: none; }
 .topbar__icon-btn {
   position: relative;
   display: grid;
@@ -229,6 +257,21 @@ const engineItems = computed<MenuItem[]>(() => [
   .topbar { padding: 0 12px; }
   .topbar__menu { display: block; }
   .topbar__session { max-width: 150px; }
+}
+@media (max-width: 600px) {
+  /* not connected: the chip says so in a word, in the room the session's (stale) name had */
+  .topbar__conn { padding: 0 8px; }
+  .topbar__conn-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .topbar__conn-short { display: inline; }
+  .topbar.is-offline .topbar__session-text { display: none; }
 }
 @media (max-width: 480px) {
   .topbar { gap: 8px; }

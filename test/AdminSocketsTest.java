@@ -64,8 +64,22 @@ public class AdminSocketsTest extends BaseTest {
         }
 
         int count(Matcher m) {
+            return countSince(0, m);
+        }
+
+        /** Frames from the {@code from}th on (a tab's sign-in replays whatever the shared engine held already). */
+        int countSince(int from, Matcher m) {
+            return countSince(frames, from, m);
+        }
+
+        /**
+         * Counted in a copy of the frames: the socket's thread adds more meanwhile, and a sublist of the
+         * shared list throws ConcurrentModificationException once a frame has come since it was taken.
+         */
+        static int countSince(List<JsonNode> frames, int from, Matcher m) {
+            List<JsonNode> all = new ArrayList<>(frames);
             int n = 0;
-            for (JsonNode f : frames) if (m.matches(f)) n++;
+            for (JsonNode f : all.subList(Math.min(from, all.size()), all.size())) if (m.matches(f)) n++;
             return n;
         }
 
@@ -134,6 +148,37 @@ public class AdminSocketsTest extends BaseTest {
     private static void own(User user, Experiment experiment) {
         user.ownedExperiments.add(experiment);
         user.saveManyToManyAssociations("ownedExperiments");
+    }
+
+    // ---- a tab's frames, counted as they arrive ---------------------------------------------------
+
+    /**
+     * Counting a tab's frames while its socket's thread adds more never fails: counting them in a sublist
+     * of the shared list threw ConcurrentModificationException whenever a frame came between taking the
+     * sublist and going through it, which failed a test waiting for a count now and then.
+     */
+    @Test
+    public void framesAreCountedWhileMoreArrive() throws Exception {
+        final List<JsonNode> frames = new CopyOnWriteArrayList<>();
+        final JsonNode frame = Json.newObject().put("user", "u");
+        for (int i = 0; i < 10; i++) frames.add(frame);
+        final int more = 20000;
+        Thread socket = new Thread(() -> {
+            for (int i = 0; i < more; i++) frames.add(frame);
+        }, "fake-socket");
+        socket.start();
+        int last = 0;
+        try {
+            while (socket.isAlive()) {
+                int n = Tab.countSince(frames, 5, userJson());
+                assertTrue("counted " + n + " after " + last, n >= last);
+                last = n;
+            }
+        } finally {
+            socket.join();
+        }
+        assertEquals(5 + more, Tab.countSince(frames, 5, userJson()));
+        assertEquals(0, Tab.countSince(frames, frames.size() + 3, userJson()));
     }
 
     // ---- replies go to the asking socket ---------------------------------------------------------
@@ -353,10 +398,14 @@ public class AdminSocketsTest extends BaseTest {
         assertEquals(a1Replays, a1.count(replay()));
         assertEquals(adminsBefore + 2, ScriptBoard.adminCount());
 
-        // A player joins: each tab sees it once, OnJoinStep runs once.
+        // A player joins: each tab sees it once, OnJoinStep runs once. (Counted from the join: another
+        // test may have left a player of that name in the shared engine before this one rebuilt it, and
+        // the first tab's sign-in showed it.)
+        final int a1Seen = a1.frames.size();
+        final int a2Seen = a2.frames.size();
         ScriptBoard.processScript("g.addPlayer('p1')", null, "test");
         await("OnJoinStep", () -> "[p1]".equals(String.valueOf(engine.eval("onJoinStep.ids"))));
-        await("addNode on both tabs", () -> a1.count(graph("addNode", "p1")) == 1 && a2.count(graph("addNode", "p1")) == 1);
+        await("addNode on both tabs", () -> a1.countSince(a1Seen, graph("addNode", "p1")) == 1 && a2.countSince(a2Seen, graph("addNode", "p1")) == 1);
         settle();
         assertEquals("[p1]", String.valueOf(engine.eval("onJoinStep.ids")));
 
@@ -375,10 +424,12 @@ public class AdminSocketsTest extends BaseTest {
         // A tab closes: it is sent nothing more. The player leaves: OnLeaveStep runs once.
         a2.close();
         assertEquals(adminsBefore + 2, ScriptBoard.adminCount());
+        final int a1Kept = a1.frames.size();
+        final int a2Kept = a2.frames.size();
         ScriptBoard.processScript("g.removePlayer('p1')", null, "test");
         await("OnLeaveStep", () -> "[p1]".equals(String.valueOf(engine.eval("onLeaveStep.ids"))));
-        await("removeNode", () -> a1.count(graph("removeNode", "p1")) == 1 && b.count(graph("removeNode", "p1")) == 1);
-        assertEquals(0, a2.count(graph("removeNode", "p1")));
+        await("removeNode", () -> a1.countSince(a1Kept, graph("removeNode", "p1")) == 1 && b.count(graph("removeNode", "p1")) == 1);
+        assertEquals(0, a2.countSince(a2Kept, graph("removeNode", "p1")));
 
         // With every console closed (the autopilot running alone) the steps still run, once.
         a1.close();

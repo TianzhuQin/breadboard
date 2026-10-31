@@ -135,7 +135,6 @@ public class PreviewTokenTest extends BaseTest {
             {987654321L, instance.id, "P1"},             // no such experiment
             {experiment.id, 987654321L, "P1"},           // no such session
             {experiment.id, othersSession.id, "P1"},     // another experiment's session
-            {other.id, 0, "P1"},                         // the test session of an experiment the account doesn't have
         };
         for (Object[] r : refused) {
             Result result = mint(researcher, r[0], r[1], r[2]);
@@ -146,6 +145,14 @@ public class PreviewTokenTest extends BaseTest {
             .withSession("uid", researcher.uid));
         assertEquals(BAD_REQUEST, status(notJson));
         assertTrue(Json.parse(contentAsString(notJson)).has("error"));
+    }
+
+    @Test
+    public void anyExperimentOnTheServerCanBePreviewed() {
+        // Every researcher works on every experiment, so also on one another account made.
+        Experiment other = createExperiment("Someone else's");
+        Result result = mint(researcher, other.id, 0, "P1");
+        assertEquals(contentAsString(result), OK, status(result));
     }
 
     @Test
@@ -241,8 +248,9 @@ public class PreviewTokenTest extends BaseTest {
     // ---- the participant websocket --------------------------------------------------------------------
 
     /**
-     * Whether the participant websocket takes this handshake: a refused one is closed at once without
-     * a frame. (The session here is over, so a taken one gets its final screen and joins nothing.)
+     * Whether the participant websocket takes this handshake: a refused one is closed at once, after a
+     * frame that says why (ParticipantReconnectTest). (The session here is over, so a taken one gets
+     * its final screen and joins nothing.)
      */
     private static boolean socketAccepted(String experimentId, String instanceId, String clientId, FakeRequest handshake) throws Exception {
         Http.Context.current.set(play.core.j.JavaHelpers$.MODULE$.createJavaContext(handshake.getWrappedRequest()));

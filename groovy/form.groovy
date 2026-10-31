@@ -477,6 +477,15 @@ public class Form extends FormBase {
   Random r = new Random()
   def pages = []
   def doneClosures = []
+  // The listeners this form puts on its players, each made once: off() takes away only the very
+  // closure on() was given, and every this.&onPlayerNext is a new one (no two are equal), so a
+  // finished form's listeners were never taken off.
+  private final Map navigationListeners = [
+    "f-next": this.&onPlayerNext,
+    "f-prev": this.&onPlayerPrev,
+    "f-seek": this.&onPlayerSeek,
+    "f-fetch": this.&onFetchState
+  ]
   def state = FormState.PENDING
   def pageDefaults = [
     sectionDefaults: [
@@ -665,8 +674,9 @@ public class Form extends FormBase {
 
   private endPlayer (Vertex player) {
     println "end player " + player.id
-    // Player must have already been removed
-    if (!(this.formsKey in player.private)) {
+    // Player must have already been removed (or finished this form: with another form still open,
+    // end() ran this form's done closures for them a second time)
+    if (!(this.formsKey in player.private) || !(this.name in player.private[this.formsKey])) {
       return
     }
     // Remove the state information for this form
@@ -676,10 +686,7 @@ public class Form extends FormBase {
       player.private.remove(this.formsKey)
     }
     // Remove form navigation listeners
-    player.off("f-next", this.&onPlayerNext)
-    player.off("f-prev", this.&onPlayerPrev)
-    player.off("f-seek", this.&onPlayerSeek)
-    player.off("f-fetch", this.&onFetchState)
+    this.navigationListeners.each { event, listener -> player.off(event, listener) }
 
     for (def cb : this.doneClosures) {
       cb(player)
@@ -690,11 +697,12 @@ public class Form extends FormBase {
    * Assigns the form information to this player vertex
    */
   private startPlayer (Vertex player) {
-    // Attach form navigation listeners
-    player.on("f-next", this.&onPlayerNext)
-    player.on("f-prev", this.&onPlayerPrev)
-    player.on("f-seek", this.&onPlayerSeek)
-    player.on("f-fetch", this.&onFetchState)
+    // Attach form navigation listeners (each taken off first: a player started again, by a second
+    // start(), would hear every event twice)
+    this.navigationListeners.each { event, listener ->
+      player.off(event, listener)
+      player.on(event, listener)
+    }
     // Create multi-form map if it doesn't already exist
     if (!(this.formsKey in player.private)) {
       player.private[this.formsKey] = [:]

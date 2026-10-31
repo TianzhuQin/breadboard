@@ -1,5 +1,5 @@
 <template>
-  <BPage narrow intro="Your account, how the console looks, and where to find the previous console.">
+  <BPage narrow intro="Your account, the lab's researcher accounts, backups, and how the console looks.">
     <!-- Account -->
     <section class="set" aria-labelledby="set-account">
       <div class="set__about">
@@ -90,6 +90,10 @@
       </div>
     </section>
 
+    <ResearchersSection />
+
+    <BackupsSection />
+
     <!-- Appearance -->
     <section class="set" aria-labelledby="set-theme">
       <div class="set__about">
@@ -168,8 +172,12 @@
           <div class="set-facts__row">
             <dt>Help</dt>
             <dd>
-              <a href="https://github.com/human-nature-lab/breadboard/discussions" target="_blank" rel="noopener noreferrer">
-                Breadboard discussions on GitHub <ArrowUpRight :size="13" aria-hidden="true" />
+              <a href="https://github.com/TianzhuQin/breadboard/blob/main/docs/console.md" target="_blank" rel="noopener noreferrer">
+                The console's guide <ArrowUpRight :size="13" aria-hidden="true" />
+              </a>
+              ·
+              <a href="https://github.com/TianzhuQin/breadboard/blob/main/docs/install.md#troubleshooting" target="_blank" rel="noopener noreferrer">
+                Troubleshooting <ArrowUpRight :size="13" aria-hidden="true" />
               </a>
             </dd>
           </div>
@@ -189,6 +197,8 @@ import { confirmSignOut } from '@/shell/unsaved'
 import { theme, setTheme, type ThemeChoice } from '@/lib/theme'
 import { version } from '../../../package.json'
 import { useUnsavedGuard } from '../autopilot/useUnsavedGuard'
+import ResearchersSection from './ResearchersSection.vue'
+import BackupsSection from './BackupsSection.vue'
 import { describeError } from '../experiments/experiments'
 import {
   PASSWORD_MIN, changePassword, friendlyPasswordError, validatePasswordChange, type PasswordChange, type PasswordErrors,

@@ -24,7 +24,7 @@ export const BUILTINS: Builtin[] = [
   {
     name: 'InitStep',
     when: 'Starts the game',
-    detail: 'Runs when the game starts: when you press Start game on the Live session page, or when the autopilot starts the session. It runs once per engine load (initStep.start()): reloading the engine or resuming the session forgets the start, so it can run again.',
+    detail: 'Runs when the game starts: when you press Start the game on the Live session page, or when the autopilot starts the session. It runs once per engine load (initStep.start()): reloading the engine or resuming the session forgets the start, so it can run again.',
     source: 'initStep = stepFactory.createStep("InitStep")\n\ninitStep.run = {\n  println "initStep.run"\n}\ninitStep.done = {\n  println "initStep.done"\n}',
   },
   {
@@ -66,6 +66,34 @@ export function formatName (name: string): string {
     .replace(/[^\w\s]/g, '')
     .replace(/(?:^\w|[A-Z]|\b\w)/g, (letter: string, index: number) => index === 0 ? letter.toLowerCase() : letter.toUpperCase())
     .replace(/ /g, '')
+}
+
+/**
+ * The step an error or a pause of the autopilot names: by its name ("RoundStep"), or by the variable
+ * its code defines ("roundStep"), which is how the engine names a step it knows no name of. Saved
+ * names first; letters' case doesn't matter. Null when there is none.
+ */
+export function stepNamed<T extends { name: string, savedName?: string | null }> (drafts: T[], name: string): T | null {
+  const want = (name || '').trim()
+  if (!want) return null
+  const nameOf = (d: T) => d.savedName ?? d.name
+  const exact = drafts.find(d => nameOf(d) === want)
+  if (exact) return exact
+  const lower = want.toLowerCase()
+  return drafts.find(d => nameOf(d).toLowerCase() === lower || formatName(nameOf(d)).toLowerCase() === lower) || null
+}
+
+/**
+ * Where the Steps page opens a step at a line: "/steps?step=RoundStep&line=71&experiment=4", with the
+ * experiment the step belongs to when it is known (an engine error is in the experiment the engine
+ * runs, a pause in the autopilot's), which needn't be the one the console works on: the page then
+ * asks to switch to it, rather than open a step of the same name in the selected experiment.
+ */
+export function stepAt (step: string, line?: number | null, experimentId?: number | null): { path: string, query: Record<string, string> } {
+  const query: Record<string, string> = { step }
+  if (line != null && Number.isInteger(line) && line > 0) query.line = String(line)
+  if (experimentId != null && Number.isInteger(experimentId) && experimentId > 0) query.experiment = String(experimentId)
+  return { path: '/steps', query }
 }
 
 /** A new step's code (the old console's getSource, unchanged). */

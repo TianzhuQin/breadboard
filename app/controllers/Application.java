@@ -9,6 +9,7 @@ import play.data.Form;
 import play.libs.Json;
 import play.mvc.*;
 import security.PreviewTokens;
+import security.SetupCode;
 import views.html.*;
 import java.io.*;
 import java.text.SimpleDateFormat;
@@ -35,9 +36,35 @@ public class Application extends Controller {
     }
 
     Language defaultLanguage = Language.findById(defaultLanguageId);
+    if (defaultLanguage == null && email != null && password != null) {
+      // (None named, or one from a list read before the server had its languages: English will do,
+      // and it can be changed in Settings. Added now if the server has none yet.)
+      try {
+        defaultLanguage = LanguageController.english();
+      } catch (RuntimeException e) {
+        Logger.warn("Could not add the list of languages for the first account: " + e);
+      }
+      if (defaultLanguage == null) {
+        return status(SERVICE_UNAVAILABLE, "The server is still setting up. Try again in a moment.");
+      }
+    }
 
     if (email == null || password == null || defaultLanguage == null) {
       return badRequest("Please provide email, password, and default language.");
+    }
+    // From another computer, the code the server printed (SetupCode): otherwise whoever reached a
+    // new server first would own it.
+    if (!SetupCode.isLocal(request())) {
+      JsonNode given = json.get("setupCode");
+      SetupCode.current();
+      if (given == null || !SetupCode.matches(given.asText())) {
+        ObjectNode refused = Json.newObject();
+        refused.put("message", given == null || given.asText().trim().isEmpty()
+            ? "Enter the setup code: the server printed it in its window and in logs/application.log."
+            : "That isn't the setup code the server printed. Check its window or logs/application.log.");
+        refused.put("setupCodeRequired", true);
+        return forbidden(refused);
+      }
     }
     email = email.trim();
     if (!User.looksLikeEmail(email)) {
@@ -58,6 +85,7 @@ public class Application extends Controller {
     // A token nobody holds until the first sign-in (a missing one used to match a request with none).
     user.uid = UUID.randomUUID().toString();
     user.save();
+    SetupCode.forget();
 
     // TODO: Make method for creating demo experiments and associating with new user
     /*
@@ -151,7 +179,46 @@ public class Application extends Controller {
     // instead of a hard-coded ws://localhost:9000 that breaks on any other host or port.
     String wsUrl = play.Play.application().configuration().getString("breadboard.wsUrl", "auto");
     result.put("connectSocket", wsUrl.isEmpty() ? "auto" : wsUrl);
+    // Where computers on the same network (a lab's) reach this server, for the console to offer when
+    // it was opened at localhost, whose links work on this computer only.
+    com.fasterxml.jackson.databind.node.ArrayNode lan = result.putArray("lanAddresses");
+    for (String address : lanAddresses(request().host())) {
+      lan.add(address);
+    }
     return ok(result);
+  }
+
+  /**
+   * http://<address>:<port> for each IPv4 address of this computer on a private network (10.x,
+   * 172.16-31.x, 192.168.x), with the port of {@code host} (the address the console was opened at).
+   */
+  static List<String> lanAddresses(String host) {
+    String port = "";
+    if (host != null) {
+      int colon = host.lastIndexOf(':');
+      if (colon > 0 && host.indexOf(']') < colon) {
+        port = host.substring(colon);
+      }
+    }
+    List<String> found = new ArrayList<String>();
+    try {
+      for (java.net.NetworkInterface nic : Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+        if (!nic.isUp() || nic.isLoopback() || nic.isVirtual() || nic.isPointToPoint()) {
+          continue;
+        }
+        for (java.net.InetAddress address : Collections.list(nic.getInetAddresses())) {
+          if (address instanceof java.net.Inet4Address && address.isSiteLocalAddress()) {
+            String url = "http://" + address.getHostAddress() + port;
+            if (!found.contains(url)) {
+              found.add(url);
+            }
+          }
+        }
+      }
+    } catch (Exception e) {
+      Logger.debug("Could not list this computer's network addresses: " + e);
+    }
+    return found;
   }
 
   /**
@@ -271,10 +338,10 @@ public class Application extends Controller {
   /**
    * The experiment's sessions as CSV: id, name, status, creation time and every parameter value.
    * Every field is quoted, with quotes inside doubled (names and values used to go in as typed, so
-   * one with a quote or a comma shifted the columns).
+   * one with a quote or a comma shifted the columns). {@code excel}: see {@link #csvFile}.
    */
   @Security.Authenticated(Secured.class)
-  public static Result dataCsv(Long experimentId) {
+  public static Result dataCsv(Long experimentId, Boolean excel) {
     Experiment experiment = Experiment.findById(experimentId);
     if (experiment == null) {
       return badRequest("There is no experiment with id " + experimentId + ".");
@@ -309,12 +376,103 @@ public class Application extends Controller {
       csvRow(csv, row);
     }
 
-    return ok(csv.toString());
+    return csvFile(csv, excel);
   }
 
-  /** One session's events as CSV: a row per event data item, every field quoted. */
+  /**
+   * Every session's events of an experiment in one CSV (Sessions & data → Download all data): the
+   * columns of a session's own file (id, event, event_date, data_name, data_value) after the session's
+   * id, name and status and one column per launch parameter, so the rows of all sessions can be
+   * analysed together. {@code ids}: only these sessions (comma-separated), e.g. the ones the page
+   * lists; all of them when empty. Sessions oldest first, events in time order within each.
+   * {@code excel}: see {@link #csvFile}.
+   */
   @Security.Authenticated(Secured.class)
-  public static Result eventCsv(Long experimentInstanceId) {
+  public static Result experimentDataCsv(Long experimentId, String ids, Boolean excel) {
+    Experiment experiment = Experiment.findById(experimentId);
+    if (experiment == null) {
+      return badRequest("There is no experiment with id " + experimentId + ".");
+    }
+    Set<Long> wanted = new HashSet<Long>();
+    if (ids != null && !ids.trim().isEmpty()) {
+      for (String part : ids.split(",")) {
+        try {
+          wanted.add(Long.parseLong(part.trim()));
+        } catch (NumberFormatException notAnId) {
+          return badRequest("\"" + part.trim() + "\" is not a session id.");
+        }
+      }
+    }
+    List<ExperimentInstance> sessions = new ArrayList<ExperimentInstance>();
+    for (ExperimentInstance instance : experiment.instances) {
+      if (wanted.isEmpty() || wanted.contains(instance.id)) {
+        sessions.add(instance);
+      }
+    }
+    Collections.sort(sessions, new Comparator<ExperimentInstance>() {
+      @Override
+      public int compare(ExperimentInstance a, ExperimentInstance b) {
+        return Long.compare(a.id == null ? 0 : a.id, b.id == null ? 0 : b.id);
+      }
+    });
+    Set<String> parameterNames = new TreeSet<>();
+    for (ExperimentInstance instance : sessions) {
+      for (Data d : instance.data) {
+        if (d.name != null) {
+          parameterNames.add(d.name);
+        }
+      }
+    }
+
+    final StringBuilder csv = new StringBuilder();
+    List<Object> header = new ArrayList<Object>(Arrays.asList("session_id", "session_name", "session_status"));
+    header.addAll(parameterNames);
+    header.addAll(Arrays.asList("id", "event", "event_date", "data_name", "data_value"));
+    csvRow(csv, header);
+    for (ExperimentInstance instance : sessions) {
+      List<Object> lead = new ArrayList<Object>(Arrays.<Object>asList(instance.id, instance.name, instance.status));
+      HashMap<String, String> values = new HashMap<>();
+      for (Data d : instance.data) {
+        values.put(d.name, d.value);
+      }
+      for (String name : parameterNames) {
+        lead.add(values.get(name));
+      }
+      for (Event event : eventsInOrder(instance)) {
+        String when = event.datetime == null ? null : Timestamps.csv(event.datetime);
+        if (event.eventData == null || event.eventData.isEmpty()) {
+          List<Object> row = new ArrayList<Object>(lead);
+          row.addAll(Arrays.<Object>asList(event.id, event.name, when, null, null));
+          csvRow(csv, row);
+          continue;
+        }
+        for (EventData eventData : event.eventData) {
+          List<Object> row = new ArrayList<Object>(lead);
+          row.addAll(Arrays.<Object>asList(event.id, event.name, when, eventData.name, eventData.value));
+          csvRow(csv, row);
+        }
+      }
+    }
+    return csvFile(csv, excel);
+  }
+
+  /** A session's events by time; events in the same millisecond in the order they were recorded. */
+  private static List<Event> eventsInOrder(ExperimentInstance instance) {
+    List<Event> events = new ArrayList<Event>(instance.events);
+    Collections.sort(events, new Comparator<Event>() {
+      @Override
+      public int compare(Event o1, Event o2) {
+        int byTime = o1.datetime == null || o2.datetime == null
+            ? Boolean.compare(o1.datetime != null, o2.datetime != null) : o1.datetime.compareTo(o2.datetime);
+        return byTime != 0 ? byTime : Long.compare(o1.id == null ? 0 : o1.id, o2.id == null ? 0 : o2.id);
+      }
+    });
+    return events;
+  }
+
+  /** One session's events as CSV: a row per event data item, every field quoted. {@code excel}: see {@link #csvFile}. */
+  @Security.Authenticated(Secured.class)
+  public static Result eventCsv(Long experimentInstanceId, Boolean excel) {
     ExperimentInstance ei = ExperimentInstance.findById(experimentInstanceId);
     if (ei == null) {
       return badRequest("There is no session with id " + experimentInstanceId + ".");
@@ -344,6 +502,20 @@ public class Application extends Controller {
       }
     }
 
+    return csvFile(csv, excel);
+  }
+
+  /**
+   * A CSV file as the server has always sent it: UTF-8 without a byte-order mark, which analysis
+   * scripts read as it is. With {@code excel} (?excel=true, the console's "For Excel" choice) it
+   * starts with the UTF-8 byte-order mark, without which Excel and WPS read the file in the
+   * computer's own encoding (on a Chinese Windows, GBK) and Chinese turns into garbage. The values
+   * are the same either way.
+   */
+  static Result csvFile(StringBuilder csv, Boolean excel) {
+    if (excel != null && excel) {
+      return ok("\uFEFF" + csv).as("text/csv; charset=utf-8");
+    }
     return ok(csv.toString());
   }
 

@@ -1,4 +1,7 @@
 {
   "title": "Network game",
-  "steps": ["OnJoinStep", "OnLeaveStep", "InitStep", "RoundStep", "FinishStep"]
+  "steps": ["OnJoinStep", "OnLeaveStep", "InitStep", "RoundStep", "FinishStep"],
+  "content": ["RoundHeading", "RoundPrompt", "RoundPromptLater", "RoundTimer", "Picked", "PickedForYou", "Score",
+              "ResultNoPick", "ResultTie", "ResultPoint", "ResultNoPoint", "CutLeavesYouAlone", "CutLeavesThemAlone",
+              "Finished", "FinishedProlific"]
 }

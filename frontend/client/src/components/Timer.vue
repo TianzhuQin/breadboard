@@ -1,5 +1,7 @@
 <template>
+  <!-- bb-timer: ConnectionStatus dims it while the connection is lost -->
   <v-progress-linear
+    class="bb-timer"
     height="25"
     :value="value"
     :color="color"

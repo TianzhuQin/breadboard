@@ -2,6 +2,7 @@ package models;
 
 import play.Logger;
 import groovy.lang.Closure;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -52,6 +53,9 @@ public class EventBus <T> {
   }
 
   private Map<String, EventHandler<T>> events = new ConcurrentHashMap();
+  // The player each of their own events is for ("__player-<id>-<event>", from groovy/events.groovy's
+  // Vertex.on): ids and event names may both have a "-" in them, so p's names start as p-1's do.
+  private final Map<String, String> playerOf = new ConcurrentHashMap<String, String>();
 
   public EventHandler<T> register (String eventName) {
     EventHandler<T> handler = new EventHandler();
@@ -61,6 +65,29 @@ public class EventBus <T> {
 
   public void unregister (String eventName) {
     this.events.remove(eventName);
+    this.playerOf.remove(eventName);
+  }
+
+  /** on, for an event of a player's own (groovy/events.groovy's Vertex.on): see offPlayer. */
+  public void onForPlayer (String playerId, String eventName, Closure closure) {
+    this.playerOf.put(eventName, playerId);
+    on(eventName, closure);
+  }
+
+  /**
+   * Take off every event whose name starts with {@code prefix}, a player's own ("__player-<id>-",
+   * groovy/events.groovy's clearListeners), except those onForPlayer put on for another player whose
+   * names start the same way. How many were taken off.
+   */
+  public int offPlayer (String playerId, String prefix) {
+    int removed = 0;
+    for (String eventName : new ArrayList<String>(this.events.keySet())) {
+      String owner = this.playerOf.get(eventName);
+      if (eventName.startsWith(prefix) && (owner == null || owner.equals(playerId)) && off(eventName)) {
+        removed++;
+      }
+    }
+    return removed;
   }
 
   public void on (String eventName, Closure closure) {
@@ -75,6 +102,7 @@ public class EventBus <T> {
 
    public boolean off (String eventName) {
     EventHandler<T> removed = this.events.remove(eventName);
+    this.playerOf.remove(eventName);
     boolean wasRemoved = removed != null;
     this.logThread("off 1", eventName);
     return wasRemoved;
@@ -113,6 +141,7 @@ public class EventBus <T> {
 
   public void clear () {
     this.events.clear();
+    this.playerOf.clear();
     this.logThread("clear");
   }
 

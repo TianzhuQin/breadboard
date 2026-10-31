@@ -21,7 +21,7 @@ vi.mock('@/ui/confirm', () => ({ confirm: confirmMock, confirmState: { open: fal
 
 import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
-  participantLinks, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
+  participantLinks, pauseFailure, pausedLine, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
   stepsCall,
 } from '../src/pages/autopilot/autopilot'
@@ -91,6 +91,20 @@ describe('autopilot form validation', () => {
     expect(s.waitingRoom.maxPlayers).toBeNull()
     expect(s.waitingRoom.maxWaitSeconds).toBeNull()
   })
+
+  it('takes the longest session in whole minutes, up to a day, or no limit', () => {
+    expect(DEFAULTS.maxSessionMinutes).toBe(120)
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 0 }))).toHaveProperty('maxSessionMinutes', 'At least 1.')
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 1441 }))).toHaveProperty('maxSessionMinutes', 'At most a day (1440 minutes).')
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 2.5 }))).toHaveProperty('maxSessionMinutes', 'Use a whole number.')
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = 1440 }))).toEqual({})
+    // empty: no limit
+    expect(validateAutopilot(form(f => { f.maxSessionMinutes = null }))).toEqual({})
+    expect(toSettings(form(f => { f.maxSessionMinutes = null })).maxSessionMinutes).toBeNull()
+    expect(toSettings(form(f => { f.maxSessionMinutes = 90 })).maxSessionMinutes).toBe(90)
+    // also when the continuous switch is off: it applies to every session
+    expect(validateAutopilot(form(f => { f.continuous = false; f.maxSessionMinutes = 0 }))).toHaveProperty('maxSessionMinutes')
+  })
 })
 
 describe('reading the server\'s answer', () => {
@@ -100,6 +114,20 @@ describe('reading the server\'s answer', () => {
     expect(s.waitingRoom.minPlayers).toBe(4)
     expect(s.waitingRoom.waitSeconds).toBe(60)
     expect(s.replaceDisconnected).toEqual(DEFAULTS.replaceDisconnected)
+  })
+  it('reads the longest session: a number, no limit (null), or the default from an older server', () => {
+    expect(normalizeSettings({ maxSessionMinutes: 90 }).maxSessionMinutes).toBe(90)
+    expect(normalizeSettings({ maxSessionMinutes: '45' }).maxSessionMinutes).toBe(45)
+    expect(normalizeSettings({ maxSessionMinutes: null }).maxSessionMinutes).toBeNull()
+    expect(normalizeSettings({}).maxSessionMinutes).toBe(120)
+    expect(normalizeSettings({ maxSessionMinutes: 'soon' }).maxSessionMinutes).toBe(120)
+  })
+  it('reads the notice of a session ended for running too long', () => {
+    const st = normalizeState({ status: { on: true, notice: 'Session "auto 3" was ended after 120 minutes, the longest a session may run.', noticeAt: '2026-10-29T10:05:00Z' } }).status
+    expect(st.notice).toBe('Session "auto 3" was ended after 120 minutes, the longest a session may run.')
+    expect(st.noticeAt).toBe('2026-10-29T10:05:00Z')
+    expect(normalizeState({ status: { on: true } }).status).toMatchObject({ notice: null, noticeAt: null })
+    expect(normalizeState({ status: { notice: ' ', noticeAt: 'later' } }).status).toMatchObject({ notice: null, noticeAt: null })
   })
   it('reads the state, with unknown sources as "off"', () => {
     const st = normalizeState({ source: 'weird', status: { on: 1, instance: { id: 3, name: 'auto', status: 'RUNNING' } } })
@@ -192,15 +220,15 @@ describe('reading the server\'s answer', () => {
   it('knows when stopping a session pauses the autopilot', () => {
     const ap = (status: any, settings: any = { enabled: true, experimentId: 12 }) => normalizeState({ source: 'admin', settings, status })
     const own = { id: 4, name: 'auto 1', status: 'RUNNING' }
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(true)
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 5, experimentId: 12 })).toBe(false)
-    // a test session the engine runs is left out of status.instance
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7, experimentId: 12 }, 7)).toBe(true)
-    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7, experimentId: 13 }, 7)).toBe(false)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 4 })).toBe(true)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: own }), { id: 5 })).toBe(false)
+    // a session of its experiment opened by hand, or the test session, isn't the autopilot's: the
+    // server pauses it for neither (status.instance is the autopilot's own session alone)
+    expect(stopPausesAutopilot(ap({ on: true, experimentId: 12, instance: null }), { id: 7 })).toBe(false)
     // off, already paused, or no answer: nothing to say
-    expect(stopPausesAutopilot(ap({ on: false, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(false)
-    expect(stopPausesAutopilot(ap({ on: true, paused: true, experimentId: 12, instance: own }), { id: 4, experimentId: 12 })).toBe(false)
-    expect(stopPausesAutopilot(null, { id: 4, experimentId: 12 })).toBe(false)
+    expect(stopPausesAutopilot(ap({ on: false, experimentId: 12, instance: own }), { id: 4 })).toBe(false)
+    expect(stopPausesAutopilot(ap({ on: true, paused: true, experimentId: 12, instance: own }), { id: 4 })).toBe(false)
+    expect(stopPausesAutopilot(null, { id: 4 })).toBe(false)
   })
 })
 
@@ -254,6 +282,45 @@ describe('words and links', () => {
     ])
     expect(list.map(a => a.text)).toEqual(['The computer took over p2\'s seat', 'Game started with 4 people'])
   })
+
+  it('says when the guards ended its session', () => {
+    const list = autopilotActivity([
+      { name: 'autopilotStart', datetime: '2026-10-29T10:01:00Z', data: { players: '2' } },
+      { name: 'sessionTooLong', datetime: '2026-10-29T12:01:30Z', data: { minutes: '120', limit: '120' } },
+    ])
+    expect(list[0]).toMatchObject({ text: 'Ended: the game ran out of time (longest session: 120 min)', tone: 'warning' })
+    expect(autopilotActivity([{ name: 'sessionStalled', datetime: '2026-10-29T10:03:00Z', data: { step: 'RoundStep', error: 'line 7: x' } }])[0])
+      .toMatchObject({ text: 'Stopped: nothing was left to do after the step RoundStep failed', tone: 'danger' })
+  })
+
+  it('lists step failures that let the game go on, and the failures and stops that ended it', () => {
+    const at = (m: number) => `2026-10-30T10:${String(m).padStart(2, '0')}:00Z`
+    const list = autopilotActivity([
+      { name: 'autopilotStart', datetime: at(1), data: { players: '2' } },
+      { name: 'stepFailed', datetime: at(2), data: { step: 'RoundStep', error: 'line 72: No such property: roundNote' } },
+      { name: 'stepFailed', datetime: at(3), data: { step: 'RoundStep', error: 'line 72: No such property: roundNote' } },
+      { name: 'stepFailed', datetime: at(4), data: { step: 'FinishStep', error: 'line 9: boom' } },
+      { name: 'sessionFailed', datetime: at(4), data: { step: 'FinishStep', line: '9', error: 'boom' } },
+    ], 10)
+    expect(list.map(a => [a.text, a.tone])).toEqual([
+      ['Ended: FinishStep failed at line 9 and stalled the game', 'danger'],
+      ['FinishStep failed at line 9', 'danger'],
+      ['RoundStep failed at line 72; the game went on', 'warning'],
+      ['RoundStep failed at line 72; the game went on', 'warning'],
+      ['Game started with 2 people', 'success'],
+    ])
+    // a failure the game went on after, until it had nothing left to do
+    expect(autopilotActivity([
+      { name: 'stepFailed', datetime: at(2), data: { step: 'RoundStep', error: 'line 77: boom' } },
+      { name: 'sessionStalled', datetime: at(4), data: { step: 'RoundStep', error: 'line 77: boom' } },
+    ]).map(a => a.text)).toEqual(['Stopped: nothing was left to do after the step RoundStep failed', 'RoundStep failed at line 77'])
+    expect(autopilotActivity([{ name: 'sessionStopped', datetime: at(5), data: { by: 'b@lab.org' } }])[0]).toMatchObject({ text: 'Stopped by b@lab.org', tone: 'warning' })
+    expect(autopilotActivity([{ name: 'serverStopping', datetime: at(5), data: { reason: 'x' } }])[0]).toMatchObject({ text: 'Ended: the server was stopped' })
+    expect(autopilotActivity([{ name: 'stepsFailedToLoad', datetime: at(5), data: { error: 'InitStep: line 24: No such property: five' } }])[0])
+      .toMatchObject({ text: 'Stopped before anyone joined: InitStep failed at line 24 as the steps loaded', tone: 'danger' })
+    expect(autopilotActivity([{ name: 'engineReloaded', datetime: at(5), data: { restarted: 'true', by: 'a@lab.org' } }])[0])
+      .toMatchObject({ text: 'The engine was reloaded by a@lab.org; the game started again from the beginning', tone: 'info' })
+  })
 })
 
 // ---- the page --------------------------------------------------------------------------------------
@@ -305,16 +372,36 @@ describe('Autopilot page', () => {
     w.unmount()
   })
 
-  it('does not save invalid settings', async () => {
+  it('says the pause comes with a second or so of restarting the scripts', async () => {
     http.get.mockResolvedValue(stateJson())
     const w = await mountPage()
+    const hint = w.findAll('.b-field').find(f => f.text().includes('Pause before the next session'))!
+    expect(hint.text()).toContain('Restarting the experiment\'s scripts adds a second or so; 0 opens the next session a second or so after one finishes.')
+    expect(hint.text()).not.toContain('at once')
+    w.unmount()
+    expect(validateAutopilot(form(f => { f.nextSessionDelaySeconds = null })).nextSessionDelaySeconds).toBe('Enter a number of seconds (0 for no pause).')
+  })
+
+  it('does not save invalid settings, and brings the field into clear view', async () => {
+    http.get.mockResolvedValue(stateJson())
+    const scrolled = vi.fn()
+    Element.prototype.scrollIntoView = scrolled
+    const w = await mountPage()
+    // the page's toasts keep above its save bar
+    expect(document.documentElement.classList.contains('ap-lifts-toasts')).toBe(true)
     const min = w.findAll('input.b-input__el').find(i => i.attributes('min') === '1' && !i.attributes('placeholder'))!
     await min.setValue('0')
     expect(w.text()).toMatch(/At least 1\./)
     await w.find('form.ap-form').trigger('submit')
     await flushPromises()
     expect(http.post).not.toHaveBeenCalled()
+    // the field with the problem, into the middle of the window (not behind the bar at its bottom)
+    expect(scrolled).toHaveBeenCalledWith({ block: 'center' })
+    expect(scrolled.mock.contexts[0]).toBe(min.element)
+    expect(document.activeElement).toBe(min.element)
     w.unmount()
+    expect(document.documentElement.classList.contains('ap-lifts-toasts')).toBe(false)
+    delete (Element.prototype as any).scrollIntoView
   })
 
   it('asks before turning on, then posts the settings', async () => {
@@ -396,6 +483,114 @@ describe('Autopilot page', () => {
     } finally {
       a.user = undefined
     }
+  })
+
+  it('never set up: suggests the current experiment, and gives a lone participant ten minutes', async () => {
+    http.get.mockResolvedValue(stateJson({ source: 'off', settings: { ...DEFAULTS, enabled: false, experimentId: null } }))
+    http.post.mockImplementation(async (_url: string, body: any) => stateJson({ settings: body }))
+    const w = await mountPage()
+    await w.find('.ap-sec input[role="switch"]').setValue(true)
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    const sent = http.post.mock.calls[0][1]
+    expect(sent.experimentId).toBe(12)
+    expect(sent.waitingRoom).toMatchObject({ enabled: true, maxWaitSeconds: 600 })
+    w.unmount()
+  })
+
+  it('explains a pause for a mistake in a step as the Steps page does, with a link to the step at that line', async () => {
+    const tail = '. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    const loadFailed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 24: No such property: five), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(loadFailed)).toEqual({
+      step: 'InitStep',
+      line: 24,
+      message: 'No such property: five',
+      text: 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load, so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail,
+    })
+    const stalled = 'It is paused: the step "RoundStep" failed during its session "A (1)" (line 71: No signature of method: foo() is applicable for argument types: (java.lang.String)), and then the game had nothing left to do, so that session was stopped. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(stalled)).toMatchObject({ step: 'RoundStep', line: 71, message: 'No signature of method: foo() is applicable for argument types: (java.lang.String)' })
+    expect(pauseFailure('It is paused: the step "finishStep" failed during its session "S" (boom), so that session was stopped.')).toMatchObject({ step: 'finishStep', line: null, message: 'boom' })
+    expect(pauseFailure('It is paused: its session "auto 1" was stopped by b@lab.org.')).toBeNull()
+
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem: loadFailed },
+    }))
+    const w = await mountPage()
+    const box = w.find('.apst__problem')
+    // a mistake to fix, not just information
+    expect(box.classes()).not.toContain('is-info')
+    expect(box.text()).toContain('Unknown name “five”')
+    expect(box.text()).toContain('Groovy doesn\'t know this name.')
+    expect(box.find('.apst__problem-text').text()).not.toContain('No such property')
+    const link = box.find('a.apst__open-step')
+    expect(link.text()).toBe('Open InitStep at line 24')
+    // (the step of the autopilot's experiment: the Steps page asks to switch when it is another one)
+    expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24&experiment=12')
+    w.unmount()
+  })
+
+  it('names the autopilot\'s experiment in the link to the failing step when the console works on another one', async () => {
+    const failed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 23: No such property: two), so that session was stopped before anyone could join. Fix the step on the Steps page first. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    // (this console works on "Public goods", id 12)
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 13 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 13, experimentName: 'Trust', instance: null, links: null, problem: failed },
+    }))
+    const w = await mountPage()
+    try {
+      const link = w.find('a.apst__open-step')
+      expect(link.text()).toBe('Open InitStep of “Trust” at line 23')
+      expect(link.attributes('href')).toBe('/steps?step=InitStep&line=23&experiment=13')
+    } finally {
+      w.unmount()
+    }
+  })
+
+  it('lists what its session recorded before the page opened, and what arrives live, in its recent activity', async () => {
+    const recorded = [
+      { id: 1, name: 'autopilotStart', datetime: '2026-10-30T10:01:00.000Z', eventData: [{ id: 1, name: 'players', value: '2' }] },
+      { id: 2, name: 'stepFailed', datetime: '2026-10-30T10:02:00.000Z', eventData: [{ id: 2, name: 'step', value: 'RoundStep' }, { id: 3, name: 'error', value: 'line 72: No such property: x' }] },
+    ]
+    mockedAdmin.instance = { id: 4, name: 'auto 1', status: 'RUNNING', events: recorded } as any
+    try {
+      http.get.mockResolvedValue(stateJson({
+        settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+        status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 4, name: 'auto 1', status: 'RUNNING' }, links: null },
+      }))
+      const w = await mountPage()
+      const lines = () => w.findAll('.apst__activity li').map(li => li.text())
+      expect(lines()).toHaveLength(2)
+      expect(lines()[0]).toContain('RoundStep failed at line 72; the game went on')
+      expect(lines()[1]).toContain('Game started with 2 people')
+      // a failure arriving live
+      mockedAdmin.events.push({ id: 3, experimentInstanceId: 4, name: 'stepFailed', datetime: '2026-10-30T10:03:00.000Z', data: { step: 'RoundStep', error: 'line 72: No such property: x' } } as any)
+      await flushPromises()
+      expect(lines()).toHaveLength(3)
+      w.unmount()
+    } finally {
+      mockedAdmin.instance = null
+      mockedAdmin.events.splice(0)
+    }
+  })
+
+  it('says under "paused" why, in a line that matches the reason, or a neutral one', async () => {
+    expect(pausedLine('It is paused: the steps of its session "S" didn\'t load (InitStep: line 24: x), so that session was stopped.')).toBe('The steps of its last session didn’t load, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: the step "RoundStep" failed during its session "S" (line 71: x), so that session was stopped.')).toBe('A step failed in its last session, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: 3 sessions in a row ran longer than 1 minute (the longest a session may run) and were ended, the last one "S".')).toBe('Its last sessions ran out of time, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: its session "auto 1" was stopped by b@lab.org.')).toBe('Its session was stopped, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused: its session "auto 1" ended when b@lab.org reloaded the engine.')).toBe('Its session was ended from the console, so it opens no new session until you press Resume.')
+    expect(pausedLine('It is paused.')).toBe('It opens no new session until you press Resume (see why below).')
+    expect(pausedLine(null)).toBe('It opens no new session until you press Resume (see why below).')
+
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem: 'It is paused: 3 sessions in a row ran longer than 1 minute (the longest a session may run) and were ended, the last one "S".' },
+    }))
+    const w = await mountPage()
+    expect(w.find('.apst__sub').text()).toBe('Its last sessions ran out of time, so it opens no new session until you press Resume.')
+    expect(w.find('.apst__sub').text()).not.toContain('was stopped')
+    w.unmount()
   })
 
   it('shows a paused autopilot and when the next session opens, as information', async () => {
@@ -581,6 +776,47 @@ describe('Autopilot page', () => {
     w.unmount()
   })
 
+  it('shows a session of its experiment opened by hand as the open session, and that it waits for it to end', async () => {
+    // (GET /autopilot's status.handSession: the autopilot opens none of its own beside it; its links lead to it)
+    const hand = { id: 21, name: 'By hand review', status: 'RUNNING', gameStarted: false, openToNewcomers: true, owner: 'b@lab.org' }
+    const problem = '"By hand review", a session of this experiment that b@lab.org opened by hand, is open, and the participant links lead to it. The autopilot opens its own session once that one has ended; saving these settings hands it to the autopilot.'
+    const on = { settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null, engineSession: null } }
+    http.get.mockResolvedValue(stateJson({ ...on, status: { ...on.status, handSession: hand, problemKind: 'waiting', problem } }))
+    const w = await mountPage()
+    const box = w.find('.apst__problem')
+    expect(box.classes()).toContain('is-info')
+    expect(box.find('.apst__problem-title').text()).toBe('Waiting for the session opened by hand to end')
+    expect(box.find('.apst__problem-text').text()).toBe(problem)
+    const block = w.findAll('.apst__block')[0]
+    expect(block.find('.apst__label').text()).toBe('Open session')
+    expect(block.find('.apst__session-name').text()).toBe('By hand review')
+    expect(block.find('.b-badge').text()).toBe('Taking participants')
+    expect(block.text()).toContain('Opened by hand by b@lab.org, not by the autopilot: the participant links lead to it.')
+    expect(block.text()).not.toMatch(/No session is open right now/)
+    // not the console's session: nothing to watch from here
+    expect(block.find('.apst__watch').exists()).toBe(false)
+    w.unmount()
+
+    // its game under way, and it is the console's session; paused, it is shown all the same
+    ;(mockedAdmin as any).instance = { id: 21, name: 'By hand review', status: 'RUNNING' }
+    try {
+      http.get.mockResolvedValue(stateJson({
+        ...on,
+        status: { ...on.status, paused: true, problemKind: 'paused', handSession: { ...hand, gameStarted: true, openToNewcomers: false, owner: null }, problem: 'It is paused: its session "auto 1" was stopped. Meanwhile "By hand review", a session of this experiment that a researcher opened by hand, is running. Resume hands it to the autopilot.' },
+      }))
+      const w2 = await mountPage()
+      const block2 = w2.findAll('.apst__block')[0]
+      expect(block2.find('.b-badge').text()).toBe('Game under way')
+      expect(block2.text()).toContain('Opened by hand by a researcher, not by the autopilot.')
+      expect(block2.text()).not.toMatch(/participant links lead to it|No session is open/)
+      expect(block2.find('.apst__watch').text()).toContain('Watch it live')
+      expect(w2.find('.apst__problem-title').text()).toBe('Paused until you resume it')
+      w2.unmount()
+    } finally {
+      ;(mockedAdmin as any).instance = null
+    }
+  })
+
   it('says a paused autopilot opens nothing, even once another session ends', async () => {
     const pilot = { id: 9, name: 'Trust pilot', experimentId: 13, experimentName: 'Trust', owner: 'b@lab.org' }
     http.get.mockResolvedValue(stateJson({
@@ -617,6 +853,63 @@ describe('Autopilot page', () => {
     expect(w.find('.apst__problem').text()).toMatch(/there is no experiment with that name/)
     expect(w.text()).not.toMatch(/Waiting for another session/)
     w.unmount()
+  })
+
+  it('shows the longest session with its default and saves it, or no limit once emptied', async () => {
+    http.get.mockResolvedValue(stateJson())
+    http.post.mockImplementation(async (_url: string, body: any) => stateJson({ settings: body }))
+    const w = await mountPage()
+    const field = () => w.findAll('.b-field').find(f => f.text().includes('Longest session'))!
+    const input = () => field().find('input.b-input__el')
+    expect((input().element as HTMLInputElement).value).toBe('120')
+    expect(input().attributes('placeholder')).toBe('No limit')
+    expect(field().text()).toMatch(/ran out of time\. Empty: no limit\. \(2 hours\)/)
+    // in the section about sessions
+    expect(w.find('section[aria-labelledby="ap-sec-sessions"]').text()).toMatch(/Longest session/)
+
+    await input().setValue('0')
+    expect(field().text()).toMatch(/At least 1\./)
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    expect(http.post).not.toHaveBeenCalled()
+
+    await input().setValue('')
+    expect(field().text()).not.toMatch(/At least/)
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(1)
+    expect(http.post.mock.calls[0][1]).toMatchObject({ maxSessionMinutes: null })
+    expect((input().element as HTMLInputElement).value).toBe('')
+
+    await input().setValue('90')
+    await w.find('form.ap-form').trigger('submit')
+    await flushPromises()
+    expect(http.post).toHaveBeenCalledTimes(2)
+    expect(http.post.mock.calls[1][1]).toMatchObject({ maxSessionMinutes: 90 })
+    w.unmount()
+  })
+
+  it('shows a session it ended for running too long, also while it runs on', async () => {
+    const notice = 'Session "auto 3" was ended after 120 minutes, the longest a session may run. Its participants were told that the session ran out of time.'
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 5, name: 'auto 4', status: 'RUNNING' }, links: null, notice, noticeAt: new Date().toISOString() },
+    }))
+    const w = await mountPage()
+    const box = w.find('.apst__notice')
+    expect(box.exists()).toBe(true)
+    expect(box.attributes('role')).toBe('status')
+    expect(box.find('.apst__problem-title').text()).toMatch(/^A session ran out of time \(at .+\)$/)
+    expect(box.find('.apst__problem-text').text()).toBe(notice)
+    // not a fault of the autopilot's: it is on, and nothing to resume
+    expect(w.find('.apst__title').text()).toBe('The autopilot is on')
+    expect(w.find('.apst__resume').exists()).toBe(false)
+    w.unmount()
+
+    http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null } }))
+    const w2 = await mountPage()
+    expect(w2.find('.apst__notice').exists()).toBe(false)
+    w2.unmount()
   })
 
   it('counts unsaved settings when signing out, while the page is open', async () => {

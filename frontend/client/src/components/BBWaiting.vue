@@ -20,26 +20,16 @@
     <h1 class="bb-waiting__title">{{ title }}</h1>
 
     <template v-if="state === 'waiting'">
-      <p class="bb-waiting__count">
-        <strong>{{ here }}</strong> {{ here === 1 ? 'person is' : 'people are' }} here.
-        <template v-if="enough">
-          That's enough to begin: the session starts
-          {{ startsIn != null && startsIn > 0 ? `in about ${startsIn} s` : 'shortly' }}<template v-if="max && here < max">, or as soon as {{ max }} are here</template>.
-        </template>
-        <template v-else>
-          The session starts when {{ target }} {{ maxIsOne ? 'person is' : 'people are' }} here.
-        </template>
-      </p>
-      <div class="bb-waiting__bar" :aria-label="`${here} of ${barTarget}`">
+      <!-- how many are here (the number in bold), then when the session starts -->
+      <p class="bb-waiting__count"><template v-for="(part, i) in countParts"><strong v-if="part.param" :key="i">{{ part.text }}</strong><template v-else>{{ part.text }}</template></template></p>
+      <div class="bb-waiting__bar" :aria-label="progressLabel">
         <span :style="{ width: `${progress}%` }" />
       </div>
     </template>
 
     <div v-if="showText" class="bb-prose bb-waiting__text" v-html="player.text" />
 
-    <p v-if="state !== 'cancelled'" class="bb-waiting__note">
-      Please keep this page open. It will change by itself when the session starts.
-    </p>
+    <p v-if="state !== 'cancelled'" class="bb-waiting__note">{{ keepOpen }}</p>
 
     <!-- What screen readers hear: only the changes that matter, not every second of the countdown. -->
     <p class="bb-waiting__sr" aria-live="polite" aria-atomic="true">{{ announcement }}</p>
@@ -48,6 +38,7 @@
 
 <script lang="ts">
 import Vue from 'vue'
+import { t, tParts, sentenceGap } from '../lib/texts'
 
 /**
  * The waiting screen for a session run by the autopilot (groovy/autopilot.groovy), which publishes
@@ -55,7 +46,8 @@ import Vue from 'vue'
  * The countdown starts again from `seconds` whenever the server sends a new value, as it does for
  * someone who reconnects during the countdown. Screen readers hear the title when the state changes
  * and the last three seconds of the countdown, not every second.
- * BBGame shows it on its own; it can also be used directly in a client HTML.
+ * BBGame shows it on its own; it can also be used directly in a client HTML. Its words are in the
+ * language of the session's texts (lib/texts).
  */
 export default Vue.extend({
   name: 'BBWaiting',
@@ -86,6 +78,24 @@ export default Vue.extend({
       return this.max && this.max !== this.min ? `${this.min}–${this.max}` : String(this.min)
     },
     maxIsOne (): boolean { return (this.max || this.min) === 1 },
+    // "2 people are here. The session starts when 3–8 people are here.", with the 2 in bold
+    countParts (): { text: string, param?: string }[] {
+      let then: string
+      if (!this.enough) {
+        then = t('waiting.startsWhen', { target: this.target, n: this.maxIsOne ? 1 : 2 })
+      } else {
+        const orMax = !!this.max && this.here < this.max
+        const timed = this.startsIn != null && this.startsIn > 0
+        then = t((timed ? 'waiting.startsIn' : 'waiting.startsShortly') + (orMax ? 'OrMax' : ''), { s: this.startsIn, max: this.max })
+      }
+      return [...tParts('waiting.here', { n: this.here }), { text: sentenceGap() + then }]
+    },
+    progressLabel (): string {
+      return t('waiting.progress', { here: this.here, target: this.barTarget })
+    },
+    keepOpen (): string {
+      return t('waiting.keepOpen')
+    },
     // The minimum is here: the autopilot waits a little longer for more, then starts.
     enough (): boolean { return this.min > 0 && this.here >= this.min },
     // Towards the minimum, then (when there is a maximum) towards the maximum.
@@ -110,9 +120,9 @@ export default Vue.extend({
     },
     title (): string {
       switch (this.state) {
-        case 'starting': return this.remaining > 0 ? `Starting in ${this.remaining}…` : 'Starting…'
-        case 'cancelled': return 'This session could not start'
-        default: return this.enough ? 'Starting soon' : 'Waiting for the others'
+        case 'starting': return this.remaining > 0 ? t('waiting.startingIn', { n: this.remaining }) : t('waiting.starting')
+        case 'cancelled': return t('waiting.cancelledTitle')
+        default: return this.enough ? t('waiting.soonTitle') : t('waiting.title')
       }
     },
     showText (): boolean {
@@ -136,9 +146,9 @@ export default Vue.extend({
           this.restartCountdown()
           // A participant who switched tabs sees it in the tab title.
           if (!this.originalTitle) this.originalTitle = document.title
-          document.title = `Starting now · ${this.originalTitle}`
+          document.title = t('waiting.tabStarting', { title: this.originalTitle })
           const n = this.remaining
-          this.announcement = n > 0 ? `Starting in ${n} ${n === 1 ? 'second' : 'seconds'}` : this.title
+          this.announcement = n > 0 ? t('waiting.announceStarting', { n }) : this.title
         } else {
           this.announcement = this.title
         }
@@ -147,14 +157,16 @@ export default Vue.extend({
     'info.startsIn': {
       immediate: true,
       handler (n: any) {
+        // same instant for both, or a clock tick in between shows one second more
         this.waitStart = Date.now()
+        this.now = this.waitStart
         // the longest wait seen, so the bar fills over the whole of it
         if (typeof n === 'number' && n > this.startsTotal) this.startsTotal = n
         if (n == null) this.startsTotal = 0
       },
     },
     // the heading changed without the state changing ("Starting soon" once enough are here)
-    title (t: string) { if (this.state !== 'starting') this.announcement = t },
+    title (heading: string) { if (this.state !== 'starting') this.announcement = heading },
     // Someone who reconnects during the countdown is sent the seconds that are left.
     'info.seconds' () {
       if (this.state === 'starting') this.restartCountdown()

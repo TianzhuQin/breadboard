@@ -1,10 +1,17 @@
 <template>
-  <li class="pt" :style="{ width: `${width}px` }" :aria-label="`Preview of ${playerId}`">
+  <li class="pt" :style="{ width: `${width}px` }" :aria-label="`Preview of ${name}`">
     <div class="pt__head">
-      <span class="pt__id" :title="playerId">{{ playerId }}</span>
+      <span class="pt__id" :title="playerId">{{ name }}</span>
       <span class="pt__tags">
         <span v-if="test" class="pt__tag" title="Test player (testmode)"><FlaskConical :size="13" aria-hidden="true" /><span class="sr-only">Test player</span></span>
         <span v-if="ai" class="pt__tag" title="Played by the computer"><Bot :size="13" aria-hidden="true" /><span class="sr-only">Computer player</span></span>
+        <!-- (the participant page says so too, but at tile size its words are a few pixels high) -->
+        <span v-if="watching" class="pt__tag is-text" :title="watching">
+          <Eye :size="13" aria-hidden="true" /><span :class="{ 'sr-only': compact }">Watching</span>
+        </span>
+        <span v-else-if="role === 'away'" class="pt__tag is-text is-away" title="Away: their own page isn’t connected. You are standing in for them, but they count as away">
+          <UserX :size="13" aria-hidden="true" /><span :class="{ 'sr-only': compact }">Away</span>
+        </span>
       </span>
       <span class="pt__acts">
         <BButton
@@ -12,13 +19,13 @@
           variant="ghost"
           :icon="RotateCw"
           :disabled="!!paused"
-          :aria-label="`Reload ${playerId}'s page`"
+          :aria-label="`Reload ${name}'s page`"
           title="Reload"
           @click="emit('reload')"
         />
         <BMenu :items="menu" align="right" :width="210">
           <template #trigger="{ toggle, attrs }">
-            <BButton size="sm" variant="ghost" :icon="Ellipsis" v-bind="attrs" :aria-label="`More for ${playerId}`" title="More" @click="toggle" />
+            <BButton size="sm" variant="ghost" :icon="Ellipsis" v-bind="attrs" :aria-label="`More for ${name}`" title="More" @click="toggle" />
           </template>
         </BMenu>
       </span>
@@ -29,7 +36,7 @@
         <PreviewFrame
           :key="frameKey"
           :target="target"
-          :title="`Participant page of ${playerId}`"
+          :title="`Participant page of ${name}`"
           :device="device"
           :width="width"
           :interactive="interactive"
@@ -39,7 +46,7 @@
           v-if="!interactive"
           type="button"
           class="pt__cover"
-          :aria-label="`Open ${playerId}'s page full size`"
+          :aria-label="`Open ${name}'s page full size`"
           @click="emit('focus')"
         >
           <span class="pt__cover-hint"><Maximize2 :size="14" aria-hidden="true" /> Open full size</span>
@@ -48,7 +55,7 @@
       <div v-else class="pt__paused">
         <component :is="paused === 'focus' ? Maximize2 : ExternalLink" :size="18" aria-hidden="true" />
         <p>{{ paused === 'focus' ? 'Shown full size' : 'Open in another tab' }}</p>
-        <p class="pt__paused-why">One page per player at a time, or the two would keep taking the connection from each other.</p>
+        <p class="pt__paused-why">One page per player at a time: the newer one would take the connection from the other.</p>
         <BButton v-if="paused === 'tab'" size="sm" @click="emit('resume')">Show here again</BButton>
       </div>
     </div>
@@ -62,10 +69,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Bot, Ellipsis, ExternalLink, FlaskConical, Maximize2, RotateCw, TriangleAlert, X } from 'lucide-vue-next'
+import { Bot, Ellipsis, ExternalLink, Eye, FlaskConical, Maximize2, RotateCw, TriangleAlert, UserX, X } from 'lucide-vue-next'
 import { BButton, BMenu, type MenuItem } from '@/ui'
+import { playerName } from '@/network/players'
 import PreviewFrame from './PreviewFrame.vue'
-import { frameGeometry, type DeviceKind, type PreviewTarget } from './preview'
+import { WATCHING_WHY, frameGeometry, type DeviceKind, type PreviewRole, type PreviewTarget } from './preview'
 
 const props = defineProps<{
   playerId: string
@@ -75,6 +83,8 @@ const props = defineProps<{
   interactive: boolean
   test: boolean
   ai: boolean
+  /** What a preview of this player does (preview.ts previewRole). */
+  role?: PreviewRole | null
   /** Changing it loads the page again, with a new preview token. */
   frameKey: string
   /** Why the page isn't shown here right now. */
@@ -83,7 +93,13 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ focus: [], reload: [], 'open-tab': [], remove: [], resume: [] }>()
 
+// "AI 6 (_6)" for a computer player, as in the list
+const name = computed(() => playerName(props.playerId))
 const geo = computed(() => frameGeometry(props.device, props.width))
+/** Why the preview only watches ('' when it doesn't), for the Watching tag. */
+const watching = computed(() => props.role === 'computer' || props.role === 'watching' ? `Watching: ${WATCHING_WHY[props.role]}` : '')
+// small tiles keep the tags' icons only (the words stay for screen readers and in the tooltip)
+const compact = computed(() => props.width < 230)
 const menu = computed<MenuItem[]>(() => [
   { label: 'Open full size', icon: Maximize2, run: () => emit('focus') },
   { label: 'Open in a new tab', icon: ExternalLink, run: () => emit('open-tab') },
@@ -117,6 +133,17 @@ const menu = computed<MenuItem[]>(() => [
   background: var(--bg-subtle);
   color: var(--text-soft);
 }
+.pt__tag.is-text {
+  display: inline-flex;
+  gap: 4px;
+  width: auto;
+  min-width: 20px;
+  padding: 0 6px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pt__tag.is-away { background: var(--warning-soft); color: var(--warning-soft-text); }
 .pt__acts { margin-left: auto; display: inline-flex; align-items: center; flex: none; }
 .pt__body { position: relative; }
 .pt__cover {

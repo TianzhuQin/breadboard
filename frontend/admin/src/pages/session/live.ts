@@ -122,6 +122,22 @@ export function isLocalOrigin (origin: string): boolean {
   }
 }
 
+/**
+ * An address on a private network (a lab's, say: 192.168.…, 10.…, a .local name): computers on that
+ * network reach it, but nobody on the internet does.
+ */
+export function isPrivateOrigin (origin: string): boolean {
+  try {
+    const h = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    if (/^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || h.endsWith('.local')) return true
+    const b = /^172\.(\d+)\./.exec(h)
+    if (b && Number(b[1]) >= 16 && Number(b[1]) <= 31) return true
+    return /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h)
+  } catch (e) {
+    return false
+  }
+}
+
 const START_OUTPUT = 'initStep.start()'
 const ALREADY = 'initStep started already'
 /** Events that mean the game began: the default InitStep's own, and the autopilot's start. */
@@ -317,7 +333,8 @@ export function formatWhen (at: number, now = Date.now()): string {
 
 /** A file name the browser and every OS accept. */
 export function safeFileName (s: string): string {
-  // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only)
-  const cleaned = (s || '').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
+  // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only, any space a
+  // plain one first, as the autopilot's names have no-break spaces)
+  const cleaned = (s || '').replace(/\s+/gu, ' ').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
   return (cleaned || 'session').slice(0, 120)
 }

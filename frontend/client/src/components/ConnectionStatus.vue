@@ -1,22 +1,82 @@
 <template>
-  <!-- Not once the participant is done (the experiment set player.finished): the researcher opening
-       the next session restarts the engine, and the banner would cover their thank-you screen. -->
-  <v-alert :value="!isOpen && !finished" :color="color" :transition="transition" class="bb-connection">
-    <!-- The message to be shown when the client is disconnected -->
-    <slot :time="time">
-      Connection lost. Reconnecting{{ time > 0 ? ` in ${(time / 1000).toFixed(0)} s` : '' }}… Please keep this page open.
+  <!-- Not once the participant is done (the experiment set player.finished, or gave them a completion
+       code): the researcher opening the next session restarts the engine, and the banner would cover
+       their thank-you screen. -->
+  <v-alert
+    :value="shown"
+    :color="color"
+    :transition="transition"
+    class="bb-connection"
+    :class="{ 'bb-connection--watching': state === 'watching' }"
+  >
+    <!-- What a page says while it reconnects: `state` is 'lost', or 'blocked' (it can't connect
+         while the server answers over plain HTTP, or has never connected: the network may not let
+         it). `time` is how long until the next attempt (ms),
+         counting down, and 0 while one is under way; `tryNow` does what the button does. Pages
+         written for 3.0 put their message here: only these states show it. -->
+    <slot v-if="reconnecting" :time="time" :state="state" :tryNow="tryNow">
+      <div class="bb-connection__body">
+        <span class="bb-connection__text">{{ text }}</span>
+        <button type="button" class="bb-connection__btn" @click="tryNow">{{ tryNowText }}</button>
+      </div>
+    </slot>
+    <!-- The study is open in another tab or window; `useHere` does what the button does -->
+    <slot v-else-if="state === 'elsewhere'" name="elsewhere" :useHere="useHere">
+      <div class="bb-connection__body">
+        <span class="bb-connection__text">{{ text }}</span>
+        <button type="button" class="bb-connection__btn" @click="useHere">{{ useHereText }}</button>
+      </div>
+    </slot>
+    <!-- The session is over, and the page shows no end of its own -->
+    <slot v-else-if="state === 'ended'" name="ended">
+      <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
+    </slot>
+    <!-- A researcher's preview of a player whose own page is connected, or of a computer player,
+         which only watches -->
+    <slot v-else-if="state === 'watching'" name="watching">
+      <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
     </slot>
   </v-alert>
 </template>
 
 <script lang="ts">
   import Vue from 'vue'
-  import { SocketState } from '@human-nature-lab/breadboard-core'
+  import { CONNECTION_EVENT } from '@human-nature-lab/breadboard-core'
+  import { t } from '../lib/texts'
+
+  // On the page while the connection is down or done with: what the page shows may be out of date,
+  // so it is dimmed. (Not while it watches: what it shows is live.)
+  const DISCONNECTED = 'bb-disconnected'
+
+  // What the participant reads, in the language of the session's texts (lib/texts)
+  const TEXTS: Record<string, string> = {
+    lost: 'connection.lost',
+    blocked: 'connection.blocked',
+    elsewhere: 'connection.elsewhere',
+    ended: 'connection.ended',
+  }
+  // What only a researcher's preview says, in English, as the console does: it watches
+  const WATCHING = 'Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.'
+  // What a researcher's preview says instead
+  const PREVIEW_TEXTS: Record<string, string> = {
+    elsewhere: 'This player is open in another preview or tab.',
+  }
+  // What a preview of a computer player (g.addAI's _1, _2, …) says: it watches what the computer does.
+  const COMPUTER_TEXTS: Record<string, string> = {
+    watching: 'Watching only: the computer plays this seat, so you see what it does but can’t answer for it.',
+  }
 
   /**
    * This component will show players a message if they are disconnected from
    * the game due to a network interruption. Breadboard will automatically
-   * reconnect if possible.
+   * reconnect if possible; the participant can also try again at once. It also
+   * says when reconnecting won't help: the network blocks the connection, the
+   * study is open in another tab (which the participant can take back), or the
+   * session is over. On a researcher's preview that only watches its player, it
+   * says so.
+   *
+   * The default slot replaces the message while it reconnects; the slots
+   * `elsewhere`, `ended` and `watching` replace the others.
    */
   export default Vue.extend({
     name: 'ConnectionStatus',
@@ -32,46 +92,147 @@
     },
     data () {
       return {
-        isOpen: true,
+        // Breadboard's `connection` (see ConnectionState in breadboard-core)
+        state: 'connecting',
+        preview: false,
+        computer: false,
         time: 0,
-        finished: false
+        finished: false,
+        // when the next attempt starts (Date.now()), and the timer counting down to it
+        retryAt: 0,
+        countdown: null as ReturnType<typeof setInterval> | null,
+        listening: false
+      }
+    },
+    computed: {
+      shown (): boolean {
+        return !this.finished && ['lost', 'blocked', 'elsewhere', 'ended', 'watching'].includes(this.state)
+      },
+      reconnecting (): boolean {
+        return this.state === 'lost' || this.state === 'blocked'
+      },
+      dimmed (): boolean {
+        return this.shown && this.state !== 'watching'
+      },
+      text (): string {
+        return (this.computer && COMPUTER_TEXTS[this.state]) || (this.preview && PREVIEW_TEXTS[this.state])
+          || (this.state === 'watching' ? WATCHING : t(TEXTS[this.state] || TEXTS.lost))
+      },
+      tryNowText (): string {
+        return t('connection.tryNow')
+      },
+      // (a preview's own note is in English: so is its button)
+      useHereText (): string {
+        return this.preview && PREVIEW_TEXTS[this.state] ? 'Use it here' : t('connection.useHere')
+      }
+    },
+    watch: {
+      dimmed (dimmed: boolean) {
+        document.documentElement.classList.toggle(DISCONNECTED, dimmed)
       }
     },
     async created () {
-      const socket = await window.Breadboard.connect()
-      // @ts-ignore
-      this.socket = socket
-      if (socket.state === SocketState.CLOSED) {
-        this.isOpen = false
-      }
-      window.Breadboard.on('close', this.onClose)
+      await window.Breadboard.connect()
+      this.preview = !!window.Breadboard.preview
+      this.computer = !!window.Breadboard.computerPlayer
+      this.sync()
+      window.Breadboard.on(CONNECTION_EVENT, this.sync)
       window.Breadboard.on('retry', this.onRetry)
-      window.Breadboard.on('open', this.onOpen)
+      window.Breadboard.on('connect', this.stopCountdown)
       window.Breadboard.on('player', this.onPlayer)
+      this.listening = true
     },
     destroyed () {
-      window.Breadboard.off('close', this.onClose)
-      window.Breadboard.off('retry', this.onRetry)
-      window.Breadboard.off('open', this.onOpen)
-      window.Breadboard.off('player', this.onPlayer)
+      // (only what created() added: removing a listener that isn't there removes another one)
+      if (this.listening) {
+        window.Breadboard.off(CONNECTION_EVENT, this.sync)
+        window.Breadboard.off('retry', this.onRetry)
+        window.Breadboard.off('connect', this.stopCountdown)
+        window.Breadboard.off('player', this.onPlayer)
+      }
+      this.stopCountdown()
+      document.documentElement.classList.remove(DISCONNECTED)
     },
     methods: {
+      sync () {
+        this.state = window.Breadboard.connection
+        // (no attempt to count down to)
+        if (!this.reconnecting) this.stopCountdown()
+      },
       onPlayer (p: any) {
-        if (p && typeof p === 'object' && 'finished' in p) this.finished = !!p.finished
+        if (!p || typeof p !== 'object') return
+        if ('finished' in p) this.finished = !!p.finished
+        // a completion code on the screen is the participant's end too
+        const recruitment = p._system && p._system.recruitment
+        if (recruitment && recruitment.completed) this.finished = true
       },
-      onClose () {
-        this.isOpen = false
+      tryNow () {
+        window.Breadboard.reconnectNow()
       },
-      onOpen () {
-        this.isOpen = true
+      useHere () {
+        window.Breadboard.useHere()
       },
-      onRetry (time: number) {
-        this.time = time
-      } 
+      onRetry (wait: number) {
+        this.retryAt = Date.now() + wait
+        this.tick()
+        if (this.countdown === null) this.countdown = setInterval(this.tick, 1000)
+      },
+      tick () {
+        this.time = Math.max(0, this.retryAt - Date.now())
+        if (this.time === 0) this.stopCountdown()
+      },
+      stopCountdown () {
+        if (this.countdown !== null) clearInterval(this.countdown)
+        this.countdown = null
+        this.time = 0
+      }
     }
   })
 </script>
 
-<style lang="sass">
-  
+<style>
+  .bb-connection__body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+  }
+  .bb-connection__text {
+    flex: 1 1 240px;
+  }
+  .bb-connection__btn {
+    flex: none;
+    padding: 5px 14px;
+    border: 1px solid currentColor;
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .bb-connection__btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+  .bb-connection__btn:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+  /* The timers keep time with the server: while the page can't hear it, their times stop being true. */
+  .bb-disconnected .bb-timer {
+    opacity: 0.4;
+    transition: opacity 0.2s;
+  }
+  /* Nor is the rest of what the server last sent necessarily still so. */
+  .bb-disconnected .bb-game__text,
+  .bb-disconnected .bb-game__waiting,
+  .bb-disconnected .bb-network__stage {
+    opacity: 0.55;
+    transition: opacity 0.2s;
+  }
+  /* The message stays at the top of the screen as the page scrolls (the participant theme): the
+     panel with the timer and choices, which stays there too, would slide under it. */
+  .bb-disconnected .bb-game__panel {
+    position: static;
+  }
 </style>
