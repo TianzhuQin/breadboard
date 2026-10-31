@@ -290,23 +290,44 @@ public class SessionLanguageTest extends BaseTest {
     }
 
     @Test
-    public void aReloadOrAResumeKeepsTheSessionsLanguage() throws Exception {
+    public void aReloadOrAResumeRecordsTheLanguageItsStepsChooseAgain() throws Exception {
         final ExperimentInstance session = launch("Kept", "zho");
+        // Switched to English from the Script console; the steps choose Chinese again as the reload
+        // loads them, for the session that carries on.
+        engine().eval("c.setDefaultLanguage('eng'); null");
+        assertEquals("eng", recorded(session));
         final ScriptEngine before = engine();
         console.send("ReloadEngine");
         await("a new engine", () -> engine() != before);
         afterTheEngineChange();
         assertEquals(session.id, engineSessionId());
+        assertEquals("zho", recorded(session));
         assertEquals("zho", SessionLanguage.of(session.id));
 
         console.send("StopGame", "id", session.id);
         await("stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
         afterTheEngineChange();
+        // As for a session from before 3.1: nothing recorded. Resumed, its steps record it.
+        Ebean.createSqlUpdate("update experiment_instances set content_language = null where id = :id")
+            .setParameter("id", session.id).execute();
+        SessionLanguage.reset();
+        assertNull(recorded(session));
         final ScriptEngine stopped = engine();
         console.send("SelectInstance", "id", session.id);
         await("resumed", () -> engine() != stopped && session.id.equals(engineSessionId()));
         afterTheEngineChange();
+        assertEquals("zho", recorded(session));
         assertEquals("zho", SessionLanguage.of(session.id));
+
+        // Taken up again as its experiment is selected while the engine holds no session (as after a
+        // start of the server that couldn't mark it interrupted): its steps record it too.
+        engine().eval("c.setDefaultLanguage('eng'); null");
+        assertEquals("eng", recorded(session));
+        field("engineGameListener").set(null, null);
+        final ScriptEngine held = engine();
+        console.send("SelectExperiment", "experimentId", experiment.id);
+        await("taken up again", () -> engine() != held && session.id.equals(engineSessionId()));
+        afterTheEngineChange();
         assertEquals("zho", recorded(session));
     }
 
