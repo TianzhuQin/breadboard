@@ -133,8 +133,8 @@ set, participants who came from Prolific are given that completion code at the e
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
 
-On a server without experiments, the Experiments page points to the example, and **New experiment**
-has it chosen, named "Network game".
+On a server without experiments, the page the console opens on and the Experiments page point to
+the example, and **New experiment** has it chosen, named "Network game".
 
 ### Steps
 

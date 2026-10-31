@@ -34,7 +34,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 ## 建一个实验
 
-控制台的大多数页面都针对一个实验：侧栏顶部选中的那个。点它可以切换实验，也可以新建或导入。服务器上还没有实验时，**Experiments** 页会建议从 **Example: network game** 开始；点 **New experiment**，它已经选好了，名字也填好了（Network game）。
+控制台的大多数页面都针对一个实验：侧栏顶部选中的那个。点它可以切换实验，也可以新建或导入。服务器上还没有实验时，控制台打开后的第一页（**Live session**）和 **Experiments** 页都会建议从 **Example: network game** 开始；点 **New experiment**，它已经选好了，名字也填好了（Network game）。
 
 - **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 OnJoinStep、OnLeaveStep、InitStep 三个空步骤和标准的参与者页面）开始，从 **Example: network game**（一个可以直接运行的网络小游戏）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
 - **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S，Mac 上是 ⌘S）只是保存，引擎还在用原来的代码。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。
