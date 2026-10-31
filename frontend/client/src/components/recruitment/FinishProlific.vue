@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { PlayerData, participantToken } from '@human-nature-lab/breadboard-core'
 
 const props = defineProps<{
@@ -14,6 +14,8 @@ const submitUrl = computed(() => {
 
 // How long the comment may take to save before the screen says it couldn't be (ms).
 const SAVE_WAIT_MS = 10000
+// How often the screen asks for a new comment token while it is open (ms): see commentToken.
+const TOKEN_REFRESH_MS = 60 * 60 * 1000
 
 /** The seat's token, as the page's own requests carry it, with what the server reads as JSON. */
 function headers (): Record<string, string> {
@@ -27,8 +29,11 @@ function headers (): Record<string, string> {
  * The token the comment is sent with ('comment', next to the page's own address: GET, with the seat's
  * token), asked for as this screen appears. The server keeps the comment with it for a week, also once
  * it has forgotten the seat's token (ten more sessions have ended since, or it restarted), which used
- * to refuse the comment. Null when the server gives none (an older one, a researcher's preview, the
- * network down: then asked for again as the comment is sent).
+ * to refuse the comment. It is asked for again every hour while the screen is open, and the server
+ * gives a new one for as long as it knows the seat, which it forgets only once the session has ended:
+ * the last one is good until about a week after that, however long the session went on after this
+ * screen appeared. Null when the server gives none (an older one, a researcher's preview, the network
+ * down: then asked for again as the comment is sent).
  */
 let commentToken: string | null = null
 async function getCommentToken (): Promise<string | null> {
@@ -41,9 +46,16 @@ async function getCommentToken (): Promise<string | null> {
     return null
   }
 }
+let refresh: ReturnType<typeof setInterval> | undefined
 onMounted(async () => {
-  if (data.value && !data.value.noFeedback) commentToken = await getCommentToken()
+  if (!data.value || data.value.noFeedback) return
+  refresh = setInterval(async () => {
+    const newer = await getCommentToken()
+    if (newer) commentToken = newer
+  }, TOKEN_REFRESH_MS)
+  commentToken = await getCommentToken()
 })
+onBeforeUnmount(() => clearInterval(refresh))
 
 /**
  * The comment goes to the server on its own ('comment', POST, with the seat's token and the comment

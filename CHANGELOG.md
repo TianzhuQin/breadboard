@@ -261,8 +261,9 @@ see [docs/install.md](docs/install.md#upgrading).
 - What a Prolific participant writes under "Comments for the researcher" on the finish screen is
   saved in their session's data (`participantComment`), also once their game has ended and the next
   session has opened: in View events and every download. It used to be lost. A finish screen left
-  open can send it for a week, also after many more sessions or a restart of the server, and when it
-  can't be saved the screen says so, with **Try again**, instead of going on to Prolific without it.
+  open can still send it a week after the session ended, also after many more sessions or a restart
+  of the server, and when it can't be saved the screen says so, with **Try again**, instead of going
+  on to Prolific without it.
 - Preview shows the session's test players as soon as it opens, also after a reload and beside a
   player opened with Preview their screen; on a phone the player list folds away above them. Its
   tiles and player list say Watching where a preview only watches (a connected participant, a

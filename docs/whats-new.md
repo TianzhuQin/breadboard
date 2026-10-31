@@ -509,7 +509,8 @@ restarts the running session.
   what a participant wrote under "Comments for the researcher" on the finish screen, kept in their
   session's data even after its game has ended. It used to be sent to the game, which ignored it.
   The screen sends it to `POST /game/<experiment>/<session>/<player>/comment`, with the seat's token
-  and a comment token it asked for as it appeared (`GET` on the same address), signed with
-  `application.secret` and good for a week: a comment sent once the server has forgotten the seat's
-  token (ten more sessions have ended, or it restarted) is kept too. When it isn't kept, the screen
+  and a comment token it asks for as it appears and every hour after (`GET` on the same address,
+  answered while the server knows the seat), signed with `application.secret` and good for a week: a
+  comment sent once the server has forgotten the seat's token (ten more sessions have ended, or it
+  restarted) is kept too, until about a week after the session ended. When it isn't kept, the screen
   says so and goes on to Prolific only when asked.

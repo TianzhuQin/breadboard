@@ -159,6 +159,39 @@ describe('FinishProlific', () => {
     expect(JSON.parse(posts()[0][2].body)).toEqual({ text: 'Hello', token: 'comment-token' })
   })
 
+  it('asks for a new comment token every hour, and keeps the one it has when the server gives none', async () => {
+    // (the server gives one for as long as it knows the seat, which it forgets once the session has ended)
+    let given = 0
+    const answers = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: any) => {
+      if (!init || !init.method) {
+        given++
+        if (given === 3) return Promise.resolve({ status: 403, json: () => Promise.resolve({ error: 'forgotten' }) })
+        return Promise.resolve({ status: 200, json: () => Promise.resolve({ token: 'comment-token-' + given, expiresAt: '2026-11-07T12:00:00.000Z' }) })
+      }
+      return answers(url, init)
+    })
+    wrapper = mount(FinishProlific, { propsData: { player } })
+    await settle()
+    expect(given).toBe(1)
+    await vi.advanceTimersByTimeAsync(59 * 60 * 1000)
+    expect(given).toBe(1)
+    await vi.advanceTimersByTimeAsync(60 * 1000)
+    expect(given).toBe(2)
+    // the seat is forgotten by the next hour: the token it has stays
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+    expect(given).toBe(3)
+    await wrapper.find('textarea').setValue('Late, but kept')
+    await wrapper.find('button').trigger('click')
+    await settle()
+    expect(JSON.parse(posts()[0][2].body)).toEqual({ text: 'Late, but kept', token: 'comment-token-2' })
+    // and it stops asking once the screen has gone
+    wrapper.destroy()
+    wrapper = null
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000)
+    expect(given).toBe(3)
+  })
+
   it('has no comment box, and asks for no token, when the experiment asks for no feedback', async () => {
     const quiet = { ...player, _system: { recruitment: { ...player._system.recruitment, noFeedback: true } } }
     wrapper = mount(FinishProlific, { propsData: { player: quiet } })

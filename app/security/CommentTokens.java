@@ -18,8 +18,10 @@ import java.util.Base64;
  *
  * <p>A token names the experiment, session and participant it is good for, and until when, signed
  * with application.secret as invitation links are: nothing is kept, so it works after a restart too.
- * The finish screen asks for one with the seat's own token (a researcher's preview gets none). There
- * are none while application.secret is a published default: anyone could make them then.
+ * The finish screen asks for one with the seat's own token (a researcher's preview gets none), as it
+ * appears and every hour after, so the last one it got, once the server has forgotten the seat (which
+ * it does only after the session has ended), is good until about a week after that. There are none
+ * while application.secret is a published default: anyone could make them then.
  */
 public final class CommentTokens {
 

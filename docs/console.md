@@ -519,9 +519,9 @@ writes under **Comments for the researcher** on the finish screen (it isn't show
 `noFeedback: true`) is kept in their session's data as a `participantComment` event, with `player`
 and `text`, also once their game has ended and the next session has opened: find it with
 **View events** in **Sessions & data**, or in the data you download. A finish screen left open can
-send it for a week, also after many more sessions or a restart of the server. If it can't be saved,
-the screen says so, with **Try again** and **Return to Prolific without it**, instead of going on to
-Prolific without it.
+still send it a week after the session has ended, also after many more sessions or a restart of the
+server. If it can't be saved, the screen says so, with **Try again** and **Return to Prolific
+without it**, instead of going on to Prolific without it.
 
 **People don't take part twice.** Someone who opens the Prolific link again after they took part in
 this experiment (they were given a completion code, or were still there when a session's game
