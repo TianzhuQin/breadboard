@@ -60,6 +60,7 @@ import CreateHitTab from '@/pages/recruit/mturk/CreateHitTab.vue'
 import RecruitPage from '@/pages/recruit/RecruitPage.vue'
 import HitDetail from '@/pages/recruit/mturk/HitDetail.vue'
 import AutopilotCard from '@/pages/recruit/prolific/AutopilotCard.vue'
+import { autopilotStatusOf } from '@/pages/session/autopilot'
 import { moneyState, settleMoney } from '@/pages/recruit/mturk/moneyConfirm'
 import { activeJobs, track } from '@/pages/recruit/mturk/jobs'
 import { confirmSignOut, unsavedTotal } from '@/shell/unsaved'
@@ -638,11 +639,14 @@ describe('Recruitment page with the autopilot', () => {
         throw new HttpError(404, 'Not found')
       })
       const asked = () => vi.mocked(http.get).mock.calls.filter(([u]) => u === '/autopilot').length
+      // the side card's badge follows the same answers (it used to be asked for once, as the page opened)
+      const badge = () => w.find('.pl-ap__status .b-badge').text()
       // (the page asked once as it opened, before the answer above was set: ask again now)
       vi.advanceTimersByTime(10000)
       await flushPromises()
       expect(promises(w).text).toContain('The autopilot opens the next session in a moment')
       expect(promises(w).holds).toBe(true)
+      expect(badge()).toBe('On for this experiment')
       // another experiment's session opens on the engine: every console hears, and the page asks again
       answer = waiting
       const before = asked()
@@ -651,16 +655,25 @@ describe('Recruitment page with the autopilot', () => {
       expect(asked()).toBe(before + 1)
       expect(promises(w).holds).toBe(false)
       expect(promises(w).turnsAway).toBe(true)
+      expect(badge()).toBe('On, but held up for now')
       // what no console hears of (the autopilot's session reported an error, say): the next ask finds it
       answer = free
       vi.advanceTimersByTime(10000)
       await flushPromises()
       expect(promises(w).holds).toBe(true)
+      expect(badge()).toBe('On for this experiment')
       answer = { settings: free.settings, status: { ...free.status, problemKind: 'error', problem: 'There is no admin account to open sessions as.' } }
       vi.advanceTimersByTime(10000)
       await flushPromises()
       expect(promises(w).holds).toBe(false)
       expect(promises(w).text).toContain('The Autopilot page shows a problem.')
+      expect(badge()).toBe('On, but held up for now')
+      // and paused, as the Study URL card says by then
+      answer = { settings: free.settings, status: { ...free.status, paused: true, problemKind: 'paused', problem: 'It is paused: its session "Autopilot 7" was stopped.' } }
+      vi.advanceTimersByTime(10000)
+      await flushPromises()
+      expect(badge()).toBe('Paused for this experiment')
+      expect(promises(w).turnsAway).toBe(true)
       w.unmount()
       // and stops asking once the page is closed
       const after = asked()
@@ -926,22 +939,39 @@ describe('Prolific participants of this session', () => {
 })
 
 describe('Prolific autopilot card', () => {
-  it('says when the autopilot of this experiment is paused', async () => {
-    vi.mocked(http.get).mockResolvedValueOnce({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game', paused: true } })
-    const w = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
-    await flushPromises()
-    expect(w.text()).toContain('Paused for this experiment')
-    vi.mocked(http.get).mockResolvedValueOnce({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game' } })
-    const w2 = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
-    await flushPromises()
-    expect(w2.text()).toContain('On for this experiment')
+  // (as the Recruitment page passes it: GET /autopilot, read by autopilotStatusOf)
+  const card = (answer: any) => mount(AutopilotCard, {
+    props: { experimentId: 3, status: autopilotStatusOf({ settings: { continuous: true }, ...answer }) },
+    global: { plugins: [makeRouter()] },
   })
-  it('says when its one session has finished, so the Prolific link leads nowhere', async () => {
-    vi.mocked(http.get).mockResolvedValueOnce({ source: 'config', status: { on: true, experimentId: 3, experimentName: 'Trust game', done: true } })
-    const w = mount(AutopilotCard, { props: { experimentId: 3 }, global: { plugins: [makeRouter()] } })
-    await flushPromises()
+  it('says when the autopilot of this experiment is paused', () => {
+    const w = card({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game', paused: true } })
+    expect(w.text()).toContain('Paused for this experiment')
+    expect(w.find('.b-badge').classes()).toContain('b-badge--warning')
+    const w2 = card({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game' } })
+    expect(w2.text()).toContain('On for this experiment')
+    expect(w2.find('.b-badge').classes()).toContain('b-badge--success')
+  })
+  it('says when its one session has finished, so the Prolific link leads nowhere', () => {
+    const w = card({ source: 'config', status: { on: true, experimentId: 3, experimentName: 'Trust game', done: true } })
     expect(w.text()).toContain('Done: it opens no more sessions')
+    expect(w.text()).toContain('Set in the server’s configuration')
     expect(w.text()).not.toContain('On for this experiment')
+  })
+  it('says when something holds it up, and promises nothing the study link may not do', () => {
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const w = card({ source: 'admin', status: { on: true, experimentId: 3, experimentName: 'Trust game', engineSession: other, problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).' } })
+    expect(w.find('.b-badge').text()).toBe('On, but held up for now')
+    expect(w.find('.b-badge').classes()).toContain('b-badge--warning')
+    const text = w.text().replace(/\s+/g, ' ')
+    expect(text).not.toContain('always find one')
+    expect(text).toContain('The Study URL card says when something keeps it from opening one.')
+    expect(card({ source: 'admin', status: { on: true, experimentId: 5, experimentName: 'Ultimatum' } }).text()).toContain('On for Ultimatum')
+    expect(card({ source: 'off', status: { on: false, experimentId: null } }).text()).toContain('Off')
+    // not known (yet): no badge, the way to the Autopilot page all the same
+    const unknown = mount(AutopilotCard, { props: { experimentId: 3, status: null }, global: { plugins: [makeRouter()] } })
+    expect(unknown.find('.b-badge').exists()).toBe(false)
+    expect(unknown.text()).toContain('Open Autopilot')
   })
 })
 

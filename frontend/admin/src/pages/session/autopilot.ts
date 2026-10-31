@@ -6,6 +6,8 @@ import { normalizeState, problemKind, type EngineSession } from '../autopilot/au
 
 /** What this page needs from GET /autopilot (see the Autopilot page for the full settings). */
 export interface AutopilotStatus {
+  /** who is in charge of its settings: the console ('admin'), the server's settings file ('config'), or nobody ('off') */
+  source: 'admin' | 'config' | 'off'
   on: boolean
   experimentId: number | null
   experimentName: string | null
@@ -90,6 +92,7 @@ export function autopilotStatusOf (s: any): AutopilotStatus | null {
   // game (the server leaves it out of Autopilot.nextSessionHeldUp). Paused or done, the reason stays.
   const handNote = !!state.status.handSession && problemKind(state) === 'waiting'
   return {
+    source: state.source,
     on: !!s.status.on,
     experimentId: s.status.experimentId ?? null,
     experimentName: s.status.experimentName ?? null,

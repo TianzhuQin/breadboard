@@ -59,7 +59,7 @@
     </div>
 
     <aside class="pl__side">
-      <AutopilotCard :experiment-id="admin.experiment.id" />
+      <AutopilotCard :experiment-id="admin.experiment.id" :status="autopilot" />
       <ProlificPlayers :has-session="!!admin.instance" />
     </aside>
   </div>
