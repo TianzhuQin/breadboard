@@ -124,3 +124,18 @@ test("the built-in timers and the ready-up sequence speak the session's language
   def own = new ReadyUpSequence([readyButtonContent: [content: "Go"]])
   assert own.fetchContent(own.readyButtonContent) == "Go"
 }
+
+test("the ready-up sequence's defaults keep the words an experiment puts into them") {
+  chose("zho")
+  def ready = new ReadyUpSequence()
+  ready.readyButtonContent.content = "Go"
+  ready.waitingContent.content = "Hold on"
+  // (a text of the experiment's, as c.get gives it)
+  c = [languageCode: { -> "zho" }, readyPrompt: "按下按钮"]
+  ready.readyContent.contentKey = "readyPrompt"
+  assert ready.fetchContent(ready.readyButtonContent) == "Go"
+  assert ready.fetchContent(ready.waitingContent) == "Hold on"
+  assert ready.fetchContent(ready.readyContent) == "按下按钮"
+  // and the ones it leaves alone are Breadboard's own, in the session's language
+  assert ready.fetchContent(ready.pendingContent) == "游戏马上开始。出现“准备好了”按钮时，按下它开始任务。"
+}

@@ -109,11 +109,12 @@ public class BreadboardBase {}
 
 BreadboardBase.metaClass.fetchContent = { Map opts ->
   // TODO: Handle locale property
-  if ("systemText" in opts) {
-    // One of Breadboard's own texts (conf/i18n), in the session's language: the defaults of ready.groovy.
-    return bbText(opts.systemText)
-  }
   if (!("content" in opts || "contentKey" in opts)) {
+    if ("systemText" in opts) {
+      // One of Breadboard's own texts (conf/i18n), in the session's language: the defaults of
+      // ready.groovy, unless the experiment put its own words into them (content or contentKey).
+      return bbText(opts.systemText)
+    }
     throw new Exception("Must supply either the 'content' or 'contentKey' property")
   }
   String content = opts.get("content") ?: c.get(opts.contentKey)

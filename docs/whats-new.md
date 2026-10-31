@@ -142,6 +142,9 @@ around its own texts.
   value])` gives one in the session's language.
 - `BBGame`'s `networkTitle`, and `BBNetwork`'s `egoLabel` and `ariaLabel`, are null by default, which
   stands for the built-in words in the session's language; a page that sets them keeps its own.
+- `ReadyUpSequence`'s texts (`pendingContent`, `readyContent`, `readyButtonContent`, `timerContent`,
+  `waitingContent`) are Breadboard's own words by default; an experiment that gives its own, as
+  options or by setting `content` or `contentKey` in them, keeps them.
 - A refusal of a tie change is told to the participant in their language and recorded in English
   (`edgeEdit`'s `reason`), as before; a reason the experiment gives (`validate`, a candidate's
   `reason`) is its own. A researcher's edit is refused in English.
