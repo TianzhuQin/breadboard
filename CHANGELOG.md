@@ -192,7 +192,8 @@ see [docs/install.md](docs/install.md#upgrading).
 - The pages shown before or between sessions are in the language of the session they lead to, or
   else of the experiment's most recent session, also after a restart of the server.
 - The console, a preview's notes for the researcher, Mechanical Turk's pages and experiments that still
-  use the previous AngularJS participant page stay in English. The Chinese quick start says how to
+  use the previous AngularJS participant page stay in English; the "Not in the game" screen of a
+  preview follows the session's language, as the end screens do. The Chinese quick start says how to
   make a study's pages Chinese, and what stays English.
 
 #### The console and the lab

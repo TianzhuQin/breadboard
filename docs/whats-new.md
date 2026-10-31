@@ -154,7 +154,9 @@ Chinese used to show its participants English around its own texts.
 - In English stay: the console, the notes a researcher's preview adds (`Watching only…`), Mechanical
   Turk's pages and `FinishMturk`, the experimental waiting room (`waitingRoom`, `WaitingRoom`) and
   groups, and the previous AngularJS participant page: experiments that still use it keep English
-  system texts.
+  system texts. The "Not in the game" screen the server sends a preview of someone who isn't in the
+  game (`notInGame`) is in the session's language, as the end screens are, although only researchers
+  see it.
 
 ## Running without anyone at the admin console (autopilot)
 

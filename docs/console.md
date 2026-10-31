@@ -182,6 +182,8 @@ between two) is in the language of the session it leads to, or else of the exper
 session, and in English while the experiment has had none. In English stay the console, the notes a
 researcher's preview adds (**Watching only**), Mechanical Turk's pages, experiments that still use the
 previous AngularJS participant page, and the data (an `edgeEdit` event's `reason`, for one). The
+"Not in the game" screen in the preview of someone who isn't in the game is in the session's
+language, as the end screens are, while the note under its tile is the console's, in English. The
 example sets the language from its `language` launch parameter: with `zho`, and its texts translated
 on this page, its participants read Chinese from the sign-in page to the end, but for the names of
 its colours (Blue, Orange), which are in its steps.

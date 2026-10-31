@@ -67,7 +67,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 - **自己写的实验**：在 InitStep 里、`run` 外面写上 `c.setDefaultLanguage("zho")`，这样每一场的步骤一加载，就定下了这一场的语言。游戏进行中再调用一次（比如换成 `eng`），参与者开着的页面也会跟着换。`a.add` 里没写 `name` 的选项，按钮上显示为“选项 1”“选项 2”……，也跟着这一场的语言。
 - 开场前和两场之间看到的页面（等下一场的等待页、“现在没有开放的实验”、“你已经参加过这项研究了”），用的是它们要带人进入的那一场的语言；那一场还没开时，用这个实验最近一场的语言。这个实验还从没开过场时，是英文。
 - 这份指南里引用的参与者页面上的英文（比如 "No session is open right now"、**Finish and return to Prolific**），在中文的场次里都是对应的中文。
-- 仍然是英文的：控制台；预览里只给研究者看的提示（比如 **Watching only**）；用旧版参与者页面（AngularJS）的老实验；Mechanical Turk 的页面；实验性的模块（旧的 `waitingRoom` 等候室和分组）。数据里记下的原因（比如 `edgeEdit` 事件的 `reason`）也一直是英文，方便分析。
+- 仍然是英文的：控制台；预览里只给研究者看的提示（比如 **Watching only**）；用旧版参与者页面（AngularJS）的老实验；Mechanical Turk 的页面；实验性的模块（旧的 `waitingRoom` 等候室和分组）。数据里记下的原因（比如 `edgeEdit` 事件的 `reason`）也一直是英文，方便分析。预览一个不在游戏里的人时，小窗里显示的“不在游戏里”页面也跟着这一场的语言，只有小窗下面控制台的说明 **Not in the game right now** 是英文。
 
 实验语言（步骤、`g`、`a`、内容）的写法见 [原版 wiki](https://github.com/human-nature-lab/breadboard/wiki)，Breadboard 自己的文字怎样跟着语言走，见 [whats-new.md](whats-new.md#texts-in-several-languages)。各页面的说明见 [console.md](console.md#building-an-experiment)。
 
