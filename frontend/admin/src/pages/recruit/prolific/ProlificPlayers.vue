@@ -6,6 +6,12 @@
     </div>
 
     <p v-if="!hasSession" class="rc-muted pl-side-card__text">Start a session to see who joins from Prolific.</p>
+    <!-- (the network this console has is the engine's) -->
+    <p v-else-if="elsewhere" class="rc-muted pl-side-card__text">
+      The engine now runs {{ elsewhere }}, so this list can’t show who came to this session:
+      From Prolific in every session lists them.
+    </p>
+    <p v-else-if="!players.length && !live" class="rc-muted pl-side-card__text">This session has ended. From Prolific in every session lists who came to it.</p>
     <p v-else-if="!players.length" class="rc-muted pl-side-card__text">Nobody has joined from Prolific yet. They appear here as they arrive.</p>
 
     <template v-else>
@@ -49,6 +55,21 @@ defineProps<{ hasSession: boolean }>()
 // Who the session recorded as finished without a completion code (noCompletionCode), as the list of
 // every session beside this one reads its data: they finished, as it says, rather than play on.
 const withoutCode = computed(() => playersWithoutCode(admin.instance?.events, admin.events))
+/**
+ * What the engine runs instead of this session, when it runs another (another experiment's session, or
+ * one of this experiment's that the console doesn't show): the players this console has are that
+ * one's, not this session's, so they aren't listed. Null when they are this session's.
+ */
+const elsewhere = computed(() => {
+  const e = admin.user?.engine
+  const inst = admin.instance
+  if (!e || !inst || !admin.engineInfoCurrent || e.experimentId === null) return null
+  const other = e.experimentId !== admin.experiment?.id
+  if (!other && (e.sessionId === null || e.sessionId === inst.id)) return null
+  if (e.sessionId === null) return e.experimentName ? `“${e.experimentName}”` : 'another experiment'
+  const session = e.sessionName ? `“${e.sessionName}”` : 'another session'
+  return other && e.experimentName ? `${session} of “${e.experimentName}”` : session
+})
 const live = computed(() => admin.instance?.status === 'RUNNING' || admin.instance?.status === 'TESTING')
 const players = computed(() => {
   void graph.version.value

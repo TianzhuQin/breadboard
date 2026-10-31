@@ -873,6 +873,56 @@ describe('Prolific participants of this session', () => {
     expect(w.text()).not.toContain('Playing')
     w.unmount()
   })
+
+  it('lists nobody from another session the engine runs now, nor says nobody joined an ended session, and says where its participants are', async () => {
+    const ProlificPlayers = (await import('@/pages/recruit/prolific/ProlificPlayers.vue')).default
+    // Game A's session 4 has finished; the engine now runs Game B's "Session 1", with someone from Prolific
+    admin.instance = { id: 4, name: 'Autopilot 4', status: 'FINISHED', hasStarted: true, events: [], hits: [] }
+    admin.engineInfoCurrent = true
+    admin.user = { engine: { experimentId: 2, experimentName: 'Game B', sessionId: 8, sessionName: 'Session 1', owner: 'r1@example.org' } }
+    graph.nodes.set('pp-b1', node('pp-b1', { prolificPid: 'PID-OF-GAME-B' }, true))
+    graph.version.value++
+    try {
+      const w = mount(ProlificPlayers, { props: { hasSession: true } })
+      const text = () => w.text().replace(/\s+/g, ' ')
+      expect(text()).toContain('The engine now runs “Session 1” of “Game B”, so this list can’t show who came to this session: From Prolific in every session lists them.')
+      expect(text()).not.toContain('PID-OF-GAME-B')
+      expect(text()).not.toContain('Nobody has joined')
+      // another experiment loaded, with no session
+      admin.user = { engine: { experimentId: 2, experimentName: 'Game B', sessionId: null, sessionName: null, owner: 'r1@example.org' } }
+      await flushPromises()
+      expect(text()).toContain('The engine now runs “Game B”, so this list can’t show who came to this session')
+      // a newer session of this experiment (the console shows the older one)
+      admin.user = { engine: { experimentId: 1, experimentName: 'Game A', sessionId: 6, sessionName: 'Autopilot 6', owner: 'r1@example.org' } }
+      await flushPromises()
+      expect(text()).toContain('The engine now runs “Autopilot 6”, so this list can’t show who came to this session')
+      // the engine holds this session (or, once it has finished, no session of this experiment): its players are listed
+      for (const engine of [{ experimentId: 1, sessionId: 4 }, { experimentId: 1, sessionId: null }]) {
+        admin.user = { engine: { experimentName: 'Game A', sessionName: null, owner: 'r1@example.org', ...engine } }
+        await flushPromises()
+        expect(text()).toContain('PID-OF-GAME-B')
+        expect(text()).not.toContain('The engine now runs')
+      }
+      // what the engine runs isn't known (a reload under way): as before
+      admin.user = { engine: { experimentId: 2, experimentName: 'Game B', sessionId: 8, sessionName: 'Session 1', owner: null } }
+      admin.engineInfoCurrent = false
+      await flushPromises()
+      expect(text()).not.toContain('The engine now runs')
+      // an ended session whose players the engine no longer has (after a restart, say): nobody "has joined yet"
+      graph.nodes.clear()
+      graph.version.value++
+      await flushPromises()
+      expect(text()).toContain('This session has ended. From Prolific in every session lists who came to it.')
+      expect(text()).not.toContain('Nobody has joined')
+      admin.instance = { ...admin.instance, status: 'RUNNING' }
+      await flushPromises()
+      expect(text()).toContain('Nobody has joined from Prolific yet.')
+      w.unmount()
+    } finally {
+      delete admin.user
+      delete admin.engineInfoCurrent
+    }
+  })
 })
 
 describe('Prolific autopilot card', () => {
