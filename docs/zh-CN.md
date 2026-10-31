@@ -19,14 +19,14 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 | `breadboard-<version>.zip` | 任何系统，但要自己装 Java 8（**只能用 Java 8**），并把 `JAVA8_HOME` 设为它的安装文件夹 |
 
 2. 启动：
-   - **macOS**：双击 `Start Breadboard.command`。第一次 macOS 会拦下它，因为它是从网上下载的，macOS 无法验证开发者。macOS 15 及以后，按住 Control 键点按 → **打开** 已经不管用，只能到 **系统设置 → 隐私与安全性** 里点 **仍要打开**。一定能用的办法是用"终端"：打开终端，输入 `sh` 和一个空格，把文件夹里的 `breadboard.sh` 拖进终端窗口，按回车。
+   - **macOS**：双击 `Start Breadboard.command`。第一次 macOS 会拦下它，因为它是从网上下载的，macOS 无法验证开发者。macOS 15 及以后，按住 Control 键点按 → **打开** 已经不管用，只能到 **系统设置 → 隐私与安全性** 里点 **仍要打开**。一定能用的办法是用“终端”：打开终端，输入 `sh` 和一个空格，把文件夹里的 `breadboard.sh` 拖进终端窗口，按回车。
    - **Windows**：解压之前，先右键点下载的 zip，选 **属性**，勾选 **解除锁定**，点 **确定**。不然 Windows（智能应用控制）可能不让运行从网上下载的 `breadboard.bat`。然后右键点 zip，选 **全部解压缩**，再双击解压出的文件夹里的 `breadboard.bat`。（直接在 zip 里双击的话，它会提示先解压。）第一次启动时，Windows 防火墙会询问是否允许 Java 访问网络。要让实验室里的其他电脑连上，勾选这台电脑所在网络的类型，**专用网络** 或 **公用网络**（Windows 常把第一次连上的网络算作公用网络，在 **设置 → 网络和 Internet** 里可以看到是哪一种），再点 **允许访问**，这一步需要管理员权限。只在这台电脑上用的话，怎么选都不影响。如果 SmartScreen 还是拦截，点 **更多信息** → **仍要运行**。
    - **Linux**：解压（没有 `unzip` 的话，先运行 `sudo apt install unzip`），在文件夹里运行 `./breadboard.sh`。
 3. 服务器启动好后，浏览器会自动打开控制台。窗口里也会写出访问地址：`On this computer: http://localhost:9000` 给这台电脑用，`On this network: http://192.168.…:9000` 给同一网络（比如实验室）里的其他电脑用。如果是从别的电脑打开一台新服务器（例如远程的服务器），还要填 **Setup code**：服务器会把它打印在自己的窗口里和 `logs/application.log` 里，这样只有管理这台服务器的人能创建第一个账号。第一次会看到 **Welcome to Breadboard**：填 **Email**、**Password**（至少 8 位，输两遍）和 **Default language**，点 **Create account**，以后就用这个账号登录。**Default language** 是你给参与者写文字用的语言（这些文字在 **Content** 页面里写），新建的实验会用它；控制台的界面始终是英文，不受它影响。它以后可以在 **Settings** 里改。
 4. 实验室的其他人：在 **Settings → Researchers** 里输入他们的邮箱，点 **Add**，把显示的密码（只显示一次，可以点 **Copy sign-in details** 复制）发给他们。用 localhost 打开控制台时，复制的地址会换成服务器在实验室网络里的地址，同事的电脑才能打开；找不到这个地址时，页面会提醒你 localhost 只能在这台电脑上用。所有研究者都能看到和修改这台服务器上的每个实验。
 5. 停止服务器：在它的窗口里按 Ctrl+C，或直接关掉窗口。
 
-服务器运行期间，Mac 和 Windows 电脑不会自己进入睡眠。在 Linux 上，如果是在图形桌面里启动的（不是通过 SSH 或作为服务），启动脚本会请求 systemd（在 GNOME 桌面上也会请求桌面环境）不让电脑睡眠；如果电脑仍然会自动睡眠（有些桌面会这样，比如 Linux Mint 的 Cinnamon），请在电源设置里关掉"自动挂起"。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里"显示器关闭时防止自动进入睡眠"那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
+服务器运行期间，Mac 和 Windows 电脑不会自己进入睡眠。在 Linux 上，如果是在图形桌面里启动的（不是通过 SSH 或作为服务），启动脚本会请求 systemd（在 GNOME 桌面上也会请求桌面环境）不让电脑睡眠；如果电脑仍然会自动睡眠（有些桌面会这样，比如 Linux Mint 的 Cinnamon），请在电源设置里关掉“自动挂起”。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里“显示器关闭时防止自动进入睡眠”那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
 
 启动时如果提示 "Breadboard is already running from this folder"，说明这个文件夹里的 Breadboard 已经在运行；从终端或双击启动时，它会直接在浏览器里打开正在运行的那个控制台。如果提示 "Breadboard is already running on port 9000"，是另一份 Breadboard 在用这个端口，打开提示里的网址就能用它。如果提示 "Another program is using port 9000"，是别的程序占了这个端口：关掉那个程序，或者换一个端口。Windows 上这两种情况的提示都是 "Port 9000 is in use"：先打开提示里的网址看看，打开的是 Breadboard 的话，说明它已经在运行，直接用就行；不是的话，就是别的程序占了这个端口。换端口的办法：在 `conf/local.conf` 里加一行 `http.port=9001`，以后每次启动都用这个端口；只想这一次换，就像上面那样在终端里启动，在拖进去的 `breadboard.sh` 后面加上 ` -Dhttp.port=9001` 再按回车（在 Breadboard 的文件夹里，就是 `sh breadboard.sh -Dhttp.port=9001`；Windows 上用提示里给出的命令）。同一个文件夹同时只能运行一个 Breadboard，因为它们共用一个数据库；要同时运行第二个，请把 zip 另外解压一份，在那一份里用另一个端口启动。
 
@@ -53,7 +53,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
   - 测试玩家（他自己的页面从没在这一场连上过）由预览来玩：预览算他在线，预览里的选择就是他的选择。
   - 预览不会把人加进游戏：不在网络里的人（比如恢复场次后还没回来的人），预览上写着 **Not in the game right now**，等他回来后自动显示他的页面。恢复场次或重新加载引擎以后，这些规则照样适用。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后，再等 20 秒看还有没有人来（满 8 人就不再等），倒数 5 秒后游戏自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；游戏里的说明、提示和得分文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后，再等 20 秒看还有没有人来（满 8 人就不再等），倒数 5 秒后游戏自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它切断；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；游戏里的说明、提示和得分文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次切断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 例子的文字是英文写的，放在 Content 页面代码为 `eng` 的语言下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
 
@@ -77,14 +77,14 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 ## 开一场实验并邀请参与者
 
-"一场"（session）就是实验的一次运行。
+“一场”（session）就是实验的一次运行。
 
 1. 在 **Live session** 页点 **New session**，填 **Session name**（已经填好了，比如 Session 1，可以改），检查 **Launch parameters**，点 **Create session**。这一场马上开放，参与者可以用链接加入。
    - 第一场的启动参数填的是 **Parameters** 页上的默认值（Default）。以后每一场都照上一场填好；和默认值不一样时，对话框里写着 Filled in as in “Session 1”, the last session。
    - 所以在 **Parameters** 页改了某个参数的 Default 以后，自己新建一场时，要在这个参数下点 **Use default**（或点 **Reset to defaults**，全部换回默认值），新的 Default 才会用上。自动运行开的场次总是用默认值。
 2. 把 **Links for participants** 里的链接发给参与者。**This session** 只在这一场运行时有效。**Whichever session is open** 总是指向这个实验当前开放、还没开始的那一场，可以一直用同一个。**Prolific study URL** 给 Prolific 用。参与者打开链接，在 **Your ID** 里输入一个 ID，点 **Continue**。ID 可以是你给他们的任何名字或编号（最多 64 个字符，不能以 `_` 开头），一个 ID 只占一个位置。
 3. 链接用的是你打开控制台时的网址。用 localhost 打开时，链接只在你自己的电脑上能用。放到服务器上以后，要用服务器的公开网址打开控制台，再复制链接。
-4. 人到齐后点 **Start the game**，在确认框里再点一次 **Start the game**。等待的人一起进入，实验开始。有等候室的实验（比如 Example: network game）人够了会自己开始，不用点。开始后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面"设置写在哪里"）。
+4. 人到齐后点 **Start the game**，在确认框里再点一次 **Start the game**。等待的人一起进入，实验开始。有等候室的实验（比如 Example: network game）人够了会自己开始，不用点。开始后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面“设置写在哪里”）。
 5. 在 **Network** 页实时看网络。选 **Tie**（快捷键 C），先点一个人再点另一个人，就加了一条连接；选 **Cut**（X）再点一条连接，就把它切断。成功后会出现 **Undo**，Ctrl+Z 也能撤销。每次修改都记成一条 `edgeEdit` 事件，操作者是 `admin`。
 6. 点 **Stop session**（确认框里再点一次）停止这一场：没有新人能加入，参与者看到这一场已被停止的页面（已经拿到完成码的人仍看到完成码），之后不再记录任何东西。以后可以点 **Resume session**，让它的游戏从头再来，之前的数据都保留。
 
@@ -161,7 +161,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 完成以后：
 
 - **完成页面**：参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。
-- **参与者的留言**：他们在完成页面的 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。完成页面一直开着的话，一周之内都能把留言存下来，服务器重启过也一样。存不下来时，页面会告诉参与者，给出 **Try again** 和 **Return to Prolific without it**，不会悄悄丢掉留言；服务器 10 秒内没有回音时，页面说留言还没确认存下（按钮是 **Try again** 和 **Return to Prolific without waiting**），存好后自己回到 Prolific。同一个参与者的同一句留言只存一次。
+- **参与者的留言**：他们在完成页面的 **Comments for the researcher** 框里写的话，会存进各自那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。完成页面一直开着的话，一周之内都能把留言存下来，服务器重启过也一样。存不下来时，页面会告诉参与者，给出 **Try again** 和 **Return to Prolific without it**，不会悄悄丢掉留言；服务器 10 秒内没有回音时，页面说留言还没确认存下（按钮是 **Try again** 和 **Return to Prolific without waiting**），存好后自己回到 Prolific。同一个参与者的同一句留言只存一次。
 - **谁来了、谁完成了，以前各场的名单**：**From Prolific in this session** 列出这一场从 Prolific 来的人。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场，所以付费时请看 **From Prolific in every session**：它按场次列出这个实验每一场从 Prolific 来的人（最新的一场在最上面），什么时候加入的、有没有完成、完成码和奖金。如果你在 `completeProlific` 里给了 `bonus` 金额，两个列表的 **Copy bonus list** 都能复制奖金名单（后一个是所有场次的），用于 Prolific 的批量发奖金。游戏结束时没拿到完成码的人（比如例子的 `prolificCode` 还空着时）也算完成，标成 **No code**。
 - 等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。
 
@@ -223,7 +223,7 @@ breadboard.example.org {
 
 **数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），不用停服务器；每天的、手动做的、升级前做的备份各保留最近 14 份。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：停止服务器，把备份 zip 解压到 `db` 文件夹（替换里面的 `breadboard.h2.db`），再启动。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传。从 3.x 升级时，把它和 `conf/local.conf`（你的设置）跟数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
 
-**设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的"文本编辑"，Windows 上的"记事本"）打开就能改。引号要用英文的直引号（`"`）。中文输入法的标点，和 Mac "文本编辑"默认打开的智能引号，都会把它打成弯引号（`“ ”`），服务器就读不了这个文件：启动脚本会提示 "Line … of conf/local.conf has curly quotes"，指出是哪一行，并且不启动服务器。遇到这种情况，切换到英文输入法，把那一行的引号重新输入一遍，保存后再启动。用"文本编辑"的话，最好先在 **编辑 → 替换** 里关掉 **智能引号** 再输入。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。Windows 上的路径要用正斜杠，例如 `breadboard.backup.dir="D:/Breadboard backups"`，或者把每个反斜杠写两遍（`"D:\\Breadboard backups"`）：引号里的单个反斜杠是转义符，会让服务器启动不了，或者悄悄变成别的路径。运行服务器的账号必须能读这个文件：读不了的话（比如用 `sudo` 复制过来的，属于 root），启动脚本会提示 "conf/local.conf can't be read by …" 并拒绝启动，免得服务器不带你的设置就跑起来；按提示把文件的所有者改成那个账号就行。
+**设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的“文本编辑”，Windows 上的“记事本”）打开就能改。引号要用英文的直引号（`"`）。中文输入法的标点，和 Mac 上“文本编辑”默认打开的智能引号，都会把它打成弯引号（`“ ”`），服务器就读不了这个文件：启动脚本会提示 "Line … of conf/local.conf has curly quotes"，指出是哪一行，并且不启动服务器。遇到这种情况，切换到英文输入法，把那一行的引号重新输入一遍，保存后再启动。用“文本编辑”的话，最好先在 **编辑 → 替换** 里关掉 **智能引号** 再输入。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。Windows 上的路径要用正斜杠，例如 `breadboard.backup.dir="D:/Breadboard backups"`，或者把每个反斜杠写两遍（`"D:\\Breadboard backups"`）：引号里的单个反斜杠是转义符，会让服务器启动不了，或者悄悄变成别的路径。运行服务器的账号必须能读这个文件：读不了的话（比如用 `sudo` 复制过来的，属于 root），启动脚本会提示 "conf/local.conf can't be read by …" 并拒绝启动，免得服务器不带你的设置就跑起来；按提示把文件的所有者改成那个账号就行。
 
 **实验室几个人怎么一起用？** 每人一个账号：在 **Settings → Researchers** 里添加、删除，或给别人重置密码。所有研究者共用这台服务器上的全部实验（谁都能打开、修改、运行）。要和别的课题组分开，就各用一台服务器。
 
