@@ -155,7 +155,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
      }
      ```
 
-     不加这个判断也不会出错：对不是从 Prolific 来的人，它什么都不做，只在服务器日志里写一行原因。
+     不加这个判断也不会出错：对不是从 Prolific 来的人，它什么都不做，只在服务器日志里写一行原因。想在完成码上方显示一句话，可以在方括号里加上 `message`，用参与者的语言写，比如 `[completionCode: "C1A2B3C4", message: "感谢你的参与！"]`。
    - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场（用例子游戏时，确认 `prolificCode` 填的是你的完成码，不是的话点它下面的 **Use default**），然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮（中文的场次里是 **完成，回到 Prolific**）。
 
 完成以后：

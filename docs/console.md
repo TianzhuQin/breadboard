@@ -535,7 +535,9 @@ code when they finish (**When a participant finishes** says how for this experim
   ```
 
   For someone who didn't come from Prolific, `completeProlific` does nothing (the server's log says
-  why), so a call without the check doesn't stop the game either.
+  why), so a call without the check doesn't stop the game either. To show a line above the code, add
+  a `message` (HTML), written in your participants' language, e.g.
+  `[completionCode: "C1A2B3C4", message: "Thank you for taking part!"]`.
 - Before you publish the study, open a session (with the example, check that its `prolificCode` is
   your code), go through it with **Try it as a test participant** (press **Start the game** on Live
   session if the waiting room waits for more people), and check that the code shows at the end.
