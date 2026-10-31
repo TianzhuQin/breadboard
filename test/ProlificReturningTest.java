@@ -118,8 +118,8 @@ public class ProlificReturningTest extends BaseTest {
      * the order is that of their ids, which follow the order they were recorded in
      * (conf/ebean.properties). That order is DataExportTest's to guard
      * (eventsOfTheSameMillisecondComeOutInTheOrderTheyWereRecorded): ids given out the wrong way round,
-     * as before that fix, swapped a pair here only when it straddled the end of one of the batches Ebean
-     * took ids in, so this class would catch that only now and then.
+     * as before that fix, swapped a pair here only when it straddled the point where H2's hash order of
+     * a batch of ids wraps around (…, 40, 21, …), so this class would catch that only now and then.
      */
     private static void inOneMillisecond(ExperimentInstance session) {
         com.avaje.ebean.Ebean.createSqlUpdate("update events set datetime = :t where experiment_instance_id = :session"
