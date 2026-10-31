@@ -1,7 +1,7 @@
 import com.tinkerpop.blueprints.Vertex
 
 // Running a session from first arrival to last answer with nobody at the admin console.
-// Together with breadboard.autopilot.* in application.conf (models.Autopilot), which opens the
+// Together with the console's Autopilot page (or breadboard.autopilot.* in conf/local.conf), which opens the
 // session, an experiment can run unattended. Call these from a step that runs at load time,
 // e.g. the OnJoinStep's file or InitStep's setup code outside run:
 //

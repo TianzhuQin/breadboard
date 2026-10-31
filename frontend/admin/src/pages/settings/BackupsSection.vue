@@ -25,7 +25,7 @@
                 <strong>{{ latestText }}</strong>
                 <span>
                   A new one every {{ status.everyHours === 24 ? 'day' : `${status.everyHours} hours` }}; the newest
-                  {{ status.keep }} are kept.
+                  {{ status.keep }} of each kind are kept: these, those made by hand, and those made before an upgrade.
                 </span>
               </p>
               <BButton :icon="Save" :loading="busy" @click="backUpNow">Back up now</BButton>

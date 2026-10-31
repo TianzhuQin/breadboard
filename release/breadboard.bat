@@ -1,19 +1,22 @@
 @ECHO OFF
 REM (Without delayed expansion, a "!" in the folder's path is just a character.)
 SETLOCAL EnableExtensions DisableDelayedExpansion
-REM Start Breadboard: double-click it. The console opens in the browser once the server is up
-REM (SET BREADBOARD_NO_BROWSER=1 stops that); close the window or press Ctrl+C to stop it. While it
-REM runs, the computer doesn't go to sleep by itself.
+REM Start Breadboard: double-click it. The console opens in the browser once the server is up, and
+REM again at a second double-click while it runs (SET BREADBOARD_NO_BROWSER=1 stops that); close the
+REM window or press Ctrl+C to stop it. While it runs, the computer doesn't go to sleep by itself.
 REM Other settings go to the server as -D options, e.g.  breadboard.bat -Dhttp.port=8080; the settings
-REM you change go in conf\local.conf.
+REM you change go in conf\local.conf, where http.port=8080 sets the port, and breadboard.memory=2g how
+REM much memory the server may use for its data (1g), for every start.
 REM Needs Java 8: the first Java 8 among JAVA8_HOME's (the JDK's folder, or its bin folder), the one
 REM that comes with this download (jre\), JAVA_HOME's, and java on PATH. JAVA_OPTS adds options for
-REM Java itself, e.g. SET JAVA_OPTS=-Xmx2g
+REM Java itself.
 REM
 REM Keep running: when the server stops by itself (it ran out of memory, Java crashed), this window
 REM says why, waits a few seconds and starts it again; after 5 restarts in 10 minutes it is left
-REM stopped. On when the window is someone's (double-clicked, or typed in a Command Prompt); off
-REM when its input is redirected (a script). SET BREADBOARD_KEEP_RUNNING=1 or 0 decides instead.
+REM stopped, and so is one that stopped before it ever started (a mistake in conf\local.conf, its
+REM port taken): what Java printed as errors is then in logs\start-errors.log. On when the window is
+REM someone's (double-clicked, or typed in a Command Prompt); off when its input is redirected (a
+REM script). SET BREADBOARD_KEEP_RUNNING=1 or 0 decides instead.
 REM
 REM As a service (SET BREADBOARD_SERVICE=1, as breadboard-task.xml has Task Scheduler do), nobody
 REM reads the window: it never waits for a key (PAUSE), no browser is opened, keep running is on and
@@ -61,28 +64,93 @@ EXIT /B 1
 
 REM Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
 REM and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-REM would fill the disk): delete logs\out-of-memory.hprof once it has been looked at. These options
-REM need Java 8u92 or newer; an older Java 8 runs without them.
-SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof"
+REM would fill the disk): delete logs\out-of-memory.hprof once it has been looked at. What Java itself
+REM says then (that it ran out of memory, and of what; the heap dump) goes into logs\jvm-pidN.log, N
+REM being its process id, not to this window: Java writes it to the window directly, and one that
+REM doesn't take output (a click into it starts selecting text, which pauses it) held it up there for
+REM good, before it ended, so that it was never started again (keep running, below). Each start has
+REM a file of its own: launcher.Main deletes the earlier ones in which Java said nothing, and keeps
+REM at most 10. These options need Java 8u92 or newer; an older Java 8 runs without them.
+SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
 "%JAVA%" %MEMORY_OPTS% -version >NUL 2>&1
 IF ERRORLEVEL 1 SET "MEMORY_OPTS="
+REM (Not in the check: there, Java would make such a file too. The doubled percent sign is one, for
+REM Java, which puts the process id in its place.)
+IF DEFINED MEMORY_OPTS SET "MEMORY_OPTS=%MEMORY_OPTS% -XX:+LogVMOutput -XX:LogFile=logs\jvm-%%p.log"
 
-REM The port: 9000, or the one given with -Dhttp.port=... (cmd splits that option at the =).
-SET "PORT=9000"
-CALL :findport %*
+REM conf\local.conf holds the settings changed for this Breadboard (see below). One the server can't
+REM read (made or copied by another account) would be left out without a word, as if there were
+REM none: the server would run without those settings (its address, its port, HTTPS-only cookies,
+REM AWS keys). Say so instead, before anything is read from it.
+SET "UNREADABLE="
+IF EXIST "conf\local.conf" (
+  (TYPE "conf\local.conf" >NUL) 2>NUL || SET "UNREADABLE=1"
+)
+IF DEFINED UNREADABLE (
+  CALL :refuse say_unreadable
+  EXIT /B 1
+)
+
+REM The port: 9000, or http.port in conf\local.conf, or the one given with -Dhttp.port=... (here or in
+REM JAVA_OPTS; cmd splits that option at the =), which wins: Play reads the port only from
+REM -Dhttp.port, so the one in conf\local.conf is passed on as one (PORT_OPT). And how much memory the
+REM server may use for its data (Java's heap, -Xmx): 1g, or breadboard.memory in conf\local.conf. Each
+REM is read from a line of its own (key=value, key: value or key = "value", with a comment after it
+REM or not), the last one if there are several; a value that isn't one ("?") is refused. Curly double
+REM quotes (as Word, a web page or an input method types them) make the file unreadable to the
+REM server, whose message then misleads: CURLY is the first line that has them (outside straight
+REM quotes and comments, where they are fine), which is named instead. A comment (# or //) starts
+REM outside straight quotes: after one left open, as in a "https://... whose closing quote is curly,
+REM it is all the value. An -Xmx given here or in JAVA_OPTS wins over breadboard.memory: MEMORY_GIVEN
+REM is the size it gives, and MEMORY_GIVEN_IN says where it was given (:findmemory).
+SET "PORT="
+CALL :findport %JAVA_OPTS% %*
+SET "MEMORY_GIVEN="
+SET "MEMORY_GIVEN_IN="
+CALL :findmemory JAVA_OPTS %JAVA_OPTS%
+CALL :findmemory command %*
+SET "MEMORY=1g"
+SET "LOCAL_PORT="
+SET "LOCAL_MEMORY="
+SET "CURLY="
+IF EXIST "conf\local.conf" FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$port = $null; $memory = $null; $n = 0; foreach ($line in [IO.File]::ReadAllLines((Join-Path (Get-Location) 'conf\local.conf'))) { $n++; if (($line -replace '\x22[^\x22]*\x22', '' -replace '//', '#' -replace '\A([^\x22#]*)#.*', '$1') -match '[\u201C\u201D]') { 'curly ' + $n }; if ($line -match '\A\s*(http\.port|breadboard\.memory)\s*[=:]\s*(.*?)\s*(#.*|//.*)?\z') { $value = $Matches[2] -replace '\A\x22(.*)\x22\z', '$1'; if ($Matches[1] -eq 'http.port') { $port = $value } else { $memory = $value } } }; if ($port -ne $null) { if ($port -match '\A[1-9][0-9]{0,4}\z' -and [int]$port -le 65535) { 'http.port ' + $port } else { 'http.port ?' } }; if ($memory -ne $null) { if ($memory -match '\A[1-9][0-9]{0,4}[mMgG]\z') { 'breadboard.memory ' + $memory } else { 'breadboard.memory ?' } }" 2^>NUL') DO (
+  IF "%%A"=="curly" IF NOT DEFINED CURLY SET "CURLY=%%B"
+  IF "%%A"=="http.port" SET "LOCAL_PORT=%%B"
+  IF "%%A"=="breadboard.memory" SET "LOCAL_MEMORY=%%B"
+)
+IF DEFINED CURLY (
+  CALL :refuse say_curly
+  EXIT /B 1
+)
+IF "%LOCAL_PORT%"=="?" (
+  CALL :refuse say_badport
+  EXIT /B 1
+)
+IF "%LOCAL_MEMORY%"=="?" (
+  CALL :refuse say_badmemory
+  EXIT /B 1
+)
+SET "PORT_OPT="
+IF NOT DEFINED PORT IF DEFINED LOCAL_PORT SET "PORT_OPT=-Dhttp.port=%LOCAL_PORT%"
+IF NOT DEFINED PORT IF DEFINED LOCAL_PORT SET "PORT=%LOCAL_PORT%"
+IF NOT DEFINED PORT SET "PORT=9000"
+IF DEFINED LOCAL_MEMORY SET "MEMORY=%LOCAL_MEMORY%"
 
 REM One already running from this folder, on whatever port, has the database open: say so, instead
-REM of the database's stack trace.
+REM of the database's stack trace. Started by someone (often a second double-click), its console is
+REM opened, as the first start did (:openrunning).
 CALL :runninghere
 IF DEFINED RUNNING (
+  CALL :openrunning
   CALL :refuse say_running
   EXIT /B 1
 )
 
 REM Something already answering on the port (often Breadboard itself, started earlier): say so
-REM instead of a stack trace.
-powershell -NoProfile -Command "try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %PORT%); $c.Close(); exit 0 } catch { exit 1 }" >NUL 2>&1
-IF NOT ERRORLEVEL 1 (
+REM instead of a stack trace (here, and again before the server is started again after it stopped
+REM by itself).
+CALL :porttaken
+IF DEFINED PORT_TAKEN (
   CALL :refuse say_port
   EXIT /B 1
 )
@@ -125,17 +193,6 @@ IF NOT EXIST "conf\local.conf" (
   ECHO # They win over conf/application-prod.conf, which lists every setting and what it does. A new release
   ECHO # doesn't come with this file: copy it into the new release's conf folder when you upgrade.
 ) 2>NUL >"conf\local.conf"
-REM One the server can't read (made or copied by another account) would be left out without a word,
-REM as if there were none: the server would run without those settings (its address, HTTPS-only
-REM cookies, AWS keys). Say so instead.
-SET "UNREADABLE="
-IF EXIST "conf\local.conf" (
-  (TYPE "conf\local.conf" >NUL) 2>NUL || SET "UNREADABLE=1"
-)
-IF DEFINED UNREADABLE (
-  CALL :refuse say_unreadable
-  EXIT /B 1
-)
 
 REM Play refuses to start while RUNNING_PID exists: one left behind by a crash goes.
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
@@ -158,10 +215,12 @@ IF /I "%BREADBOARD_KEEP_RUNNING%"=="no" SET "KEEP_RUNNING="
 IF /I "%BREADBOARD_KEEP_RUNNING%"=="off" SET "KEEP_RUNNING="
 
 REM Where it is reached: here, and from the other computers on this network (a lab's), at this
-REM computer's private IPv4 address on the network it reaches the internet through.
+REM computer's IPv4 addresses: first those of the network it reaches the internet through (its
+REM default route), then those of every other connected adapter (a second network; a lab's network
+REM may hand out public addresses). Only loopback (127.x) and link-local (169.254.x) ones are left out.
 ECHO Starting Breadboard. Once it says "Listening for HTTP", it is ready at:
 ECHO   On this computer: http://localhost:%PORT%
-FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue; if ($route) { Get-NetIPAddress -AddressFamily IPv4 -InterfaceIndex $route.InterfaceIndex -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match '\A(10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]+\.[0-9]+\z' } | Select-Object -ExpandProperty IPAddress -Unique }" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
+FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$default = @(Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue | Sort-Object RouteMetric | ForEach-Object { $_.InterfaceIndex }); $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { $_.ifIndex }); Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '\A(127|169\.254)\.' -and ($default -contains $_.InterfaceIndex -or $up -contains $_.InterfaceIndex) } | Sort-Object { if ($default -contains $_.InterfaceIndex) { 0 } else { 1 } } | Select-Object -ExpandProperty IPAddress -Unique" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
 IF DEFINED KEEP_RUNNING ECHO If it stops by itself, it is started again. Close this window to stop it.
 
 REM Open the console once the server answers (for up to 3 minutes), from a helper in the background.
@@ -202,14 +261,22 @@ SET "JAVA_ERRORS="
 IF DEFINED SERVICE SET "JAVA_ERRORS=2>>logs\service-errors.log"
 
 :start
+REM logs\start-errors.log says that Java is starting: launcher.Main deletes it once the server listens,
+REM and when Java ends before that, it writes what Java printed as errors into it. So the file is
+REM there after Java ended only when the server never started.
+>"logs\start-errors.log" ECHO Breadboard's Java was started on %DATE% at %TIME%, and the server hasn't listened yet. Once it listens, this file is deleted. If Java ends before, what it printed as errors is written here; if nothing else is, it ended before it could: what it printed in Breadboard's window says why, and the newest logs\jvm-pid*.log has what Java itself said (such as that it ran out of memory).
 REM ("%CD%\.": at a drive root, "D:\" would end in \" and hide the closing quote.) MaxMetaspaceSize:
 REM the classes made for the experiments' scripts (anew at every engine reload) may take that much
 REM memory besides the heap, so that a leak of them ends in a restart (out of memory) instead of
-REM taking all the computer's memory. ERRORLEVEL is 1 until Java sets it: if cmd can't open
+REM taking all the computer's memory. launcher.Main is Play's start with an output that never waits
+REM for this window: one that doesn't take it (a click into it starts selecting text, which pauses
+REM it) can't hold the server up, nor, with MEMORY_OPTS (above), Java as it runs out of memory. (Only
+REM a crash of Java itself, which is rare, still waits for the window to take its first lines.)
+REM ERRORLEVEL is 1 until Java sets it: if cmd can't open
 REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
 REM purpose (0).
 CMD /D /C EXIT 1
-"%JAVA%" -Xmx1024m -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %* play.core.server.NettyServer "%CD%\." %JAVA_ERRORS%
+"%JAVA%" -Xmx%MEMORY% -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %PORT_OPT% %* launcher.Main "%CD%\." %JAVA_ERRORS%
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
@@ -217,10 +284,17 @@ IF "%EXIT_CODE%"=="0" EXIT /B 0
 IF "%EXIT_CODE%"=="130" EXIT /B 130
 IF "%EXIT_CODE%"=="143" EXIT /B 143
 IF NOT DEFINED KEEP_RUNNING GOTO failed
+REM The server never started (a mistake in conf\local.conf, its port taken by then, Java that can't
+REM start at all): started again, it would only fail the same way. As a service it is all the same,
+REM as below: what kept it from starting may be gone by then (a program that held the port).
+IF EXIST "logs\start-errors.log" IF NOT DEFINED SERVICE GOTO couldnotstart
 
 SET "WHY=exit code %EXIT_CODE%; logs\application.log may say why"
 IF DEFINED SERVICE SET "WHY=exit code %EXIT_CODE%; logs\application.log or logs\service-errors.log may say why"
-IF "%EXIT_CODE%"=="3" SET "WHY=it ran out of memory: a script may keep too much data. SET JAVA_OPTS=-Xmx2g gives it more memory. What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
+REM (1: the server's own stop after an error that stopped its engine, Global.exitIfActorsStop)
+IF "%EXIT_CODE%"=="1" SET "WHY=exit code 1: the server stopped itself after an error, which logs\application.log shows"
+IF DEFINED SERVICE IF EXIST "logs\start-errors.log" SET "WHY=it could not start, exit code %EXIT_CODE%; logs\start-errors.log and logs\service-errors.log may say why"
+IF "%EXIT_CODE%"=="3" CALL :outofmemory
 CALL :now
 SET /A "SINCE=NOW-(R1)"
 IF %SINCE% LSS 600 IF NOT DEFINED SERVICE GOTO giveup
@@ -229,7 +303,7 @@ SET "RECENT=0"
 FOR %%R IN (%R1% %R2% %R3% %R4% %R5%) DO CALL :countrecent %%R
 SET /A "DELAY=5<<RECENT"
 IF %DELAY% GTR 60 SET "DELAY=60"
-CALL :note "Breadboard stopped by itself (%WHY%). Starting it again in %DELAY% seconds; %TO_STOP%."
+CALL :note_going_on "Breadboard stopped by itself (%WHY%). Starting it again in %DELAY% seconds; %TO_STOP%."
 SET /A "PINGS=DELAY+1"
 ping -n %PINGS% 127.0.0.1 >NUL
 SET "R1=%R2%"
@@ -243,10 +317,37 @@ IF DEFINED RUNNING (
   EXIT /B %EXIT_CODE%
 )
 IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
+REM (another program may have taken the port meanwhile: the server would only fail to start. As a
+REM service it is tried all the same, until the port is free again.)
+SET "PORT_TAKEN="
+IF NOT DEFINED SERVICE CALL :porttaken
+IF DEFINED PORT_TAKEN GOTO portnowtaken
 REM (the server doesn't redo what -Dbreadboard.resetPassword asked for: see Global)
 SET /A "BREADBOARD_RESTARTED+=1"
-ECHO Starting Breadboard again.
+CALL :show "Starting Breadboard again."
 GOTO start
+
+:couldnotstart
+REM (-1: Play's, for a server that couldn't start; 3: out of memory)
+SET "WHY=exit code %EXIT_CODE%"
+IF "%EXIT_CODE%"=="-1" SET "WHY=it could not start, exit code -1"
+IF "%EXIT_CODE%"=="3" CALL :outofmemory
+CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+GOTO failed
+
+:portnowtaken
+REM Said in logs\application.log too, as at the other ends of keep running (its last entry there said
+REM that the server would be started again), and there first: a window that doesn't take output
+REM would hold that up.
+(
+  ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
+  ECHO Breadboard is not started again:
+  CALL :say_port
+  ECHO.
+) >>"logs\application.log" 2>NUL
+ECHO Breadboard is not started again:
+CALL :say_port
+GOTO failed
 
 :giveup
 CALL :note "Breadboard stopped by itself (%WHY%). It has been started again 5 times in 10 minutes, so it is left stopped: logs\application.log says what went wrong."
@@ -288,12 +389,40 @@ ECHO in -windows-x64^), or install a Java 8 JDK ^(for example Azul Zulu 8^) and 
 GOTO :EOF
 
 :say_running
+IF DEFINED OPENING GOTO say_running_opening
 ECHO Breadboard is already running from this folder ^(process %RUNNING%^): open http://localhost:%RUNNING_PORT%, or stop it first.
+GOTO :EOF
+:say_running_opening
+ECHO Breadboard is already running from this folder ^(process %RUNNING%^): its console, http://localhost:%RUNNING_PORT%, opens in the browser. To start it again, stop it first.
 GOTO :EOF
 
 :say_port
+SET /A "NEXT_PORT=PORT+1"
 ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
-ECHO To start another one, choose another port, e.g.  breadboard.bat -Dhttp.port=9001
+IF DEFINED PORT_OPT GOTO say_port_local
+ECHO To start another one, choose another port: for every start, with the line  http.port=%NEXT_PORT%
+ECHO in conf\local.conf, or once, from a Command Prompt:
+ECHO   "%CD%\breadboard.bat" -Dhttp.port=%NEXT_PORT%
+GOTO :EOF
+:say_port_local
+ECHO To start another one, change the line http.port=%PORT% in conf\local.conf to another port, e.g.
+ECHO   http.port=%NEXT_PORT%
+GOTO :EOF
+
+:say_curly
+ECHO Line %CURLY% of conf\local.conf has curly quotes where Breadboard needs straight double quotes, as
+ECHO Word, a web page or an input method may type them. Type those quotes again in Notepad, with the
+ECHO keyboard in English, save the file, and start Breadboard again.
+GOTO :EOF
+
+:say_badport
+ECHO conf\local.conf gives http.port a value that isn't a port number ^(1 to 65535^): write it as, e.g.,
+ECHO   http.port=8080
+GOTO :EOF
+
+:say_badmemory
+ECHO conf\local.conf gives breadboard.memory a value Breadboard can't read: write it in megabytes or
+ECHO gigabytes, e.g.  breadboard.memory=2g
 GOTO :EOF
 
 :say_unwritable
@@ -315,6 +444,17 @@ GOTO :EOF
 ECHO conf\local.conf can't be read by the account "%USERNAME%", so Breadboard can't start: it would
 ECHO run without your settings. Give that account read access to "%CD%\conf\local.conf" (right-click
 ECHO it, Properties, Security).
+GOTO :EOF
+
+:openrunning
+REM The console of the Breadboard already running from this folder (RUNNING_PORT) opens in the
+REM browser once it answers, from a helper in the background, as at a start (not as a service, nor
+REM with BREADBOARD_NO_BROWSER). OPENING says it does.
+SET "OPENING="
+IF DEFINED SERVICE GOTO :EOF
+IF DEFINED BREADBOARD_NO_BROWSER GOTO :EOF
+SET "OPENING=1"
+START "" /B powershell -NoProfile -Command "for ($i = 0; $i -lt 180; $i++) { try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', %RUNNING_PORT%); $c.Close(); Start-Process 'http://localhost:%RUNNING_PORT%'; break } catch { Start-Sleep -Seconds 1 } }"
 GOTO :EOF
 
 :pause
@@ -339,11 +479,63 @@ GOTO :EOF
 IF DEFINED CP (SET "CP=%CP%;lib\%~1") ELSE (SET "CP=lib\%~1")
 GOTO :EOF
 
+:outofmemory
+REM WHY, for a server that ran out of memory (exit code 3), with how to give it more: it had MEMORY,
+REM unless -Xmx was given (MEMORY_GIVEN, in MEMORY_GIVEN_IN), which wins over breadboard.memory.
+CALL :morememory
+SET "MEMORY_ADVICE=A line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf gives it more than the %MEMORY% it has."
+IF "%MEMORY_GIVEN_IN%"=="JAVA_OPTS" SET "MEMORY_ADVICE=-Xmx%MEMORY_GIVEN% in JAVA_OPTS gives it %MEMORY_GIVEN%, and wins over breadboard.memory: raise that, e.g. to -Xmx%MORE_MEMORY%, or take it out of JAVA_OPTS and put a line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf."
+IF "%MEMORY_GIVEN_IN%"=="command" SET "MEMORY_ADVICE=-Xmx%MEMORY_GIVEN%, given to breadboard.bat, gives it %MEMORY_GIVEN%, and wins over breadboard.memory: start it with more, e.g. -Xmx%MORE_MEMORY%, or without -Xmx and with a line such as breadboard.memory=%MORE_MEMORY% in conf\local.conf."
+SET "WHY=it ran out of memory: a script may keep too much data. %MEMORY_ADVICE% What was in memory is in logs\out-of-memory.hprof, for whoever looks into it; it is large, so delete it afterwards"
+GOTO :EOF
+
+:morememory
+REM MORE_MEMORY: twice what the server had (MEMORY, or MEMORY_GIVEN when -Xmx was given), as
+REM breadboard.memory and -Xmx are written: in gigabytes when that is a whole number of them (2g for
+REM 1g), otherwise in megabytes; 2g for a size in bytes, which cmd may not count that far.
+SET "HAS=%MEMORY%"
+IF DEFINED MEMORY_GIVEN SET "HAS=%MEMORY_GIVEN%"
+SET "MORE_MEMORY=2g"
+SET "MEMORY_UNIT=%HAS:~-1%"
+SET "MEMORY_MB="
+IF /I "%MEMORY_UNIT%"=="g" SET /A "MEMORY_MB=%HAS:~0,-1%*1024" 2>NUL
+IF /I "%MEMORY_UNIT%"=="m" SET /A "MEMORY_MB=%HAS:~0,-1%" 2>NUL
+IF /I "%MEMORY_UNIT%"=="k" SET /A "MEMORY_MB=%HAS:~0,-1%/1024" 2>NUL
+IF NOT DEFINED MEMORY_MB GOTO :EOF
+SET /A "MORE_MB=MEMORY_MB*2"
+IF %MORE_MB% LEQ 0 GOTO :EOF
+SET /A "MORE_REST=MORE_MB %% 1024"
+SET /A "MORE_GB=MORE_MB / 1024"
+SET "MORE_MEMORY=%MORE_MB%m"
+IF "%MORE_REST%"=="0" SET "MORE_MEMORY=%MORE_GB%g"
+GOTO :EOF
+
 :findport
 IF "%~1"=="" GOTO :EOF
 IF /I "%~1"=="-Dhttp.port" SET "PORT=%~2"
 SHIFT
 GOTO findport
+
+:findmemory
+REM MEMORY_GIVEN: the size the last -Xmx among the options after the first gives, and MEMORY_GIVEN_IN
+REM where those were given, the first: JAVA_OPTS, or command for this script's own command line.
+SET "XMX_IN=%~1"
+:findmemory_next
+SHIFT
+IF "%~1"=="" GOTO :EOF
+SET "XMX_ARG=%~1"
+IF "%XMX_ARG:~0,4%"=="-Xmx" SET "MEMORY_GIVEN_IN=%XMX_IN%"
+IF "%XMX_ARG:~0,4%"=="-Xmx" SET "MEMORY_GIVEN=%XMX_ARG:~4%"
+GOTO findmemory_next
+
+:porttaken
+REM PORT_TAKEN: 1 when something answers on the port, at 127.0.0.1 or at its IPv6 address, ::1 (a
+REM program there leaves the server free to start, and the browser, which tries ::1 first for
+REM localhost, would then open that program).
+SET "PORT_TAKEN="
+powershell -NoProfile -Command "foreach ($a in @('127.0.0.1', '::1')) { try { $ip = [Net.IPAddress]::Parse($a); $c = New-Object Net.Sockets.TcpClient($ip.AddressFamily); $c.Connect($ip, %PORT%); $c.Close(); exit 0 } catch { } }; exit 1" >NUL 2>&1
+IF NOT ERRORLEVEL 1 SET "PORT_TAKEN=1"
+GOTO :EOF
 
 :runninghere
 REM RUNNING (and RUNNING_PORT): the process RUNNING_PID names, when it is a Breadboard running from
@@ -351,7 +543,7 @@ REM this folder. A crash leaves the file behind, naming a process that is gone o
 SET "RUNNING="
 SET "RUNNING_PORT="
 IF NOT EXIST RUNNING_PID GOTO :EOF
-FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$p = [int]((Get-Content -LiteralPath 'RUNNING_PID' -TotalCount 1) -replace '\D', ''); $j = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p) -ErrorAction SilentlyContinue; if ($j -and $j.CommandLine -and $j.CommandLine.Contains('NettyServer') -and $j.CommandLine.Contains((Get-Location).Path + '\.')) { $port = '9000'; if ($j.CommandLine -match '-Dhttp\.port=(\d+)') { $port = $Matches[1] }; Write-Output ([string]$p + ' ' + $port) }" 2^>NUL') DO (
+FOR /F "tokens=1,2" %%A IN ('powershell -NoProfile -Command "$p = [int]((Get-Content -LiteralPath 'RUNNING_PID' -TotalCount 1) -replace '\D', ''); $j = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p) -ErrorAction SilentlyContinue; if ($j -and $j.CommandLine -and ($j.CommandLine.Contains('launcher.Main') -or $j.CommandLine.Contains('NettyServer')) -and $j.CommandLine.Contains((Get-Location).Path + '\.')) { $port = '9000'; if ($j.CommandLine -match '-Dhttp\.port=(\d+)') { $port = $Matches[1] }; Write-Output ([string]$p + ' ' + $port) }" 2^>NUL') DO (
   SET "RUNNING=%%A"
   SET "RUNNING_PORT=%%B"
 )
@@ -374,4 +566,20 @@ ECHO %~1
 >>"logs\application.log" ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
 >>"logs\application.log" ECHO %~1
 >>"logs\application.log" ECHO.
+GOTO :EOF
+
+:note_going_on
+REM As :note, for a message after which this script goes on to start the server again: it is shown
+REM by :show, so that a window that doesn't take output can't hold that up.
+>>"logs\application.log" ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
+>>"logs\application.log" ECHO %~1
+>>"logs\application.log" ECHO.
+CALL :show %1
+GOTO :EOF
+
+:show
+REM Shows %1 (given in quotes) in this window from a helper in the background, without waiting for
+REM the window: one that doesn't take output (a click into it starts selecting text, which pauses it
+REM until Esc) holds up only the helper.
+START "" /B CMD /D /C ECHO(%~1
 GOTO :EOF

@@ -367,7 +367,7 @@ describe('backups', () => {
     const w = await mountPage()
     const section = w.find('.set-backups')
     expect(section.text()).toMatch(/Last backup/)
-    expect(section.text()).toMatch(/A new one every day; the newest 14 are kept/)
+    expect(section.text()).toMatch(/A new one every day; the newest 14 of each kind are kept: these, those made by hand, and those made before an upgrade\./)
     expect(section.text()).toMatch(/Made by hand/)
     expect(section.text()).toMatch(/\/srv\/breadboard\/backups/)
     expect(section.findAll('a').map(a => a.attributes('href'))).toContain('/backups/breadboard-2026-10-27-120000.zip')

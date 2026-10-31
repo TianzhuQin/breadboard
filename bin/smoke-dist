@@ -4,11 +4,20 @@
 # participant pages, back up the database, then restart it on the same database and sign in again.
 # The restart has a proxy set for the internet (http_proxy, as many researchers have) and a
 # conf/local.conf, whose setting must be in effect and which only its owner may read once the
-# launcher has started. It also checks what the launcher says to a second copy (from the same
-# folder, and on the same port), about folders it can't write to and a conf/local.conf it can't
-# read, and that a read-only folder runs with -Dpidfile.path. A release that carries its own Java
-# (bin/bundle-java) is started on that Java. On macOS, the computer must be kept awake while the
-# server runs.
+# launcher has started, and whose port and memory it passes on to Java. It also checks what the
+# launcher says to a second copy (from the same folder, where in a terminal it opens the running
+# one's console, and on the same port), to a program that holds the port (at [::1] only, too), about
+# curly quotes in conf/local.conf, folders it can't write to and a conf/local.conf it can't read,
+# that a read-only folder runs with -Dpidfile.path, that the data is the server's account's only,
+# and that keep-running doesn't start again a server that can't start, but does start again one
+# that ran out of memory while nobody read its window (when there is a javac, for the Java agent
+# that fills the heap), with what Java said about it in logs/jvm-pid<N>.log and how to give it more
+# (the -Xmx in JAVA_OPTS, which wins over breadboard.memory), doesn't start again one that stopped by
+# itself when, while it waited to, another program took the port or Breadboard was started from its
+# folder (which logs/application.log says too), and doesn't start again one that ran out of memory
+# while starting (saying how to give it more: the -Xmx given to breadboard.sh). A
+# release that carries its own Java (bin/bundle-java) is started on that Java. On macOS, the
+# computer must be kept awake while the server runs.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/smoke-dist [target/release/breadboard-<version>.zip] [--db old/breadboard.h2.db]
 #
@@ -45,6 +54,10 @@ PROXY=""
 WORK="$(mktemp -d)"
 SERVER=""
 cleanup () {
+  [ -z "${HOLDER:-}" ] || kill "$HOLDER" 2>/dev/null || true
+  [ -z "${STANDIN:-}" ] || kill "$STANDIN" 2>/dev/null || true
+  # (the window nobody reads, at the end: once it is gone, what waits for it goes on)
+  [ -z "${READER:-}" ] || kill "$READER" 2>/dev/null || true
   if [ -n "$SERVER" ] && kill -0 "$SERVER" 2>/dev/null; then
     kill "$SERVER" 2>/dev/null || true
     wait "$SERVER" 2>/dev/null || true
@@ -92,6 +105,22 @@ case "$(basename "$ZIP")" in
   *-linux-*) ;;
   *) [ -x "$APP/Start Breadboard.command" ] || fail "the zip has no Start Breadboard.command" ;;
 esac
+# A javac, to build the Java agent of the check at the end (without one, that check is skipped):
+# JAVA8_HOME's or JAVA_HOME's (looked for before a release that carries its own Java sets them aside,
+# below), or the one on PATH (on macOS, not /usr/bin/javac when no Java is installed: it only offers
+# to install one).
+JAVAC=""
+for candidate in "${JAVA8_HOME:-}/bin/javac" "${JAVA8_HOME:-}/Contents/Home/bin/javac" "${JAVA_HOME:-}/bin/javac" \
+    "$(command -v javac || true)"; do
+  case "$candidate" in
+    /bin/javac|/Contents/Home/bin/javac|'') continue ;;
+  esac
+  if [ -f "$candidate" ] && [ -x "$candidate" ] \
+      && { [ "$candidate" != /usr/bin/javac ] || [ ! -x /usr/libexec/java_home ] || /usr/libexec/java_home >/dev/null 2>&1; }; then
+    JAVAC="$candidate"
+    break
+  fi
+done
 if [ -d "$APP/jre" ]; then
   [ -x "$APP/jre/bin/java" ] || fail "the zip's jre/ has no bin/java"
   # Zulu's licence and notices go with it (LICENSE.md says they are there)
@@ -119,12 +148,15 @@ awake_for () {
 }
 
 # start "what this start is" [more settings for the server]
+# (on the port given as -Dhttp.port, or, with PORT_IN_LOCAL_CONF set, on the one conf/local.conf gives)
+PORT_IN_LOCAL_CONF=""
 start () {
-  local what="$1" from
+  local what="$1" from port_arg="-Dhttp.port=$PORT"
   shift
+  [ -z "$PORT_IN_LOCAL_CONF" ] || port_arg=""
   touch "$WORK/server.log"
   from=$(( $(wc -l < "$WORK/server.log") + 1 ))
-  (cd "$APP" && use_proxy && exec ./breadboard.sh -Dhttp.port="$PORT" "$@") >> "$WORK/server.log" 2>&1 &
+  (cd "$APP" && use_proxy && exec ./breadboard.sh ${port_arg:+"$port_arg"} "$@") >> "$WORK/server.log" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 180); do
     if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi
@@ -175,6 +207,9 @@ pages () {
   get /health
   grep -q '"status":"ok"' "$WORK/body" || fail "/health doesn't say ok: $(cat "$WORK/body")"
   grep -q '"diskFreeMb":[0-9]' "$WORK/body" || fail "/health doesn't say how much disk space is free: $(cat "$WORK/body")"
+  # (HEAD too, for uptime monitors that check that way: GET's status, and no body)
+  [ "$(curl -s --max-time 30 -I -o /dev/null -w '%{http_code} %{size_download}' "$BASE/health")" = "200 0" ] \
+    || fail "HEAD /health didn't answer 200 without a body: $(curl -s --max-time 30 -I "$BASE/health" | head -3)"
   get /
   grep -q 'admin/admin.js' "$WORK/body" || fail "the console page doesn't load admin.js"
   get /legacy-admin
@@ -212,6 +247,42 @@ sign_in () {
   pass "signed in; account state, autopilot settings and accounts load"
 }
 
+# The data is the server's account's only (the launcher's umask, and its chmod at start): no access
+# for the group or others to these folders and files.
+only_mine () {
+  local f
+  for f in "$@"; do
+    [ -e "$f" ] || fail "$f isn't there"
+    case "$(ls -ld "$f")" in
+      ?rw?------*) ;;
+      *) fail "others than the server's account can use $f: $(ls -ld "$f")" ;;
+    esac
+  done
+}
+
+# Another program (a stand-in for one) listening on the port, at the address $1 (127.0.0.1, ::1),
+# until let_port_go; false when it can't (no IPv6 here, for ::1).
+HOLDER=""
+hold_port () {
+  python3 -m http.server --bind "$1" "$PORT" > "$WORK/holder.log" 2>&1 &
+  HOLDER=$!
+  local url="http://$1:$PORT/"
+  case "$1" in *:*) url="http://[$1]:$PORT/" ;; esac
+  for _ in $(seq 1 40); do
+    kill -0 "$HOLDER" 2>/dev/null || break
+    curl -g -s -o /dev/null --max-time 2 "$url" && return 0
+    sleep 0.5
+  done
+  let_port_go
+  return 1
+}
+let_port_go () {
+  [ -n "$HOLDER" ] || return 0
+  kill "$HOLDER" 2>/dev/null || true
+  wait "$HOLDER" 2>/dev/null || true
+  HOLDER=""
+}
+
 backups () {
   local code name
   code="$(curl -s --max-time 60 -o "$WORK/body" -w '%{http_code}' -b "$WORK/cookies" -X POST "$BASE/backups")"
@@ -229,6 +300,11 @@ if [ -n "$OLD_DB" ]; then
   ls "$APP"/backups/breadboard-*-upgrade.zip >/dev/null 2>&1 || fail "no backup was made before upgrading the older database"
   pass "the older database was backed up before it was brought up to date"
 fi
+# What Java itself says (that it ran out of memory) goes into logs/jvm-pid<N>.log, not the window,
+# where one that takes no output would hold Java up for good (see the check at the end).
+ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- " -XX:-DisplayVMOutput " && [ -f "$APP/logs/jvm-pid$SERVER.log" ] \
+  || fail "what Java itself says doesn't go into logs/jvm-pid$SERVER.log: $(ls "$APP/logs")"
+pass "what Java itself says goes into logs/jvm-pid<N>.log, not the window"
 pages
 
 get /autopilot 401
@@ -243,6 +319,8 @@ if [ "$code" = "200" ]; then
   pass "first account created"
   sign_in
   backups
+  only_mine "$APP/db" "$APP/db/breadboard.h2.db" "$APP/logs" "$APP/logs/application.log" "$APP/backups" "$APP"/backups/*.zip
+  pass "the database, its backups and the logs are the server's account's only"
 elif [ -n "$OLD_DB" ] && grep -q "already exists" "$WORK/body"; then
   SIGN_IN=""
   pass "the older database has accounts: pages load, sign-in still required"
@@ -257,21 +335,55 @@ fi
 grep -q "already running from this folder" "$WORK/second.log" && grep -qF "http://localhost:$PORT," "$WORK/second.log" \
   || fail "a second copy from the same folder didn't say where the first one is: $(cat "$WORK/second.log")"
 pass "a second copy from the same folder says where the first one is"
+# Started again in a terminal (here a pseudo-terminal) while it runs, as by a second double-click, it
+# opens the running one's console instead: stand-ins for the browser's openers (open, xdg-open) say
+# what they were asked to open.
+mkdir -p "$WORK/openers"
+for opener in open xdg-open; do
+  printf '#!/bin/sh\necho "$*" >> "%s/opened"\n' "$WORK" > "$WORK/openers/$opener"
+  chmod +x "$WORK/openers/$opener"
+done
+(cd "$APP" && PATH="$WORK/openers:$PATH" DISPLAY="${DISPLAY:-:0}" \
+  python3 -c 'import pty, sys; pty.spawn(sys.argv[1:])' sh ./breadboard.sh -Dhttp.port="$((PORT + 1))") \
+  > "$WORK/second-terminal.log" 2>&1 < /dev/null || true
+for _ in $(seq 1 20); do
+  [ -s "$WORK/opened" ] && break
+  sleep 0.5
+done
+grep -qx "http://localhost:$PORT" "$WORK/opened" 2>/dev/null && grep -q "already running from this folder" "$WORK/second-terminal.log" \
+  || fail "started again in a terminal while it runs, it didn't open the running one's console: $(cat "$WORK/second-terminal.log")"
+pass "started again in a terminal while it runs, it opens the running one's console"
 stop
 
 # Again, with a conf/local.conf, whose settings win over conf/application-prod.conf's, and with a
 # proxy set for the internet, as many researchers have (here one that isn't there, on port 9): the
-# launcher's requests to this computer must not go through it.
-printf '%s\n' '# the settings this install changes' 'breadboard.wsUrl="ws://local-conf.smoke.test"' > "$APP/conf/local.conf"
-# (readable by anyone, as a copy brought from an earlier release may be)
-chmod 644 "$APP/conf/local.conf"
+# launcher's requests to this computer must not go through it. Its port and memory are the ones
+# conf/local.conf gives, which the launcher passes on to Java (no -Dhttp.port is given here).
+# (Curly quotes, as TextEdit's Smart Quotes types them, are fine in a comment and inside straight
+# quotes; elsewhere they are named, below.)
+LQ="$(printf '\342\200\234')"
+RQ="$(printf '\342\200\235')"
+printf '%s\n' "# the settings this install ${LQ}changes${RQ}" 'breadboard.wsUrl="ws://local-conf.smoke.test"' \
+  "http.port = $PORT   # the lab's port" 'breadboard.memory: "768m"' "smoke.note=\"the ${LQ}lab${RQ} copy\"" \
+  > "$APP/conf/local.conf"
+# (readable by anyone, as a copy brought from an earlier release may be; so are a log and the backups)
+chmod 644 "$APP/conf/local.conf" "$APP/logs/application.log"
+mkdir -p "$APP/backups"
+chmod 755 "$APP/backups"
 PROXY=http://127.0.0.1:9
+PORT_IN_LOCAL_CONF=1
 start "same database again, with conf/local.conf and a proxy set"
-# It may hold keys: the launcher lets only its owner read it.
+PORT_IN_LOCAL_CONF=""
+ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qE -- "-Xmx768m .* -Dhttp\.port=$PORT launcher\.Main " \
+  || fail "the port and memory in conf/local.conf weren't passed on to Java: $(ps -ww -o args= -p "$SERVER" | tr ' ' '\n' | grep -E '^-(Xmx|Dhttp)')"
+pass "the port and memory set in conf/local.conf are the ones the server runs with"
+# It may hold keys: the launcher lets only its owner read it, and the data too.
 case "$(ls -l "$APP/conf/local.conf")" in
   -rw-------*) pass "the launcher lets only its owner read conf/local.conf" ;;
   *) fail "others can read conf/local.conf: $(ls -l "$APP/conf/local.conf")" ;;
 esac
+only_mine "$APP/logs/application.log" "$APP/backups"
+pass "a log and backups/ that others could read are the server's account's only again"
 pages
 if [ -n "$SIGN_IN" ]; then
   sign_in
@@ -292,6 +404,34 @@ PROXY=""
 stop
 rm -f "$APP/conf/local.conf"
 
+# A program on the port's IPv6 loopback address only ([::1], where Node's dev servers listen for
+# localhost) is reported as using the port: the browser would open it in Breadboard's place. (Where
+# this computer has no IPv6, there is nothing to check.)
+if hold_port ::1; then
+  if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/ipv6-port.log" 2>&1 < /dev/null; then
+    let_port_go
+    fail "it started while another program listened on [::1]:$PORT"
+  fi
+  let_port_go
+  grep -q "Another program is using port $PORT" "$WORK/ipv6-port.log" \
+    || fail "a program on [::1]:$PORT wasn't reported as using the port: $(cat "$WORK/ipv6-port.log")"
+  pass "a program on the port's IPv6 address, [::1], is reported as using the port"
+else
+  echo "skip a program on [::1] at the port: this computer has no IPv6 loopback"
+fi
+
+# Curly quotes in conf/local.conf, outside straight quotes and comments, are named before Java starts:
+# both of a value's, or one (here the closing one of a URL whose opening one was typed again).
+printf '%s\n' '# the settings this install changes' "breadboard.rootUrl=${LQ}https://curly.smoke.test${RQ}" \
+  "breadboard.wsUrl=\"wss://half-curly.smoke.test${RQ}" > "$APP/conf/local.conf"
+if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/curly.log" 2>&1 < /dev/null; then
+  fail "it started with curly quotes in conf/local.conf"
+fi
+rm -f "$APP/conf/local.conf"
+grep -q "Lines 2, 3 of conf/local.conf have curly quotes" "$WORK/curly.log" && ! grep -q "Play server process ID" "$WORK/curly.log" \
+  || fail "curly quotes in conf/local.conf weren't named before Java started: $(cat "$WORK/curly.log")"
+pass "curly quotes in conf/local.conf are named before Java starts"
+
 # A db/ that can't be written is reported, with how to fix it, before Java starts. (Not as root,
 # who can write anything.)
 if [ "$(id -u)" != 0 ]; then
@@ -302,18 +442,27 @@ if [ "$(id -u)" != 0 ]; then
   fi
   chmod u+w "$APP/db"
   grep -q "db/ can't be written by" "$WORK/read-only.log" || fail "a db/ it can't write to wasn't reported: $(cat "$WORK/read-only.log")"
+  # (this account's own: chmod fixes it, without an administrator)
+  grep -q 'chmod -R u+rwX ".*/db"' "$WORK/read-only.log" && ! grep -q sudo "$WORK/read-only.log" \
+    || fail "a db/ of this account's that it can't write to wasn't given chmod as the fix: $(cat "$WORK/read-only.log")"
   pass "a db/ that can't be written is reported, with how to fix it"
 
   # So is a conf/local.conf it can't read (made or copied by another account): Java would take it for
-  # missing, and the server would run without its settings.
+  # missing, and the server would run without its settings. It is said first, before the port (which
+  # that file may set) is looked at: here another program holds the port, and isn't what is said.
   printf '%s\n' 'breadboard.wsUrl="ws://local-conf.smoke.test"' > "$APP/conf/local.conf"
   chmod a-r "$APP/conf/local.conf"
+  hold_port 127.0.0.1 || fail "couldn't hold port $PORT for the check"
   if (cd "$APP" && exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/unreadable.log" 2>&1 < /dev/null; then
+    let_port_go
     fail "it started with a conf/local.conf it can't read"
   fi
+  let_port_go
   rm -f "$APP/conf/local.conf"
   grep -q "conf/local.conf can't be read by" "$WORK/unreadable.log" \
     || fail "a conf/local.conf it can't read wasn't reported: $(cat "$WORK/unreadable.log")"
+  grep -q 'chmod u+rw ".*/conf/local.conf"' "$WORK/unreadable.log" && ! grep -q sudo "$WORK/unreadable.log" \
+    || fail "a conf/local.conf of this account's that it can't read wasn't given chmod as the fix: $(cat "$WORK/unreadable.log")"
   pass "a conf/local.conf that can't be read is reported, with how to fix it"
 
   # A folder kept read-only (root's, under /opt) runs with a db/ and logs/ it can write and its pid
@@ -353,4 +502,250 @@ fi
 pass "no debug output in the logs, and conf/logger.xml loads without a problem"
 # H2's own log (TRACE_LEVEL_FILE=0 in conf/application-prod.conf)
 [ ! -e "$APP/db/breadboard.trace.db" ] || fail "H2 wrote db/breadboard.trace.db: $(head -5 "$APP/db/breadboard.trace.db")"
+
+# (After the look for errors above: what follows makes the server fail on purpose.)
+# A server that can't start (here a mistake in conf/local.conf) isn't started again, even with keep
+# running on: the launcher says so and ends, and logs/start-errors.log keeps what Java printed as
+# errors.
+printf '%s\n' 'breadboard.rootUrl="https://unclosed.smoke.test' > "$APP/conf/local.conf"
+(cd "$APP" && BREADBOARD_KEEP_RUNNING=1 exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/start-failure.log" 2>&1 < /dev/null &
+LAUNCHER=$!
+for _ in $(seq 1 120); do
+  kill -0 "$LAUNCHER" 2>/dev/null || break
+  sleep 1
+done
+if kill -0 "$LAUNCHER" 2>/dev/null; then
+  kill "$LAUNCHER" 2>/dev/null || true
+  wait "$LAUNCHER" 2>/dev/null || true
+  fail "the launcher kept trying to start a server that can't start: $(cat "$WORK/start-failure.log")"
+fi
+if wait "$LAUNCHER"; then
+  fail "a launcher whose server couldn't start ended as if all went well"
+fi
+rm -f "$APP/conf/local.conf"
+grep -q "before the server started (it could not start, exit code 255), so it is not started again" "$WORK/start-failure.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/start-failure.log" \
+  || fail "a server that couldn't start was started again, or the launcher didn't say it isn't, and why: $(cat "$WORK/start-failure.log")"
+grep -q "conf/local.conf: 1" "$APP/logs/start-errors.log" 2>/dev/null \
+  || fail "logs/start-errors.log doesn't say why the server couldn't start: $(cat "$APP/logs/start-errors.log" 2>&1)"
+pass "a server that can't start isn't started again, and logs/start-errors.log says why"
+
+# With keep running on and nobody reading its window (here a pipe that is full, as a paused window
+# is), a server that runs out of memory is started again all the same: Java says so in
+# logs/jvm-pid<N>.log, not in the window, which would hold it up for good. A Java agent, built here
+# when there is a javac, fills the heap once the file it is given appears (and is deleted, so that
+# the server started again doesn't). Its heap is small, which keeps the heap dump small, and is set
+# with -Xmx in JAVA_OPTS, which wins over breadboard.memory: the launcher must say to give it more
+# there.
+oom_agent () {
+  [ -n "$JAVAC" ] || return 1
+  mkdir -p "$WORK/oom/classes"
+  cat > "$WORK/oom/SmokeOutOfMemory.java" <<'EOF'
+public class SmokeOutOfMemory {
+  public static void premain(final String go) {
+    Thread filler = new Thread(new Runnable() {
+      public void run() {
+        java.io.File file = new java.io.File(go);
+        try {
+          while (!file.delete()) {
+            Thread.sleep(200);
+          }
+        } catch (InterruptedException e) {
+          return;
+        }
+        java.util.List<long[]> heap = new java.util.ArrayList<long[]>();
+        while (true) {
+          heap.add(new long[1 << 16]);
+        }
+      }
+    }, "smoke-out-of-memory");
+    filler.setDaemon(true);
+    filler.start();
+  }
+}
+EOF
+  "$JAVAC" -source 1.8 -target 1.8 -nowarn -d "$WORK/oom/classes" "$WORK/oom/SmokeOutOfMemory.java" \
+    > "$WORK/oom/javac.log" 2>&1 || return 1
+  python3 - "$WORK/oom/classes" "$WORK/oom/agent.jar" <<'EOF' || return 1
+import os, sys, zipfile
+with zipfile.ZipFile(sys.argv[2], 'w') as jar:
+    jar.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\nPremain-Class: SmokeOutOfMemory\n\n')
+    for name in os.listdir(sys.argv[1]):
+        jar.write(os.path.join(sys.argv[1], name), name)
+EOF
+}
+# (the process id in RUNNING_PID, or nothing; and the status /health answers with, or 000)
+running_pid () { tr -cd '0-9' 2>/dev/null < "$APP/RUNNING_PID" || true; }
+health () { curl -s --max-time 5 -o /dev/null -w '%{http_code}' "$BASE/health" || true; }
+if oom_agent; then
+  printf '%s\n' 'breadboard.memory=1g' > "$APP/conf/local.conf"
+  mkfifo "$WORK/window"
+  # (the window's reader, which never reads)
+  sleep 900 < "$WORK/window" &
+  READER=$!
+  (cd "$APP" && JAVA_OPTS="-Xmx192m -javaagent:$WORK/oom/agent.jar=$WORK/oom/go" BREADBOARD_KEEP_RUNNING=1 \
+    exec ./breadboard.sh -Dhttp.port="$PORT") > "$WORK/window" 2>&1 < /dev/null &
+  SERVER=$!
+  UP=""
+  for _ in $(seq 1 180); do
+    kill -0 "$SERVER" 2>/dev/null || fail "the launcher stopped while starting: $(tail -20 "$APP/logs/application.log")"
+    if [ "$(health)" = 200 ]; then
+      UP=1
+      break
+    fi
+    sleep 1
+  done
+  FIRST="$(running_pid)"
+  [ -n "$UP" ] && [ -n "$FIRST" ] || fail "the server did not answer within 180 s"
+  # Nothing more goes into the window.
+  python3 - "$WORK/window" <<'EOF'
+import os, sys
+window = os.open(sys.argv[1], os.O_WRONLY | os.O_NONBLOCK)
+for size in (4096, 1):
+    try:
+        while True:
+            os.write(window, b'x' * size)
+    except BlockingIOError:
+        pass
+EOF
+  touch "$WORK/oom/go"
+  AGAIN=""
+  for _ in $(seq 1 120); do
+    kill -0 "$SERVER" 2>/dev/null || fail "the launcher ended after the server ran out of memory: $(tail -20 "$APP/logs/application.log")"
+    if [ -n "$(running_pid)" ] && [ "$(running_pid)" != "$FIRST" ] && [ "$(health)" = 200 ]; then
+      AGAIN=1
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$AGAIN" ]; then
+    STILL=""
+    if kill -0 "$FIRST" 2>/dev/null; then STILL=", which is still there"; fi
+    fail "with nobody reading its window, a server that ran out of memory (process $FIRST$STILL) wasn't started again: $(tail -20 "$APP/logs/application.log")"
+  fi
+  grep -q "Terminating due to java.lang.OutOfMemoryError: Java heap space" "$APP/logs/jvm-pid$FIRST.log" 2>/dev/null \
+    || fail "logs/jvm-pid$FIRST.log doesn't say that Java ran out of memory: $(tail -5 "$APP/logs/jvm-pid$FIRST.log" 2>&1)"
+  grep -qF "Breadboard stopped by itself (it ran out of memory: a script may keep too much data. -Xmx192m in JAVA_OPTS gives it 192m, and wins over breadboard.memory: raise that, e.g. to -Xmx384m," "$APP/logs/application.log" \
+    || fail "the launcher didn't say that the server ran out of memory, and how to give it more: $(tail -20 "$APP/logs/application.log")"
+  stop
+  kill "$READER" 2>/dev/null || true
+  wait "$READER" 2>/dev/null || true
+  READER=""
+  rm -f "$WORK/window" "$APP/conf/local.conf" "$APP/logs/out-of-memory.hprof"
+  pass "with nobody reading its window, a server that runs out of memory is started again, logs/jvm-pid<N>.log says why, and the launcher how to give it more (the -Xmx in JAVA_OPTS)"
+else
+  echo "skip a server that runs out of memory with nobody reading its window: no javac here to build the agent that fills the heap"
+fi
+
+# With keep running on, a server that stopped by itself (here it is killed) isn't started again when,
+# while the launcher waits to, another program takes the port (the server would only fail to start),
+# or Breadboard is started from this folder meanwhile (here a stand-in for one: a process named in
+# RUNNING_PID whose command line ends as the server's does). The launcher says why in its window, and
+# in logs/application.log as its last note there, after the one that said it would start it again.
+# keep_running WINDOW: a launcher with keep running on, in the background, once its server answers
+keep_running () {
+  (cd "$APP" && BREADBOARD_KEEP_RUNNING=1 exec ./breadboard.sh -Dhttp.port="$PORT") > "$1" 2>&1 < /dev/null &
+  SERVER=$!
+  for _ in $(seq 1 180); do
+    kill -0 "$SERVER" 2>/dev/null || fail "the launcher stopped while starting: $(cat "$1")"
+    [ "$(health)" = 200 ] && [ -n "$(running_pid)" ] && return 0
+    sleep 1
+  done
+  fail "the server did not answer within 180 s"
+}
+# Kills the server's Java (kill -9, as the system does when memory runs low) and waits until it is
+# gone, and with it its hold on the port.
+kill_java () {
+  local java
+  java="$(running_pid)"
+  kill -KILL "$java"
+  for _ in $(seq 1 50); do
+    kill -0 "$java" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  fail "the server's Java (process $java) was still there 5 s after kill -9"
+}
+# Whether the launcher ended within 60 s; ENDED is its exit status.
+launcher_ended () {
+  for _ in $(seq 1 60); do
+    kill -0 "$SERVER" 2>/dev/null || break
+    sleep 1
+  done
+  ! kill -0 "$SERVER" 2>/dev/null || return 1
+  ENDED=0
+  wait "$SERVER" || ENDED=$?
+  SERVER=""
+}
+# The launcher's last note in logs/application.log
+last_note () {
+  awk '/ - from breadboard\.sh in launcher *$/ { note = ""; inside = 1; next }
+    /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] .* - \[[A-Z]*\] - from / { inside = 0; next }
+    inside { note = note $0 "\n" }
+    END { printf "%s", note }' "$APP/logs/application.log"
+}
+keep_running "$WORK/port-taken-meanwhile.log"
+kill_java
+hold_port 127.0.0.1 || fail "couldn't hold port $PORT while the launcher waited to start the server again"
+if ! launcher_ended; then
+  let_port_go
+  fail "the launcher went on although another program took the port while it waited to start the server again: $(cat "$WORK/port-taken-meanwhile.log")"
+fi
+let_port_go
+NOTE="$(last_note)"
+[ "$ENDED" = 137 ] \
+  && grep -q "Starting it again in 5 seconds" "$WORK/port-taken-meanwhile.log" \
+  && grep -qF "Breadboard is not started again. Another program is using port $PORT." "$WORK/port-taken-meanwhile.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/port-taken-meanwhile.log" \
+  && grep -qF "Breadboard is not started again. Another program is using port $PORT." <<< "$NOTE" \
+  || fail "killed, with its port taken while the launcher waited to start it again, the server was started again, or that it wasn't isn't in the window and last in logs/application.log (exit code $ENDED): $(cat "$WORK/port-taken-meanwhile.log") / $NOTE"
+pass "a server whose port another program took while the launcher waited to start it again isn't started again, and logs/application.log says why"
+keep_running "$WORK/started-meanwhile.log"
+kill_java
+python3 -c 'import time; time.sleep(300)' launcher.Main "$(cd "$APP" && pwd -P)" &
+STANDIN=$!
+printf '%s\n' "$STANDIN" > "$APP/RUNNING_PID"
+if ! launcher_ended; then
+  fail "the launcher went on although Breadboard was started from its folder while it waited to start the server again: $(cat "$WORK/started-meanwhile.log")"
+fi
+kill "$STANDIN" 2>/dev/null || true
+wait "$STANDIN" 2>/dev/null || true
+rm -f "$APP/RUNNING_PID"
+NOTE="$(last_note)"
+[ "$ENDED" = 137 ] \
+  && grep -qF "Breadboard was started from this folder meanwhile (process $STANDIN): leaving it to that one." "$WORK/started-meanwhile.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/started-meanwhile.log" \
+  && grep -qF "Breadboard was started from this folder meanwhile (process $STANDIN): leaving it to that one." <<< "$NOTE" \
+  || fail "killed, while Breadboard was started from its folder as the launcher waited to start it again, the server was started again, or that it wasn't isn't in the window and last in logs/application.log (exit code $ENDED): $(cat "$WORK/started-meanwhile.log") / $NOTE"
+STANDIN=""
+pass "a server is left to a Breadboard started from its folder while the launcher waited to start it again, and logs/application.log says so"
+
+# A server that runs out of memory while it starts isn't started again either (it would only run out
+# again), and the launcher says how to give it more: here with the -Xmx given to breadboard.sh, which
+# wins over breadboard.memory. (Too little room for its classes, -XX:MaxMetaspaceSize, makes it run
+# out at once, whatever its heap, with no javac needed.) What Java itself says about it goes into
+# logs/jvm-pid<N>.log, not the window.
+(cd "$APP" && BREADBOARD_KEEP_RUNNING=1 exec ./breadboard.sh -Dhttp.port="$PORT" -Xmx64m -XX:MaxMetaspaceSize=16m) \
+  > "$WORK/start-out-of-memory.log" 2>&1 < /dev/null &
+LAUNCHER=$!
+for _ in $(seq 1 120); do
+  kill -0 "$LAUNCHER" 2>/dev/null || break
+  sleep 1
+done
+if kill -0 "$LAUNCHER" 2>/dev/null; then
+  kill "$LAUNCHER" 2>/dev/null || true
+  wait "$LAUNCHER" 2>/dev/null || true
+  fail "the launcher kept trying to start a server that ran out of memory while starting: $(cat "$WORK/start-out-of-memory.log")"
+fi
+CODE=0
+wait "$LAUNCHER" || CODE=$?
+rm -f "$APP/logs/out-of-memory.hprof"
+[ "$CODE" = 3 ] \
+  && grep -qF "Breadboard stopped before the server started (it ran out of memory: a script may keep too much data. -Xmx64m, given to breadboard.sh, gives it 64m, and wins over breadboard.memory: start it with more, e.g. -Xmx128m," "$WORK/start-out-of-memory.log" \
+  && ! grep -q "Starting Breadboard again" "$WORK/start-out-of-memory.log" \
+  || fail "a server that ran out of memory while starting was started again, or the launcher didn't say how to give it more (exit code $CODE): $(cat "$WORK/start-out-of-memory.log")"
+JVM_LOG="$(ls -t "$APP"/logs/jvm-pid*.log 2>/dev/null | head -1 || true)"
+! grep -q "Terminating due to" "$WORK/start-out-of-memory.log" \
+  && grep -q "Terminating due to java.lang.OutOfMemoryError" "$JVM_LOG" \
+  || fail "what Java said as it ran out of memory isn't in logs/jvm-pid<N>.log, or went into the window: $(tail -3 "$JVM_LOG" 2>&1)"
+pass "a server that runs out of memory while starting isn't started again; the launcher says how to give it more (the -Xmx given to breadboard.sh), and logs/jvm-pid<N>.log what Java said"
 echo "The release in $(basename "$ZIP") works."

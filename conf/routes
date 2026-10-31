@@ -110,6 +110,7 @@ POST        /logout                                                             
 
 # For uptime monitors and service managers
 GET         /health                                                              controllers.HealthController.health()
+HEAD        /health                                                              controllers.HealthController.healthHead()
 
 # Database backups (Settings → Backups)
 GET         /backups                                                             controllers.BackupsController.list()

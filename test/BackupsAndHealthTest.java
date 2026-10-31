@@ -43,6 +43,21 @@ public class BackupsAndHealthTest extends BaseTest {
         assertTrue(body.has("uptimeSeconds"));
     }
 
+    /** Uptime monitors and proxies that check with HEAD get GET's status and headers, without the body. */
+    @Test
+    public void healthAnswersHeadAsItAnswersGetWithoutTheBody() {
+        Result get = route(fakeRequest(GET, "/health"));
+        Result head = route(fakeRequest("HEAD", "/health"));
+        assertNotNull("HEAD /health has a route", head);
+        assertEquals(OK, status(head));
+        assertEquals("no body", "", contentAsString(head));
+        assertEquals(contentType(get), contentType(head));
+        assertEquals("no-store", header("Cache-Control", head));
+        // the length of the body GET sends (its uptime and free space may have changed a digit meanwhile)
+        int length = Integer.parseInt(header("Content-Length", head));
+        assertTrue(length + " for " + contentAsString(get), Math.abs(length - contentAsBytes(get).length) <= 2);
+    }
+
     @Test
     public void eachHealthCheckWritesItsHeartbeatRow() throws Exception {
         assertEquals(OK, status(route(fakeRequest(GET, "/health"))));
@@ -90,6 +105,9 @@ public class BackupsAndHealthTest extends BaseTest {
             assertTrue(said, said.contains("Health check: failing"));
             assertTrue("the details are in the log: " + said, said.toLowerCase().contains("lock"));
             assertTrue("it doesn't hang: " + took + " ms", took < 8000);
+            Result head = route(fakeRequest("HEAD", "/health"));
+            assertEquals("HEAD says so too", SERVICE_UNAVAILABLE, status(head));
+            assertEquals("", contentAsString(head));
             stuck.rollback();
         } finally {
             log.detachAppender(logged);
@@ -128,12 +146,9 @@ public class BackupsAndHealthTest extends BaseTest {
             try (ZipFile zip = new ZipFile(first)) {
                 assertNotNull("the zip holds the database file", zip.getEntry("breadboard.h2.db"));
             }
-            // made by hand, and once more: only the newest two stay (the same second: by the file's time)
-            File second = Backups.backUpTo(db, folder, "manual", 2);
-            long now = System.currentTimeMillis();
-            first.setLastModified(now - 20000);
-            second.setLastModified(now - 10000);
-            File third = Backups.backUpTo(db, folder, "upgrade", 2);
+            // twice more (each in a second of its own, for a name of its own): only the newest two stay
+            Backups.backUpTo(db, folder, null, 2);
+            File third = Backups.backUpTo(db, folder, null, 2);
             List<File> kept = Backups.list(folder);
             assertEquals(2, kept.size());
             assertEquals("newest first", third, kept.get(0));
@@ -142,6 +157,71 @@ public class BackupsAndHealthTest extends BaseTest {
         assertNotNull(Backups.find(folder, Backups.list(folder).get(0).getName()));
         assertNull(Backups.find(folder, "../breadboard.h2.db"));
         assertNull(Backups.find(folder, "breadboard-2026-10-28-120000.zip"));
+    }
+
+    /** An empty file named as a backup, made at {@code stamp} (yyyy-MM-dd-HHmmss) for {@code why}. */
+    private static File backupFile(File folder, String stamp, String why) throws Exception {
+        File file = new File(folder, "breadboard-" + stamp + (why == null ? "" : "-" + why) + ".zip");
+        assertTrue(file.createNewFile());
+        return file;
+    }
+
+    /**
+     * Backing up by hand, however often, leaves the regular (daily) backups and the one made before an
+     * upgrade alone: each kind keeps its own newest ones.
+     */
+    @Test
+    public void backupsMadeByHandPushOutOnlyOlderOnesMadeByHand() throws Exception {
+        File dir = Files.createTempDirectory("bb-backups").toFile();
+        File folder = new File(dir, "backups");
+        assertTrue(folder.mkdirs());
+        File upgrade = backupFile(folder, "2026-10-19-120000", "upgrade");
+        File daily1 = backupFile(folder, "2026-10-20-120000", null);
+        File daily2 = backupFile(folder, "2026-10-21-120000", null);
+        File manual1 = backupFile(folder, "2026-10-22-120000", "manual");
+        File manual2 = backupFile(folder, "2026-10-23-120000", "manual");
+        File manual3 = backupFile(folder, "2026-10-24-120000", "manual");
+        try (Connection db = DriverManager.getConnection("jdbc:h2:" + new File(dir, "breadboard").getAbsolutePath() + ";MODE=MYSQL", "", "")) {
+            File manual4 = Backups.backUpTo(db, folder, "manual", 2);
+            assertTrue(manual4.getName(), manual4.getName().endsWith("-manual.zip"));
+            assertTrue(manual4.exists());
+            assertTrue(manual3.exists());
+            assertFalse("older ones made by hand go", manual2.exists());
+            assertFalse(manual1.exists());
+            assertTrue("the daily ones stay", daily1.exists() && daily2.exists());
+            assertTrue("the one made before an upgrade stays", upgrade.exists());
+
+            // a regular one pushes out the oldest regular one, and nothing else
+            File daily3 = Backups.backUpTo(db, folder, null, 2);
+            assertTrue(daily3.exists() && daily2.exists());
+            assertFalse(daily1.exists());
+            assertTrue(manual4.exists() && manual3.exists() && upgrade.exists());
+        }
+        assertEquals(5, Backups.list(folder).size());
+    }
+
+    /**
+     * A backup's time is the one in its name, also for a copy whose file time is the copy's (an
+     * upgrade copies backups/ into the new release's folder); a name whose time can't be read gives
+     * the file's time.
+     */
+    @Test
+    public void aBackupWasMadeWhenItsNameSays() throws Exception {
+        File folder = Files.createTempDirectory("bb-backups").toFile();
+        File copied = backupFile(folder, "2026-10-30-133336", "upgrade");
+        File daily = backupFile(folder, "2026-10-30-133858", null);
+        long copiedAt = System.currentTimeMillis() / 1000 * 1000;
+        assertTrue(copied.setLastModified(copiedAt));
+        assertTrue(daily.setLastModified(copiedAt));
+
+        assertEquals("2026-10-30T13:33:36.000Z", Backups.row(copied).get("createdAt").asText());
+        assertEquals("2026-10-30T13:38:58.000Z", Backups.row(daily).get("createdAt").asText());
+        assertEquals(copied.getName(), Backups.row(copied).get("name").asText());
+        assertEquals("newest first, by the time in their names", daily, Backups.list(folder).get(0));
+
+        File unreadable = backupFile(folder, "2026-13-45-996199", "manual");
+        assertTrue(unreadable.setLastModified(copiedAt));
+        assertEquals(copiedAt, Backups.madeAt(unreadable));
     }
 
     @Test

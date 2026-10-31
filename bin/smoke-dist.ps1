@@ -3,8 +3,14 @@
 # account, sign in, back up the database, check what a second start says (from the same folder:
 # that Breadboard runs from it already, and where; from another copy, on the same port: that the
 # port is in use, and as a service, in its logs\application.log too), check that as a service a
-# mistake in conf\local.conf is in logs\service-errors.log, then stop it and look for errors in its
-# log. While it runs, a helper must keep the computer awake.
+# mistake in conf\local.conf is in logs\service-errors.log, and otherwise that a server that can't
+# start isn't started again, that the port and memory in conf\local.conf are the ones used, that a
+# server that stopped by itself isn't started again when another program took its port while
+# breadboard.bat waited to (which logs\application.log says too), that curly quotes in
+# conf\local.conf are named, that a program on ::1 holds the port, and that a server that runs
+# out of memory while starting isn't started again, with how to give it more (the -Xmx in
+# JAVA_OPTS), then stop it and look for errors in its log. While it runs, a helper must keep the
+# computer awake, and what Java itself says must go into logs\jvm-pid<N>.log, not the window.
 #
 # It is unzipped into a folder whose path has spaces, parentheses and an "&" (as Explorer's Extract
 # All of a second download, "... (1)", or a lab's "R&D" folder has), and the other copy into one
@@ -66,11 +72,14 @@ $env:BREADBOARD_NO_BROWSER = '1'
 $empty = Join-Path $work 'empty.txt'
 Set-Content -LiteralPath $empty -Value ''
 
-# breadboard.bat in $folder, on $on; its output goes to $out and $err in $work.
-function Start-Breadboard([string]$folder, [int]$on, [string]$out, [string]$err, [switch]$Wait) {
+# breadboard.bat in $folder, on $on (with -NoPort, on the port its conf\local.conf gives); its output
+# goes to $out and $err in $work.
+function Start-Breadboard([string]$folder, [int]$on, [string]$out, [string]$err, [switch]$Wait, [switch]$NoPort) {
+  $arguments = @('/c', 'breadboard.bat')
+  if (-not $NoPort) { $arguments += "-Dhttp.port=$on" }
   $opts = @{
     FilePath               = 'cmd.exe'
-    ArgumentList           = @('/c', 'breadboard.bat', "-Dhttp.port=$on")
+    ArgumentList           = $arguments
     WorkingDirectory       = $folder
     PassThru               = $true
     NoNewWindow            = $true
@@ -98,11 +107,23 @@ while (-not $health) {
   try { $health = Invoke-RestMethod -Uri "$base/health" -TimeoutSec 10 } catch { $health = $null }
 }
 if ($health.status -ne 'ok') { Fail "/health says $($health | ConvertTo-Json -Compress)" }
+# (HEAD too, for uptime monitors that check that way)
+$head = Invoke-WebRequest -Uri "$base/health" -Method Head -UseBasicParsing
+if ($head.StatusCode -ne 200) { Fail "HEAD /health answered $($head.StatusCode)" }
 Pass 'server started (from a folder whose path has spaces, parentheses and an "&")'
 
 $java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($app) } | Select-Object -First 1
 if (-not $java -or $java.ExecutablePath -ne (Join-Path $app 'jre\bin\java.exe')) { Fail "the server doesn't run on the Java in jre\ ($($java.ExecutablePath))" }
 Pass 'it runs on the Java that comes with it'
+
+# What Java itself says (that it ran out of memory) goes into logs\jvm-pid<N>.log, not the window,
+# where one that takes no output (a click into it starts selecting text) would hold Java up for good.
+# (breadboard.bat writes Java's %p, the process id, as %%p.)
+$jvmLog = Join-Path $app "logs\jvm-pid$($java.ProcessId).log"
+if (-not $java.CommandLine.Contains(' -XX:-DisplayVMOutput ') -or -not $java.CommandLine.Contains(' -XX:LogFile=logs\jvm-%p.log ') -or -not (Test-Path -LiteralPath $jvmLog)) {
+  Fail "what Java itself says doesn't go into logs\jvm-pid$($java.ProcessId).log: $($java.CommandLine)"
+}
+Pass 'what Java itself says goes into logs\jvm-pid<N>.log, not the window'
 
 # The helper that keeps the computer awake runs beside it, one for its window.
 $awake = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($server.Id) AND Name = 'powershell.exe'" |
@@ -149,8 +170,9 @@ Pass 'a second start from the same folder says where the first one is'
 $other = Expand-Release (Join-Path $work 'another copy! (2)')
 $third = Start-Breadboard $other $Port 'third.log' 'third-err.log' -Wait
 $said = Get-Said 'third.log'
-if ($third.ExitCode -ne 1 -or -not $said.Contains("Port $Port is in use")) {
-  Fail "another copy started on the same port didn't say the port is in use (exit code $($third.ExitCode)): $said"
+# (with a command for another port that works from any Command Prompt: breadboard.bat's full path)
+if ($third.ExitCode -ne 1 -or -not $said.Contains("Port $Port is in use") -or -not $said.Contains("\breadboard.bat`" -Dhttp.port=$($Port + 1)")) {
+  Fail "another copy started on the same port didn't say the port is in use, with a command for another one (exit code $($third.ExitCode)): $said"
 }
 Pass 'another copy on the same port says the port is in use (from a folder whose path has a "!")'
 
@@ -191,6 +213,140 @@ while (-not ($said.Contains('local.conf') -and $logged.Contains('logs\service-er
 }
 Stop-Process -Id $fifth.Id -Force -ErrorAction SilentlyContinue
 Pass 'as a service, a mistake in conf\local.conf is in logs\service-errors.log, which the restart note names'
+
+# Not as a service, with keep running on, a server that can't start (a mistake in conf\local.conf) isn't
+# started again: breadboard.bat says so and ends, and logs\start-errors.log keeps what Java printed as
+# errors. (PAUSE, at its end, reads the empty input and doesn't wait.)
+Set-Content -LiteralPath $localConf -Value 'breadboard.rootUrl="https://unclosed.smoke.test'
+$env:BREADBOARD_KEEP_RUNNING = '1'
+$sixth = Start-Breadboard $other ($Port + 3) 'sixth.log' 'sixth-err.log'
+# (its exit code is kept only once its handle has been asked for)
+$null = $sixth.Handle
+Remove-Item Env:BREADBOARD_KEEP_RUNNING
+if (-not $sixth.WaitForExit(120000)) {
+  Stop-Process -Id $sixth.Id -Force -ErrorAction SilentlyContinue
+  Fail "breadboard.bat kept trying to start a server that can't start: $(Get-Said 'sixth.log')"
+}
+$said = Get-Said 'sixth.log'
+$startErrors = Join-Path $other 'logs\start-errors.log'
+$kept = ''
+if (Test-Path -LiteralPath $startErrors) { $kept = "$(Get-Content -LiteralPath $startErrors -Raw)" }
+if ($sixth.ExitCode -eq 0 -or -not $said.Contains('(it could not start, exit code -1), so it is not started again') -or $said.Contains('Starting Breadboard again') -or -not $kept.Contains('local.conf')) {
+  Fail "a server that couldn't start was started again, or that wasn't said, or logs\start-errors.log doesn't say why (exit code $($sixth.ExitCode)): $said / $kept"
+}
+Remove-Item -LiteralPath $localConf
+Pass "a server that can't start isn't started again, and logs\start-errors.log says why"
+
+# With no -Dhttp.port, it starts on the port its conf\local.conf gives (http.port), with the memory it
+# gives (breadboard.memory). (Keep running is on, for the check after this one.)
+$localPort = $Port + 4
+Set-Content -LiteralPath $localConf -Value @('# the lab''s settings', "http.port = $localPort   # the lab's port", 'breadboard.memory: "768m"')
+$env:BREADBOARD_KEEP_RUNNING = '1'
+$seventh = Start-Breadboard $other 0 'seventh.log' 'seventh-err.log' -NoPort
+# (its exit code is kept only once its handle has been asked for)
+$null = $seventh.Handle
+Remove-Item Env:BREADBOARD_KEEP_RUNNING
+$deadline = (Get-Date).AddSeconds(240)
+$health = $null
+while (-not $health) {
+  if ($seventh.HasExited) { Fail "breadboard.bat stopped while starting on the port in conf\local.conf: $(Get-Said 'seventh.log')" }
+  if ((Get-Date) -gt $deadline) { Fail "the server did not answer on the port in conf\local.conf ($localPort) within 240 s: $(Get-Said 'seventh.log')" }
+  Start-Sleep -Seconds 2
+  try { $health = Invoke-RestMethod -Uri "http://localhost:$localPort/health" -TimeoutSec 10 } catch { $health = $null }
+}
+$java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($other) } | Select-Object -First 1
+if (-not $java -or -not $java.CommandLine.Contains('-Xmx768m') -or -not $java.CommandLine.Contains("-Dhttp.port=$localPort")) {
+  Fail "the port and memory in conf\local.conf weren't passed on to Java: $($java.CommandLine)"
+}
+Pass 'the port and memory set in conf\local.conf are the ones the server runs with'
+
+# Killed, the server would be started again 5 seconds later (keep running). Another program takes the
+# port meanwhile, so it isn't (it would only fail to start), and breadboard.bat says why in its window
+# and in logs\application.log, as its last note there, after the one that said it would start it again.
+Stop-Process -Id $java.ProcessId -Force
+Wait-Process -Id $java.ProcessId -Timeout 30 -ErrorAction SilentlyContinue
+$holder = $null
+$deadline = (Get-Date).AddSeconds(4)
+while (-not $holder) {
+  try { $holder = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $localPort); $holder.Start() } catch { $holder = $null }
+  if (-not $holder) {
+    if ((Get-Date) -gt $deadline) { Fail "couldn't take port $localPort while breadboard.bat waited to start the server again: $(Get-Said 'seventh.log')" }
+    Start-Sleep -Milliseconds 250
+  }
+}
+$ended = $seventh.WaitForExit(60000)
+$holder.Stop()
+if (-not $ended) {
+  Stop-Process -Id $seventh.Id -Force -ErrorAction SilentlyContinue
+  Fail "breadboard.bat went on although another program took the port while it waited to start the server again: $(Get-Said 'seventh.log')"
+}
+$said = Get-Said 'seventh.log'
+$logged = "$(Get-Content -LiteralPath $otherLog -Raw)"
+$lastNote = $logged.Substring([Math]::Max(0, $logged.LastIndexOf('from breadboard.bat in launcher')))
+if ($seventh.ExitCode -eq 0 -or -not $said.Contains('Breadboard is not started again:') -or -not $said.Contains("Port $localPort is in use") -or $said.Contains('Starting Breadboard again') -or -not $lastNote.Contains('Breadboard is not started again:') -or -not $lastNote.Contains("Port $localPort is in use")) {
+  Fail "killed, with its port taken while breadboard.bat waited to start it again, the server was started again, or that it wasn't isn't in the window and last in logs\application.log (exit code $($seventh.ExitCode)): $said / $lastNote"
+}
+Remove-Item -LiteralPath $localConf
+Pass 'a server whose port another program took while breadboard.bat waited to start it again isn''t started again, and logs\application.log says why'
+
+# Curly quotes in conf\local.conf (as Word or an input method types them), outside straight quotes and
+# comments, are named before Java starts: one (here the closing one of a URL whose opening one was
+# typed again), or both of a value's. The first line that has them is named.
+$halfCurly = 'breadboard.wsUrl="wss://half-curly.smoke.test' + [char]0x201D
+$curly = 'breadboard.rootUrl=' + [char]0x201C + 'https://curly.smoke.test' + [char]0x201D
+Set-Content -LiteralPath $localConf -Encoding utf8 -Value @('# the lab''s settings', $halfCurly, $curly)
+$eighth = Start-Breadboard $other ($Port + 5) 'eighth.log' 'eighth-err.log' -Wait
+$said = Get-Said 'eighth.log'
+if ($eighth.ExitCode -ne 1 -or -not $said.Contains('Line 2 of conf\local.conf has curly quotes') -or $said.Contains('Play server process ID')) {
+  Fail "curly quotes in conf\local.conf weren't named before Java started (exit code $($eighth.ExitCode)): $said"
+}
+Remove-Item -LiteralPath $localConf
+Pass 'curly quotes in conf\local.conf are named before Java starts'
+
+# A program on the port's IPv6 loopback address only (::1) is reported as using the port: the
+# browser, which tries ::1 first for localhost, would open it in Breadboard's place.
+$v6Port = $Port + 6
+$v6 = $null
+try { $v6 = New-Object Net.Sockets.TcpListener([Net.IPAddress]::IPv6Loopback, $v6Port); $v6.Start() } catch { $v6 = $null }
+if ($v6) {
+  $ninth = Start-Breadboard $other $v6Port 'ninth.log' 'ninth-err.log' -Wait
+  $v6.Stop()
+  $said = Get-Said 'ninth.log'
+  if ($ninth.ExitCode -ne 1 -or -not $said.Contains("Port $v6Port is in use")) {
+    Fail "a program on [::1]:$v6Port wasn't reported as using the port (exit code $($ninth.ExitCode)): $said"
+  }
+  Pass 'a program on the port''s IPv6 address, ::1, is reported as using the port'
+} else {
+  Write-Host 'skip a program on ::1 at the port: this computer has no IPv6 loopback'
+}
+
+# With keep running on, a server that runs out of memory while it starts isn't started again either
+# (it would only run out again), and breadboard.bat says how to give it more: here with the -Xmx in
+# JAVA_OPTS (as 3.0's launchers suggested), which wins over breadboard.memory. (Too little room for
+# its classes, -XX:MaxMetaspaceSize, makes it run out at once, whatever its heap.) What Java itself
+# says about it goes into logs\jvm-pid<N>.log, not the window.
+$env:BREADBOARD_KEEP_RUNNING = '1'
+$env:JAVA_OPTS = '-Xmx64m -XX:MaxMetaspaceSize=16m'
+$tenth = Start-Breadboard $other ($Port + 7) 'tenth.log' 'tenth-err.log'
+# (its exit code is kept only once its handle has been asked for)
+$null = $tenth.Handle
+Remove-Item Env:BREADBOARD_KEEP_RUNNING
+Remove-Item Env:JAVA_OPTS
+if (-not $tenth.WaitForExit(120000)) {
+  Stop-Process -Id $tenth.Id -Force -ErrorAction SilentlyContinue
+  Fail "breadboard.bat kept trying to start a server that ran out of memory while starting: $(Get-Said 'tenth.log')"
+}
+$said = Get-Said 'tenth.log'
+$window = $said + (Get-Said 'tenth-err.log')
+$jvmSaid = "$(Get-ChildItem -LiteralPath (Join-Path $other 'logs') -Filter 'jvm-pid*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content -Raw)"
+Remove-Item -LiteralPath (Join-Path $other 'logs\out-of-memory.hprof') -ErrorAction SilentlyContinue
+if ($tenth.ExitCode -eq 0 -or -not $said.Contains('stopped before the server started (it ran out of memory: a script may keep too much data. -Xmx64m in JAVA_OPTS gives it 64m, and wins over breadboard.memory: raise that, e.g. to -Xmx128m,') -or $said.Contains('Starting Breadboard again')) {
+  Fail "a server that ran out of memory while starting was started again, or breadboard.bat didn't say how to give it more (exit code $($tenth.ExitCode)): $said"
+}
+if ($window.Contains('Terminating due to') -or -not $jvmSaid.Contains('Terminating due to java.lang.OutOfMemoryError')) {
+  Fail "what Java said as it ran out of memory isn't in logs\jvm-pid<N>.log, or went into the window: $window / $jvmSaid"
+}
+Pass 'a server that runs out of memory while starting isn''t started again; breadboard.bat says how to give it more (the -Xmx in JAVA_OPTS), and logs\jvm-pid<N>.log what Java said'
 
 Stop-Breadboard
 Start-Sleep -Seconds 3
