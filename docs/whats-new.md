@@ -91,8 +91,7 @@ than made in (and counted against) the new turn.
 The answer (`bb:edge-edit-result`) says whether the edit was accepted (`ok`). It also says whether
 the network changed (`applied`), which is false when `onEdit` only collects it, and true when
 `onEdit` makes the change itself (the network game example does, to record a cut as a `TieCut`
-event of its own). Every edit,
-accepted or not, is logged as an `edgeEdit` event naming the actor.
+event of its own). Every edit, accepted or not, is logged as an `edgeEdit` event naming the actor.
 
 Scopes `amongNeighbors` and `visible` concern ties among a participant's neighbors. Turn those ties
 on with `g.setVisibility("egoTies")`. Under the default visibility the page cannot tell which

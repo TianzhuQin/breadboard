@@ -37,7 +37,11 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 控制台的大多数页面都针对一个实验：侧栏顶部选中的那个。点它可以切换实验，也可以新建或导入。服务器上还没有实验时，**Experiments** 页会建议从 **Example: network game** 开始；点 **New experiment**，它已经选好了，名字也填好了（Network game）。
 
 - **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 OnJoinStep、OnLeaveStep、InitStep 三个空步骤和标准的参与者页面）开始，从 **Example: network game**（一个可以直接运行的网络小游戏）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
-- **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S，Mac 上是 ⌘S）只是保存。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。注意：重新加载会让网络里的所有人断开。重新加载后，你自己开的那一场（或者自动运行用你的账号开的那一场）会继续；如果它的游戏已经开始或有人在线，控制台会先问你，并说明游戏会从头开始，里面的人会自己重新连上。重新加载大约要半秒，这期间参与者点的选项和对连线的修改都不算数，他们的页面重新连上后显示的是从头开始的游戏；这一场的数据里会记一条 `engineReloaded`，旧游戏的记录都在它前面，后面不会再有。有场次在运行时，保存后、重新加载前，顶栏会显示 **Reload needed**（没有场次在运行时显示 **Steps saved**，下一场会自动用上），所有研究者的控制台都一样，刷新页面也还在。自动运行自己的那一场开着时，下一场也会自动用上保存的代码，所以顶栏同样显示 **Steps saved**，Steps 页只提示已保存，不催你重新加载（如果自动运行用的不是你的账号，你这时重新加载会结束这一场并让自动运行暂停，页面也会这样提醒）。
+- **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S，Mac 上是 ⌘S）只是保存，引擎还在用原来的代码。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。
+  - 重新加载会让网络里的所有人断开。你自己开的那一场（或者自动运行用你的账号开的那一场）会接着进行：游戏从头开始，里面的人会自己重新连上，新来的人也能加入。如果游戏已经开始或有人在线，控制台会先问你，再重新加载。
+  - 重新加载大约要半秒。这期间参与者点的选项和对连接的修改都不算数，他们重新连上后看到的是从头开始的游戏。数据里会记一条 `engineReloaded`，旧游戏的记录都在它前面。
+  - 有场次在运行时，保存后、重新加载前，顶栏会显示 **Reload needed**，所有研究者的控制台都一样，刷新页面也还在。没有场次在运行时显示 **Steps saved**：下一场会自动用上保存的代码。
+  - 自动运行自己的那一场开着时，顶栏也显示 **Steps saved**，Steps 页只提示已保存：自动运行的下一场会用上，不用重新加载。这时重新加载会让这一场的游戏从头开始；如果自动运行用的不是你的账号，重新加载会结束这一场并让自动运行暂停，页面会先提醒你。
 - **Content**：参与者读到的文字，比如说明和知情同意书。每段文字有一个名字，程序里用 `c.get("名字")` 显示。每种语言各写一份；实验有几种语言时，参与者读哪一种由步骤决定，比如 `c.setDefaultLanguage("zho")`（`zho` 是语言的代码，Content 页面上写在语言名字旁边）。某段文字还没有这种语言的版本时，参与者看到的是英文版；有这种语言的版本但内容是空的，参与者就什么也看不到（Content 页面也会这样提醒）。
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
 - **Preview**（页面标题是 Participant preview）：开场后，在这里按某位参与者的视角看他的页面，可选 **Desktop** 或 **Phone**。
@@ -49,7 +53,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
   - 测试玩家（他自己的页面从没在这一场连上过）由预览来玩：预览算他在线，预览里的选择就是他的选择。
   - 预览不会把人加进游戏：不在网络里的人（比如恢复场次后还没回来的人），预览上写着 **Not in the game right now**，等他回来后自动显示他的页面。恢复场次或重新加载引擎以后，这些规则照样适用。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；游戏里的说明、提示和得分文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后，再等 20 秒看还有没有人来（满 8 人就不再等），倒数 5 秒后游戏自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它剪掉；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；游戏里的说明、提示和得分文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次剪断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
 
 例子的文字是英文写的，放在 Content 页面代码为 `eng` 的语言下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
 
@@ -82,7 +86,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 3. 链接用的是你打开控制台时的网址。用 localhost 打开时，链接只在你自己的电脑上能用。放到服务器上以后，要用服务器的公开网址打开控制台，再复制链接。
 4. 人到齐后点 **Start the game**，在确认框里再点一次 **Start the game**。等待的人一起进入，实验开始。有等候室的实验（比如 Example: network game）人够了会自己开始，不用点。开始后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面"设置写在哪里"）。
 5. 在 **Network** 页实时看网络。选 **Tie**（快捷键 C），先点一个人再点另一个人，就加了一条连接；选 **Cut**（X）再点一条连接，就把它切断。成功后会出现 **Undo**，Ctrl+Z 也能撤销。每次修改都记成一条 `edgeEdit` 事件，操作者是 `admin`。
-6. **Stop session** 之后，没有新人能加入。
+6. 点 **Stop session**（确认框里再点一次）停止这一场：没有新人能加入，参与者看到这一场已被停止的页面（已经拿到完成码的人仍看到完成码），之后不再记录任何东西。以后可以点 **Resume session**，让它的游戏从头再来，之前的数据都保留。
 
 更多见 [console.md](console.md#running-a-session)。
 
@@ -129,6 +133,8 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行。最好先做完下面第 5 步再开场：已经开着的那一场不会自动用上之后设的完成码。
 2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 研究设置的 Data collection 部分，记录 Prolific ID 的方式选 **I'll use URL parameters**；链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。Prolific 的参与者都是从互联网来的，所以这个网址必须用服务器的公开网址：用公开网址打开控制台，再复制。如果你是用 localhost 或实验室内网的地址打开控制台的，页面会提醒你。
 3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，如果自动运行开着、会自己开下一场，而且没有什么让它开不了，参与者会看到一个等待页，下一场一开就自动进入（他们也可以选择退回研究）；否则会看到 "No session is open right now"。Study URL 下面会写明现在是哪种情况；如果它提醒链接会显示 "No session is open right now"（比如引擎里正跑着别的实验的场次），就先在 Prolific 上暂停招募。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
+
+   **请分批放出名额**：一场的游戏开始后（例子游戏一场大约 2–3 分钟），Prolific 再送来的人只能在等待页上等下一场，等不及的就会退回研究。所以在 Prolific 上不要一次放出所有名额（places），每批不超过一场最多能容纳的人数（例子游戏是 `networkSize`，默认 8 人；用 Autopilot 页的等候室时，是那里的 **Maximum players**），等这一批开始玩、下一场开放了，再放下一批。
 4. 参与者的 Prolific ID 会换成一个 player id，其他参与者看不到。ID 记在 `prolificEntry` 事件里，方便付费。**同一个人不会参加两次**：在这个实验里已经参加过的人（拿到过完成码，或者游戏结束时还在场）再打开 Prolific 链接，会看到 "You have already taken part in this study" 和他的完成码，不会被安排进新的一场（服务器重启后也一样）；场次被停止或因重启中断的人可以再加入。这个检查按整个实验算：如果要在 Prolific 上用同一批人做新一期，就复制一个实验。自己测试时请用 **Try it as a test participant**，它每次都会生成新的 Prolific ID。
 5. **完成码**：在 Prolific 里设置用完成码（completion code）把参与者送回，记下这个码。然后：
    - **用 Example: network game（或复制它的实验）**：不用改代码，它自己会把完成码给从 Prolific 来的人，**Recruitment** 页的 **When a participant finishes** 会写明现在用的是哪个码。在 **Parameters** 页点 `prolificCode` 右边的铅笔，把 **Default** 填成这个码，点 **Save changes**。最好在开场和打开自动运行之前做：已经开着的那一场仍用开场时的值。
@@ -145,7 +151,14 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
      不加这个判断也不会出错：对不是从 Prolific 来的人，它什么都不做，只在服务器日志里写一行原因。
    - 改好后先试一遍，再在 Prolific 上发布：在 **Live session** 新建一场（用例子游戏时，确认 `prolificCode` 填的是你的完成码，不是的话点它下面的 **Use default**），然后在 **Recruitment** 页点 **Try it as a test participant**，它会打开一个新标签页，用一个假的 Prolific ID 加入。游戏没有自己开始时（例子游戏的等候室默认要 2 人），回到 **Live session** 点 **Start the game**，电脑玩家会补上其他位置。玩完几轮，确认最后能看到完成码和 **Finish and return to Prolific** 按钮（中文的场次里是 **完成，回到 Prolific**）。
 
-参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。他们在这一页 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。这一页一直开着的话，这一场结束后一周之内都能把留言存下来，又过了很多场、服务器重启过也一样；万一存不下来，页面会直接告诉参与者，给出 **Try again** 和 **Return to Prolific without it** 两个按钮，不会不声不响地丢掉留言（连不上服务器、或者服务器出错时，页面说的是留言可能没送到，因为服务器也许已经存下了）；服务器 10 秒内没有回音时，页面会说留言还没确认存下（按钮是 **Try again** 和 **Return to Prolific without waiting**），等服务器存好了就自己回到 Prolific。**Try again** 会先等前一次的回音，前一次确实失败了才重发；同一个参与者发来的同一句留言，服务器也只存一次。**From Prolific in this session** 列出谁加入了、谁完成了，如果你在 `completeProlific` 里给了 `bonus` 金额，**Copy bonus list** 会复制奖金名单，用于 Prolific 的批量发奖金。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场；**From Prolific in every session** 按场次列出这个实验所有场次从 Prolific 来的人（最新的一场在最上面）：什么时候加入的、有没有完成、完成码和奖金，它的 **Copy bonus list** 会复制所有场次的奖金名单。游戏结束时没拿到完成码的人（比如例子实验的 `prolificCode` 还空着的时候），在两个列表里都算完成，标成 **No code**。等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。更多见 [console.md](console.md#recruiting-participants)。
+完成以后：
+
+- **完成页面**：参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。
+- **参与者的留言**：他们在完成页面的 **Comments for the researcher** 框里写的话，会存进他那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。完成页面一直开着的话，一周之内都能把留言存下来，服务器重启过也一样。存不下来时，页面会告诉参与者，给出 **Try again** 和 **Return to Prolific without it**，不会悄悄丢掉留言；服务器 10 秒内没有回音时，页面说留言还没确认存下（按钮是 **Try again** 和 **Return to Prolific without waiting**），存好后自己回到 Prolific。同一个参与者的同一句留言只存一次。
+- **谁来了、谁完成了，以前各场的名单**：**From Prolific in this session** 列出这一场从 Prolific 来的人。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场，所以付费时请看 **From Prolific in every session**：它按场次列出这个实验每一场从 Prolific 来的人（最新的一场在最上面），什么时候加入的、有没有完成、完成码和奖金。如果你在 `completeProlific` 里给了 `bonus` 金额，两个列表的 **Copy bonus list** 都能复制奖金名单（后一个是所有场次的），用于 Prolific 的批量发奖金。游戏结束时没拿到完成码的人（比如例子的 `prolificCode` 还空着时）也算完成，标成 **No code**。
+- 等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。
+
+更多见 [console.md](console.md#recruiting-participants)。
 
 ## 导出数据
 

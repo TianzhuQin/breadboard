@@ -91,9 +91,8 @@ once the server has stopped. On Linux, started in a desktop session by someone l
 computer, the launcher asks systemd to keep the computer awake (`systemd-inhibit`), and on GNOME
 the desktop too (`gnome-session-inhibit`); if the computer still suspends (some desktops do, such as
 Cinnamon on Linux Mint), turn off automatic suspend in the power settings. The screen still turns
-off and locks as usual. Started over SSH or as a
-service it can't (systemd doesn't let an ordinary account do it there), and servers seldom sleep
-anyway. A laptop still sleeps when its lid is closed. For a long study that runs by itself, keep
+off and locks as usual. Started over SSH or as a service it can't (systemd doesn't let an ordinary
+account do it there), and servers seldom sleep anyway. A laptop still sleeps when its lid is closed. For a long study that runs by itself, keep
 the computer plugged in with its lid open; on a Mac, also turn on **Prevent automatic sleeping …
 when the display is off** (System Settings → Battery → Options; on a Mac mini or iMac, System
 Settings → Energy).

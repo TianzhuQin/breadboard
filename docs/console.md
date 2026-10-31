@@ -500,6 +500,12 @@ asks Prolific participants to return the study, so pause recruiting meanwhile.
 **Try it as a test participant** opens it with a made-up Prolific ID, taking a seat like a real
 participant.
 
+**Release places on Prolific in batches.** Once a session's game has started, the people Prolific
+sends can only wait for the next session, and those who can't wait return the study. So publish no
+more places at a time than one session takes (the example's `networkSize`, 8 by default, or the
+Autopilot page's **Maximum players** when its waiting room is used), and the next batch once those
+people are playing and the next session is open.
+
 A participant's Prolific ID is swapped for a player id, so other participants never see it, and
 recorded in a `prolificEntry` event. To send participants back to Prolific with your completion
 code when they finish (**When a participant finishes** says how for this experiment):
