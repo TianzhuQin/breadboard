@@ -336,9 +336,18 @@ CALL :note "Breadboard stopped before the server started (%WHY%), so it is not s
 GOTO failed
 
 :portnowtaken
+REM Said in logs\application.log too, as at the other ends of keep running (its last entry there said
+REM that the server would be started again), and there first: a window that doesn't take output
+REM would hold that up.
+(
+  ECHO %DATE% %TIME% - [ERROR] - from breadboard.bat in launcher
+  ECHO Breadboard is not started again:
+  CALL :say_port
+  ECHO.
+) >>"logs\application.log" 2>NUL
 ECHO Breadboard is not started again:
-CALL :refuse say_port
-EXIT /B %EXIT_CODE%
+CALL :say_port
+GOTO failed
 
 :giveup
 CALL :note "Breadboard stopped by itself (%WHY%). It has been started again 5 times in 10 minutes, so it is left stopped: logs\application.log says what went wrong."
