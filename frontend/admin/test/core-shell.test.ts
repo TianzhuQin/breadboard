@@ -382,6 +382,45 @@ describe('the top bar\'s engine chip', () => {
   const exp = (id: number, name: string, instances: any[] = []) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances, images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
   const session = { id: 9, name: 'Auto 3', status: 'RUNNING' }
 
+  it('says the engine rebuilt without claiming its steps compiled, and keeps their error after the chip clears', async () => {
+    __receive({
+      user: { email: 'researcher@example.org', experiments: [exp(1, 'A')], currentScript: '' },
+      experiment: exp(1, 'A'),
+      experimentInstance: '',
+      engine: { experimentId: 1, experimentName: 'A', sessionId: null, stepsChanged: false },
+    })
+    actions.clearOutput()
+    vi.spyOn(connection, 'send').mockReturnValue(true)
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
+    const w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    const chip = () => w.find('.topbar__chip')
+    const error = 'Line 3 of FinishStep: unexpected token: ;'
+    vi.useFakeTimers()
+    try {
+      __receive({ notify: { ScriptEngineReloading: 1 } })
+      await nextTick()
+      expect(chip().text()).toBe('Loading steps…')
+      // This notification describes the engine rebuild; its steps compile afterwards and can fail.
+      __receive({ notify: { ScriptEngineReloaded: 2 } })
+      __receive({ error, source: 'Steps', step: 'FinishStep' })
+      await nextTick()
+      expect(chip().text()).toBe('Engine rebuilt')
+      expect(chip().text()).not.toContain('Steps loaded')
+      expect(admin.output).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'error', text: error, source: 'Steps' })]))
+      await vi.advanceTimersByTimeAsync(2499)
+      expect(chip().text()).toBe('Engine rebuilt')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(chip().text()).toBe('Engine')
+      expect(admin.output).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'error', text: error })]))
+    } finally {
+      w.unmount()
+      // Let the graph's batched reset finish too, before returning this shared store to real timers.
+      await vi.runOnlyPendingTimersAsync()
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
   it('says "Reload needed" as the server says, and that the autopilot\'s next session uses the saved steps while its session is open', async () => {
     __receive({ notify: { ScriptEngineReloading: 1 } })
     __receive({ notify: { ScriptEngineReloaded: 2 } })
