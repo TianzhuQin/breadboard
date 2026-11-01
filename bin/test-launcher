@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Fast preflight checks against the real Unix launcher, without starting the server."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class LauncherPreflight(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='bb-launcher-')
+        self.home = Path(self.temp.name)
+        for folder in ('conf', 'logs', 'db', 'lib', 'fakebin', 'fakejdk/bin'):
+            (self.home / folder).mkdir(parents=True)
+        shutil.copy(ROOT / 'release/breadboard.sh', self.home / 'breadboard.sh')
+        (self.home / 'lib/classpath.txt').write_text('unused.jar\n')
+        (self.home / 'conf/application.secret').write_text('local-preflight-test-only')
+        self.script('fakejdk/bin/java', '''#!/bin/sh
+case "$*" in *-version*) echo 'java version "1.8.0_test"' >&2; exit 0 ;; esac
+printf 'started\\n' >> starts
+sleep "${FAKE_START_SECONDS:-0}"
+exit 255
+''')
+        self.script('fakebin/curl', '#!/bin/sh\nexit 7\n')
+        self.script('fakebin/caffeinate', '#!/bin/sh\nexit 0\n')
+        self.env = dict(os.environ, JAVA8_HOME=str(self.home / 'fakejdk'),
+                        PATH=str(self.home / 'fakebin') + ':' + os.environ['PATH'],
+                        BREADBOARD_NO_BROWSER='1', BREADBOARD_KEEP_RUNNING='1')
+        self.children = []
+
+    def tearDown(self):
+        for child in self.children:
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=10)
+        self.temp.cleanup()
+
+    def script(self, file, text):
+        target = self.home / file
+        target.write_text(text)
+        target.chmod(0o700)
+
+    def start(self, **env):
+        child = subprocess.Popen(['sh', './breadboard.sh'], cwd=self.home,
+                                 env=dict(self.env, **env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.children.append(child)
+        return child
+
+    def result(self, **env):
+        return self.start(**env).communicate(timeout=15)[0].decode()
+
+    def test_two_starts_claim_one_start_lock(self):
+        first = self.start(FAKE_START_SECONDS='3')
+        until = time.monotonic() + 5
+        while not (self.home / 'starts').exists() and time.monotonic() < until:
+            time.sleep(.02)
+        said = self.result()
+        self.assertIn('starting or running from this folder', said)
+        first.communicate(timeout=10)
+        self.assertEqual('started\n', (self.home / 'starts').read_text())
+        self.assertFalse((self.home / 'logs/start.lock').exists())
+
+    def test_a_live_process_file_is_never_removed(self):
+        pid = self.home / 'RUNNING_PID'
+        pid.write_text(str(os.getpid()))
+        said = self.result()
+        self.assertIn('live process', said)
+        self.assertEqual(str(os.getpid()), pid.read_text())
+        self.assertFalse((self.home / 'starts').exists())
+
+    def test_a_dead_start_lock_is_recovered(self):
+        lock = self.home / 'logs/start.lock'
+        lock.mkdir()
+        (lock / 'pid').write_text('2147483647\n')
+        self.result()
+        self.assertEqual('started\n', (self.home / 'starts').read_text())
+        self.assertFalse(lock.exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

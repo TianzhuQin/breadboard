@@ -46,6 +46,7 @@ public final class Main {
     System.setErr(printStream(err, System.getProperty("sun.stderr.encoding")));
     // What is printed just before the process ends (why the server can't start) still goes out.
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      StartLock.release(home, System.getenv("BREADBOARD_START_LOCK_PID"));
       startErrors.writeIfTheServerNeverListened();
       long until = System.nanoTime() + DRAIN_AT_EXIT_MS * 1000000L;
       err.drain(until);
@@ -62,6 +63,7 @@ public final class Main {
     // (System.exit), except when the folder it is given isn't there: then it only says so.
     if (play.api.Play.maybeApplication().isDefined()) {
       startErrors.serverListens();
+      StartLock.release(home, System.getenv("BREADBOARD_START_LOCK_PID"));
     } else {
       System.exit(-1);
     }

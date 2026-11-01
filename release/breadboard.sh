@@ -249,6 +249,50 @@ open_console() {
   done
 }
 
+# Claim the start before checking the process file or the port: two double-clicks can otherwise
+# both pass those checks before either Java writes RUNNING_PID. mkdir is atomic. Java releases
+# this lock once it listens (or exits); the shell releases it if a preflight check refuses.
+START_LOCK="logs/start.lock"
+BREADBOARD_START_LOCK_PID="$$"
+export BREADBOARD_START_LOCK_PID
+release_start_lock() {
+  [ -f "$START_LOCK/pid" ] || return 0
+  [ "$(cat "$START_LOCK/pid" 2>/dev/null)" = "$$" ] || return 0
+  rm -f "$START_LOCK/pid"
+  rmdir "$START_LOCK" 2>/dev/null || true
+}
+trap 'release_start_lock' EXIT
+pid_alive() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$(ps -p "$1" -o pid= 2>/dev/null)" ]
+}
+claim_start_lock() {
+  umask 077
+  mkdir -p logs 2>/dev/null || cannot_write "logs/" "$HERE/logs"
+  [ -w logs ] || cannot_write "logs/" "$HERE/logs"
+  # An empty lock may be between mkdir and writing its pid. Leave it alone for a minute.
+  while ! mkdir "$START_LOCK" 2>/dev/null; do
+    OWNER="$(cat "$START_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$OWNER" ] && ! pid_alive "$OWNER" && mkdir "$START_LOCK/recover" 2>/dev/null; then
+      OWNER="$(cat "$START_LOCK/pid" 2>/dev/null || true)"
+      if [ -n "$OWNER" ] && ! pid_alive "$OWNER"; then
+        rm -f "$START_LOCK/pid"
+      fi
+      rmdir "$START_LOCK/recover" 2>/dev/null || true
+      rmdir "$START_LOCK" 2>/dev/null || true
+      continue
+    fi
+    if [ -z "$OWNER" ] && [ -n "$(find "$START_LOCK" -prune -mmin +1 2>/dev/null)" ]; then
+      rmdir "$START_LOCK" 2>/dev/null && continue
+    fi
+    echo "Breadboard is starting or running from this folder. Once it answers, open $URL. To start it again, stop it first." >&2
+    if [ -n "$OPENER" ]; then (trap '' HUP; open_console "$PORT" &); fi
+    return 1
+  done
+  printf '%s\n' "$$" > "$START_LOCK/pid"
+}
+claim_start_lock || exit 1
+
 # Whether a Breadboard runs from this folder now: the pid file names it (its process id, written by
 # Play), and a crash or power cut leaves the file behind, naming a process that is gone or another
 # program. Sets RUNNING to the process id.
@@ -386,7 +430,15 @@ fi
 
 # Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
 remove_pid_file() {
-  [ "$PID_FILE" = /dev/null ] || rm -f "$PID_FILE"
+  [ "$PID_FILE" = /dev/null ] && return 0
+  if [ -f "$PID_FILE" ]; then
+    OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if pid_alive "$OLD_PID"; then
+      echo "$PID_FILE names a live process ($OLD_PID), so it is left in place. Another Breadboard from this folder may have the database open; stop it before starting this one." >&2
+      return 1
+    fi
+    rm -f "$PID_FILE"
+  fi
 }
 remove_pid_file
 
@@ -662,7 +714,7 @@ stop_server() {
 trap 'stop_server 130' INT
 trap 'stop_server 143' TERM
 trap 'stop_server 129' HUP
-trap '[ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null; let_said_out' EXIT
+trap 'release_start_lock; [ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null; let_said_out' EXIT
 
 RESTARTS=""   # when the server was started again (in seconds), within the last 10 minutes
 CODE=""       # how the last Java ended (none yet)
@@ -697,6 +749,10 @@ while :; do
   # The server never started (a mistake in conf/local.conf, its port taken by then, Java that can't
   # start at all): started again, it would only fail the same way.
   if [ -f logs/start-errors.log ]; then
+    if grep -qF "Locked by another process" logs/start-errors.log; then
+      note "Breadboard could not start: another Breadboard from this folder has the database open. Stop that one before starting this one; logs/start-errors.log keeps the details."
+      exit "$CODE"
+    fi
     note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs/start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
     exit "$CODE"
   fi
@@ -736,7 +792,8 @@ while :; do
     note "Breadboard is not started again. $TAKEN"
     exit "$CODE"
   fi
-  remove_pid_file
+  claim_start_lock || exit "$CODE"
+  remove_pid_file || exit "$CODE"
   RESTARTS="$RESTARTS $NOW"
   # (the server doesn't redo what -Dbreadboard.resetPassword asked for: see Global)
   BREADBOARD_RESTARTED=$((${BREADBOARD_RESTARTED:-0} + 1))

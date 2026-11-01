@@ -98,6 +98,15 @@ function Get-Said([string]$out) {
 }
 
 $server = Start-Breadboard $app $Port 'out.log' 'err.log'
+# A second double-click while Java is still starting must leave the first one's lock and pid alone.
+$claimDeadline = (Get-Date).AddSeconds(60)
+while (-not (Test-Path -LiteralPath (Join-Path $app 'logs\start.lock')) -and
+       -not (Test-Path -LiteralPath (Join-Path $app 'RUNNING_PID')) -and -not $server.HasExited) {
+  if ((Get-Date) -gt $claimDeadline) { Fail 'the first start did not claim its start lock' }
+  Start-Sleep -Milliseconds 20
+}
+$race = Start-Breadboard $app $Port 'race.log' 'race-err.log'
+
 $deadline = (Get-Date).AddSeconds(240)
 $health = $null
 while (-not $health) {
@@ -110,6 +119,14 @@ if ($health.status -ne 'ok') { Fail "/health says $($health | ConvertTo-Json -Co
 # (HEAD too, for uptime monitors that check that way)
 $head = Invoke-WebRequest -Uri "$base/health" -Method Head -UseBasicParsing
 if ($head.StatusCode -ne 200) { Fail "HEAD /health answered $($head.StatusCode)" }
+$race.WaitForExit(60000) | Out-Null
+$raceSaid = Get-Said 'race.log'
+if (-not $race.HasExited -or $race.ExitCode -ne 1 -or
+    -not ($raceSaid.Contains('starting or running from this folder') -or $raceSaid.Contains('already running from this folder'))) {
+  Fail "a simultaneous second start was not safely refused: $raceSaid"
+}
+if (Test-Path -LiteralPath (Join-Path $app 'logs\start.lock')) { Fail 'the start lock was not released after the server listened' }
+Pass 'two simultaneous starts leave one server and release the start lock'
 Pass 'server started (from a folder whose path has spaces, parentheses and an "&")'
 
 $java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($app) } | Select-Object -First 1
@@ -139,7 +156,7 @@ Pass 'console and participant bundles load'
 
 $languages = Invoke-RestMethod -Uri "$base/languages"
 $english = ($languages.languages | Where-Object { $_.code -eq 'eng' } | Select-Object -First 1).id
-$email = 'smoke@breadboard.test'
+$email = 'smoke@example.org'
 $password = 'smoke-' + [Guid]::NewGuid().ToString('N').Substring(0, 16)
 $body = @{ email = $email; password = $password; defaultLanguageId = $english } | ConvertTo-Json
 Invoke-RestMethod -Uri "$base/createFirstUser" -Method Post -ContentType 'application/json' -Body $body | Out-Null

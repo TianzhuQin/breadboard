@@ -68,6 +68,9 @@ cleanup () {
 }
 trap cleanup EXIT
 # Anything else that fails (set -e) says where, instead of stopping without a word.
+
+# Fast checks of launcher preflight races and refusals before unpacking a release.
+"$(dirname "$0")/test-launcher"
 trap 'fail "unexpected failure at line $LINENO"' ERR
 
 fail () {

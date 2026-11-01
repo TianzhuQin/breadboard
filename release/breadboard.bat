@@ -136,6 +136,15 @@ IF NOT DEFINED PORT IF DEFINED LOCAL_PORT SET "PORT=%LOCAL_PORT%"
 IF NOT DEFINED PORT SET "PORT=9000"
 IF DEFINED LOCAL_MEMORY SET "MEMORY=%LOCAL_MEMORY%"
 
+REM Claim the start before reading RUNNING_PID: mkdir is atomic even with two double-clicks.
+CALL :claimstart
+IF NOT DEFINED START_CLAIMED (
+  CALL :openrunning
+  CALL :say_starting
+  CALL :pause
+  EXIT /B 1
+)
+
 REM One already running from this folder, on whatever port, has the database open: say so, instead
 REM of the database's stack trace. Started by someone (often a second double-click), its console is
 REM opened, as the first start did (:openrunning).
@@ -195,7 +204,11 @@ IF NOT EXIST "conf\local.conf" (
 ) 2>NUL >"conf\local.conf"
 
 REM Play refuses to start while RUNNING_PID exists: one left behind by a crash goes.
-IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
+CALL :removepid
+IF DEFINED LIVE_PID (
+  CALL :refuse say_livepid
+  EXIT /B 1
+)
 
 REM The jars in the order the build lists them (lib\classpath.txt): a few classes are in two of them.
 SET "CP="
@@ -324,7 +337,13 @@ IF DEFINED RUNNING (
   CALL :note "Breadboard was started from this folder meanwhile (process %RUNNING%): leaving it to that one."
   EXIT /B %EXIT_CODE%
 )
-IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
+CALL :claimstart
+IF NOT DEFINED START_CLAIMED EXIT /B %EXIT_CODE%
+CALL :removepid
+IF DEFINED LIVE_PID (
+  CALL :refuse say_livepid
+  EXIT /B 1
+)
 REM (another program may have taken the port meanwhile: the server would only fail to start. As a
 REM service it is tried all the same, until the port is free again.)
 SET "PORT_TAKEN="
@@ -340,7 +359,13 @@ REM (-1: Play's, for a server that couldn't start; 3: out of memory)
 SET "WHY=exit code %EXIT_CODE%"
 IF "%EXIT_CODE%"=="-1" SET "WHY=it could not start, exit code -1"
 IF "%EXIT_CODE%"=="3" CALL :outofmemory
+findstr /L /C:"Locked by another process" "logs\start-errors.log" >NUL 2>&1
+IF NOT ERRORLEVEL 1 GOTO databasealreadyopen
 CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+GOTO failed
+
+:databasealreadyopen
+CALL :note "Breadboard could not start: another Breadboard from this folder has the database open. Stop that one before starting this one; logs\start-errors.log keeps the details."
 GOTO failed
 
 :portnowtaken
@@ -372,6 +397,7 @@ REM Says why Breadboard can't start (what the subroutine %1 says) and keeps the 
 REM As a service nobody reads the window, so it goes into logs\application.log too, when that can be
 REM written (Task Scheduler itself shows only the exit code, 1, as the task's Last Run Result).
 CALL :%~1
+CALL :releasestart
 CALL :pause
 IF NOT DEFINED SERVICE GOTO :EOF
 (
@@ -594,4 +620,43 @@ REM Shows %1 (given in quotes) in this window from a helper in the background, w
 REM the window: one that doesn't take output (a click into it starts selecting text, which pauses it
 REM until Esc) holds up only the helper.
 START "" /B CMD /D /C ECHO(%~1
+GOTO :EOF
+
+:claimstart
+SET "START_CLAIMED="
+SET "BREADBOARD_START_LOCK_PID="
+FOR /F "delims=" %%P IN ('powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID); $p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p.ParentProcessId); while ($p.Name -eq 'cmd.exe' -and $p.CommandLine.Contains('powershell -NoProfile -Command')) { $p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p.ParentProcessId) }; $p.ProcessId"') DO SET "BREADBOARD_START_LOCK_PID=%%P"
+IF NOT DEFINED BREADBOARD_START_LOCK_PID GOTO :EOF
+:claimstart_try
+MKDIR "logs\start.lock" 2>NUL
+IF NOT ERRORLEVEL 1 GOTO claimstart_owned
+REM Recover a lock only after its owner's process has gone; an empty recent lock may still be
+REM between mkdir and its pid write. A recovery subfolder keeps contenders from deleting each other.
+powershell -NoProfile -Command "$d = Join-Path (Get-Location) 'logs\start.lock'; $f = Join-Path $d 'pid'; if (Test-Path -LiteralPath $f) { $owner = (Get-Content -LiteralPath $f -TotalCount 1).Trim(); if ($owner -match '\A[0-9]+\z' -and -not (Get-Process -Id ([int]$owner) -ErrorAction SilentlyContinue)) { try { $r = Join-Path $d 'recover'; New-Item -ItemType Directory -Path $r -ErrorAction Stop | Out-Null; if ((Get-Content -LiteralPath $f -TotalCount 1).Trim() -eq $owner -and -not (Get-Process -Id ([int]$owner) -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $f; Remove-Item -LiteralPath $r; Remove-Item -LiteralPath $d; exit 0 }; Remove-Item -LiteralPath $r } catch {} } } elseif ((Get-Item -LiteralPath $d).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-1)) { try { [IO.Directory]::Delete($d); exit 0 } catch {} }; exit 1" >NUL 2>&1
+IF NOT ERRORLEVEL 1 GOTO claimstart_try
+SET "RUNNING_PORT=%PORT%"
+GOTO :EOF
+:claimstart_owned
+>"logs\start.lock\pid" ECHO %BREADBOARD_START_LOCK_PID%
+SET "START_CLAIMED=1"
+GOTO :EOF
+
+:releasestart
+IF NOT DEFINED START_CLAIMED GOTO :EOF
+powershell -NoProfile -Command "$d = Join-Path (Get-Location) 'logs\start.lock'; $f = Join-Path $d 'pid'; if ((Get-Content -LiteralPath $f -TotalCount 1 -ErrorAction SilentlyContinue) -eq $env:BREADBOARD_START_LOCK_PID) { Remove-Item -LiteralPath $f -ErrorAction SilentlyContinue; [IO.Directory]::Delete($d) }" >NUL 2>&1
+SET "START_CLAIMED="
+GOTO :EOF
+
+:removepid
+SET "LIVE_PID="
+IF NOT EXIST RUNNING_PID GOTO :EOF
+FOR /F "delims=" %%P IN ('powershell -NoProfile -Command "$p = (Get-Content -LiteralPath 'RUNNING_PID' -TotalCount 1).Trim(); if ($p -match '\A[0-9]+\z' -and (Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue)) { $p } else { Remove-Item -LiteralPath 'RUNNING_PID' }" 2^>NUL') DO SET "LIVE_PID=%%P"
+GOTO :EOF
+
+:say_starting
+ECHO Breadboard is starting or running from this folder. Once it answers, open http://localhost:%PORT%. To start it again, stop it first.
+GOTO :EOF
+
+:say_livepid
+ECHO RUNNING_PID names a live process ^(%LIVE_PID%^), so it is left in place. Another Breadboard from this folder may have the database open; stop it before starting this one.
 GOTO :EOF
