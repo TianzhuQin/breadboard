@@ -897,7 +897,7 @@ describe('SessionPage', () => {
     const w = await mountPage()
     const card = w.find('.live-err')
     expect(card.findAll('.eng-err__places li').map(li => li.text()))
-      .toEqual(['Line 5 of finishStep', 'Script684.groovy, line 82 an earlier script or a step'])
+      .toEqual(['Line 5 of finishStep'])
     await card.find('button.eng-err__place').trigger('click')
     expect(routerPush).toHaveBeenCalledWith({ path: '/steps', query: { step: 'finishStep', line: '5' } })
     // InitStep failing at its line 47, started by the OnJoinStep (its line 5) in the script the server runs for a
@@ -909,7 +909,7 @@ describe('SessionPage', () => {
     }]
     await nextTick()
     expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual([
-      'Line 47 of InitStep', 'Script202.groovy, line 5 an earlier script or a step', 'Script205.groovy, line 1 an earlier script or a step',
+      'Line 47 of InitStep',
     ])
     await w.find('.live-err button.eng-err__place').trigger('click')
     expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '47' } })
@@ -972,7 +972,7 @@ describe('SessionPage', () => {
       frames: [{ file: 'Script531.groovy', line: 47, step: 'InitStep', own: true }, { file: 'Script900.groovy', line: 1 }],
     }]
     await nextTick()
-    expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual(['Line 47 of InitStep', 'Script900.groovy, line 1 another script'])
+    expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual(['Line 47 of InitStep'])
     expect(w.findAll('.live-err button.eng-err__place')).toHaveLength(1)
 
     // RoundStep failing in its own code, at its line 66 (in its g.V.each at line 64), on its timer
