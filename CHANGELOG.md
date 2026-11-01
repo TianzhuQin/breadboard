@@ -104,9 +104,8 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   seat, also after a restart. `recruitment.completeProlific` for someone who didn't come from
   Prolific does nothing (the server's log says why); it used to stop the step, so the game stalled.
 - The autopilot opens no new session while the disk that holds the database is almost full.
-- Long unattended runs: memory stays level (replaced script engines and their classes are freed,
-  computer players share one timer, seats and records of finished sessions are released, including
-  after signing in again), and rebuilding the
+- Long unattended runs release replaced script engines and their classes, finished seats and session
+  records, including after signing in again. Computer players share one timer. Rebuilding the
   engine, as every new session and **Reload engine** do, takes about half a second instead of two
   or more.
 - The Autopilot page leaves the waiting room and takeover to the steps of an experiment that sets
