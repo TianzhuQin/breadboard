@@ -129,6 +129,27 @@ exit 255
         self.assertIn('rename it to breadboard.h2.db', said)
         self.assertNotIn("db/breadboard.h2.db isn't used", said)
 
+    def test_default_network_comes_first_without_virtual_adapters(self):
+        self.script('fakebin/uname', '#!/bin/sh\necho Darwin\n')
+        self.script('fakebin/route', '#!/bin/sh\necho "  interface: en0"\n')
+        self.script('fakebin/ifconfig', """#!/bin/sh
+cat <<'NETWORKS'
+vnic0: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+    inet 10.211.55.2 netmask 0xffffff00 broadcast 10.211.55.255
+bridge100: flags=8a63<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+    inet 192.168.64.1 netmask 0xffffff00 broadcast 192.168.64.255
+en7: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+    inet 192.168.1.20 netmask 0xffffff00 broadcast 192.168.1.255
+en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+    inet 10.20.30.40 netmask 0xffffff00 broadcast 10.20.30.255
+utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380
+    inet 100.64.0.2 netmask 0xffffffff
+NETWORKS
+""")
+        addresses = [line.strip() for line in self.result().splitlines() if 'On this network:' in line]
+        self.assertEqual(['On this network: http://10.20.30.40:9000',
+                          'On this network: http://192.168.1.20:9000'], addresses)
+
 
 if __name__ == '__main__':
     unittest.main()

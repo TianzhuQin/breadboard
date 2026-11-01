@@ -359,7 +359,14 @@ backups () {
   pass "a backup made in the console downloads as a zip of the database"
 }
 
+NETWORKS="$FAKE_NETWORKS"
 if [ -n "$OLD_DB" ]; then start "an older release's database"; else start "empty database"; fi
+NETWORKS=""
+NETWORK_LINES="$(tail -n +"$FROM" "$WORK/server.log" | sed -n 's/^  On this network: //p')"
+EXPECTED_NETWORK_LINES="$(printf '%s\n' "http://10.20.30.40:$PORT" "http://192.168.1.20:$PORT")"
+[ "$NETWORK_LINES" = "$EXPECTED_NETWORK_LINES" ] || fail "the launcher listed virtual adapters or put the default network last: $NETWORK_LINES"
+pass "the default network comes first and virtual-machine and VPN addresses are left out"
+
 [ -s "$APP/conf/application.secret" ] || fail "no conf/application.secret was generated"
 if [ -n "$OLD_DB" ]; then
   ls "$APP"/backups/breadboard-*-upgrade.zip >/dev/null 2>&1 || fail "no backup was made before upgrading the older database"
