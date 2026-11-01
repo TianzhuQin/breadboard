@@ -999,6 +999,10 @@ public class ScriptBoard extends UntypedActor {
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("events", eventBus);
 
     if (experiment != null) {
+      // The console reads this experiment's whole session history when it builds its JSON. Its
+      // content fetcher needs only the id; keep a separate lazy reference, so that history is not
+      // retained for the lifetime of the engine through c.selectedExperiment.
+      experiment.contentFetcher.selectedExperiment = Experiment.find.ref(experiment.id);
       engine.getBindings(ScriptContext.ENGINE_SCOPE).put("c", experiment.contentFetcher);
     }
 
@@ -1012,6 +1016,7 @@ public class ScriptBoard extends UntypedActor {
     boolean experimental = Play.application().configuration().getBoolean("breadboard.experimental", false);
     File groovyDir = new File(Play.application().path().toString(), "groovy");
     ScriptLoader.loadAll(engine, groovyDir, experimental);
+    EngineCleanup.afterScriptsLoaded();
 
     // get script object on which we want to implement the interface with
     Object a = engine.get("a");
@@ -2485,7 +2490,9 @@ public class ScriptBoard extends UntypedActor {
     // Internal messages (OnJoinStep / OnLeaveStep) carry no account and must not redirect the
     // game's "finished" notice to everyone's consoles.
     if (breadboardMessage.user != null) {
-      gameListener.user = breadboardMessage.user;
+      // A request's User is also serialized for the console, loading its experiment's full session
+      // history. The long-lived listener needs the account, with its own lazy relations instead.
+      gameListener.user = User.find.ref(breadboardMessage.user.email);
       gameListener.out = breadboardMessage.out;
     }
     if (breadboardMessage.user != null && actsOnTheGame(breadboardMessage)) {
@@ -3389,14 +3396,15 @@ public class ScriptBoard extends UntypedActor {
       return;
     }
     try {
-      play.libs.Akka.system().scheduler().scheduleOnce(
+      // A step finishing on its script timer may be the first to need another dispatcher thread.
+      ServerContext.run(() -> play.libs.Akka.system().scheduler().scheduleOnce(
           scala.concurrent.duration.Duration.create(50, java.util.concurrent.TimeUnit.MILLISECONDS),
           new Runnable() {
             public void run() {
               tellEngineNews();
             }
           },
-          play.libs.Akka.system().dispatcher());
+          play.libs.Akka.system().dispatcher()));
     } catch (Exception e) {
       engineNewsDue.set(false);
       Logger.warn("Could not tell the consoles what the engine runs: " + e);
@@ -3865,7 +3873,7 @@ public class ScriptBoard extends UntypedActor {
    */
   private ExperimentInstance startGame(String gameName, long currentExperimentInstanceId, LinkedHashMap parameters, Experiment selectedExperiment, User user,
                                        boolean onAccount) {
-    ExperimentInstance instance = new ExperimentInstance(gameName, selectedExperiment);
+    ExperimentInstance instance = new ExperimentInstance(gameName, Experiment.find.ref(selectedExperiment.id));
     instance.hasStarted = false;
     instance.status = ExperimentInstance.Status.STOPPED;
 
@@ -3881,8 +3889,10 @@ public class ScriptBoard extends UntypedActor {
 
     initAllParam(parameters, selectedExperiment, instance);
 
-    selectedExperiment.instances.add(instance);
-    selectedExperiment.save();
+    // Save the owning side of the relation. Adding it to the experiment's lazy history loads and
+    // retains every past session (and its launch data) through the engine's ContentFetcher and the
+    // current session's experiment. The history is still queried normally by the console/export.
+    instance.save();
     // Before it runs, and so takes people (the study's link leads to its sign-in page): the language of
     // its texts until its steps have loaded and chosen one (loadSteps).
     SessionLanguage.recordProvisional(instance.id, selectedExperiment.id);
@@ -5731,6 +5741,10 @@ public class ScriptBoard extends UntypedActor {
 
     @Override
     public void propertyChange(PropertyChangeEvent evt) {
+      ServerContext.run(() -> changedInServerContext(evt));
+    }
+
+    private void changedInServerContext(PropertyChangeEvent evt) {
       List<Data> dataList = experimentInstance.data;
       Data foundData = null;
       if (evt.getPropertyName() != null) {

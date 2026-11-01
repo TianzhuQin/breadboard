@@ -43,10 +43,6 @@ public class EngineCleanupTest {
     @Test
     public void aReplacedEngineCanBeGarbageCollected() throws Exception {
         JsonSetup.install(); // as at startup
-        // Groovy keeps a metaclass for Vertex's classes made when they are first used, with the
-        // closures events.groovy gave Vertex then: the JVM's first engines can stay for that. One
-        // played before the engine under test takes that place.
-        replaced(played(new ScriptTestHarness(false)));
         WeakReference<ScriptEngine> old = new WeakReference<ScriptEngine>(replaced(played(new ScriptTestHarness(false))));
         ScriptTestHarness next = played(new ScriptTestHarness(false));
         try {
@@ -79,7 +75,7 @@ public class EngineCleanupTest {
         // A task of the old engine under way when its timers were cancelled can go on after the release:
         // its classes, gone from Groovy's caches, still make objects (Groovy looks them up anew).
         JsonSetup.install();
-        replaced(played(new ScriptTestHarness(false))); // (the JVM's first engines can stay: see above)
+        replaced(played(new ScriptTestHarness(false))); // exercise an earlier replacement too
         ScriptTestHarness engine = played(new ScriptTestHarness(false));
         Closure<?> laterTask = (Closure<?>) engine.eval("{ -> new Note().text }");
         WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
@@ -112,7 +108,7 @@ public class EngineCleanupTest {
         // of them used to fail from the release on: the task had put Groovy's entry for its class back in
         // the class's own field during the release, and the release then emptied that entry.
         JsonSetup.install();
-        replaced(played(new ScriptTestHarness(false))); // (the JVM's first engines can stay: see above)
+        replaced(played(new ScriptTestHarness(false))); // exercise an earlier replacement too
         ScriptTestHarness engine = played(new ScriptTestHarness(false));
         WeakReference<ClassLoader> classes = new WeakReference<ClassLoader>(scriptLoader(engine));
         Task task = new Task((Closure<?>) engine.eval("class Work { int n; Work twice() { new Work(n: n * 2) } }\n"
@@ -215,6 +211,55 @@ public class EngineCleanupTest {
         assertFalse("the mapper still holds a class of the replaced engine", reachesClassUnder(playMapper(), scripts));
         assertFalse("the type factory still holds a class of the replaced engine",
             reachesClassUnder(TypeFactory.defaultInstance(), scripts));
+    }
+
+    /** A server class that inherits a method an experiment adds to an interface, like EventVertex.on. */
+    public interface HookSource {}
+    public static class HookReceiver implements HookSource {}
+
+    @Test
+    public void aServerClassForgetsMethodsInheritedFromAReplacedEnginesInterfaceExtension() throws Exception {
+        WeakReference<ClassLoader> old = inheritHookAndRelease();
+        ScriptTestHarness next = new ScriptTestHarness(false);
+        try {
+            next.put("receiver", new HookReceiver());
+            next.eval("EngineCleanupTest.HookSource.metaClass.fromEngine = { -> 'new engine' }; null");
+            assertEquals("the server class must inherit the new engine's method", "new engine",
+                next.eval("receiver.fromEngine()"));
+            assertTrue("the inherited method kept the old engine's script classes loaded", collected(old, 20000));
+        } finally {
+            next.close();
+            GroovySystem.getMetaClassRegistry().removeMetaClass(HookSource.class);
+            GroovySystem.getMetaClassRegistry().removeMetaClass(HookReceiver.class);
+            EngineCleanup.release(next.engine);
+        }
+    }
+
+    @Test
+    public void anExplicitCustomMetaclassOnAServerClassIsKept() throws Exception {
+        ScriptTestHarness old = new ScriptTestHarness(false);
+        try {
+            old.eval("EngineCleanupTest.HookReceiver.metaClass.keep = { -> 'still installed' }; null");
+            MetaClass custom = GroovySystem.getMetaClassRegistry().getMetaClass(HookReceiver.class);
+            replaced(old);
+            assertSame("only an ordinary inherited-method cache may be dropped", custom,
+                GroovySystem.getMetaClassRegistry().getMetaClass(HookReceiver.class));
+            assertEquals("still installed", custom.invokeMethod(new HookReceiver(), "keep", new Object[0]));
+        } finally {
+            old.close();
+            GroovySystem.getMetaClassRegistry().removeMetaClass(HookReceiver.class);
+            EngineCleanup.release(old.engine);
+        }
+    }
+
+    private static WeakReference<ClassLoader> inheritHookAndRelease() throws Exception {
+        ScriptTestHarness old = new ScriptTestHarness(false);
+        old.put("receiver", new HookReceiver());
+        old.eval("EngineCleanupTest.HookSource.metaClass.fromEngine = { -> 'old engine' }; null");
+        assertEquals("old engine", old.eval("receiver.fromEngine()"));
+        WeakReference<ClassLoader> scripts = new WeakReference<ClassLoader>(scriptLoader(old));
+        replaced(old);
+        return scripts;
     }
 
     // ---- helpers ------------------------------------------------------------------------------------
