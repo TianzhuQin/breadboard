@@ -272,8 +272,9 @@ starts it. If a session is running, the button reads **Stop it and create**.
 A session you stop yourself is no longer the one shown: the page says **No session is open** and
 lists it under **Recent sessions**, the experiment's five newest. Its **Resume** there, or on
 **Sessions & data**, takes it up again; the confirmation's button reads **Resume session**. A session
-of yours that someone else ended stays shown, and the page says who did it and how (stopped it,
-reloaded the engine, created or resumed another session), as its data does.
+of yours that someone else stopped says who did it and how (stopped it, reloaded the engine,
+created or resumed another session), as its data does. If the console follows a replacement
+session, a notice keeps the old session's name and who stopped it, on every page until you dismiss it.
 
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows

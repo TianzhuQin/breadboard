@@ -86,7 +86,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 3. 链接用的是你打开控制台时的网址。用 localhost 打开时，链接只在你自己的电脑上能用。放到服务器上以后，要用服务器的公开网址打开控制台，再复制链接。
 4. 人到齐后点 **Start the game**，在确认框里再点一次 **Start the game**。等待的人一起进入，实验开始。有等候室的实验（比如 Example: network game）人够了会自己开始，不用点。开始后再来的人会被拒绝（除非在 `conf/local.conf` 里设了 `breadboard.allowLateJoin=true`，见下面“设置写在哪里”）。
 5. 在 **Network** 页实时看网络。选 **Tie**（快捷键 C），先点一个人再点另一个人，就加了一条连接；选 **Cut**（X）再点一条连接，就把它切断。成功后会出现 **Undo**，Ctrl+Z 也能撤销。每次修改都记成一条 `edgeEdit` 事件，操作者是 `admin`。
-6. 点 **Stop session**（确认框里再点一次）停止这一场：没有新人能加入，参与者看到这一场已被停止的页面（从 Prolific 来的人还会看到：可以过几分钟从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍看到完成码），数据里记一条 `sessionStopped`，写明是谁停的（`by`）和怎么停的（`reason`），之后不再记录任何东西。新建一场（**Stop it and create**）、恢复另一场、别的账号点 **Reload engine**，结束了正在进行的一场时，也都这样记；开这一场的研究者会在 **Live session** 页上看到是谁、怎么停的。停止以后，**Live session** 页上写着 No session is open，这一场列在下面的 **Recent sessions** 里。以后可以在 **Recent sessions**（或 **Sessions & data**）里点这一场的 **Resume**，在确认框里点 **Resume session**，让它的游戏从头再来，之前的数据都保留。
+6. 点 **Stop session**（确认框里再点一次）停止这一场：没有新人能加入，参与者看到这一场已被停止的页面（从 Prolific 来的人还会看到：可以过几分钟从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍看到完成码），数据里记一条 `sessionStopped`，写明是谁停的（`by`）和怎么停的（`reason`），之后不再记录任何东西。新建一场（**Stop it and create**）、恢复另一场、别的账号点 **Reload engine**，结束了正在进行的一场时，也都这样记；开这一场的研究者会看到是谁、怎么停的；即使控制台已经跟到新场次或切到别的页面，提示也会保留，直到手动关掉。停止以后，**Live session** 页上写着 No session is open，这一场列在下面的 **Recent sessions** 里。以后可以在 **Recent sessions**（或 **Sessions & data**）里点这一场的 **Resume**，在确认框里点 **Resume session**，让它的游戏从头再来，之前的数据都保留。
 
 更多见 [console.md](console.md#running-a-session)。
 
