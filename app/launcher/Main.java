@@ -25,9 +25,9 @@ import java.io.UnsupportedEncodingException;
  * written into it. A launcher that finds the file after Java ended knows that the server never
  * started, and doesn't start it again: it would only fail the same way.
  *
- * What Java itself says (that it ran out of memory), which it writes straight to the window, the
- * launchers send into a file of each start's own instead, logs/jvm-pid&lt;N&gt;.log: this deletes
- * the earlier ones in which Java said nothing, and keeps the newest of the others (JvmLogs).
+ * Native Java output is kept out of the window, and its out-of-memory hook writes a short
+ * diagnostic to logs/jvm-pid&lt;N&gt;.log. Leave room for that file, keep the newest two earlier
+ * diagnostics, and remove older releases' empty VM logs (JvmLogs).
  */
 public final class Main {
 
@@ -46,14 +46,14 @@ public final class Main {
     System.setErr(printStream(err, System.getProperty("sun.stderr.encoding")));
     // What is printed just before the process ends (why the server can't start) still goes out.
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-      StartLock.release(home, System.getenv("BREADBOARD_START_LOCK_PID"));
       startErrors.writeIfTheServerNeverListened();
       long until = System.nanoTime() + DRAIN_AT_EXIT_MS * 1000000L;
       err.drain(until);
       out.drain(until);
+      StartLock.release(home, System.getenv("BREADBOARD_START_LOCK_PID"));
     }, "breadboard-console-at-exit"));
     try {
-      JvmLogs.prune(new File(home, "logs"), JvmLogs.KEEP, JvmLogs.ownName());
+      JvmLogs.prune(new File(home, "logs"), JvmLogs.KEEP - 1, JvmLogs.ownName());
     } catch (RuntimeException e) {
       // they stay until the next start
     }

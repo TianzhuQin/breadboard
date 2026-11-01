@@ -137,7 +137,7 @@ Pass 'it runs on the Java that comes with it'
 # where one that takes no output (a click into it starts selecting text) would hold Java up for good.
 # (breadboard.bat writes Java's %p, the process id, as %%p.)
 $jvmLog = Join-Path $app "logs\jvm-pid$($java.ProcessId).log"
-if (-not $java.CommandLine.Contains(' -XX:-DisplayVMOutput ') -or -not $java.CommandLine.Contains(' -XX:LogFile=logs\jvm-%p.log ') -or -not (Test-Path -LiteralPath $jvmLog)) {
+if (-not $java.CommandLine.Contains(' -XX:-DisplayVMOutput ') -or -not $java.CommandLine.Contains('-XX:OnOutOfMemoryError=') -or (Test-Path -LiteralPath $jvmLog)) {
   Fail "what Java itself says doesn't go into logs\jvm-pid$($java.ProcessId).log: $($java.CommandLine)"
 }
 Pass 'what Java itself says goes into logs\jvm-pid<N>.log, not the window'
@@ -366,7 +366,7 @@ Remove-Item -LiteralPath (Join-Path $other 'logs\out-of-memory.hprof') -ErrorAct
 if ($tenth.ExitCode -eq 0 -or -not $said.Contains('stopped before the server started (it ran out of memory: a script may keep too much data. -Xmx64m in JAVA_OPTS gives it 64m, and wins over breadboard.memory: raise that, e.g. to -Xmx128m,') -or $said.Contains('Starting Breadboard again')) {
   Fail "a server that ran out of memory while starting was started again, or breadboard.bat didn't say how to give it more (exit code $($tenth.ExitCode)): $said"
 }
-if ($window.Contains('Terminating due to') -or -not $jvmSaid.Contains('Terminating due to java.lang.OutOfMemoryError')) {
+if ($window.Contains('Terminating due to') -or -not $jvmSaid.Contains('java.lang.OutOfMemoryError: Java memory exhausted.')) {
   Fail "what Java said as it ran out of memory isn't in logs\jvm-pid<N>.log, or went into the window: $window / $jvmSaid"
 }
 Pass 'a server that runs out of memory while starting isn''t started again; breadboard.bat says how to give it more (the -Xmx in JAVA_OPTS), and logs\jvm-pid<N>.log what Java said'

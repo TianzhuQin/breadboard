@@ -62,21 +62,18 @@ CALL :refuse say_nojava
 EXIT /B 1
 :havejava
 
-REM Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
-REM and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-REM would fill the disk): delete logs\out-of-memory.hprof once it has been looked at. What Java itself
-REM says then (that it ran out of memory, and of what; the heap dump) goes into logs\jvm-pidN.log, N
-REM being its process id, not to this window: Java writes it to the window directly, and one that
-REM doesn't take output (a click into it starts selecting text, which pauses it) held it up there for
-REM good, before it ended, so that it was never started again (keep running, below). Each start has
-REM a file of its own: launcher.Main deletes the earlier ones in which Java said nothing, and keeps
-REM at most 10. These options need Java 8u92 or newer; an older Java 8 runs without them.
-SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
-"%JAVA%" %MEMORY_OPTS% -version >NUL 2>&1
-IF ERRORLEVEL 1 SET "MEMORY_OPTS="
-REM (Not in the check: there, Java would make such a file too. The doubled percent sign is one, for
-REM Java, which puts the process id in its place.)
-IF DEFINED MEMORY_OPTS SET "MEMORY_OPTS=%MEMORY_OPTS% -XX:+LogVMOutput -XX:LogFile=logs\jvm-%%p.log"
+REM Native Java output must not wait for a paused window. LogVMOutput's dependency_failed XML
+REM grows on each engine rebuild, so leave it off and write only a short OOM diagnostic with its
+REM native hook. Heap dumps and hs_err_pid crash reports stay. The percent signs are Java's pid.
+SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput -XX:-LogVMOutput"
+SET "OOM_NOTE=-XX:OnOutOfMemoryError=echo java.lang.OutOfMemoryError: Java memory exhausted. See logs/out-of-memory.hprof and raise breadboard.memory. > logs/jvm-pid%%p.log"
+"%JAVA%" %MEMORY_OPTS% "%OOM_NOTE%" -version >NUL 2>&1
+IF ERRORLEVEL 1 (
+  SET "MEMORY_OPTS="
+  SET "OOM_NOTE="
+)
+SET "OOM_OPT="
+IF DEFINED OOM_NOTE SET OOM_OPT="%OOM_NOTE%"
 
 REM conf\local.conf holds the settings changed for this Breadboard (see below). One the server can't
 REM read (made or copied by another account) would be left out without a word, as if there were
@@ -298,7 +295,7 @@ REM ERRORLEVEL is 1 until Java sets it: if cmd can't open
 REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
 REM purpose (0).
 CMD /D /C EXIT 1
-"%JAVA%" -Xmx%MEMORY% -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %PORT_OPT% %* launcher.Main "%CD%\." %JAVA_ERRORS%
+"%JAVA%" -Xmx%MEMORY% -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %OOM_OPT% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %PORT_OPT% %* launcher.Main "%CD%\." %JAVA_ERRORS%
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).

@@ -367,7 +367,9 @@ if [ -n "$OLD_DB" ]; then
 fi
 # What Java itself says (that it ran out of memory) goes into logs/jvm-pid<N>.log, not the window,
 # where one that takes no output would hold Java up for good (see the check at the end).
-ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- " -XX:-DisplayVMOutput " && [ -f "$APP/logs/jvm-pid$SERVER.log" ] \
+ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- " -XX:-DisplayVMOutput " \
+  && ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- "-XX:OnOutOfMemoryError=" \
+  && [ ! -f "$APP/logs/jvm-pid$SERVER.log" ] \
   || fail "what Java itself says doesn't go into logs/jvm-pid$SERVER.log: $(ls "$APP/logs")"
 pass "what Java itself says goes into logs/jvm-pid<N>.log, not the window"
 pages
@@ -689,7 +691,7 @@ EOF
     if kill -0 "$FIRST" 2>/dev/null; then STILL=", which is still there"; fi
     fail "with nobody reading its window, a server that ran out of memory (process $FIRST$STILL) wasn't started again: $(tail -20 "$APP/logs/application.log")"
   fi
-  grep -q "Terminating due to java.lang.OutOfMemoryError: Java heap space" "$APP/logs/jvm-pid$FIRST.log" 2>/dev/null \
+  grep -q "java.lang.OutOfMemoryError: Java memory exhausted." "$APP/logs/jvm-pid$FIRST.log" 2>/dev/null \
     || fail "logs/jvm-pid$FIRST.log doesn't say that Java ran out of memory: $(tail -5 "$APP/logs/jvm-pid$FIRST.log" 2>&1)"
   grep -qF "Breadboard stopped by itself (it ran out of memory: a script may keep too much data. -Xmx192m in JAVA_OPTS gives it 192m, and wins over breadboard.memory: raise that, e.g. to -Xmx384m," "$APP/logs/application.log" \
     || fail "the launcher didn't say that the server ran out of memory, and how to give it more: $(tail -20 "$APP/logs/application.log")"
@@ -811,7 +813,7 @@ rm -f "$APP/logs/out-of-memory.hprof"
   || fail "a server that ran out of memory while starting was started again, or the launcher didn't say how to give it more (exit code $CODE): $(cat "$WORK/start-out-of-memory.log")"
 JVM_LOG="$(ls -t "$APP"/logs/jvm-pid*.log 2>/dev/null | head -1 || true)"
 ! grep -q "Terminating due to" "$WORK/start-out-of-memory.log" \
-  && grep -q "Terminating due to java.lang.OutOfMemoryError" "$JVM_LOG" \
+  && grep -q "java.lang.OutOfMemoryError: Java memory exhausted." "$JVM_LOG" \
   || fail "what Java said as it ran out of memory isn't in logs/jvm-pid<N>.log, or went into the window: $(tail -3 "$JVM_LOG" 2>&1)"
 pass "a server that runs out of memory while starting isn't started again; the launcher says how to give it more (the -Xmx given to breadboard.sh), and logs/jvm-pid<N>.log what Java said"
 echo "The release in $(basename "$ZIP") works."

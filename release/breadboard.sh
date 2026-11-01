@@ -92,22 +92,15 @@ if [ -z "$JAVA" ]; then
   exit 1
 fi
 
-# Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
-# and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-# would fill the disk): delete logs/out-of-memory.hprof once it has been looked at. What Java itself
-# says then (that it ran out of memory, and of what; the heap dump) goes into logs/jvm-pid<its
-# process id>.log, not to this window: Java writes it to the window directly, and one that doesn't
-# take output (paused, or a pipe nobody reads) held it up there for good, before it ended, so that
-# it was never started again (Keep running, below). Each start has a file of its own: launcher.Main
-# deletes the earlier ones in which Java said nothing, and keeps at most 10. These options need Java
-# 8u92 or newer; an older Java 8 runs without them.
-MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
-# shellcheck disable=SC2086 # a list of options
-if "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
-  # (not in the check: there, Java would make such a file too)
-  MEMORY_OPTS="$MEMORY_OPTS -XX:+LogVMOutput -XX:LogFile=logs/jvm-%p.log"
-else
+# Native Java output must never block on a paused window. HotSpot's LogVMOutput also writes
+# dependency_failed XML at every engine rebuild, without a size limit, so leave it off. The OOM
+# hook writes one short diagnostic of its own; heap dumps and hs_err_pid crash reports stay.
+MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput -XX:-LogVMOutput"
+OOM_NOTE="-XX:OnOutOfMemoryError=echo java.lang.OutOfMemoryError: Java memory exhausted. See logs/out-of-memory.hprof and raise breadboard.memory. > logs/jvm-pid%p.log"
+# shellcheck disable=SC2086 # a list of options; the OOM hook is deliberately one argument
+if ! "$JAVA" $MEMORY_OPTS "$OOM_NOTE" -version >/dev/null 2>&1; then
   MEMORY_OPTS=""
+  OOM_NOTE=""
 fi
 
 # The real folder, not a symbolic link to it (e.g. /opt/breadboard), which may be moved to the next
@@ -601,7 +594,7 @@ fi
 # the server up, nor, with MEMORY_OPTS (above), Java as it runs out of memory. (Only a crash of Java
 # itself, which is rare, still waits for the window to take its first lines.)
 # shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options, PORT_OPT one or none
-set -- "$JAVA" "-Xmx$MEMORY" -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
+set -- "$JAVA" "-Xmx$MEMORY" -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS ${OOM_NOTE:+"$OOM_NOTE"} $JAVA_OPTS \
   -Duser.timezone=UTC \
   -Dconfig.file=conf/application-prod.conf -Dlogger.file=conf/logger.xml \
   -cp "$CP" \

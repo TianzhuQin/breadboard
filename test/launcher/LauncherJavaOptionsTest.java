@@ -21,7 +21,8 @@ import static org.junit.Assert.*;
  * and release/breadboard.bat): a server that runs out of memory ends, with exit code 3, so that
  * keep-running starts it again, also when nobody reads its window. Java says that it ran out of
  * memory straight to the window, where one that takes no output (paused, a pipe nobody reads) held
- * it up for good; the launchers send that into logs/jvm-pid&lt;N&gt;.log instead.
+ * it up for good; the launchers suppress that native window output and use Java's OOM hook to
+ * write a bounded diagnostic to logs/jvm-pid&lt;N&gt;.log instead.
  */
 public class LauncherJavaOptionsTest {
 
@@ -34,6 +35,10 @@ public class LauncherJavaOptionsTest {
   static List<String> memoryOptions(String launcher, String assignment, boolean batch) throws IOException {
     List<String> options = new ArrayList<>();
     for (String line : Files.readAllLines(new File(launcher).toPath(), StandardCharsets.UTF_8)) {
+      if (line.startsWith(batch ? "SET \"OOM_NOTE=" : "OOM_NOTE=\"")) {
+        String hook = line.substring(line.indexOf("-XX:"), line.length() - 1);
+        options.add(batch ? hook.replace("%%", "%") : hook);
+      }
       if (!line.contains(assignment)) {
         continue;
       }
@@ -111,7 +116,8 @@ public class LauncherJavaOptionsTest {
       assertNotNull(said);
       assertEquals("logs/jvm-pid<N>.log: " + Arrays.toString(logs.list()), 1, said.length);
       String text = new String(Files.readAllBytes(said[0].toPath()), StandardCharsets.UTF_8);
-      assertTrue(text, text.contains("Terminating due to java.lang.OutOfMemoryError: Java heap space"));
+      assertTrue(text, text.contains("java.lang.OutOfMemoryError: Java memory exhausted."));
+      assertTrue("a short diagnostic, without engine dependency XML", text.length() < 1024 && !text.contains("dependency_failed"));
       assertTrue("the heap dump", new File(logs, "out-of-memory.hprof").isFile());
     } finally {
       delete(home);
@@ -126,6 +132,25 @@ public class LauncherJavaOptionsTest {
   @Test(timeout = 300000)
   public void withBreadboardBatsOptionsJavaThatRunsOutOfMemoryEndsThoughNobodyReadsItsWindow() throws Exception {
     endsThoughNobodyReadsTheWindow(batOptions());
+  }
+
+  @Test(timeout = 60000)
+  public void ordinaryJavaStartsDoNotCreateAnUnboundedHotspotLog() throws Exception {
+    File home = Files.createTempDirectory("bb-no-native-noise").toFile();
+    assertTrue(new File(home, "logs").mkdir());
+    try {
+      List<String> command = new ArrayList<>(Arrays.asList(java()));
+      command.addAll(shOptions());
+      command.add("-version");
+      Process child = new ProcessBuilder(command).directory(home).redirectErrorStream(true)
+          .redirectOutput(new File(home, "version.txt")).start();
+      assertTrue(child.waitFor(20, TimeUnit.SECONDS));
+      assertEquals(0, child.exitValue());
+      assertEquals("ordinary execution must not create a HotSpot XML log that grows with engine rebuilds",
+          0, new File(home, "logs").list().length);
+    } finally {
+      delete(home);
+    }
   }
 
   @Test

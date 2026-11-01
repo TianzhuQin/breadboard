@@ -99,7 +99,7 @@ Mac mini or iMac, System Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
-that file is gone). Java says so, and what it ran out of, in `logs/jvm-pid<N>.log` (see below). To
+that file is gone). A short diagnostic is kept in `logs/jvm-pid<N>.log` (see below). To
 give it more memory, set `breadboard.memory` in `conf/local.conf`. A server whose shutdown is stuck
 (an experiment's script that never ends) is stopped after 20 seconds. When it stops normally, a
 running session's game stops at once (no page joins it again, no computer player or timer plays it
@@ -116,7 +116,7 @@ On first start the launcher creates:
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
 | `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux the launcher lets only its owner read it, as it may hold keys. The account the server runs as must be able to read it. |
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
-| `logs/jvm-pid<N>.log` | What Java itself says, such as that the server ran out of memory, which would otherwise go to the server's window. One for each start, N being Java's process id; at the next start, those in which Java said nothing are deleted, and at most 10 are kept. |
+| `logs/jvm-pid<N>.log` | A short diagnostic made only when Java runs out of memory, N being its process id. At startup, the newest two earlier diagnostics are kept, leaving room for this process's; at most three stay. HotSpot's growing internal XML log is disabled. Crash reports remain in `hs_err_pid*.log`. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
 
 On macOS and Linux, `db/`, `backups/` and `logs/`, and what is in them, can be read only by the
