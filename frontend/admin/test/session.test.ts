@@ -38,7 +38,7 @@ const store = vi.hoisted(() => ({
 vi.mock('@/store/admin', async () => {
   const { reactive, computed, ref } = await import('vue')
   const admin = reactive<any>({
-    experiment: null, instance: null, user: null, output: [], events: [], engineReloadedAt: 0, engine: 'ready', email: 'me@lab.org',
+    experiment: null, instance: null, user: null, output: [], events: [], engineReloadedAt: 0, engine: 'ready', email: 'me@example.org',
     engineInfoCurrent: true, engineInfoAt: 0,
   })
   return {
@@ -547,7 +547,7 @@ describe('live session state', () => {
   })
 
   it('takes the engine\'s flag only when it is current and about this session', () => {
-    const engine = { experimentId: 1, experimentName: 'E', sessionId: 9, sessionName: 'S', owner: 'me@lab.org', gameStarted: false }
+    const engine = { experimentId: 1, experimentName: 'E', sessionId: 9, sessionName: 'S', owner: 'me@example.org', gameStarted: false }
     expect(engineGameFlag(engine, true, 9, 1234)).toEqual({ started: false, at: 1234 })
     expect(engineGameFlag({ ...engine, gameStarted: true }, true, 9, 1234)).toEqual({ started: true, at: 1234 })
     // a rebuild under way, another session, nothing said (an older server), no engine
@@ -684,7 +684,7 @@ describe('session controls', () => {
   })
 
   it('refuses to start while the engine runs another experiment', async () => {
-    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@lab.org' }
+    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@example.org' }
     await startGame(ctx)
     expect(confirmState.open).toBe(false)
     expect(store.startGame).not.toHaveBeenCalled()
@@ -912,8 +912,8 @@ describe('SessionPage', () => {
     const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: two for class: Script12\n  at Script12.groovy:23'
     store2.admin.output = [{ id: 7, kind: 'error', text, source: 'initStep', step: 'InitStep', at: Date.now() }]
     const engine = (experimentId: number, experimentName: string) =>
-      ({ experimentId, experimentName, sessionId: 4, sessionName: 'Autopilot · 1', owner: 'me@lab.org', gameStarted: false, stepsChanged: false, autopilotSession: true })
-    store2.admin.user = { email: 'me@lab.org', experiments: [], currentScript: '', engine: engine(12, 'Exp') }
+      ({ experimentId, experimentName, sessionId: 4, sessionName: 'Autopilot · 1', owner: 'me@example.org', gameStarted: false, stepsChanged: false, autopilotSession: true })
+    store2.admin.user = { email: 'me@example.org', experiments: [], currentScript: '', engine: engine(12, 'Exp') }
     routerPush.mockClear()
     const w = await mountPage()
     try {
@@ -976,7 +976,7 @@ describe('SessionPage', () => {
   it('offers Start the game when the engine was reloaded since the game started (the engine says so)', async () => {
     store2.admin.instance = { ...store2.admin.instance, hasStarted: true }
     store2.admin.events = [startEvent('InitStepStart', Date.now() - 600000)]
-    store2.admin.user = { engine: { experimentId: 12, experimentName: 'Exp', sessionId: 9, sessionName: 'Live one', owner: 'me@lab.org', gameStarted: false } }
+    store2.admin.user = { engine: { experimentId: 12, experimentName: 'Exp', sessionId: 9, sessionName: 'Live one', owner: 'me@example.org', gameStarted: false } }
     store2.admin.engineInfoAt = Date.now()
     const w = await mountPage()
     expect(startButton(w)).toBeDefined()
@@ -1025,10 +1025,10 @@ describe('SessionPage', () => {
     expect(autopilotStatusOf(raw({ done: true }))!.halted).toBe('done')
     expect(autopilotStatusOf(raw({ problemKind: 'waiting' }))!.halted).toBe(null)
     // what it waits for, as the Autopilot page reads it: another experiment's session, or the engine
-    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
-    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
-    expect(autopilotStatusOf(raw({ problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
-    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' }))!.waiting).toEqual({ session: null })
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@example.org' }
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@example.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problem: 'Another session is running: "pilot 3" (a@example.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@example.org, who has a console open.' }))!.waiting).toEqual({ session: null })
     expect(autopilotStatusOf(raw({}))!.waiting).toBe(null)
     expect(autopilotStatusOf(raw({ paused: true, problemKind: 'paused', problem: 'It is paused: …', engineSession: other }))!.waiting).toBe(null)
     expect(autopilotStatusOf(raw({ problemKind: 'error', problem: 'There is no admin account to open sessions as.', engineSession: other }))!.waiting).toBe(null)
@@ -1048,16 +1048,16 @@ describe('SessionPage', () => {
   it('tells when the autopilot opens the next session soon, as the server does for the study links, and what keeps it from it', async () => {
     const { autopilotHold, autopilotOpensNextSoon, autopilotStatusOf } = await import('../src/pages/session/autopilot')
     const raw = (status: any, settings: any = {}) => autopilotStatusOf({ settings: { continuous: true, nextSessionDelaySeconds: 10, ...settings }, status: { on: true, experimentId: 12, instance: null, ...status } })
-    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@example.org' }
     // nothing in the way (Autopilot.opensNextSoon): on for this experiment, continuous, neither paused nor done, no problem
     expect(autopilotOpensNextSoon(raw({}), 12)).toBe(true)
     expect(autopilotHold(raw({}), 12)).toBe(null)
     expect(raw({ problem: 'There is no admin account to open sessions as.', problemKind: 'error' })!.problem).toBe('There is no admin account to open sessions as.')
     // another experiment's session on the shared engine, or a researcher who has another experiment loaded there
-    const waitingForSession = raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other })
+    const waitingForSession = raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@example.org).', engineSession: other })
     expect(autopilotOpensNextSoon(waitingForSession, 12)).toBe(false)
     expect(autopilotHold(waitingForSession, 12)).toEqual({ by: 'session', session: other })
-    const waitingForEngine = raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' })
+    const waitingForEngine = raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@example.org, who has a console open.' })
     expect(autopilotOpensNextSoon(waitingForEngine, 12)).toBe(false)
     expect(autopilotHold(waitingForEngine, 12)).toEqual({ by: 'engine' })
     // any other problem the Autopilot page shows: the last session reported an error, the disk is almost full, ...
@@ -1069,13 +1069,13 @@ describe('SessionPage', () => {
     // a session of this experiment that a researcher opened by hand: the autopilot opens its own once
     // that one has ended, and the links wait for it during that session's game (the server's note
     // about it holds nothing up); paused or done, the reason stays
-    const hand = { id: 9, name: 'By hand', status: 'RUNNING', gameStarted: true, openToNewcomers: false, owner: 'b@lab.org' }
-    const handOpen = raw({ handSession: hand, problemKind: 'waiting', problem: '"By hand", a session of this experiment that b@lab.org opened by hand, is running. The autopilot opens its own session once that one has ended.' })
+    const hand = { id: 9, name: 'By hand', status: 'RUNNING', gameStarted: true, openToNewcomers: false, owner: 'b@example.org' }
+    const handOpen = raw({ handSession: hand, problemKind: 'waiting', problem: '"By hand", a session of this experiment that b@example.org opened by hand, is running. The autopilot opens its own session once that one has ended.' })
     expect(handOpen!.problem).toBe(null)
     expect(handOpen!.waiting).toBe(null)
     expect(autopilotOpensNextSoon(handOpen, 12)).toBe(true)
     expect(autopilotHold(handOpen, 12)).toBe(null)
-    const handPaused = raw({ handSession: hand, paused: true, problemKind: 'paused', problem: 'It is paused: … Meanwhile "By hand", a session of this experiment that b@lab.org opened by hand, is running. Resume hands it to the autopilot.' })
+    const handPaused = raw({ handSession: hand, paused: true, problemKind: 'paused', problem: 'It is paused: … Meanwhile "By hand", a session of this experiment that b@example.org opened by hand, is running. Resume hands it to the autopilot.' })
     expect(handPaused!.halted).toBe('paused')
     expect(handPaused!.problem).toMatch(/^It is paused/)
     expect(autopilotOpensNextSoon(handPaused, 12)).toBe(false)
@@ -1097,26 +1097,26 @@ describe('SessionPage', () => {
     const stopped = (data: any, id = 40) => ({ id, name: 'sessionStopped', datetime: new Date(at).toISOString(), data })
     store2.admin.instance = { id: 9, name: 'Hand session', status: 'STOPPED', creationTime: '', data: [], events: [] }
     // pushed live as it was recorded: another account reloaded the engine
-    store2.admin.events = [stopped({ by: 'bob@lab.org', reason: 'reloadEngine' })]
+    store2.admin.events = [stopped({ by: 'bob@example.org', reason: 'reloadEngine' })]
     const w = await mountPage()
     const explain = () => w.find('.live-hero__explain').text()
-    expect(explain()).toMatch(/^bob@lab\.org reloaded the engine, which stopped this session\. Nobody can join it now\. Resuming it runs its game again/)
-    store2.admin.events = [stopped({ by: 'bob@lab.org', reason: 'newSession' })]
+    expect(explain()).toMatch(/^bob@example\.org reloaded the engine, which stopped this session\. Nobody can join it now\. Resuming it runs its game again/)
+    store2.admin.events = [stopped({ by: 'bob@example.org', reason: 'newSession' })]
     await nextTick()
-    expect(explain()).toMatch(/^bob@lab\.org created a new session, which stopped this one\./)
-    store2.admin.events = [stopped({ by: 'bob@lab.org', reason: 'otherSession' })]
+    expect(explain()).toMatch(/^bob@example\.org created a new session, which stopped this one\./)
+    store2.admin.events = [stopped({ by: 'bob@example.org', reason: 'otherSession' })]
     await nextTick()
-    expect(explain()).toMatch(/^bob@lab\.org resumed or selected another session, which stopped this one\./)
-    store2.admin.events = [stopped({ by: 'BOB@lab.org', reason: 'stopSession' })]
+    expect(explain()).toMatch(/^bob@example\.org resumed or selected another session, which stopped this one\./)
+    store2.admin.events = [stopped({ by: 'BOB@example.org', reason: 'stopSession' })]
     await nextTick()
-    expect(explain()).toMatch(/^BOB@lab\.org stopped this session\./)
+    expect(explain()).toMatch(/^BOB@example\.org stopped this session\./)
     // (this account's own; one recorded by an older server, which gave no reason)
-    store2.admin.events = [stopped({ by: 'Me@Lab.org', reason: 'reloadEngine' })]
+    store2.admin.events = [stopped({ by: 'Me@Example.org', reason: 'reloadEngine' })]
     await nextTick()
     expect(explain()).toMatch(/^You reloaded the engine, which stopped this session\./)
-    store2.admin.events = [stopped({ by: 'bob@lab.org' })]
+    store2.admin.events = [stopped({ by: 'bob@example.org' })]
     await nextTick()
-    expect(explain()).toMatch(/^bob@lab\.org stopped this session\./)
+    expect(explain()).toMatch(/^bob@example\.org stopped this session\./)
     // nothing said by whom: as before
     store2.admin.events = [stopped({})]
     await nextTick()
@@ -1127,24 +1127,24 @@ describe('SessionPage', () => {
   it('names who stopped a session only from its last end, not from one before a resume', async () => {
     const { stoppedByText } = await import('../src/pages/session/stopped')
     const ev = (name: string, at: number, data: any = {}) => fromLive({ id: at, name, datetime: new Date(at).toISOString(), data } as any)
-    const stop = ev('sessionStopped', 1000, { by: 'bob@lab.org', reason: 'reloadEngine' })
-    expect(stoppedByText([stop], 'me@lab.org')).toBe('bob@lab.org reloaded the engine, which stopped this session.')
+    const stop = ev('sessionStopped', 1000, { by: 'bob@example.org', reason: 'reloadEngine' })
+    expect(stoppedByText([stop], 'me@example.org')).toBe('bob@example.org reloaded the engine, which stopped this session.')
     // (newest first) resumed since, then cut short by a restart: not bob's doing
-    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), ev('sessionInterrupted', 3000)], []), 'me@lab.org')).toBe('')
-    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000)], []), 'me@lab.org')).toBe('')
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), ev('sessionInterrupted', 3000)], []), 'me@example.org')).toBe('')
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000)], []), 'me@example.org')).toBe('')
     // a later Stop after the resume names its own account
-    const again = ev('sessionStopped', 4000, { by: 'carl@lab.org', reason: 'stopSession' })
-    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), again, ev('clientDisconnected', 5000)], []), 'me@lab.org'))
-      .toBe('carl@lab.org stopped this session.')
-    expect(stoppedByText(mergeFeed([ev('autopilotStart', 1), ev('sessionStopped', 2, { by: 'ann@lab.org', reason: 'autopilot' })], []), ''))
-      .toBe('ann@lab.org let the autopilot take over the engine for its session, which stopped this one.')
-    expect(stoppedByText([], 'me@lab.org')).toBe('')
+    const again = ev('sessionStopped', 4000, { by: 'carl@example.org', reason: 'stopSession' })
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), again, ev('clientDisconnected', 5000)], []), 'me@example.org'))
+      .toBe('carl@example.org stopped this session.')
+    expect(stoppedByText(mergeFeed([ev('autopilotStart', 1), ev('sessionStopped', 2, { by: 'ann@example.org', reason: 'autopilot' })], []), ''))
+      .toBe('ann@example.org let the autopilot take over the engine for its session, which stopped this one.')
+    expect(stoppedByText([], 'me@example.org')).toBe('')
   })
 
   it('disables Start the game while the engine runs another experiment, and says why', async () => {
     const w = await mountPage()
     expect(startButton(w)!.attributes('disabled')).toBeUndefined()
-    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@lab.org' }
+    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@example.org' }
     await nextTick()
     expect(startButton(w)!.attributes('disabled')).toBeDefined()
     expect(startButton(w)!.attributes('title')).toMatch(/running “Other study” right now/)
