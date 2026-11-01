@@ -81,6 +81,25 @@ exit 255
         self.assertEqual('started\n', (self.home / 'starts').read_text())
         self.assertFalse(lock.exists())
 
+    def test_launcher_refusals_are_kept_in_start_errors(self):
+        for setting, phrase in [('http.port=no', "isn't a port number"),
+                                ('breadboard.memory=lots', 'breadboard.memory'),
+                                ('breadboard.rootUrl=“https://example.org”', 'curly quotes')]:
+            with self.subTest(setting=setting):
+                (self.home / 'conf/local.conf').write_text(setting + '\n')
+                said = self.result()
+                self.assertIn(phrase, said)
+                log = self.home / 'logs/start-errors.log'
+                self.assertTrue(log.exists(), 'the refusal must be kept after its window closes')
+                self.assertIn(phrase, log.read_text())
+                self.assertFalse((self.home / 'starts').exists())
+
+    def test_a_taken_port_is_kept_in_start_errors(self):
+        self.script('fakebin/curl', '#!/bin/sh\nprintf "another program"\nexit 0\n')
+        said = self.result()
+        self.assertIn('Another program is using port', said)
+        self.assertIn('Another program is using port', (self.home / 'logs/start-errors.log').read_text())
+
 
 if __name__ == '__main__':
     unittest.main()

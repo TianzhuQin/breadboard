@@ -318,7 +318,10 @@ if ($eighth.ExitCode -ne 1 -or -not $said.Contains('Line 2 of conf\local.conf ha
   Fail "curly quotes in conf\local.conf weren't named before Java started (exit code $($eighth.ExitCode)): $said"
 }
 Remove-Item -LiteralPath $localConf
-Pass 'curly quotes in conf\local.conf are named before Java starts'
+if (-not (Get-Content -LiteralPath (Join-Path $other 'logs\start-errors.log') -Raw).Contains('curly quotes')) {
+  Fail 'the curly-quotes refusal was not kept in logs\start-errors.log'
+}
+Pass 'curly quotes in conf\local.conf are named before Java starts and kept in start-errors.log'
 
 # A program on the port's IPv6 loopback address only (::1) is reported as using the port: the
 # browser, which tries ::1 first for localhost, would open it in Breadboard's place.

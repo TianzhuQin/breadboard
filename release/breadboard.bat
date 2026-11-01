@@ -396,6 +396,8 @@ EXIT /B %EXIT_CODE%
 REM Says why Breadboard can't start (what the subroutine %1 says) and keeps the window open (:pause).
 REM As a service nobody reads the window, so it goes into logs\application.log too, when that can be
 REM written (Task Scheduler itself shows only the exit code, 1, as the task's Last Run Result).
+REM Duplicate starts must not replace the start-errors file of the first, still-starting Java.
+IF /I NOT "%~1"=="say_running" CALL :%~1 >"logs\start-errors.log" 2>NUL
 CALL :%~1
 CALL :releasestart
 CALL :pause

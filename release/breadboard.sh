@@ -29,6 +29,18 @@ cd "$(dirname "$0")"
 # set again below for the server when this script starts it again
 unset BREADBOARD_RESTARTED
 
+# Refusals made before Java starts must survive closing this window too. Keep only this
+# refusal's lines; a successful start replaces this file, as launcher.Main already does.
+REFUSAL_LOGGED=""
+refuse() {
+  if [ -z "$REFUSAL_LOGGED" ]; then
+    (umask 077; mkdir -p logs; : > logs/start-errors.log) 2>/dev/null || true
+    REFUSAL_LOGGED=1
+  fi
+  (umask 077; printf '%s\n' "$1" >> logs/start-errors.log) 2>/dev/null || true
+  printf '%s\n' "$1" >&2
+}
+
 # Java 8: JAVA is the first one found. OTHER is the first Java found that isn't Java 8, to name it if
 # there is no Java 8 at all.
 JAVA=""
@@ -68,14 +80,14 @@ if [ -z "$JAVA" ]; then
 fi
 if [ -z "$JAVA" ]; then
   if [ -n "$OTHER" ]; then
-    echo "Breadboard needs Java 8, but $OTHER is:" >&2
+    refuse "Breadboard needs Java 8, but $OTHER is:"
     "$OTHER" -version >&2 || true
-    echo "Download the Breadboard release that includes Java, or install a Java 8 JDK (for example" >&2
-    echo "Azul Zulu 8) and set JAVA8_HOME to it." >&2
+    refuse "Download the Breadboard release that includes Java, or install a Java 8 JDK (for example"
+    refuse "Azul Zulu 8) and set JAVA8_HOME to it."
   else
-    echo "Breadboard needs Java 8. Download the Breadboard release that includes Java (its name ends in" >&2
-    echo "-macos-arm64, -macos-x64 or -linux-x64), or install a Java 8 JDK (for example Azul Zulu 8)" >&2
-    echo "and set JAVA8_HOME to it." >&2
+    refuse "Breadboard needs Java 8. Download the Breadboard release that includes Java (its name ends in"
+    refuse "-macos-arm64, -macos-x64 or -linux-x64), or install a Java 8 JDK (for example Azul Zulu 8)"
+    refuse "and set JAVA8_HOME to it."
   fi
   exit 1
 fi
@@ -110,18 +122,18 @@ HERE="$(pwd -P)"
 ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
 cannot_write() {
   if [ -O "$2" ]; then
-    echo "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:" >&2
+    refuse "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:"
     if [ -d "$2" ]; then
-      echo "  chmod -R u+rwX \"$2\"" >&2
+      refuse "  chmod -R u+rwX \"$2\""
     else
-      echo "  chmod u+rw \"$2\"" >&2
+      refuse "  chmod u+rw \"$2\""
     fi
   else
-    echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
+    refuse "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:"
     if [ -d "$2" ]; then
-      echo "  sudo chown -R $ME \"$2\"" >&2
+      refuse "  sudo chown -R $ME \"$2\""
     else
-      echo "  sudo chown $ME \"$2\"" >&2
+      refuse "  sudo chown $ME \"$2\""
     fi
   fi
   exit 1
@@ -188,10 +200,10 @@ if [ -r conf/local.conf ]; then
       *,*) WHERE="Lines $CURLY of conf/local.conf have" ;;
       *) WHERE="Line $CURLY of conf/local.conf has" ;;
     esac
-    echo "$WHERE curly quotes ($(printf '\342\200\234 \342\200\235')) where Breadboard needs straight ones (\")," >&2
-    echo "as TextEdit's Smart Quotes (or an input method) types them. Type those quotes again with Smart" >&2
-    echo "Quotes off (in TextEdit: Edit > Substitutions > Smart Quotes), save the file, and start" >&2
-    echo "Breadboard again." >&2
+    refuse "$WHERE curly quotes ($(printf '\342\200\234 \342\200\235')) where Breadboard needs straight ones (\"),"
+    refuse "as TextEdit's Smart Quotes (or an input method) types them. Type those quotes again with Smart"
+    refuse "Quotes off (in TextEdit: Edit > Substitutions > Smart Quotes), save the file, and start"
+    refuse "Breadboard again."
     exit 1
   fi
 fi
@@ -203,8 +215,8 @@ if [ -n "$LOCAL_PORT" ]; then
   esac
   case "$LOCAL_PORT" in
     \?*)
-      echo "conf/local.conf gives http.port as ${LOCAL_PORT#?}, which isn't a port number (1 to 65535): write it as, e.g.," >&2
-      echo "  http.port=8080" >&2
+      refuse "conf/local.conf gives http.port as ${LOCAL_PORT#?}, which isn't a port number (1 to 65535): write it as, e.g.,"
+      refuse "  http.port=8080"
       exit 1
       ;;
   esac
@@ -219,8 +231,8 @@ if [ -n "$LOCAL_MEMORY" ]; then
   case "$LOCAL_MEMORY" in
     [1-9][mMgG]|[1-9][0-9][mMgG]|[1-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][0-9][mMgG]) MEMORY="$LOCAL_MEMORY" ;;
     *)
-      echo "conf/local.conf gives breadboard.memory as $LOCAL_MEMORY: write it in megabytes or gigabytes, e.g." >&2
-      echo "  breadboard.memory=2g" >&2
+      refuse "conf/local.conf gives breadboard.memory as $LOCAL_MEMORY: write it in megabytes or gigabytes, e.g."
+      refuse "  breadboard.memory=2g"
       exit 1
       ;;
   esac
@@ -362,7 +374,7 @@ start, with the line  http.port=$((PORT + 1))  in conf/local.conf, or once, with
   fi
 }
 if port_taken; then
-  echo "$TAKEN" >&2
+  refuse "$TAKEN"
   exit 1
 fi
 
@@ -434,7 +446,7 @@ remove_pid_file() {
   if [ -f "$PID_FILE" ]; then
     OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
     if pid_alive "$OLD_PID"; then
-      echo "$PID_FILE names a live process ($OLD_PID), so it is left in place. Another Breadboard from this folder may have the database open; stop it before starting this one." >&2
+      refuse "$PID_FILE names a live process ($OLD_PID), so it is left in place. Another Breadboard from this folder may have the database open; stop it before starting this one."
       return 1
     fi
     rm -f "$PID_FILE"
