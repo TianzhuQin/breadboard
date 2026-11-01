@@ -9,15 +9,21 @@ import { CONNECTION_EVENT } from '@human-nature-lab/breadboard-core'
  *   doesn't say. The data says that a preview stands in for someone away, not which: one that only
  *   watches while another preview stands in for them (perhaps in another console) had its tile say
  *   "Away: you are standing in".
+ * - {bbPreview: 'key', key: 'Escape'} when Escape is pressed on the page and nothing on it took the
+ *   key (BBNetwork's confirmation does: its Escape cancels it). The page has the keyboard once the
+ *   researcher has clicked in it, so the console's full-size view, which closes on Escape, never
+ *   heard the key, and stayed open.
  *
  * Nothing on a participant's page, nor on a preview in a tab of its own.
  */
 export const PREVIEW_MESSAGE = 'bbPreview'
 
-/** What the bridge needs of a window: its frame's parent, and its address */
+/** What the bridge needs of a window: its frame's parent, its address, its key presses */
 export interface BridgeWindow {
   parent: { postMessage (message: any, targetOrigin: string): void } | null
   location: { origin?: string }
+  addEventListener (type: string, listener: (ev: any) => void): void
+  removeEventListener (type: string, listener: (ev: any) => void): void
 }
 
 /**
@@ -44,7 +50,16 @@ export function startPreviewBridge (bb: any, win: BridgeWindow = window as any):
   })
   bb.on(CONNECTION_EVENT, tellConnection)
   tellConnection()
+  // (after the page's own handlers: bubbling up to the window, unless one took the key; not while an
+  // input method composes, where Escape cancels what is being typed)
+  const onKey = (ev: KeyboardEvent) => {
+    if ((ev.key === 'Escape' || ev.key === 'Esc') && !ev.defaultPrevented && !ev.isComposing) {
+      post({ [PREVIEW_MESSAGE]: 'key', key: 'Escape' })
+    }
+  }
+  win.addEventListener('keydown', onKey)
   return () => {
     bb.off(CONNECTION_EVENT, tellConnection)
+    win.removeEventListener('keydown', onKey)
   }
 }

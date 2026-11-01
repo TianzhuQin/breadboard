@@ -30,7 +30,8 @@ export function loadVueDependencies(opts: VueLoadOpts) {
 }
 
 async function client() {
-  // A researcher's preview tells the console it is shown in what its connection is (lib/previewBridge)
+  // A researcher's preview tells the console it is shown in what its connection is, and when Escape
+  // is pressed on it (lib/previewBridge)
   startPreviewBridge(Breadboard)
   let config: BreadboardConfig
   try {

@@ -218,8 +218,10 @@ though, so a copy of the experiment imported elsewhere needs its links updated.
 
 The Preview page shows the participant page of a running session as chosen players see it, live.
 Tick players in the list, or pick **Test players** (those your steps marked with `testmode`) or
-**AI players**, then choose **Desktop** or **Phone**. **Join as a new participant** opens the
-session's sign-in page in a new tab.
+**AI players**, then choose **Desktop** or **Phone**. Click a preview to open it full size (with
+**Click inside previews** on, its **⋯** menu has **Open full size**); Esc or × closes it, also after
+you have clicked inside the participant's page. **Join as a new participant** opens the session's
+sign-in page in a new tab.
 
 **Previews are live.** A click in a preview is a real choice, recorded with the session's data. A
 player whose own page is connected is shown read-only: you see their screen as it changes, but can't

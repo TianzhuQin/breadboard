@@ -130,8 +130,11 @@ export const WATCHING_WHY: Record<'computer' | 'watching' | 'preview', string> =
 export type WatchedBy = 'page' | 'preview' | 'computer'
 /** The page in a preview's frame, as it says of its connection (Breadboard.connection). */
 export interface FrameConnection { connection: string, watchingBy: WatchedBy | null }
-/** What the page in a preview's frame posts to the console (client/src/lib/previewBridge.ts). */
-export type FrameMessage = { kind: 'connection', state: FrameConnection }
+/**
+ * What the page in a preview's frame posts to the console (client/src/lib/previewBridge.ts): what its
+ * connection is, or that Escape was pressed on it (the page has the keyboard once clicked).
+ */
+export type FrameMessage = { kind: 'connection', state: FrameConnection } | { kind: 'escape' }
 
 const CONNECTION_STATES = ['connecting', 'open', 'lost', 'blocked', 'elsewhere', 'ended', 'watching']
 const WATCHED_BY: readonly WatchedBy[] = ['page', 'preview', 'computer']
@@ -148,6 +151,7 @@ export function frameMessage (data: unknown): FrameMessage | null {
     const by = WATCHED_BY.find(w => w === d.watchingBy) ?? null
     return { kind: 'connection', state: { connection: d.connection, watchingBy: by } }
   }
+  if (d.bbPreview === 'key' && d.key === 'Escape') return { kind: 'escape' }
   return null
 }
 

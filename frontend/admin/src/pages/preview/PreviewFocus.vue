@@ -31,6 +31,7 @@
           :width="frameWidth"
           interactive
           @connection="(state) => emit('connection', state)"
+          @escape="emit('close')"
         />
       </div>
     </div>

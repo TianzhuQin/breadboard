@@ -181,6 +181,10 @@ describe('who a player is', () => {
     expect(watchesAnotherPreview({ connection: 'open', watchingBy: 'preview' })).toBe(false)
     expect(watchesAnotherPreview(null)).toBe(false)
     expect(watchesAnotherPreview(undefined)).toBe(false)
+    // Escape pressed on the page, which has the keyboard once clicked
+    expect(frameMessage({ bbPreview: 'key', key: 'Escape' })).toEqual({ kind: 'escape' })
+    expect(frameMessage({ bbPreview: 'key', key: 'Enter' })).toBeNull()
+    expect(frameMessage({ bbPreview: 'key' })).toBeNull()
   })
 
   it('searches by id, or by "test" and "ai"', () => {
@@ -1283,6 +1287,39 @@ describe('PreviewPage', () => {
     expect(previewMemory.ids).toHaveLength(MAX_PREVIEWS)
     expect(ui.notify.warning).toHaveBeenCalled()
     w.unmount()
+  })
+
+  // Clicked into, the participant's page has the keyboard, and the full-size view never heard Escape:
+  // only its × closed it. The page tells the console (client/src/lib/previewBridge.ts).
+  it('closes the full-size view on Escape pressed on the page in it, and on nothing else', async () => {
+    addPlayer('p1', { testmode: true })
+    await settle()
+    const w = await mountPage()
+    try {
+      await firstLook()
+      await w.find('button.pt__cover').trigger('click')
+      await flushPromises()
+      const dialog = () => document.body.querySelector('.pfx')
+      const page = dialog()!.querySelector('iframe')!
+      // not another frame's, nor anything that isn't a key the page passes on
+      await framePosts(page, { bbPreview: 'key', key: 'Escape' }, window)
+      await framePosts(page, { bbPreview: 'key', key: 'Enter' })
+      await framePosts(page, { bbPreview: 'connection', connection: 'open', watchingBy: null })
+      expect(dialog()).not.toBeNull()
+      await framePosts(page, { bbPreview: 'key', key: 'Escape' })
+      await settle()
+      expect(dialog()).toBeNull()
+      // the tile shows the page again
+      expect(w.find('.pt iframe').exists()).toBe(true)
+      expect(w.find('.pt').text()).not.toContain('Shown full size')
+      // a tile's page, clicked into with "Click inside previews", has no full-size view to close
+      previewMemory.interactive = true
+      await settle()
+      await framePosts(w.find('.pt iframe').element, { bbPreview: 'key', key: 'Escape' })
+      expect(w.find('.pt iframe').exists()).toBe(true)
+    } finally {
+      w.unmount()
+    }
   })
 
   it('opens a preview full size and lets the tile step aside meanwhile', async () => {

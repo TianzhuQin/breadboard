@@ -64,6 +64,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** What the page says of its connection (null: no page, or a new one that hasn't said yet). */
   connection: [state: FrameConnection | null]
+  /** Escape was pressed on the page, which has the keyboard once clicked: the console never hears it. */
+  escape: []
 }>()
 
 const geo = computed(() => frameGeometry(props.device, props.width))
@@ -81,6 +83,7 @@ function onMessage (ev: MessageEvent) {
   if (!own || ev.source !== own) return
   const message = frameMessage(ev.data)
   if (message?.kind === 'connection') emit('connection', message.state)
+  else if (message?.kind === 'escape') emit('escape')
 }
 onMounted(() => window.addEventListener('message', onMessage))
 onBeforeUnmount(() => {

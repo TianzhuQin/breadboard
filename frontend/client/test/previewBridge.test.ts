@@ -24,14 +24,23 @@ function fakeBreadboard (preview = true) {
   return bb
 }
 
-/** A preview's window in the console's frame: what it posts to its parent */
+/** A preview's window in the console's frame: what it posts to its parent, and its key presses */
 function frameWindow (origin = 'http://lab.example') {
   const posted: [any, string][] = []
+  const target = new EventTarget()
   return {
     posted,
     win: {
-      parent: { postMessage: (message: any, target: string) => { posted.push([message, target]) } },
+      parent: { postMessage: (message: any, to: string) => { posted.push([message, to]) } },
       location: { origin },
+      addEventListener: (type: string, fn: (ev: any) => void) => target.addEventListener(type, fn),
+      removeEventListener: (type: string, fn: (ev: any) => void) => target.removeEventListener(type, fn),
+    },
+    /** A key pressed on the page, after the page's own handlers (`taken`: one of them took it) */
+    press (key: string, opts: { taken?: boolean, composing?: boolean } = {}) {
+      const ev = new KeyboardEvent('keydown', { key, cancelable: true, isComposing: !!opts.composing })
+      if (opts.taken) ev.preventDefault()
+      target.dispatchEvent(ev)
     },
   }
 }
@@ -64,11 +73,36 @@ describe('a preview in the console\'s frame', () => {
     expect(framed.posted).toEqual([])
 
     const preview = fakeBreadboard()
-    const tab: any = { location: { origin: 'http://lab.example' }, postMessage: vi.fn() }
+    const tab: any = { location: { origin: 'http://lab.example' }, postMessage: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() }
     tab.parent = tab
     startPreviewBridge(preview, tab)
     preview.become('open')
     expect(tab.postMessage).not.toHaveBeenCalled()
     expect(preview.on).not.toHaveBeenCalled()
+    expect(tab.addEventListener).not.toHaveBeenCalled()
+  })
+
+  // Clicked into, the page has the keyboard: the console's full-size view never heard Escape, and
+  // stayed open.
+  it('tells the console when Escape is pressed on it, unless the page took the key', () => {
+    const bb = fakeBreadboard()
+    const frame = frameWindow()
+    const stop = startPreviewBridge(bb, frame.win)
+    const keys = () => frame.posted.map(([m]) => m).filter(m => m.bbPreview === 'key')
+    frame.press('Escape')
+    expect(keys()).toEqual([{ bbPreview: 'key', key: 'Escape' }])
+    expect(frame.posted[frame.posted.length - 1][1]).toBe('http://lab.example')
+    // other keys, a key the page took (cancelling a tie change), and Escape in an input method aren't
+    frame.press('Enter')
+    frame.press('a')
+    frame.press('Escape', { taken: true })
+    frame.press('Escape', { composing: true })
+    expect(keys()).toHaveLength(1)
+    // (an older browser's name for it)
+    frame.press('Esc')
+    expect(keys()).toHaveLength(2)
+    stop()
+    frame.press('Escape')
+    expect(keys()).toHaveLength(2)
   })
 })
