@@ -38,7 +38,9 @@ const SEAT_CHECK_MS = 20 * 1000
 const RELEASED_CHECK_MS = 2 * 1000
 const SEAT_CHECK_TIMEOUT_MS = 10 * 1000
 // A participant's page whose connection had opened, and then can't open it again this many times
-// in a row, asks the server over plain HTTP whether it is there (see checkServer)
+// in a row, asks the server over plain HTTP whether it is there (see checkServer); so does one whose
+// attempt got no answer at all (given up after 15 s, socket.ts), at once: five of those took well
+// over a minute, so a network that swallows the connection was named only after 100 s
 const BLOCKED_AFTER_DROP = 5
 // How long that question may take
 const SERVER_CHECK_TIMEOUT_MS = 10 * 1000
@@ -309,9 +311,19 @@ export const ENDED_EVENT = 'bb:ended'
  *   a preview, the researcher opened another preview of this player); see useHere
  * - 'ended': the session is over for this page; it no longer reconnects
  * - 'watching': open, but only to watch: a researcher's preview of a player whose own page is
- *   connected, or of a computer player, sees what they see, and can't answer for them (see `watching`)
+ *   connected, of one another preview stands in for, or of a computer player, sees what they see,
+ *   and can't answer for them (see `watching` and `watchingBy`)
  */
 export type ConnectionState = 'connecting' | 'open' | 'lost' | 'blocked' | 'elsewhere' | 'ended' | 'watching'
+
+/**
+ * Why a researcher's preview only watches its player, as the server says ({"bbWatching": true, "by":
+ * …}): the player's own page holds the seat ('page'), another preview of the player does, standing
+ * in for them while they are away, perhaps in another researcher's console ('preview'), or the
+ * computer plays it ('computer')
+ */
+export type WatchedBy = 'page' | 'preview' | 'computer'
+const WATCHED_BY: readonly string[] = ['page', 'preview', 'computer']
 
 /** Emitted whenever `connection` may have changed */
 export const CONNECTION_EVENT = 'bb:connection'
@@ -346,6 +358,8 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
   private dropped = false
   /** The server said the current connection only watches; every new connection starts without */
   private watchingNow = false
+  /** Why it only watches, as the server said (see watchingBy); null while it doesn't */
+  private watchedBy: WatchedBy | null = null
   /**
    * The connection had opened, and now can't again although the server answers over plain HTTP:
    * the network lets the page reach the server but not open its live connection (see checkServer)
@@ -429,13 +443,25 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /**
    * Whether this page only watches its player: a researcher's preview of a player whose own page
-   * is connected, or of a computer player (see computerPlayer). The server sends it what the
-   * player's page gets, and ignores what it sends; it sends no choices, tie changes or other
-   * messages for them. The server decides again for every new connection, and hands the seat to a
-   * preview that watches when the player's page goes ({"bbWatching": false}).
+   * is connected, of one another preview stands in for, or of a computer player (see watchingBy and
+   * computerPlayer). The server sends it what the player's page gets, and ignores what it sends; it
+   * sends no choices, tie changes or other messages for them. The server decides again for every
+   * new connection, and hands the seat to a preview that watches when the player's page (or the
+   * preview standing in) goes ({"bbWatching": false}).
    */
   get watching (): boolean {
     return this.watchingNow
+  }
+
+  /**
+   * While this page only watches (`watching`), why, as the server says: the player's own page holds
+   * the seat ('page'), another preview of the player does ('preview': it stands in for them while
+   * they are away, perhaps in another researcher's console), or the computer plays it ('computer').
+   * It changes as the seat changes hands, with a CONNECTION_EVENT. Null while the page doesn't only
+   * watch, or when the server doesn't say (before 3.1).
+   */
+  get watchingBy (): WatchedBy | null {
+    return this.watchingNow ? this.watchedBy : null
   }
 
   /**
@@ -493,7 +519,10 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         config.clientId ? { ping: PING, isPong } : {})
       this.socket.on('close', () => { this.dropped = true })
       // (before CONNECTION_EVENT below: a new connection is the player's own until the server says)
-      this.socket.on('connect', () => { this.watchingNow = false })
+      this.socket.on('connect', () => {
+        this.watchingNow = false
+        this.watchedBy = null
+      })
       this.socket.on('open', () => {
         this.liveBlocked = false
         this.serverAnswered = false
@@ -513,7 +542,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         }
       })
       // A participant's page that had connected and can't again: the network, or the server?
-      if (config.clientId) this.socket.on('unopened', (inARow: number) => this.onUnopened(inARow))
+      if (config.clientId) this.socket.on('unopened', (inARow: number, timedOut?: boolean) => this.onUnopened(inARow, !!timedOut))
       // Propagate all socket events out to the Breadboard object
       for (const event of ['connect', 'open', 'close', 'error', 'retry']) {
         this.socket.on(event, (...args: any) => this.emit(event, ...args))
@@ -945,13 +974,15 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
 
   /**
    * An attempt to connect again didn't open, `inARow` in a row. From the BLOCKED_AFTER_DROP-th on,
-   * the page asks the server over plain HTTP (checkServer) after each one. When the server answered
-   * and the attempt made right after that didn't open either, the network lets the page reach the
-   * server but not open its live connection: 'blocked', which tells the participant to try another
-   * network. A page that has never connected is the socket's own 'blocked'.
+   * and after any that got no answer at all (`timedOut`, given up after 15 s), the page asks the
+   * server over plain HTTP (checkServer) after each one. When the server answered and the attempt
+   * made right after that didn't open either, the network lets the page reach the server but not
+   * open its live connection: 'blocked', which tells the participant to try another network, after
+   * about 30 s when the network swallows the connection (two attempts of 15 s), or 20 s when it
+   * refuses it (five quick ones). A page that has never connected is the socket's own 'blocked'.
    */
-  private onUnopened (inARow: number) {
-    if (!this.socket.hasOpened || inARow < BLOCKED_AFTER_DROP) return
+  private onUnopened (inARow: number, timedOut: boolean) {
+    if (!this.socket.hasOpened || (inARow < BLOCKED_AFTER_DROP && !timedOut)) return
     if (this.serverAnswered) {
       this.serverAnswered = false
       this.setLiveBlocked(true)
@@ -1050,11 +1081,14 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
         return
       }
       if (data && data.bbWatching === true) {
-        // A preview of a player whose own page is connected: the server mirrors what that page gets
-        // and leaves it alone. Sent first, or once the player's page comes back and takes the seat
-        // from a preview that had it.
-        if (!this.watchingNow) {
+        // A preview of a player whose own page is connected, of one another preview stands in for,
+        // or of a computer player: the server mirrors what that page gets and leaves it alone. Sent
+        // first, again once the player's page comes back and takes the seat from a preview that had
+        // it, and whenever why it watches changes (`by`).
+        const by: WatchedBy | null = WATCHED_BY.indexOf(data.by) >= 0 ? data.by : null
+        if (!this.watchingNow || by !== this.watchedBy) {
           this.watchingNow = true
+          this.watchedBy = by
           this.emit(CONNECTION_EVENT)
         }
         return
@@ -1062,6 +1096,7 @@ export class BreadboardClass extends Emitter implements BreadboardMessages {
       if (data && data.bbWatching === false) {
         // The player's own page has gone, and the seat passed to this preview: it acts for them
         // until their page is back.
+        this.watchedBy = null
         if (this.watchingNow) {
           this.watchingNow = false
           this.emit(CONNECTION_EVENT)

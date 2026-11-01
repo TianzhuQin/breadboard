@@ -720,6 +720,61 @@ public class ParticipantConnectionTest extends BaseTest {
         assertEquals(1, events("clientDisconnected", "p4"));
     }
 
+    // A page whose JavaScript was paused for 40 s (a laptop or phone suspending the tab), while its
+    // connection stayed up: the server closed its socket after 30 s without a word. As the page ran
+    // again, it took what the server had sent meanwhile as just heard, then saw its socket closed, and
+    // was back 0.3 s later saying it had been away 239 ms, which was recorded.
+    @Test
+    public void aGapIsAsLongAsTheServerWentWithoutAWordFromThePageWhenThatWasLonger() throws Throwable {
+        final long[] now = {System.currentTimeMillis()};
+        field("clock").set(null, (LongSupplier) () -> now[0]);
+        Page page = connect("p1");
+        page.send("LogIn", "clientId", "p1");
+        page.send("Ping");
+        now[0] += 34800;
+        closeSilentPages(now[0]);
+        assertTrue(page.closed);
+        assertEquals(1, events("clientDisconnected", "p1"));
+        now[0] += 5480;
+        Page back = connect("p1");
+        back.send("LogIn", "clientId", "p1", "awayMs", 239);
+        assertEquals("1:40280", gaps("p1"));
+        // once: a sign-in again on the same socket says what the page says
+        back.send("LogIn", "clientId", "p1", "awayMs", 30);
+        assertEquals("2:30", gaps("p1"));
+
+        // The same with a preview that stood in meanwhile: it watched, took the seat as the page's
+        // socket closed, and watches again once the page is back.
+        back.send("Ping");
+        final long heard = now[0];
+        Page preview = connect("p1", true);
+        now[0] += 31000;
+        closeSilentPages(now[0]);
+        assertEquals(1, preview.count(NOT_WATCHING));
+        now[0] += 9000;
+        Page again = connect("p1");
+        again.send("LogIn", "clientId", "p1", "awayMs", 120);
+        assertEquals("3:" + (now[0] - heard), gaps("p1"));
+        assertEquals(2, preview.count(WATCHING));
+
+        // And with the page's new socket first, the old one silent for 25 s and not closed yet.
+        again.send("Ping");
+        now[0] += 25000;
+        Page third = connect("p1");
+        third.send("LogIn", "clientId", "p1", "awayMs", 400);
+        assertEquals("4:25000", gaps("p1"));
+
+        // What the page says stands when it is the longer: here its socket's close came through at
+        // once, and the server had heard from it until then.
+        third.send("Ping");
+        now[0] += 2000;
+        third.hangUp();
+        now[0] += 1000;
+        Page fourth = connect("p1");
+        fourth.send("LogIn", "clientId", "p1", "awayMs", 6000);
+        assertEquals("5:6000", gaps("p1"));
+    }
+
     @Test
     public void silencesOfAPageAreTimedFromWhatItSent() {
         Client.Connection c = socket(0L, false, false);
@@ -1170,6 +1225,68 @@ public class ParticipantConnectionTest extends BaseTest {
         }
     }
 
+    /** Why this preview was told it only watches, each time it was ({"bbWatching": true, "by": …}), in order. */
+    private static List<String> whyWatching(Page preview) {
+        List<String> why = new ArrayList<>();
+        for (JsonNode f : preview.frames) if (WATCHING.matches(f)) why.add(f.path("by").asText());
+        return why;
+    }
+
+    // Two consoles preview someone who leaves: one preview stands in, and the other only watches. That
+    // one was told nothing more, so its page went on saying that the player's own page was connected,
+    // and its console that it stood in.
+    @Test
+    public void aPreviewThatOnlyWatchesIsToldWhyAgainWhenTheSeatChangesHands() throws Throwable {
+        Page participant = connect("p1");
+        Page first = connect("p1", true);
+        Page second = connect("p1", true);
+        assertEquals(Arrays.asList("page"), whyWatching(first));
+        assertEquals(Arrays.asList("page"), whyWatching(second));
+
+        // Their page goes: the preview that came last stands in, and the other watches it.
+        participant.hangUp();
+        assertEquals(1, second.count(NOT_WATCHING));
+        assertSame(second.out, client("p1").out);
+        assertEquals(0, first.count(NOT_WATCHING));
+        assertEquals(Arrays.asList("page", "preview"), whyWatching(first));
+        assertEquals("preview", client("p1").watchers().get(0).watchingBy());
+        // what the one watching sends still doesn't act for them; the stand-in's does
+        CustomEvents customEvents = new CustomEvents();
+        bus().on("CustomEvent", customEvents);
+        try {
+            first.send("CustomEvent", "eventName", "from-the-one-watching");
+            assertEquals(0, customEvents.heard.size());
+            second.send("CustomEvent", "eventName", "from-the-stand-in");
+            assertEquals(1, customEvents.heard.size());
+        } finally {
+            bus().off("CustomEvent", customEvents);
+        }
+
+        // Their page comes back: both watch it, and are told so.
+        Page back = connect("p1");
+        assertEquals(Arrays.asList("page", "preview", "page"), whyWatching(first));
+        assertEquals(Arrays.asList("page", "page"), whyWatching(second));
+        assertSame(back.out, client("p1").out);
+
+        // It goes again: the stand-in is the preview that came to watch last, and the other is told.
+        back.hangUp();
+        assertEquals(2, second.count(NOT_WATCHING));
+        assertEquals(Arrays.asList("page", "preview", "page", "preview"), whyWatching(first));
+
+        // The stand-in goes: the one that watched takes the seat, and stands in from now on.
+        second.hangUp();
+        assertEquals(1, first.count(NOT_WATCHING));
+        assertSame(first.out, client("p1").out);
+        assertTrue(client("p1").watchers().isEmpty());
+        assertEquals(Boolean.FALSE, system("p1").get("connected"));
+        assertEquals(Boolean.TRUE, system("p1").get("preview"));
+        // and a preview opened now takes it, as before: the one before is told it was replaced
+        Page third = connect("p1", true);
+        assertSame(third.out, client("p1").out);
+        assertEquals(1, first.count(REPLACED));
+        assertTrue(whyWatching(third).isEmpty());
+    }
+
     @Test
     public void aWatchedParticipantWhoLeavesIsHandedToTheComputerAndThePreviewCanStillChooseForThem() throws Throwable {
         Page participant = connect("p1");
@@ -1244,6 +1361,7 @@ public class ParticipantConnectionTest extends BaseTest {
         try {
             Page preview = connect(id, true);
             assertTrue("told first", WATCHING.matches(preview.frames.get(0)));
+            assertEquals("and why", "computer", preview.frames.get(0).path("by").asText());
             assertEquals("then the computer's view", 1, preview.count(VIEW));
             assertFalse(preview.closed);
             assertEquals("the computer still plays it", 1, engine().eval("bot.ai"));

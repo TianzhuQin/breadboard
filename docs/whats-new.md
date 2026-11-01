@@ -365,10 +365,12 @@ goes, and a page that has lost the seat also asks the server every 20 seconds.
 
 **A network that blocks the live connection.** A page that has never connected after three tries
 says the network may not let it through, and suggests another network or browser. So does a page
-that was connected and then can't connect again: after five failed tries in a row it asks the
-server over plain HTTP after each try. If the server answers, the page tries once more at once, and
-if that fails too, the network lets it reach the server but not open its live connection. If the
-server doesn't answer, it is down, and the page goes on saying the connection was lost.
+that was connected and then can't connect again: after five failed tries in a row, or one that got
+no answer at all (a try is given up after 15 seconds), it asks the server over plain HTTP after each
+try. If the server answers, the page tries once more at once, and if that fails too, the network
+lets it reach the server but not open its live connection: about 20 seconds after the drop when the
+network refuses the connection, and 30 when it swallows it. If the server doesn't answer, it is
+down, and the page goes on saying the connection was lost.
 
 `Breadboard.connection` says how the connection is, and Breadboard emits `bb:connection` whenever
 it may have changed (`Breadboard.on('bb:connection', () => ...)`):
@@ -422,7 +424,11 @@ session, acts for them as before, and they count as connected, until their own p
 from then on it watches. A preview of anyone whose own page has been in the session and is away
 (they left, or the computer took their seat) can act for them too, but they count as gone, like
 anyone who leaves, whichever preview it is: the computer takes over after `afterSeconds`, or goes on
-playing, and a waiting room doesn't count them.
+playing, and a waiting room doesn't count them. Only one preview of a player answers for them at a
+time: another one (in another researcher's console, say) only watches it. `Breadboard.watchingBy`
+says why a preview watches: `page` (their own page is connected), `preview` (another preview of
+theirs stands in for them) or `computer`; it changes as the seat changes hands, with a
+`bb:connection`, and the page's notes say so.
 
 **On the server.** What the server does about connections, for experiment authors:
 
@@ -455,16 +461,20 @@ playing, and a waiting room doesn't count them.
 - **Gaps in a connection.** A page that connects again after its connection dropped signs in again
   with how long it was out of touch, from when it last heard from the server
   (`{"action": "LogIn", "clientId": ..., "awayMs": ...}`), and the session records `connectionGap`
-  (`player`, `awayMs`) rather than another `clientLogIn`. An outage without a word is recorded this
-  way once the page has noticed it: after 15 to 20 seconds without a word from the server, it gives
-  the connection up and makes a new one. When the page is back before the 30 seconds of silence that
-  close a page, the `connectionGap` is all that is recorded: the participant never counts as gone. An
-  outage too short for the page to notice, which the connection lives through, leaves no record.
-  When the page's old socket closes after it was out of touch (it had sent nothing for 10 seconds,
-  or what it sent meanwhile came through only just before the close), they count as gone only once
-  30 seconds have passed since it was last heard from, unless a page of theirs is back by then. That
-  close comes through only as the network comes back, just before the page's new socket or just
-  after it, so the same outage used to be recorded as a `clientDisconnected` and a
+  (`player`, `awayMs`) rather than another `clientLogIn`. Its `awayMs` is the longer of what the page
+  says and the server's own reckoning, from when it last heard from the participant's page (or from
+  when that page's socket closed, if it was in touch until then): a page whose JavaScript was paused
+  while its connection stayed up (a laptop or phone suspending the tab) takes what the server sent
+  meanwhile as just heard, and would say it was away a moment. An outage without a word is recorded
+  this way once the page has noticed it: after 15 to 20 seconds without a word from the server, it
+  gives the connection up and makes a new one. When the page is back before the 30 seconds of
+  silence that close a page, the `connectionGap` is all that is recorded: the participant never
+  counts as gone. An outage too short for the page to notice, which the connection lives through,
+  leaves no record. When the page's old socket closes after it was out of touch (it had sent nothing
+  for 10 seconds, or what it sent meanwhile came through only just before the close), they count as
+  gone only once 30 seconds have passed since it was last heard from, unless a page of theirs is back
+  by then. That close comes through only as the network comes back, just before the page's new
+  socket or just after it, so the same outage used to be recorded as a `clientDisconnected` and a
   `clientConnected` 2 ms apart, or not at all.
 - **Answers that come too late.** A choice or tie change says when it was given, in the server's
   time as the page reckons it from the pongs (`bbSentAt`, in `MakeChoice` and in the `CustomEvent`s
@@ -480,28 +490,31 @@ playing, and a waiting room doesn't count them.
 - **`player._system.disconnectedAt`**: since when (ms) the player has been away, next to
   `_system.connected`; it goes when they are back.
 - **Previews.** A researcher's preview of a player whose own page is connected, or of a computer
-  player (an id starting with `_`), is sent `{"bbWatching": true}` and then every frame that page
-  gets; what it sends is ignored, apart from its sign-in (recorded as a preview's). Nothing about a
-  computer player's connections is recorded or announced, and the autopilot leaves its seat to the
-  computer, with the experiment's own behaviour. A preview that takes the seat of a test player
-  (one no page of the participant's has held in the session) holds it as their page would: they
-  count as connected, so the researcher plays them, and the `clientConnected` /
-  `clientDisconnected` it causes have `preview` = `true`, as does the `clientDisconnected` when
-  their own page takes the seat from it. While a preview holds the seat, `player._system.preview`
-  is `true`; neighbours never see it, as with the rest of `_system`.
+  player (an id starting with `_`), is sent `{"bbWatching": true, "by": "page"}` (or `"computer"`)
+  and then every frame that page gets; what it sends is ignored, apart from its sign-in (recorded as
+  a preview's). It is told again whenever why it watches changes: `"by": "preview"` once another
+  preview holds the seat (their page went, and a preview that watched stands in for them), and
+  `"page"` once their page is back. Nothing about a computer player's connections is recorded or
+  announced, and the autopilot leaves its seat to the computer, with the experiment's own behaviour.
+  A preview that takes the seat of a test player (one no page of the participant's has held in the
+  session) holds it as their page would: they count as connected, so the researcher plays them, and
+  the `clientConnected` / `clientDisconnected` it causes have `preview` = `true`, as does the
+  `clientDisconnected` when their own page takes the seat from it. While a preview holds the seat,
+  `player._system.preview` is `true`; neighbours never see it, as with the rest of `_system`.
 - **A preview that stands in.** Once a participant's own page has held their seat in a session, a
   preview never counts as them being there. One that watches as their page goes takes the seat and
-  is sent `{"bbWatching": false}`, and any preview opened while their page is away takes it too (the
-  console opens new ones all the time: a tile opened full size and closed again, a reload, the
-  Preview page visited again, its **AI players** pick): its choices count, but nobody counts as
-  being there. `_system.connected` stays `false` (with `_system.preview` `true`), no
-  `clientConnected` is recorded and no `bb:connection` with `connected: true` is emitted, so their
-  departure goes on as anyone's: the computer takes over after `afterSeconds` (or goes on playing a
-  seat it took over), and the waiting room stops counting them once `departureGraceSeconds` have
-  passed. It used to count as them coming back, so nobody played the seat for as long as the
-  preview was open, and a start went ahead with a seat nobody played. This holds for the whole
-  session, also once the engine has been rebuilt for it (**Resume**, or a reload that carries it on),
-  which used to forget whose own page had been there.
+  is sent `{"bbWatching": false}` (the one that came to watch last; any other goes on watching, now
+  `"by": "preview"`, and takes the seat in turn when that one goes), and any preview opened while
+  their page is away takes it too (the console opens new ones all the time: a tile opened full size
+  and closed again, a reload, the Preview page visited again, its **AI players** pick): its choices
+  count, but nobody counts as being there. `_system.connected` stays `false` (with `_system.preview`
+  `true`), no `clientConnected` is recorded and no `bb:connection` with `connected: true` is
+  emitted, so their departure goes on as anyone's: the computer takes over after `afterSeconds` (or
+  goes on playing a seat it took over), and the waiting room stops counting them once
+  `departureGraceSeconds` have passed. It used to count as them coming back, so nobody played the
+  seat for as long as the preview was open, and a start went ahead with a seat nobody played. This
+  holds for the whole session, also once the engine has been rebuilt for it (**Resume**, or a reload
+  that carries it on), which used to forget whose own page had been there.
 - **A preview adds nobody.** In a real session, a preview of someone who isn't in the network (the
   console keeps its tiles across a Stop and Resume, say, of people who haven't joined again) is sent
   a screen saying they aren't in the game (`player.ended` = `"notInGame"`), and nothing else

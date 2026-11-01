@@ -71,6 +71,11 @@ describe('the older participant client\'s connection notice', () => {
     // every preview of a computer player watches: there is no page of its own to speak of
     expect(connectionNotice({ connection: 'watching', preview: true, computerPlayer: true }))
       .toBe('Watching only: the computer plays this seat, so you see what it does but can’t answer for it.')
+    // another preview (perhaps another console's) stands in for someone away: their own page isn't connected
+    expect(connectionNotice({ connection: 'watching', preview: true, computerPlayer: false, watchingBy: 'preview' }))
+      .toBe('Watching only: another preview of this player answers for them, so you see their screen but can’t answer here.')
+    expect(connectionNotice({ connection: 'watching', preview: true, computerPlayer: false, watchingBy: 'page' }))
+      .toBe('Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.')
   })
 
   it('says where the seat went, and nothing while the page has it', () => {

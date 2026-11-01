@@ -114,6 +114,22 @@ describe('PlayerChoices', () => {
     expect(w.find('.bb-link-note').exists()).toBe(false)
   })
 
+  // Two consoles previewing someone away: one preview stands in, the other only watches. The note
+  // under the choices said their own page was connected.
+  it('says on a preview that only watches while another preview answers for the player that it does', async () => {
+    const w = mount(PlayerChoices, { propsData: { player }, stubs })
+    ;(bb as any).watchingBy = 'preview'
+    bb.become('watching')
+    await w.vm.$nextTick()
+    expect(enabled(w)).toEqual([false, false])
+    expect(w.find('.bb-link-note').text()).toBe('Watching only: another preview of this player answers for them, so you can’t answer here.')
+    // their own page is back: the server says so, and so does the note
+    ;(bb as any).watchingBy = 'page'
+    bb.become('watching')
+    await w.vm.$nextTick()
+    expect(w.find('.bb-link-note').text()).toBe('Watching only: their own page is connected, so you can’t answer for them.')
+  })
+
   it('tells a page\'s own choices whether to wait', async () => {
     const w = mount(PlayerChoices, {
       propsData: { player },

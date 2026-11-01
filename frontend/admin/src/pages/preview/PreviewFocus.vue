@@ -30,6 +30,8 @@
           :device="device"
           :width="frameWidth"
           interactive
+          @connection="(state) => emit('connection', state)"
+          @escape="emit('close')"
         />
       </div>
     </div>
@@ -41,7 +43,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, ExternalLink, Monitor, RotateCw, Smartphone } from 'lucide-vue-next'
 import { BButton, BDialog, BTabs, type TabItem } from '@/ui'
 import PreviewFrame from './PreviewFrame.vue'
-import { DEVICES, WATCHING_WHY, frameGeometry, naturalWidth, widthToFit, type DeviceKind, type PreviewRole, type PreviewTarget } from './preview'
+import {
+  DEVICES, WATCHING_WHY, frameGeometry, naturalWidth, widthToFit, type DeviceKind, type FrameConnection, type PreviewRole, type PreviewTarget,
+} from './preview'
 import { playerName } from '@/network/players'
 
 const props = defineProps<{
@@ -54,10 +58,19 @@ const props = defineProps<{
   reloadKey?: number
   /** What a preview of this player does (preview.ts previewRole). */
   role?: PreviewRole | null
+  /**
+   * The page here only watches because another preview of the player, perhaps another console's,
+   * holds their seat (preview.ts watchesAnotherPreview).
+   */
+  aside?: boolean
   /** What their tile says under the page: that they aren't in the game, or that they are away. */
   note?: string
 }>()
-const emit = defineEmits<{ close: [], step: [delta: number], 'open-tab': [] }>()
+const emit = defineEmits<{
+  close: [], step: [delta: number], 'open-tab': [],
+  /** What the page here says of its connection (PreviewFrame). */
+  connection: [state: FrameConnection | null],
+}>()
 
 // "AI 6 (_6)" for a computer player, as on its tile and in the list
 const name = computed(() => props.playerId ? playerName(props.playerId) : '')
@@ -65,6 +78,8 @@ const name = computed(() => props.playerId ? playerName(props.playerId) : '')
 // page is connected" for everyone, a computer player too.
 const subtitle = computed(() => {
   const role = props.role
+  // (another preview, perhaps another console's, stands in for someone away: the note says so)
+  if (props.aside) return props.note ? `${props.note} You see their screen here, but can’t answer for them.` : `Watching: ${WATCHING_WHY.preview}.`
   if (role === 'computer' || role === 'watching') return `Watching: ${WATCHING_WHY[role]}.`
   if (role === 'away') return `${props.note || 'Away: you are standing in, but they count as away.'} Clicks here are real choices for this player, and are recorded.`
   // (or that they aren't in the game)

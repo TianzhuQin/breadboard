@@ -2,7 +2,7 @@
   <v-col v-if="hasChoices" class="player-choices">
     <!-- A click while the connection is down would arrive late, or never: the choices wait for it.
          A preview that only watches the player answers nothing for them. -->
-    <LinkNote :link="link" />
+    <LinkNote :link="link" :by="watchedBy" />
     <v-row no-gutters class="choices-container justify-space-between">
       <template v-for="(choice, index) of player.choices">
         <slot name="choice" :choice="choice" :submit="submit" :index="index" :disabled="!canSend">

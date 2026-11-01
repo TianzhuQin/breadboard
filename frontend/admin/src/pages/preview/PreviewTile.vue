@@ -41,6 +41,7 @@
           :width="width"
           :interactive="interactive"
           lazy
+          @connection="(state) => emit('connection', state)"
         />
         <button
           v-if="!interactive"
@@ -73,7 +74,7 @@ import { Bot, Ellipsis, ExternalLink, Eye, FlaskConical, Maximize2, RotateCw, Tr
 import { BButton, BMenu, type MenuItem } from '@/ui'
 import { playerName } from '@/network/players'
 import PreviewFrame from './PreviewFrame.vue'
-import { WATCHING_WHY, frameGeometry, type DeviceKind, type PreviewRole, type PreviewTarget } from './preview'
+import { WATCHING_WHY, frameGeometry, type DeviceKind, type FrameConnection, type PreviewRole, type PreviewTarget } from './preview'
 
 const props = defineProps<{
   playerId: string
@@ -85,19 +86,30 @@ const props = defineProps<{
   ai: boolean
   /** What a preview of this player does (preview.ts previewRole). */
   role?: PreviewRole | null
+  /**
+   * Its page only watches because another preview of the player, perhaps another console's, holds
+   * their seat (preview.ts watchesAnotherPreview), whatever the role says.
+   */
+  aside?: boolean
   /** Changing it loads the page again, with a new preview token. */
   frameKey: string
   /** Why the page isn't shown here right now. */
   paused: 'focus' | 'tab' | null
   note?: string
 }>()
-const emit = defineEmits<{ focus: [], reload: [], 'open-tab': [], remove: [], resume: [] }>()
+const emit = defineEmits<{
+  focus: [], reload: [], 'open-tab': [], remove: [], resume: [],
+  /** What its page says of its connection (PreviewFrame). */
+  connection: [state: FrameConnection | null],
+}>()
 
 // "AI 6 (_6)" for a computer player, as in the list
 const name = computed(() => playerName(props.playerId))
 const geo = computed(() => frameGeometry(props.device, props.width))
 /** Why the preview only watches ('' when it doesn't), for the Watching tag. */
-const watching = computed(() => props.role === 'computer' || props.role === 'watching' ? `Watching: ${WATCHING_WHY[props.role]}` : '')
+const watching = computed(() => props.aside
+  ? `Watching: ${WATCHING_WHY.preview}`
+  : props.role === 'computer' || props.role === 'watching' ? `Watching: ${WATCHING_WHY[props.role]}` : '')
 // small tiles keep the tags' icons only (the words stay for screen readers and in the tooltip)
 const compact = computed(() => props.width < 230)
 const menu = computed<MenuItem[]>(() => [

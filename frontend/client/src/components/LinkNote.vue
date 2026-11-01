@@ -1,7 +1,7 @@
 <template>
   <!-- Shown by the choices and forms while they can't send: they wait for the connection, or the page
-       only watches (a researcher's preview of a player whose own page is connected, or of a computer
-       player) -->
+       only watches (a researcher's preview of a player whose own page is connected, of one another
+       preview stands in for, or of a computer player) -->
   <p v-if="text" class="bb-link-note" :class="`bb-link-note--${link}`" role="status">{{ text }}</p>
 </template>
 
@@ -18,6 +18,9 @@
   }
   // A preview of a computer player watches what the computer does.
   const COMPUTER_WATCHING = 'Watching only: the computer plays this seat, so you can’t answer for it.'
+  // A preview of someone away watches while another preview, perhaps in another researcher's console,
+  // stands in for them (`by` 'preview'): their own page isn't connected.
+  const PREVIEW_WATCHING = 'Watching only: another preview of this player answers for them, so you can’t answer here.'
 
 
   /**
@@ -29,10 +32,13 @@
     props: {
       /** The controls' LinkState (lib/connection.ts) */
       link: { type: String, required: true },
+      /** While they only watch, why (their LinkAware's watchedBy: lib/connection.ts watchingBy) */
+      by: { type: String, default: null },
     },
     computed: {
       text (): string {
         if (this.link === 'watching' && computerPlayer()) return COMPUTER_WATCHING
+        if (this.link === 'watching' && this.by === 'preview') return PREVIEW_WATCHING
         return TEXTS[this.link] ? TEXTS[this.link]() : ''
       }
     }

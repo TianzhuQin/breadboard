@@ -522,6 +522,53 @@ describe('the page\'s connection, as the participant hears of it', () => {
     expect(since.filter(c => c !== 'blocked')).toEqual(['open'])
   })
 
+  // A network that swallows the live connection's handshake, without a word, once the page had been
+  // connected: each attempt is given up after 15 s, and the page named the network only after five
+  // of them, about 100 s on. One such attempt is reason enough to ask the server over HTTP.
+  it('says the network may block it within about 30 s when, having been open, its attempts get no answer at all', async () => {
+    const fetch = stateAnswers([200, CONFIG])
+    const page = await openPage(fetch)
+    const droppedAt = Date.now()
+    FakeSocket.all[0].drop()
+    await nextAttempt()
+    expect(FakeSocket.all.length).toBe(2)
+    // no answer: given up after 15 s, the page asks the server over plain HTTP, which answers, and
+    // tries the live connection again at once
+    await vi.advanceTimersByTimeAsync(15000)
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(FakeSocket.all.length).toBe(3)
+    expect(page.Breadboard.connection).toBe('lost')
+    // no answer again: the network lets the page reach the server, but not open its live connection
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(page.Breadboard.connection).toBe('blocked')
+    expect(Date.now() - droppedAt).toBeLessThanOrEqual(31100)
+    // it goes on trying, and is open once the network lets it through
+    await settle()
+    ;(await nextAttempt()).accept()
+    expect(page.Breadboard.connection).toBe('open')
+  })
+
+  it('stays lost when its attempts get no answer at all and neither does the server over HTTP: the network is down', async () => {
+    // (each wait between attempts half the longest, so each attempt is given up before the next starts)
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    let calls = 0
+    const fetch = vi.fn(async () => {
+      if (calls++ === 0) return { status: 200, json: async () => CONFIG }
+      throw new TypeError('Failed to fetch')
+    })
+    const page = await openPage(fetch as any)
+    FakeSocket.all[0].drop()
+    for (let k = 0; k < 3; k++) {
+      await nextAttempt()
+      await vi.advanceTimersByTimeAsync(15000)
+      await settle()
+    }
+    expect(fetch.mock.calls.length).toBe(4)
+    expect(page.Breadboard.connection).toBe('lost')
+    expect(page.connections).not.toContain('blocked')
+  })
+
   it('takes the attempt right after the server answers over HTTP, when the server has just come back', async () => {
     const page = await openPage(stateAnswers([200, CONFIG]))
     FakeSocket.all[0].drop()
@@ -908,6 +955,44 @@ describe('a researcher\'s preview of a player whose own page is connected', () =
     // and it watches again when their page comes back
     FakeSocket.all[0].frame(WATCHING)
     expect(page.Breadboard.connection).toBe('watching')
+  })
+
+  // Two consoles previewing someone away: one preview stands in, and the other only watches. It said
+  // that the player's own page was connected: the server now says why it watches.
+  it('says why it watches, as the server says, and again whenever the seat changes hands', async () => {
+    asPreview()
+    const page = await openPage(stateAnswers([200, CONFIG]))
+    expect(page.Breadboard.watchingBy).toBe(null)
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'page' })
+    expect(page.Breadboard.connection).toBe('watching')
+    expect(page.Breadboard.watchingBy).toBe('page')
+    const heard = page.connections.length
+    // the player's page went, and another preview (another console's) took the seat
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'preview' })
+    expect(page.Breadboard.connection).toBe('watching')
+    expect(page.Breadboard.watchingBy).toBe('preview')
+    expect(page.connections.length).toBe(heard + 1)
+    // the same again changes nothing
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'preview' })
+    expect(page.connections.length).toBe(heard + 1)
+    // the other preview went: this one stands in, and can answer for them
+    FakeSocket.all[0].frame({ bbWatching: false })
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.Breadboard.watchingBy).toBe(null)
+    // from a server that doesn't say why (before 3.1), or says something else
+    FakeSocket.all[0].frame(WATCHING)
+    expect(page.Breadboard.watchingBy).toBe(null)
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'someone' })
+    expect(page.Breadboard.watchingBy).toBe(null)
+    // a new connection is asked again
+    FakeSocket.all[0].frame({ bbWatching: true, by: 'page' })
+    FakeSocket.all[0].drop()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(FakeSocket.all.length).toBe(2)
+    expect(page.Breadboard.watchingBy).toBe(null)
+    FakeSocket.all[1].accept()
+    expect(page.Breadboard.connection).toBe('open')
+    expect(page.Breadboard.watchingBy).toBe(null)
   })
 
   it('is told when another preview takes the seat for real, like a participant\'s other tab', async () => {

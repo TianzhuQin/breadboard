@@ -130,14 +130,16 @@
                 :test="isTestPlayer(t)"
                 :ai="isAIPlayer(t)"
                 :role="t.missing ? null : previewRole(t)"
+                :aside="!t.missing && watchesAnotherPreview(frames[t.id])"
                 :paused="focusId === t.id ? 'focus' : tabbed.has(t.id) ? 'tab' : null"
                 :frame-key="`${globalNonce}-${nonces[t.id] || 0}`"
-                :note="noteOf(t)"
+                :note="noteOf(t, frames[t.id])"
                 @focus="focusId = t.id"
                 @reload="reload(t.id)"
                 @open-tab="openTab(t.id)"
                 @remove="remove(t.id)"
                 @resume="tabbed.delete(t.id); reload(t.id)"
+                @connection="(state) => { frames[t.id] = state }"
               />
             </ul>
           </div>
@@ -152,10 +154,12 @@
         :initial-device="memory.device"
         :reload-key="focusId ? nonces[focusId] || 0 : 0"
         :role="focusTile && !focusTile.missing ? previewRole(focusTile) : null"
-        :note="focusTile ? noteOf(focusTile) : ''"
+        :aside="!!focusTile && !focusTile.missing && watchesAnotherPreview(focusFrame)"
+        :note="focusTile ? noteOf(focusTile, focusFrame) : ''"
         @close="closeFocus"
         @step="step"
         @open-tab="focusId && openTab(focusId)"
+        @connection="(state) => { focusFrame = state }"
       />
     </template>
   </BPage>
@@ -183,7 +187,7 @@ import PreviewFocus from './PreviewFocus.vue'
 import {
   FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, PLAYER_LIST_WIDTH, autoPicked, awayText, isAIPlayer, isComputerPlayer,
   isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, previewRole, quickPick, shownReadOnly, sortPlayers, tileWidth,
-  type PlayerLike, type PreviewTarget, type QuickPick,
+  watchesAnotherPreview, type FrameConnection, type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 
@@ -226,13 +230,29 @@ const tiles = computed(() => {
   }))
 })
 
-/** What a tile says under the page: they aren't in the game, or they are away and the preview stands in. */
-function noteOf (t: { id: string, data: Record<string, any>, missing: boolean }): string {
+/**
+ * What a tile says under the page: they aren't in the game, or they are away and the preview stands
+ * in, or another one does, perhaps another console's, while this one only watches, as its page
+ * (`frame`) says.
+ */
+function noteOf (t: { id: string, data: Record<string, any>, missing: boolean }, frame?: FrameConnection | null): string {
   if (t.missing) return admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''
   if (previewRole(t) !== 'away') return ''
   const known = takeover.value?.instanceId === inst.value?.id ? takeover.value : null
-  return awayText(t, { gameStarted: gameStarted.value, takeoverSeconds: known?.seconds ?? null, returnToHuman: known?.returnToHuman ?? null })
+  return awayText(t, {
+    gameStarted: gameStarted.value,
+    takeoverSeconds: known?.seconds ?? null,
+    returnToHuman: known?.returnToHuman ?? null,
+    anotherPreview: watchesAnotherPreview(frame),
+  })
 }
+
+/**
+ * What the page of each tile, and the one shown full size, says of its connection (PreviewFrame):
+ * whether it stands in for someone away, or only watches while another preview does.
+ */
+const frames = reactive<Record<string, FrameConnection | null>>({})
+const focusFrame = ref<FrameConnection | null>(null)
 
 /**
  * The session's game has started, as Live session says it: the engine's own word, when it runs this

@@ -661,6 +661,20 @@ describe('BBNetwork while the connection is down', () => {
     expect((w.vm as any).moves.every((m: any) => !m.available)).toBe(true)
   })
 
+  // Another preview, perhaps in another researcher's console, stands in for someone away: the hint
+  // said their own page was connected.
+  it('says on a preview that watches another preview standing in that it does, and again once their page is back', async () => {
+    ;(window as any).Breadboard.connection = 'open'
+    const w = mountNetwork({ enabled: true, remove: true, add: true, scope: 'amongNeighbors' })
+    ;(window as any).Breadboard.watchingBy = 'preview'
+    await become(w, 'watching')
+    expect(w.find('.bb-network__hint').text()).toBe('Watching only: another preview of this player answers for them, so you can’t change their ties here.')
+    expect(clickableHit(w, 'nx', 'ny').exists()).toBe(false)
+    ;(window as any).Breadboard.watchingBy = 'page'
+    await become(w, 'watching')
+    expect(w.find('.bb-network__hint').text()).toBe('Watching only: their own page is connected, so you can’t change their ties.')
+  })
+
   it('says on a preview of a computer player that the computer plays the seat', async () => {
     ;(window as any).Breadboard.connection = 'open'
     ;(window as any).Breadboard.computerPlayer = true
