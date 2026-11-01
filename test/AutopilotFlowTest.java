@@ -322,6 +322,36 @@ public class AutopilotFlowTest extends BaseTest {
         assertEquals("Away waiting credit", again.lastPlayer().get("text").asText());
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aGivenUpWaitingRoomDoesNotRefreshAnOldClientFromAReplacementPlayersPrivateState() throws Exception {
+        User researcher = user("cancelledreplacement");
+        Experiment experiment = experimentOf(researcher, "Cancelled during replacement");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("continuous", false);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        Page oldPage = connect(experiment, session, "same-id");
+        Client old = client("same-id");
+        BreadboardGraphChangedListener listener = (BreadboardGraphChangedListener) scriptBoardField("graphChangedListener").get(null);
+        listener.removeClientListener(old); // isolate the deferred end from the normal graph updater
+        Client replacement = new Client("same-id", session);
+        Object rebuild = scriptBoardField("REBUILD_LOCK").get(null);
+        synchronized (old) {
+            synchronized (rebuild) {
+                engine().eval("autopilot.giveUp(); null");
+                ((Map<String, Client>) scriptBoardField("clients").get(null)).put("same-id", replacement);
+                engine().eval("g.getVertex('same-id').private.text='Replacement private result'; g.getVertex('same-id').private.finished=true; null");
+            }
+        }
+        Thread.sleep(250);
+        assertSame(replacement, client("same-id"));
+        String oldText = old.lastFrame == null ? "" : old.lastFrame.path("player").path("text").asText();
+        assertFalse(oldText, oldText.contains("Replacement private result"));
+        // The old socket must not be sent another session's participant-only result either.
+        for (JsonNode frame : oldPage.frames) assertFalse(frame.toString().contains("Replacement private result"));
+    }
+
     // ---- Maximum players --------------------------------------------------------------------------
 
     @Test

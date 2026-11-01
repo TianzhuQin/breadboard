@@ -2240,7 +2240,11 @@ public class ScriptBoard extends UntypedActor {
       public void run() {
         for (Client client : ready) {
           try {
-            endParticipant(client, use);
+            synchronized (REBUILD_LOCK) {
+              // A later session may already have a player with the same ID. Never refresh this
+              // old Client from that player's private state, nor remove the replacement Client.
+              if (clients.get(client.id) == client) endParticipant(client, use);
+            }
           } catch (Throwable failure) {
             Logger.error("Could not close a page of a cancelled waiting room", failure);
           }
