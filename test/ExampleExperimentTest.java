@@ -331,6 +331,27 @@ public class ExampleExperimentTest extends BaseTest {
             + "}");
     }
 
+    @Test
+    public void colourNamesWithHtmlEntitiesLookTheSameOnButtonsAndInText() throws Exception {
+        ExampleTexts texts = new ExampleTexts();
+        texts.edited.put("ColorBlue", "<p>Blue &amp; white &lt;dark&gt;</p>");
+        texts.edited.put("ColorOrange", "<p>&#27225;&#33394;</p>");
+        harness = loadedGame(600, 3, 3, "eng", texts);
+        harness.runSync("{ ->\n"
+            + "  def people = ['p1', 'p2', 'p3'].collect { g.addPlayer(it) }\n"
+            + "  initStep.start()\n"
+            + "  people.each { assert it.choices*.name == ['Blue & white <dark>', '橙色'] }\n"
+            + "  a.choose(people[0].choices.find { it.name == 'Blue & white <dark>' }.uid)\n"
+            + "  assert people[0].pick == 'Blue'\n"
+            + "  assert people[0].text.contains('<strong>Blue &amp; white &lt;dark&gt;</strong>')\n"
+            + "  assert !people[0].text.contains('<dark>')\n"
+            + "  a.choose(people[1].choices.find { it.name == 'Blue & white <dark>' }.uid)\n"
+            + "  a.choose(people[2].choices.find { it.name == 'Blue & white <dark>' }.uid)\n"
+            + "  assert people.every { it.score == 1 && it.color == COLORS.Blue }\n"
+            + "  assert people.every { it.private.lastResult.contains('Blue &amp; white &lt;dark&gt;') }\n"
+            + "}");
+    }
+
     /** A colour whose text is gone or empty (a step copied into an experiment without it) is named as in the code. */
     @Test
     public void aColourWithoutItsTextIsNamedAsInTheCode() throws Exception {

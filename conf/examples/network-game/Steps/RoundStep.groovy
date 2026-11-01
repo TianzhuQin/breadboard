@@ -39,9 +39,12 @@ roundStep.run = {
 // colours and the data use "Blue" and "Orange", whatever the name. Only the words count: the Content
 // page's Visual editor puts a text in a paragraph (<p>...</p>), which a button would show as it is.
 colorName = { String colour ->
-  def words = c.get("Color" + colour).replaceAll(/<[^>]*>/, "").replace("&nbsp;", " ").trim()
+  def words = org.apache.commons.lang3.StringEscapeUtils.unescapeHtml4(
+      c.get("Color" + colour).replaceAll(/<[^>]*>/, "")).replace('\u00a0', ' ').trim()
   words ?: colour
 }
+// Buttons take plain words; values put into Content's HTML must be escaped again.
+colorText = { String colour -> org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(colorName(colour)) }
 
 // The round's heading, last round's result, `body`, then the score (from the second round on).
 roundText = { p, String body ->
@@ -63,7 +66,7 @@ pick = { p, colour ->
   eventTracker.track("ColourPick", [player: p.id, round: round, colour: colour])
   if (isHuman(p)) {
     // (the computer plays the seat of someone who left; they see it when they come back)
-    p.text = roundText(p, c.get(p.ai == 1 ? "PickedForYou" : "Picked", colorName(colour)))
+    p.text = roundText(p, c.get(p.ai == 1 ? "PickedForYou" : "Picked", colorText(colour)))
   }
 }
 
@@ -79,8 +82,8 @@ roundStep.done = {
     if (point) p.score = p.score + 1
     // (private: for this player only)
     p.private.lastResult = !p.pick ? c.get("ResultNoPick")
-        : (majority == null ? c.get("ResultTie", colorName(p.pick))
-        : c.get(point ? "ResultPoint" : "ResultNoPoint", colorName(p.pick), colorName(majority)))
+        : (majority == null ? c.get("ResultTie", colorText(p.pick))
+        : c.get(point ? "ResultPoint" : "ResultNoPoint", colorText(p.pick), colorText(majority)))
     eventTracker.track("RoundResult", [player: p.id, round: round, pick: p.pick ?: "none",
                                        neighborsMajority: majority ?: "tie", score: p.score])
   }
