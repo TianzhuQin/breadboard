@@ -974,6 +974,10 @@ public class ScriptBoard extends UntypedActor {
     engine.getBindings(ScriptContext.ENGINE_SCOPE).put("events", eventBus);
 
     if (experiment != null) {
+      // The console reads this experiment's whole session history when it builds its JSON. Its
+      // content fetcher needs only the id; keep a separate lazy reference, so that history is not
+      // retained for the lifetime of the engine through c.selectedExperiment.
+      experiment.contentFetcher.selectedExperiment = Experiment.find.ref(experiment.id);
       engine.getBindings(ScriptContext.ENGINE_SCOPE).put("c", experiment.contentFetcher);
     }
 
@@ -2314,7 +2318,9 @@ public class ScriptBoard extends UntypedActor {
     // Internal messages (OnJoinStep / OnLeaveStep) carry no account and must not redirect the
     // game's "finished" notice to everyone's consoles.
     if (breadboardMessage.user != null) {
-      gameListener.user = breadboardMessage.user;
+      // A request's User is also serialized for the console, loading its experiment's full session
+      // history. The long-lived listener needs the account, with its own lazy relations instead.
+      gameListener.user = User.find.ref(breadboardMessage.user.email);
       gameListener.out = breadboardMessage.out;
     }
     if (breadboardMessage.user != null && actsOnTheGame(breadboardMessage)) {
@@ -3695,7 +3701,7 @@ public class ScriptBoard extends UntypedActor {
    */
   private ExperimentInstance startGame(String gameName, long currentExperimentInstanceId, LinkedHashMap parameters, Experiment selectedExperiment, User user,
                                        boolean onAccount) {
-    ExperimentInstance instance = new ExperimentInstance(gameName, selectedExperiment);
+    ExperimentInstance instance = new ExperimentInstance(gameName, Experiment.find.ref(selectedExperiment.id));
     instance.hasStarted = false;
     instance.status = ExperimentInstance.Status.STOPPED;
 
@@ -3711,8 +3717,10 @@ public class ScriptBoard extends UntypedActor {
 
     initAllParam(parameters, selectedExperiment, instance);
 
-    selectedExperiment.instances.add(instance);
-    selectedExperiment.save();
+    // Save the owning side of the relation. Adding it to the experiment's lazy history loads and
+    // retains every past session (and its launch data) through the engine's ContentFetcher and the
+    // current session's experiment. The history is still queried normally by the console/export.
+    instance.save();
     // Before it runs, and so takes people (the study's link leads to its sign-in page): the language of
     // its texts until its steps have loaded and chosen one (loadSteps).
     SessionLanguage.recordProvisional(instance.id, selectedExperiment.id);

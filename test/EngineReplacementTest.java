@@ -297,6 +297,46 @@ public class EngineReplacementTest extends BaseTest {
         }
     }
 
+    @Test
+    public void openingSessionsDoesNotKeepEveryPastSessionAndItsParametersInTheEngine() throws Exception {
+        User user = user("session-records");
+        AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Session records");
+        createParameter(experiment, "rounds", "Integer", "3");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        for (int n = 1; n <= 6; n++) {
+            final String name = "Records " + n;
+            t.send("LaunchGame", "name", name, "parameters", play.libs.Json.newObject());
+            await(name, () -> t.count(m -> m.path("experimentInstance").path("name").asText().equals(name)
+                && m.path("experimentInstance").path("status").asText().equals("RUNNING")) > 0);
+            ContentFetcher content = (ContentFetcher) engine().get("c");
+            assertHistoryNotKept("the content fetcher", content.selectedExperiment, n);
+            Field listenerField = ScriptBoard.class.getDeclaredField("engineGameListener");
+            listenerField.setAccessible(true);
+            GameListener listener = (GameListener) listenerField.get(null);
+            assertHistoryNotKept("the current session", listener.experimentInstance.experiment, n);
+            assertHistoryNotKept("the session's account", listener.user.selectedExperiment, n);
+        }
+        Experiment fromDatabase = Experiment.findById(experiment.id);
+        assertEquals("the saved history can still be read through experiment.instances", 6, fromDatabase.instances.size());
+        for (ExperimentInstance saved : fromDatabase.instances) {
+            assertEquals("each saved session keeps its launch parameter", "rounds", saved.data.get(0).name);
+            assertEquals("3", saved.data.get(0).value);
+        }
+    }
+
+    private static void assertHistoryNotKept(String holder, Experiment experiment, int opened) {
+        if (experiment == null) return;
+        java.util.List<ExperimentInstance> history = experiment.instances;
+        Object actual = history instanceof com.avaje.ebean.bean.BeanCollection
+            ? ((com.avaje.ebean.bean.BeanCollection<?>) history).getActualCollection() : history;
+        int retained = actual instanceof java.util.Collection ? ((java.util.Collection<?>) actual).size() : 0;
+        assertTrue(holder + " keeps " + retained + " session records after opening " + opened, retained <= 1);
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------
 
     /** What the busy task of aTimerTaskAtWorkDuringTheReloadGoesOnWorking and the test tell each other. */

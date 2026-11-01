@@ -137,6 +137,14 @@ therefore run one at a time (`parallelExecution in Test := false` in `project/Bu
 test that needs the application or the database extends `BaseTest`, which also has helpers to
 create users, experiments, sessions, steps, content and parameters.
 
+`EngineReplacementTest` also checks the memory used between sessions. It forces Ebean's background
+pool to grow while an experiment's timer saves an event, changes session data, or finishes the
+session, then checks that the worker inherited no script class loader and the old engine can be
+collected. Server work entered from scripts uses `ServerContext` for this reason. The same tests
+open successive sessions and check that the engine's content fetcher, current session and account
+do not retain the experiment's entire history; a fresh `experiment.instances` still returns every
+saved session and its launch parameters.
+
 ### Groovy scripts
 
 The engine's scripts are tested in Groovy. Every `groovy/*_test.groovy` file registers cases,
