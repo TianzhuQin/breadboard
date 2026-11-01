@@ -7,6 +7,7 @@ import { openOutput } from '@/shell/output'
 import type { Instance } from '@/store/types'
 import { STOP_PAUSES_AUTOPILOT, autopilotNow, stopPausesAutopilot } from '../autopilot/autopilot'
 import { classifyStartReply, engineElsewhereText, isStartReply, safeFileName } from './live'
+import { parseGroovyError } from '../console/groovyError'
 
 /**
  * The session controls with their confirmations and outcomes, shared by the page's parts.
@@ -71,7 +72,8 @@ export async function startGame (ctx: { connected: number, people: number, waiti
     } else if (out.kind === 'already') {
       notify.info('The game had already started', 'It was running already, so nothing changed.')
     } else if (out.kind === 'error') {
-      toast('error', 'The game could not start', out.message, { action: showOutput })
+      const failure = parseGroovyError(out.message)
+      toast('error', 'The game could not start', [failure.title, failure.hint].filter(Boolean).join(' '), { action: showOutput })
     } else {
       toast('warning', 'No answer from the engine yet', 'The game may still be starting. The output panel shows what the engine says.', { action: showOutput })
     }

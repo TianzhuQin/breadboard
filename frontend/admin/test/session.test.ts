@@ -699,6 +699,21 @@ describe('session controls', () => {
     expect(toasts[toasts.length - 1].detail).toMatch(/running “Other study” right now, not this session/)
   })
 
+  it('explains a failed start in the notification without generated script names', async () => {
+    store.nextMessage.mockImplementationOnce(async (match: any) => {
+      const m = { request: 'RunGame', error: 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: roundz for class: Script35\n  at Script35.groovy:2' }
+      return match(m) ? m : null
+    })
+    const done = startGame(ctx)
+    settleConfirm(true)
+    await done
+    const note = toasts.find(t => t.title === 'The game could not start')!
+    expect(note.detail).toContain('Unknown name “roundz”')
+    expect(note.detail).toContain('Check its spelling')
+    expect(note.detail).not.toMatch(/Script\d+|ScriptException/)
+    expect(note.action?.label).toBe('Open output')
+  })
+
   it('names whoever the restart disconnects before resuming', async () => {
     store.engineUse.mockResolvedValueOnce({ who: 'The autopilot has session “Auto 3” open. 4 players are in the network right now.', pausesAutopilot: false })
     const done = resumeSession(inst)
