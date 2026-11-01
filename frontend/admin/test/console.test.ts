@@ -12,8 +12,8 @@ vi.mock('@/store/admin', async () => {
   let seq = 100
   let requestSeq = 0
   const admin = reactive({
-    email: 'r@lab.org',
-    user: { email: 'r@lab.org', currentScript: 'g.V.count()', experiments: [], defaultLanguage: null } as any,
+    email: 'r@example.org',
+    user: { email: 'r@example.org', currentScript: 'g.V.count()', experiments: [], defaultLanguage: null } as any,
     experiment: { id: 1, name: 'Trust game', fileMode: false } as any,
     instance: null as any,
     engine: 'ready',
@@ -719,7 +719,7 @@ describe('ConsolePage', () => {
 
   it('keeps its own buffer when the server pushes a different currentScript, and runs it', async () => {
     // the page seeds for the signed-in account (admin.email)
-    seedConsole('r@lab.org', 'server()')
+    seedConsole('r@example.org', 'server()')
     consoleState.buffer = 'g.V.count()'
     const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
     admin.user = { ...admin.user, currentScript: 'something else' }
@@ -739,7 +739,7 @@ describe('ConsolePage', () => {
   })
 
   it('opens a step\'s line its error names on the Steps page, and the script\'s own line in the editor', async () => {
-    seedConsole('r@lab.org', '')
+    seedConsole('r@example.org', '')
     consoleState.buffer = 'roundStep.start()'
     consoleState.runs = []
     admin.user = { ...admin.user, engine: { experimentId: 4, experimentName: 'Trust game' } }
@@ -768,7 +768,7 @@ describe('ConsolePage', () => {
   })
 
   it('does not run an empty editor', async () => {
-    seedConsole('r@lab.org', '')
+    seedConsole('r@example.org', '')
     consoleState.buffer = '   '
     const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
     const run = w.findAll('button').find(b => b.text() === 'Run script')!
@@ -777,7 +777,7 @@ describe('ConsolePage', () => {
   })
 
   it('says at once that a script could not run while the connection is down', async () => {
-    seedConsole('r@lab.org', '')
+    seedConsole('r@example.org', '')
     consoleState.buffer = 'g.V.count()'
     consoleState.runs = []
     const conn = (store as any).connectionState
@@ -795,10 +795,10 @@ describe('ConsolePage', () => {
   })
 
   it('says scripts can’t run here while the engine runs another experiment', async () => {
-    seedConsole('r@lab.org', '')
+    seedConsole('r@example.org', '')
     consoleState.buffer = 'g.V.count()'
     const elsewhere = (store as any).engineElsewhere
-    elsewhere.value = { experimentId: 2, experimentName: 'Live study', sessionId: 9, sessionName: 'Wave 2', owner: 'boss@lab.org' }
+    elsewhere.value = { experimentId: 2, experimentName: 'Live study', sessionId: 9, sessionName: 'Wave 2', owner: 'boss@example.org' }
     try {
       const w = mount(ConsolePage, { global: { stubs: { BCodeEditor: CodeStub } } })
       await nextTick()
