@@ -48,7 +48,7 @@
         <p class="apst__problem-text">{{ failure ? failure.text : infoText }}</p>
         <!-- paused by a mistake in a step: what went wrong, explained as on the Steps page, and the way there -->
         <template v-if="failure">
-          <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" />
+          <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" :own-step="failure.step" in-step />
           <!-- (a step of the autopilot's experiment, which needn't be the one this console works on: named then,
                and the Steps page asks to switch to it) -->
           <div class="apst__open-steps">

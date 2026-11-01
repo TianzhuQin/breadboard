@@ -572,6 +572,22 @@ describe('Autopilot page', () => {
     w.unmount()
   })
 
+  it('explains a compiler failure without exposing its generated file outside Full error', async () => {
+    const problem = 'It is paused: the steps of its session "S" didn\'t load (FinishStep: line 3: Constructor call must be the first statement in a constructor. at line: 3 column: 6. File: Script160.groovy), so that session was stopped before anyone could join. Fix the step on the Steps page first.'
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem },
+    }))
+    const w = await mountPage()
+    expect(w.find('.eng-err__title').text()).toBe('Syntax error')
+    expect(w.find('.eng-err__hint').text()).toContain('Check the brackets')
+    expect(w.find('.eng-err__msg').text()).not.toMatch(/Script\d+|File:/)
+    expect(w.find('.eng-err__places').text()).toContain('Line 3, column 6 of FinishStep')
+    expect(w.find('.eng-err__raw pre').text()).toContain('Script160.groovy')
+    expect(w.find('a.apst__open-step').text()).toBe('Open FinishStep at line 3')
+    w.unmount()
+  })
+
   it('names the autopilot\'s experiment in the link to the failing step when the console works on another one', async () => {
     const failed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 23: No such property: two), so that session was stopped before anyone could join. Fix the step on the Steps page first. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
     // (this console works on "Public goods", id 12)

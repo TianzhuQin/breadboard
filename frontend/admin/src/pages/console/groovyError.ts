@@ -110,6 +110,13 @@ export function parseGroovyError (raw: string, opts: ParseOptions = {}): GroovyE
     const line = compile[4] ? Number(compile[4]) : Number(compile[2])
     places.push({ file: compile[1], line, column: compile[5] ? Number(compile[5]) : undefined })
   }
+  // A SyntaxException's brief message, as the autopilot's pause keeps it, has no exception type
+  // or "startup failed" prefix. Its own location still identifies a compiler failure.
+  const briefCompile = /^(.*?)\s+at line:\s*(\d+)\s+column:\s*(\d+)\.\s+File:\s*(Script\d+\.groovy)\s*$/s.exec(message)
+  if (!compile && briefCompile) {
+    compileMessage = briefCompile[1].trim()
+    places.push({ file: briefCompile[4], line: Number(briefCompile[2]), column: Number(briefCompile[3]) })
+  }
   for (const f of frames) {
     if (!places.some(p => p.file === f.file && p.line === f.line)) places.push(f)
   }
