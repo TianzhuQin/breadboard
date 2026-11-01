@@ -31,6 +31,7 @@ public class DisconnectedOutputTest {
     AtomicInteger notes = new AtomicInteger();
     PrintStream err = new PrintStream(Main.connectionErrors(window, notes::incrementAndGet), false, "UTF-8");
     String ordinary = "java.nio.channels.ClosedChannelException\r\n\tat my.experiment.Step.run(Step.java:5)\r\n"
+        + "java.nio.channels.ClosedChannelException\n\tat play.core.server.netty.WebSocketHandlerFactory.run(WebSocketHandlerFactory.java:8)\n"
         + "java.lang.IllegalStateException: real failure\n\tat play.core.server.netty.WebSocketHandler.run(WebSocketHandler.scala:80)\n"
         + "配置错误：缺少引号";
     err.print(ordinary);

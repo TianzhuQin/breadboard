@@ -55,7 +55,7 @@ final class DisconnectedOutput extends OutputStream {
     if ((matching || candidate.size() > 0) && frame) {
       if (!matching) {
         candidate.write(bytes);
-        if (text.contains("at play.core.server.netty.WebSocketHandler")) {
+        if (text.matches("\\s+at play\\.core\\.server\\.netty\\.WebSocketHandler[.$].*")) {
           matching = true;
           candidate.reset();
           try { note.run(); } catch (RuntimeException ignored) { /* output must keep working */ }
