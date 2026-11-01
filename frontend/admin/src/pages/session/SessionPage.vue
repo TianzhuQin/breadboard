@@ -133,7 +133,7 @@
         <div class="live-stat">
           <dt class="live-stat__label"><Wifi :size="15" aria-hidden="true" /> Connected now</dt>
           <dd class="live-stat__value tabular">{{ stats.connected }}</dd>
-          <dd class="live-stat__sub">{{ stats.people ? `${stats.people - stats.connected} not on the page` : 'nobody has joined yet' }}</dd>
+          <dd class="live-stat__sub">{{ !isRunning ? 'the session isn’t running' : stats.people ? `${stats.people - stats.connected} not on the page` : 'nobody has joined yet' }}</dd>
         </div>
         <div class="live-stat">
           <dt class="live-stat__label"><Bot :size="15" aria-hidden="true" /> AI seats</dt>
@@ -223,7 +223,8 @@ const feed = computed(() => allEvents.value.length > FEED_CAP ? allEvents.value.
 
 const stats = computed(() => {
   void graph.version.value
-  return networkStats(graph.nodes.values(), graph.links.size)
+  // (a stopped session's participants aren't connected, whatever their players last said)
+  return networkStats(graph.nodes.values(), graph.links.size, isRunning.value)
 })
 const room = computed(() => {
   void graph.version.value

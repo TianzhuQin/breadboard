@@ -6,6 +6,7 @@
 GET         /                                                                    controllers.Application.index()
 GET         /legacy-admin                                                        controllers.Application.legacyAdmin()
 GET         /state                                                               controllers.Application.getState()
+GET         /docs/*file                                                          controllers.HelpController.guide(file: String)
 GET         /connect                                                             controllers.Application.connect()
 GET         /csv/instances/:experimentId                                         controllers.Application.dataCsv(experimentId: Long, excel: Boolean ?= false)
 GET         /csv/data/:experimentInstanceId                                      controllers.Application.eventCsv(experimentInstanceId: Long, excel: Boolean ?= false)

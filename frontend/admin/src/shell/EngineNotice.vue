@@ -112,6 +112,9 @@ async function load () {
 .engine-notice__btn .b-btn__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) {
   .engine-notice { padding: 9px 12px; flex-wrap: wrap; }
+  /* The whole line beside the icon (16px and the 12px gap), so the buttons wrap below the text: with
+     flex: 1 alone its basis was 0, so it stayed on the buttons' line and shrank to a letter's width. */
+  .engine-notice__text { flex: 1 1 calc(100% - 28px); }
   .engine-notice__actions { max-width: 100%; margin-left: 28px; justify-content: flex-start; }
 }
 </style>

@@ -37,7 +37,7 @@ withDefaults(defineProps<{
   internet?: boolean
 }>(), { what: 'These links use', compact: false, internet: false })
 
-const DOCS = 'https://github.com/TianzhuQin/breadboard/blob/main/docs/install.md#putting-it-on-a-server'
+const DOCS = '/#/help/install.md#putting-it-on-a-server'
 const origin = typeof window !== 'undefined' ? window.location.origin : ''
 const local = isLocalOrigin(origin)
 const lanOnly = isPrivateOrigin(origin)

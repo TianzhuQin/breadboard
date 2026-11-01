@@ -4,9 +4,9 @@ Breadboard runs experiments in which people interact over a network: each partic
 neighbors, makes choices, and may add or cut ties, while the researcher watches and steers the
 session from a web console, or lets the autopilot run it.
 
-The full documentation is in `docs/` (also at
-<https://github.com/TianzhuQin/breadboard/tree/main/docs>); `docs/zh-CN.md` is a quick start in
-Chinese.
+Open **Help** in the console's menu under your email for the guides included with this version;
+they work without GitHub. The same files are in `docs/`, including `docs/zh-CN.md`, a quick start
+in Chinese. Each guide in the console also links to its version on GitHub.
 
 ## What you need
 

@@ -7,6 +7,10 @@ and sign in. The previous console is still at `/legacy-admin` (see
 [install.md](install.md); for what experiment scripts can do, [whats-new.md](whats-new.md).
 Shortcuts are written with Ctrl; on a Mac, use Cmd.
 
+**Help** in the menu under your email opens these guides inside the console, from the running
+version's own `docs/` folder, including the Chinese quick start and troubleshooting. GitHub is not
+needed. Each guide also links to the same version on GitHub as a second choice.
+
 ## Signing in
 
 On a new install the console asks for the first researcher account (**Welcome to Breadboard**): an
@@ -64,8 +68,9 @@ On a narrow screen the sidebar opens from the menu button at the top left. The t
 
 Once the console has connected, a notice under the top bar says on every page when it loses the
 connection, and the top bar says **Reconnecting…** (**Offline** on a phone). Each page shows what
-was last known until the console reconnects, which it does by itself. If Breadboard was stopped,
-start it again. A console that has never connected shows no such notice: it stays on "Loading your
+was last known until the console reconnects, which it does by itself within a few seconds of the
+server answering again, and at once when you come back to its window; **Try now** on the notice
+tries at once. If Breadboard was stopped, start it again. A console that has never connected shows no such notice: it stays on "Loading your
 experiments…", with **Reconnecting…** in its top bar. Usually a proxy in front of Breadboard doesn't
 pass websockets: see [install.md](install.md#troubleshooting).
 
@@ -133,8 +138,8 @@ set, participants who came from Prolific are given that completion code at the e
 open its sign-in link in two tabs to watch it run: in the same browser, the second tab asks whether
 to continue as the first person or **Join as someone else**.
 
-On a server without experiments, the Experiments page points to the example, and **New experiment**
-has it chosen, named "Network game".
+On a server without experiments, the page the console opens on and the Experiments page point to
+the example, and **New experiment** has it chosen, named "Network game".
 
 ### Steps
 
@@ -279,8 +284,8 @@ session, a notice keeps the old session's name and who stopped it, on every page
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
 how many people are here and the countdown. **Events** lists what the session records, newest
-first, as it happens, with what the well-known ones mean (a researcher's preview signing in says
-so); click one to see its data. When the experiment's scripts report an error, a card at the top
+first, as it happens, with what the well-known ones mean (a researcher's preview signing in,
+connecting or disconnecting says so); click one to see its data. When the experiment's scripts report an error, a card at the top
 says what went wrong in plain words and on which line of which step (click it to open the step at
 that line); **Full error** has the rest, Breadboard's own code included. When that line called a
 function another step defines and it went wrong there, the card says both, for example **Line 14 of
@@ -295,7 +300,9 @@ session is open** leads to this experiment's open session whose game hasn't star
 shared once and reused. With these two, participants type an ID to join: any name or number you
 give them (up to 64 characters, not starting with `_`), one seat per ID. **Prolific study URL** goes
 into Prolific. The links use the address you opened the console at, so open it at the server's
-public address before copying them.
+public address before copying them. With the console open at localhost, a note says where computers
+on the same network (the lab's) reach the first two links, and another, under the Prolific study
+URL, that Prolific needs the server's public address.
 
 ### Network
 
@@ -367,8 +374,9 @@ that the game starts again from the beginning and that the people in it rejoin b
 Creating a session and resuming one restart the engine too, and so does switching experiments while
 no session is running. While anyone is using it, the console says who before doing any of these,
 that it stops a session of another researcher or of the autopilot (its participants are told it was
-stopped, and it can be resumed), and whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
-it would end that session.
+stopped, and it can be resumed), and whether it pauses the autopilot. While another experiment's
+session is running, a reload is refused, and a message says why: it would end that session. With no
+experiment chosen, **Reload engine** says to choose one first.
 
 ## Running sessions with nobody at the console
 
@@ -394,7 +402,7 @@ page suggests the experiment you're working on and leaves to its steps whatever 
 | **Minimum players** | 2 | The game can start once this many people are here. |
 | **Maximum players** | none | At most this many play, the first to arrive. When this many are here (or away for a moment, keeping their seat), the countdown starts at once and the links send nobody more; anyone who arrives after the last seat is taken is told at once that the session is full and how to join the next one (a `sessionFull` event). |
 | **Wait for more people** | 60 seconds | Once the minimum is here, how long to wait for latecomers. |
-| **Give up after** | 600 seconds | Counted from the first arrival. If the minimum isn't reached by then, the session is called off. Its own continuous session offers **Join the next session**, with Prolific instructions where needed; otherwise the page says no next session is scheduled. Empty: wait as long as it takes. |
+| **Give up after** | 600 seconds | Counted from the first arrival. If the minimum isn't reached by then, the session is called off. Its own continuous session offers **Join the next session**, with Prolific instructions where needed; otherwise the page says no next session is scheduled. Empty: wait as long as it takes. Switching **Use the waiting room set here** on fills an empty one in with the give-up time of the steps' own waiting room, or else 600 seconds. |
 | **Countdown** | 5 seconds | Participants see "Starting in … seconds" before the game begins. |
 | **Let the computer play for people who leave, as set here** | on (off when the steps set it) | The computer plays the seat of someone who closes their page during the game. |
 | **Take over after** | 30 seconds | A grace period, so a page reload or a short network drop doesn't hand the seat over. |
@@ -474,13 +482,14 @@ before the game starts when no waiting room is set. The line is the one in the f
 code; when it called a function another step defines and it went wrong there, the error says where
 first (`in isHuman (InitStep line 30): …`), and this page links to both lines. A failure that
 doesn't stall, such as a typo after the next round has started, is only recorded and shown, and the
-game goes on. In a session you run by hand nothing is ended. When **Start the game**, the waiting
-room or the OnJoinStep started a game that didn't get going, the start is taken back, so newcomers
-can join and **Start the game** works again once you fix the step; a start the experiment makes on a
-timer or after a choice is taken back only if InitStep itself fails, and otherwise the game counts
-as started. In the autopilot's own session, a **Start the game** that didn't get going ends the
-session and pauses the autopilot, as its waiting room's start does: once Start is pressed, its
-waiting room no longer starts the game.
+game goes on; in the autopilot's own session, this page says so, with the step and line, also once
+the next session has opened, until you save the settings or press **Resume**. In a session you run
+by hand nothing is ended. When **Start the game**, the waiting room or the OnJoinStep started a game
+that didn't get going, the start is taken back, so newcomers can join and **Start the game** works
+again once you fix the step; a start the experiment makes on a timer or after a choice is taken
+back only if InitStep itself fails, and otherwise the game counts as started. In the autopilot's
+own session, a **Start the game** that didn't get going ends the session and pauses the autopilot,
+as its waiting room's start does: once Start is pressed, its waiting room no longer starts the game.
 
 **Games that never end.** The autopilot's own session is also ended when its game has run for
 **Longest session**, at that moment, whatever keeps it going: its participants are told the session
@@ -555,7 +564,9 @@ code when they finish (**When a participant finishes** says how for this experim
   ```
 
   For someone who didn't come from Prolific, `completeProlific` does nothing (the server's log says
-  why), so a call without the check doesn't stop the game either.
+  why), so a call without the check doesn't stop the game either. To show a line above the code, add
+  a `message` (HTML), written in your participants' language, e.g.
+  `[completionCode: "C1A2B3C4", message: "Thank you for taking part!"]`.
 - Before you publish the study, open a session (with the example, check that its `prolificCode` is
   your code), go through it with **Try it as a test participant** (press **Start the game** on Live
   session if the waiting room waits for more people), and check that the code shows at the end.
@@ -610,7 +621,9 @@ or parameter, and sort. Each row has buttons to stop or resume the session, view
 download its data. Click a row for its launch parameters, its participant link while it runs, and
 **Delete…**: only stopped or finished sessions can be deleted, with their data, for good.
 
-**View events** lists a session's events as a **Timeline** or **By event**, to search and filter.
+**View events** lists a session's events as a **Timeline** or **By event**, to search and filter,
+with what the well-known ones mean (as on Live session: the step and line of a failure, say) and
+failures in red and warnings in amber.
 **Export all** (or **Export filtered**) saves the events listed; **Export as table** saves one kind
 of event with a column per data name.
 
@@ -652,7 +665,7 @@ participants could type such values.
 |---|---|
 | **Account** | The email you are signed in with, **Sign out**, and the **Default language** new content is written in. |
 | **Password** | **Current password**, **New password** (at least 8 characters) and **Repeat the new password**, then **Change password**. You stay signed in; other browsers signed in to this account are signed out, and previews must be opened again. |
-| **Researchers** | The server's accounts. **Add a researcher** takes an email address and shows the new account's password once (**Copy sign-in details** copies the address, email and password to pass on; with the console open at localhost, the address is the server's on this network, or a note says the copied one works on this computer only); they change it in Settings after signing in. **New password** gives another account a new password (shown once) and signs it out everywhere; **Remove** deletes another account and signs it out (its experiments and data stay). You can't remove your own account. |
+| **Researchers** | The server's accounts. **Add a researcher** takes an email address and shows the new account's password once (**Copy sign-in details** copies the address, email and password to pass on; with the console open at localhost, the address is the server's on this network, or a note says the copied one works on this computer only); they change it in Settings after signing in. **New password** gives another account a new password (shown once) and signs it out everywhere, and its sign-in page says that another researcher gave it a new password; **Remove** deletes another account and signs it out (its experiments and data stay), and its sign-in page says so too. You can't remove your own account. |
 | **Backups** | The copies of the database the server makes in `backups/` (every day, and before an upgrade; the newest 14 of each kind are kept, so those made with **Back up now** never push out the daily ones). **Back up now** makes one; **Download** saves one. To go back to a backup, see [install.md](install.md#backups). |
 | **Appearance** | **System** (follows your computer), **Light** or **Dark**, saved in this browser only. The menu under your email has the same choice. |
 | **Previous console** | **Open it** goes to `/legacy-admin`. |

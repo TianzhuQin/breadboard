@@ -2,7 +2,7 @@ import { computed, reactive, watch } from 'vue'
 import { AdminConnection } from '@/lib/connection'
 import { http, HttpError, onUnauthorized } from '@/lib/http'
 import { LiveGraph } from '@/lib/graph'
-import { notify } from '@/ui/toast'
+import { notify, toast } from '@/ui/toast'
 import { settleConfirm } from '@/ui/confirm'
 import type {
   AuthState, EngineInfo, EngineState, ErrorFrame, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
@@ -31,9 +31,10 @@ const state = reactive({
   /**
    * Why the sign-in page is showing, when this console didn't sign out itself: 'ended' when the
    * server ended this browser's session (the account signed out somewhere else, or its password
-   * changed), 'removed' when another researcher removed the account. Cleared by the next sign-in.
+   * changed), 'removed' when another researcher removed the account, 'reset' when another researcher
+   * gave it a new password. Cleared by the next sign-in.
    */
-  signOutReason: null as null | 'ended' | 'removed',
+  signOutReason: null as null | 'ended' | 'removed' | 'reset',
   /** A new server opened from another computer: creating the first account needs its setup code. */
   setupCodeRequired: false,
   /** Where computers on the same network reach this server (GET /state), e.g. "http://192.168.1.23:9000". */
@@ -179,7 +180,16 @@ function handle (m: any) {
   const source = typeof m.source === 'string' ? m.source : typeof m.request === 'string' ? m.request : undefined
   // the id of the script request it answers, echoed by newer servers
   const requestId = typeof m.requestId === 'string' && m.requestId ? m.requestId : undefined
-  if (typeof m.error === 'string' && m.error.trim()) {
+  if (typeof m.error === 'string' && m.error.trim() && isReloadRefusal(m)) {
+    // The server refused a Reload engine (another experiment's session holds the engine, say): nothing
+    // was rebuilt, and it is no error of the experiment's scripts, which Live session's error card and
+    // the Output button's count are for. It answers the researcher who asked, where they are.
+    const text = m.error.trim()
+    pushOutput('info', text, source, requestId)
+    state.requestError = { request: m.request, text, at: Date.now() }
+    toast('warning', 'The engine wasn’t reloaded', text, { timeout: 9000 })
+    if (engineInfoPhase === 'rebuilding') askEngineInfo()
+  } else if (typeof m.error === 'string' && m.error.trim()) {
     // the step an engine error happened in, when the server knows it ("Line 71 of RoundStep"), and the
     // step each of its lines is in (newer servers)
     const step = typeof m.step === 'string' && m.step.trim() ? m.step.trim() : undefined
@@ -262,6 +272,14 @@ function isSelectedSessionEvent (ev: any): boolean {
  * rebuilds it only when no session is live there: its answer says engineKept otherwise.)
  */
 const REBUILDS = new Set(['ReloadEngine', 'SelectExperiment', 'SelectInstance', 'LaunchGame'])
+/**
+ * The server's refusal of a Reload engine ("Nothing was reloaded: …", ScriptBoard.reloadRefusal), which
+ * comes before any rebuild begins; an error after the rebuild has begun (the engine is loading) is its
+ * failure, which may be the experiment's own.
+ */
+function isReloadRefusal (m: any): boolean {
+  return m.request === 'ReloadEngine' && (/^Nothing was reloaded\b/.test(m.error.trim()) || state.engine !== 'loading')
+}
 const ENGINE_FAILED = 'The engine did not finish reloading. The output panel says why. Fix the problem, then reload it.'
 const ENGINE_FAILED_ELSEWHERE = 'The engine did not finish reloading. Reload it to try again.'
 const ENGINE_MISSED = 'The connection dropped while the engine was reloading. Reload it if the experiment does not behave as expected.'
@@ -521,13 +539,16 @@ function resetState () {
   for (const w of pending) { clearTimeout(w.timer); w.resolve(null) }
 }
 
+/** Why the server says this browser's session ended (Secured.onUnauthorized's reason). */
+const SIGN_OUT_REASONS = new Set(['ended', 'removed', 'reset'])
+
 /** The session is gone: show the sign-in page (or the first-account form). */
 function signedOut (body?: any) {
   conn.stop()
   // a question asked on a page that is gone now
   settleConfirm(false)
   resetState()
-  state.signOutReason = body && (body.reason === 'ended' || body.reason === 'removed') ? body.reason : null
+  state.signOutReason = body && SIGN_OUT_REASONS.has(body.reason) ? body.reason : null
   state.auth = body && body.status === 'create-first-user' ? 'firstUser' : 'signedOut'
   // a new server opened from another computer: the first account needs the code the server printed
   state.setupCodeRequired = !!(body && body.setupCodeRequired)
@@ -937,6 +958,8 @@ const fileModeBlocked = computed(() => {
 
 export const admin = state
 export const connection = conn
+/** Try to reconnect now, rather than at the next attempt (the not-connected notice's Try now). */
+export function reconnectNow () { conn.tryNow() }
 export {
   graph, boot, login, logout, createFirstUser, adoptUid, actions, experiments, instances, running, engineInUse,
   engineElsewhere, reloadBlocked, runBlocked, fileModeBlocked, fileStepsWait, ensureConnected, nextMessage,

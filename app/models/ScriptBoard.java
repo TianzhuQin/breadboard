@@ -4953,6 +4953,9 @@ public class ScriptBoard extends UntypedActor {
     }
     if (stalls) {
       endAutopilotSession(listener, failedIn, step, brief);
+    } else {
+      // (in the autopilot's own session, its page keeps a note of it: Autopilot.failureWentOn)
+      Autopilot.failureWentOn(instanceIdOf(listener), step, brief);
     }
   }
 

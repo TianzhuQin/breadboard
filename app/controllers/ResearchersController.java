@@ -114,8 +114,11 @@ public class ResearchersController extends Controller {
     }
     String password = newPassword();
     user.changePassword(password);
+    // (the browsers signed in to it hold this one: their sign-in page says why they were signed out)
+    String endedUid = user.uid;
     user.uid = UUID.randomUUID().toString();
     user.update();
+    Secured.passwordReset(endedUid);
     PreviewTokens.dropAccount(user.email);
     ScriptBoard.closeAdminsOf(user.email, user.uid, null,
         "Another researcher gave this account a new password. Ask them for it, then sign in again.");

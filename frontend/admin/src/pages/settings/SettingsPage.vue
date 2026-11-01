@@ -172,11 +172,11 @@
           <div class="set-facts__row">
             <dt>Help</dt>
             <dd>
-              <a href="https://github.com/TianzhuQin/breadboard/blob/main/docs/console.md" target="_blank" rel="noopener noreferrer">
+              <a href="/#/help/console.md" target="_blank" rel="noopener noreferrer">
                 The console's guide <ArrowUpRight :size="13" aria-hidden="true" />
               </a>
               ·
-              <a href="https://github.com/TianzhuQin/breadboard/blob/main/docs/install.md#troubleshooting" target="_blank" rel="noopener noreferrer">
+              <a href="/#/help/install.md#troubleshooting" target="_blank" rel="noopener noreferrer">
                 Troubleshooting <ArrowUpRight :size="13" aria-hidden="true" />
               </a>
             </dd>

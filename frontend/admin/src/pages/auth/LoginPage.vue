@@ -11,6 +11,10 @@
         You were signed out because another researcher removed this account. Ask them to add it
         again if you still need it.
       </p>
+      <p v-else-if="admin.signOutReason === 'reset'" class="auth__note" role="status">
+        You were signed out because another researcher gave this account a new password. Ask them for
+        it, then sign in again.
+      </p>
       <p v-else-if="admin.signOutReason === 'ended'" class="auth__note" role="status">
         You were signed out because this account signed out, or its password was changed, in another
         browser or tab. Sign in again to continue here.

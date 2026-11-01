@@ -9,9 +9,12 @@ vi.mock('@/lib/http', async (orig) => {
 })
 vi.mock('@/store/admin', async () => {
   const { computed, reactive, ref, shallowRef } = await import('vue')
+  // the experiments' steps, by id, for a test to set (none by default)
+  const expSteps = reactive<Record<number, any>>({})
   return {
     admin: reactive({ experiment: { id: 12, name: 'Public goods' }, instance: null, events: [] }),
-    experiments: computed(() => [{ id: 12, name: 'Public goods' }, { id: 13, name: 'Trust' }]),
+    experiments: computed(() => [{ id: 12, name: 'Public goods', steps: expSteps[12] }, { id: 13, name: 'Trust', steps: expSteps[13] }]),
+    expSteps,
     running: ref(false),
     graph: { version: shallowRef(0), nodes: new Map() },
   }
@@ -23,7 +26,7 @@ import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
   participantLinks, pauseFailure, pausedLine, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
-  stepsCall,
+  stepsCall, stepsMaxWait, failureNoticeText,
 } from '../src/pages/autopilot/autopilot'
 import { HttpError } from '../src/lib/http'
 import { unsavedTotal } from '../src/shell/unsaved'
@@ -128,6 +131,20 @@ describe('reading the server\'s answer', () => {
     expect(st.noticeAt).toBe('2026-10-29T10:05:00Z')
     expect(normalizeState({ status: { on: true } }).status).toMatchObject({ notice: null, noticeAt: null })
     expect(normalizeState({ status: { notice: ' ', noticeAt: 'later' } }).status).toMatchObject({ notice: null, noticeAt: null })
+  })
+  it('reads the notice of a step failure the game went on after, and says it in words', () => {
+    const raw = { step: 'RoundStep', line: 81, error: 'No such property: roundNoteText for class: Script12', sessionId: 12, session: 'Autopilot · 2026-10-31 19:23:41 UTC', at: '2026-10-31T19:41:30.120Z', count: 1 }
+    const n = normalizeState({ status: { on: true, failureNotice: raw } }).status.failureNotice!
+    expect(n).toEqual(raw)
+    expect(failureNoticeText(n)).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on).')
+    expect(failureNoticeText({ ...n, count: 4 })).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on). '
+      + 'The latest of 4 such failures since the settings were saved or Resume was pressed.')
+    expect(failureNoticeText({ ...n, line: null, session: null })).toBe('RoundStep failed in session #12 (the game went on).')
+    // an older server, or nothing to say
+    expect(normalizeState({ status: { on: true } }).status.failureNotice).toBeNull()
+    expect(normalizeState({ status: { failureNotice: { step: ' ' } } }).status.failureNotice).toBeNull()
+    expect(normalizeState({ status: { failureNotice: { step: 'X', line: '7', count: 'two', at: 'later' } } }).status.failureNotice)
+      .toMatchObject({ step: 'X', line: 7, count: 1, at: null, error: null, session: null })
   })
   it('reads the state, with unknown sources as "off"', () => {
     const st = normalizeState({ source: 'weird', status: { on: 1, instance: { id: 3, name: 'auto', status: 'RUNNING' } } })
@@ -509,6 +526,60 @@ describe('Autopilot page', () => {
     expect(sent.experimentId).toBe(12)
     expect(sent.waitingRoom).toMatchObject({ enabled: true, maxWaitSeconds: 600 })
     w.unmount()
+  })
+
+  // For the example, whose steps set their own waiting room, both switches start off. Switching the
+  // room on here left Give up after empty ("Never"), so a lone participant waited for good, with nobody
+  // at the console: it takes the steps' own give-up time (600 s in the example), or else ten minutes.
+  it('fills an empty Give up after with the steps\' own give-up time, or ten minutes, when the waiting room set here is switched on', async () => {
+    const steps = (await import('@/store/admin') as any).expSteps
+    const exampleRoom = 'autopilot.waitingRoom([minPlayers: paramOr("minPlayers", 2) as Integer, maxPlayers: NETWORK_SIZE,\n' +
+      '                       waitSeconds: paramOr("waitSeconds", 20) as Integer,\n                       maxWaitSeconds: 450, countdownSeconds: 5])'
+    expect(stepsMaxWait([{ source: `x = 1\n${exampleRoom}` }])).toBe(450)
+    expect(stepsMaxWait([{ source: 'autopilot.waitingRoom([minPlayers: 2, maxWaitSeconds: giveUp])' }])).toBeNull()
+    expect(stepsMaxWait([{ source: '// autopilot.waitingRoom([maxWaitSeconds: 30])' }])).toBeNull()
+    expect(stepsMaxWait([{ source: 'autopilot.waitingRoom([maxWaitSeconds: 0])' }])).toBeNull()
+    expect(stepsMaxWait(undefined)).toBeNull()
+
+    const room = () => w.findAll('.ap-sec').find(sec => sec.text().includes('Use the waiting room set here'))!
+    const giveUp = () => room().findAll('.b-field').find(f => f.find('label').text().startsWith('Give up after'))!.find('input')
+    const roomSwitch = () => room().find('input[role="switch"]')
+    const saved = (more: any = {}) => stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12, waitingRoom: { ...DEFAULTS.waitingRoom, enabled: false, maxWaitSeconds: null, ...more } } })
+    steps[12] = [{ source: exampleRoom }]
+    http.get.mockResolvedValue(saved())
+    let w = await mountPage()
+    try {
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('450')
+      // switched off and on again, it stays as it is now
+      await giveUp().setValue('120')
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('120')
+      // emptied here, empty is the researcher's choice
+      await giveUp().setValue('')
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('')
+      w.unmount()
+
+      // steps whose waiting room gives up in code: ten minutes
+      steps[12] = [{ source: 'autopilot.waitingRoom([minPlayers: 2, maxWaitSeconds: giveUp])' }]
+      w = await mountPage()
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('600')
+      w.unmount()
+
+      // saved with this waiting room on and no limit: that was chosen, so switching it off and on keeps it
+      http.get.mockResolvedValue(saved({ enabled: true }))
+      w = await mountPage()
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('')
+    } finally {
+      w.unmount()
+      delete steps[12]
+    }
   })
 
   it('explains a pause for a mistake in a step as the Steps page does, with a link to the step at that line', async () => {
@@ -967,6 +1038,36 @@ describe('Autopilot page', () => {
     http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null } }))
     const w2 = await mountPage()
     expect(w2.find('.apst__notice').exists()).toBe(false)
+    w2.unmount()
+  })
+
+  // While its session ran, recent activity said "RoundStep failed at line 81; the game went on"; once
+  // the next session had opened, 10 s after the game ended, nothing on the page said so any more.
+  it('keeps a step failure the game went on after, once the next session has opened, with the way to the step', async () => {
+    const failureNotice = { step: 'RoundStep', line: 81, error: 'No such property: roundNoteText for class: Script306', sessionId: 10,
+      session: 'Autopilot · 2026-10-31 19:23:41 UTC', at: new Date().toISOString(), count: 2 }
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 11, name: 'Autopilot · 2026-10-31 19:41:47 UTC', status: 'RUNNING' }, links: null, failureNotice },
+    }))
+    const w = await mountPage()
+    const box = w.findAll('.apst__notice').find(b => b.text().includes('the game went on'))!
+    expect(box.attributes('role')).toBe('status')
+    expect(box.find('.apst__problem-title').text()).toMatch(/^A step failed, and the game went on \(at .+\)$/)
+    expect(box.find('.apst__problem-text').text()).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on). '
+      + 'The latest of 2 such failures since the settings were saved or Resume was pressed.')
+    // what went wrong, in the words the Steps page uses
+    expect(box.text()).toContain('Unknown name “roundNoteText”')
+    const link = box.find('a.apst__open-step')
+    expect(link.text()).toBe('Open RoundStep at line 81')
+    expect(link.attributes('href')).toBe('/steps?step=RoundStep&line=81&experiment=12')
+    // the autopilot runs on: nothing to resume
+    expect(w.find('.apst__title').text()).toBe('The autopilot is on')
+    w.unmount()
+
+    http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null, failureNotice: null } }))
+    const w2 = await mountPage()
+    expect(w2.text()).not.toContain('the game went on')
     w2.unmount()
   })
 

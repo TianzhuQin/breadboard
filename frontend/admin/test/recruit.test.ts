@@ -435,17 +435,17 @@ describe('Prolific helpers', () => {
   // return to Prolific": the card called it a Finish button.
   const FINISH_BUTTON = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'conf', 'i18n', 'eng.json'), 'utf8'))['finish.submit']
 
-  it('gives code that completes Prolific participants only, and says to use the step\'s own name for the participant', () => {
+  // A study in another language that pasted it showed an English "Thank you for taking part!" above the
+  // code, on a finish page otherwise in the session's language: the snippet has no message, as the guides' don't.
+  it('gives code that completes Prolific participants only, with no English message, and says to use the step\'s own name for the participant', () => {
     expect(completionSnippet(' C7K2M9QX ')).toBe([
       '// p is the participant: use the name your step gives them (often player, or p in g.V.each { p -> ... })',
       'if (p._system?.recruitment?.source == "prolific") {',
-      '  recruitment.completeProlific(p, [',
-      "    completionCode: 'C7K2M9QX',",
-      "    message: 'Thank you for taking part!'",
-      '  ])',
+      "  recruitment.completeProlific(p, [completionCode: 'C7K2M9QX'])",
       '}',
     ].join('\n'))
-    expect(completionSnippet('')).toContain("completionCode: 'YOUR-CODE',")
+    expect(completionSnippet('')).toContain("[completionCode: 'YOUR-CODE']")
+    expect(completionSnippet('X')).not.toContain('message')
   })
 
   it('says an experiment with a prolificCode parameter gives the code by itself, and offers no code to paste; both name the finish button', async () => {

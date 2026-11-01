@@ -42,6 +42,9 @@ then drag its `breadboard.h2.db` into `db/` and choose **Replace**. The filename
 
 ## Documentation
 
+The console's **Help** menu opens the guides shipped with the running version, including the
+Chinese quick start, without needing GitHub. The same files are in the download's `docs/` folder.
+
 | | |
 |---|---|
 | [Installing and running](docs/install.md) | Requirements, settings, HTTPS, backups, upgrading |

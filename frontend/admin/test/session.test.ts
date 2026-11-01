@@ -294,10 +294,18 @@ describe('event feed', () => {
     expect(describeEvent('myEvent')).toBe('')
   })
 
-  it('says a preview\'s sign-in is a researcher\'s, and names computer players as the other pages do', () => {
+  it('says a preview\'s sign-in and connections are a researcher\'s, and names computer players as the other pages do', () => {
     expect(describeEvent('clientLogIn', { clientId: '_6', preview: 'true' })).toBe('A researcher’s preview signed in as AI 6')
     expect(describeEvent('clientLogIn', { clientId: 't1', preview: true })).toBe('A researcher’s preview signed in as t1')
     expect(describeEvent('clientLogIn', { clientId: 'p1' })).toBe('Someone signed in')
+    // so are the connections a preview that plays a test player's seat causes: not a participant coming and going
+    expect(describeEvent('clientConnected', { clientId: 'tester1', preview: 'true' })).toBe('A researcher’s preview connected as tester1')
+    expect(describeEvent('clientDisconnected', { clientId: 'tester2', preview: true })).toBe('A researcher’s preview of tester2 disconnected')
+    expect(describeEvent('clientDisconnected', { preview: true })).toBe('A researcher’s preview disconnected')
+    expect(describeEvent('clientConnected', { clientId: 'p1' })).toBe('A participant connected')
+    expect(describeEvent('clientDisconnected', { clientId: 'p1', preview: false })).toBe('A participant lost connection')
+    // (only those three: an experiment's own event that happens to carry preview = true keeps its words)
+    expect(describeEvent('aiTakeover', { clientId: 'p1', preview: true })).toMatch(/took over/)
     expect(summarizeData({ player: '_4', choice: 'Blue', playerId: 'p2' }).shown).toEqual([['player', 'AI 4 (_4)'], ['choice', 'Blue'], ['playerId', 'p2']])
     expect(formatDataValue('clientId', '_12')).toBe('AI 12 (_12)')
     // other data keeps its values as recorded
@@ -385,6 +393,9 @@ describe('live session state', () => {
       node('_bot1', { _system: { connected: true } }),
     ], 4)
     expect(s).toEqual({ people: 4, connected: 2, aiSeats: 2, bots: 1, takenOver: 1, ties: 4 })
+    // a session that isn't running has nobody connected, whatever its players last said
+    expect(networkStats([node('p1', { _system: { connected: true } }), node('p2', { _system: { connected: true } })], 1, false))
+      .toEqual({ people: 2, connected: 0, aiSeats: 0, bots: 0, takenOver: 0, ties: 1 })
   })
 
   it('summarises the waiting room from the players\' autopilot status', () => {
@@ -435,6 +446,38 @@ describe('live session state', () => {
     const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })
     expect(w.find('.live-links__ids').text()).toBe('With the first two links, participants type an ID to join: any name or number you give them, one seat per ID. People from Prolific don\'t type one.')
     w.unmount()
+  })
+
+  // One note above all three links offered the lab's network for the Prolific study URL too, which
+  // Prolific's people, from the internet, can't use; Recruitment and the Autopilot page say so.
+  it('words the lab-network note as about the first two links, and puts the internet-only note under the Prolific study URL', async () => {
+    const { admin } = await import('@/store/admin') as any
+    admin.lanAddresses = ['http://10.0.0.5:9000']
+    const host = window.location.host
+    const JoinLinks = (await import('../src/pages/session/JoinLinks.vue')).default
+    const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })
+    try {
+      const notes = w.findAll('.local-note')
+      expect(notes).toHaveLength(2)
+      const lab = notes[0].text().replace(/\s+/g, ' ')
+      expect(lab).toContain(`The first two links use ${host}, which only works on this computer.`)
+      expect(lab).toContain('For people on the same network (say, the lab\'s computers), open the console at http://10.0.0.5:9000')
+      // the first note comes before the links, the second in the Prolific study URL's own block, after its hint
+      const blocks = w.findAll('.live-link')
+      expect(blocks.map(b => b.find('.live-link__label').text())).toEqual(['This session', 'Whichever session is open', 'Prolific study URL'])
+      expect(blocks[0].find('.local-note').exists()).toBe(false)
+      expect(blocks[1].find('.local-note').exists()).toBe(false)
+      const prolific = blocks[2].find('.local-note')
+      expect(prolific.element).toBe(notes[1].element)
+      expect(prolific.classes()).toContain('is-compact')
+      const text = prolific.text().replace(/\s+/g, ' ')
+      expect(text).toContain(`This URL uses ${host}, which only works on this computer.`)
+      expect(text).toContain('Prolific sends people from the internet, so it needs the server’s public address')
+      expect(text).not.toContain('same network')
+    } finally {
+      w.unmount()
+      admin.lanAddresses = []
+    }
   })
 
   it('says a link for Prolific needs the server\'s public address, without the tip for the lab\'s network', async () => {
@@ -1058,6 +1101,29 @@ describe('SessionPage', () => {
     w.unmount()
   })
 
+  // The pages of a stopped session's participants show its end and stop connecting, but the players
+  // keep the _system.connected they had: "Connected now 2 / 0 not on the page" for a stopped session.
+  it('counts nobody as connected in a session that has stopped', async () => {
+    const people = [['p1', { _system: { connected: true } }], ['p2', { _system: { connected: true } }]]
+    for (const [id, data] of people) store2.graph.nodes.set(id, { id, data })
+    try {
+      const connected = (w: VueWrapper) => w.findAll('.live-stat').find(d => d.text().includes('Connected now'))!
+      const w = await mountPage()
+      expect(connected(w).find('.live-stat__value').text()).toBe('2')
+      expect(connected(w).find('.live-stat__sub').text()).toBe('0 not on the page')
+      w.unmount()
+      store2.admin.instance = { ...store2.admin.instance, status: 'STOPPED' }
+      const stopped = await mountPage()
+      expect(connected(stopped).find('.live-stat__value').text()).toBe('0')
+      expect(connected(stopped).find('.live-stat__sub').text()).toBe('the session isn’t running')
+      // (they were in the network all the same)
+      expect(stopped.findAll('.live-stat').find(d => d.text().includes('In the network'))!.find('.live-stat__value').text()).toBe('2')
+      stopped.unmount()
+    } finally {
+      store2.graph.nodes.clear()
+    }
+  })
+
   it('offers Start the game again after a start that threw', async () => {
     store2.admin.instance = { ...store2.admin.instance, hasStarted: true }
     store2.admin.events = [startEvent('InitStepStart', Date.now() - 1000)]
@@ -1371,6 +1437,56 @@ describe('NewSessionDialog', () => {
     expect(store.launch).toHaveBeenCalledTimes(1)
     expect(text()).toContain('The server did not confirm the new session.')
     expect(w.emitted('update:open')).toBeFalsy()
+  })
+
+  // The server's answer puts the new session in the store (running, with the name just given) before
+  // the dialog has faded out: worked out live, the closing form flashed a warning that creating stops
+  // that very session, and that its name was taken.
+  it('closes as it was, saying Creating…, without warnings about the session it has just created', async () => {
+    const w = await open()
+    await numberInput().setValue('3')
+    let answer!: (v: any) => void
+    store.launch.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    await submit()
+    const create = () => page().findAll('button').find(b => b.attributes('type') === 'submit')!
+    expect(create().text()).toBe('Creating…')
+    // the new session reaches the store before the launch is answered
+    const made = { id: 4, name: 'Session 2', status: 'RUNNING' }
+    admin.experiment = { ...admin.experiment, instances: [...admin.experiment.instances, made] }
+    admin.instance = made
+    await flushPromises()
+    const shown = () => ({
+      warn: page().find('.nsd-warn').exists(),
+      nameTaken: text().includes('already has this name'),
+      button: create().text(),
+    })
+    expect(shown()).toEqual({ warn: false, nameTaken: false, button: 'Creating…' })
+    answer({ user: {} })
+    await flushPromises()
+    const opens = w.emitted('update:open') || []
+    expect(opens[opens.length - 1]).toEqual([false])
+    // fading out (the parent has yet to close it): as it was
+    expect(shown()).toEqual({ warn: false, nameTaken: false, button: 'Creating…' })
+    // opened again, it shows what runs now, and the next free name
+    await w.setProps({ open: false })
+    await w.setProps({ open: true })
+    await nextTick()
+    expect(page().find('.nsd-warn').text()).toContain('“Session 2” is running.')
+    expect((page().findAll('input')[0].element as HTMLInputElement).value).toBe('Session 3')
+    expect(create().text()).toBe('Stop it and create')
+  })
+
+  it('shows the live state again after a launch that didn\'t happen', async () => {
+    await open()
+    await numberInput().setValue('3')
+    store.launch.mockImplementationOnce(async () => {
+      // meanwhile someone else's session started
+      admin.instance = { id: 9, name: 'Theirs', status: 'RUNNING' }
+      return null
+    })
+    await submit()
+    expect(text()).toContain('The server did not confirm the new session.')
+    expect(page().find('.nsd-warn').text()).toContain('“Theirs” is running.')
   })
 
   it('warns that a running session will be stopped', async () => {

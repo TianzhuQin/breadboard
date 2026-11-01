@@ -31,7 +31,7 @@
       </BField>
       <BField label="Default language" :hint="LANGUAGE_HINT">
         <template #default="{ id }">
-          <BSelect :id="id" v-model="languageId" :options="languageOptions" placeholder="Loading languages…" />
+          <BSelect :id="id" v-model="languageId" :options="languageOptions" :placeholder="languagePlaceholder" />
         </template>
       </BField>
       <BButton type="submit" variant="primary" size="lg" block :loading="busy">Create account</BButton>
@@ -82,6 +82,11 @@ const error = ref('')
 const setupCode = ref('')
 
 const languageOptions = computed(() => languages.value.map(l => ({ value: l.id, label: `${l.name} (${l.code})` })))
+/** The list couldn't be loaded (the form says so). */
+const languagesFailed = ref(false)
+// Only while there is nothing to choose: once loaded, a greyed "Loading languages…" stayed at the top of the list.
+const languagePlaceholder = computed(() => languageOptions.value.length ? undefined
+  : languagesFailed.value ? 'Couldn’t load the languages' : 'Loading languages…')
 
 onMounted(async () => {
   for (let tries = 0; ; tries++) {
@@ -99,6 +104,7 @@ onMounted(async () => {
         return
       }
       settingUp.value = false
+      languagesFailed.value = true
       error.value = 'Could not load the list of languages.'
       return
     }
