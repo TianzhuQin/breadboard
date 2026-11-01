@@ -85,6 +85,7 @@
   "end.missedStartProlific": "Please return the study on Prolific. You can then close this page.",
   "end.fullTitle": "This session is full",
   "end.full": "It started with as many people as it can take, so it can't take you in.",
+  "end.fullWaiting": "All places in this session are taken, so it cannot take you in.",
   "end.fullNext": "The next session opens as soon as this one has ended. {link}: the page waits for it to open and takes you in.",
   "end.fullNextLink": "Join the next session",
   "end.fullOther": "You can close this page. If you have any questions, please contact the researcher.",

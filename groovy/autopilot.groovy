@@ -340,6 +340,7 @@ class Autopilot {
       try {
         int here = connectedPlayers().size()
         // (those away too, as in evaluate)
+        turnAwayOverflow()
         participants().each { countdown(it, seconds, here) }
       } finally {
         countdownTimer = schedule(seconds) { launch() }
@@ -354,7 +355,32 @@ class Autopilot {
     def v = g.getVertex(clientId)
     if (v == null || !isParticipant(v) || room == null || countdownEndsAt == null) return
     int seconds = Math.max(1, (int) Math.ceil((countdownEndsAt - System.currentTimeMillis()) / 1000d))
-    countdown(v, seconds, connectedPlayers().size())
+    turnAwayOverflow()
+    if (g.getVertex(clientId) != null) countdown(v, seconds, connectedPlayers().size())
+  }
+
+  // Count seats in arrival order, including those kept during a short disconnection. The map's
+  // insertion order settles arrivals in the same millisecond, so a later page never takes an earlier seat.
+  private List<Vertex> byArrival(List<Vertex> players) {
+    def order = arrivedAt.keySet().toList()
+    players.sort { left, right ->
+      int time = (arrivedAt[left.id.toString()] ?: Long.MAX_VALUE) <=> (arrivedAt[right.id.toString()] ?: Long.MAX_VALUE)
+      time ?: (order.indexOf(left.id.toString()) <=> order.indexOf(right.id.toString()))
+    }
+  }
+
+  // A full countdown has no seat for a newcomer. Say so now, rather than making them watch a
+  // countdown for a game they will not join. launch() keeps its own check for simultaneous arrivals.
+  private void turnAwayOverflow() {
+    Integer most = room?.maxPlayers ? (room.maxPlayers as Integer) : null
+    if (!most) return
+    def seats = byArrival(seated(System.currentTimeMillis()))
+    if (seats.size() <= most) return
+    seats[most..-1].each { v ->
+      String id = v.id.toString()
+      g.removePlayer(id)
+      tellFull(id)
+    }
   }
 
   private void countdown(Vertex v, int seconds, int here) {
@@ -394,7 +420,7 @@ class Autopilot {
       Integer most = room?.maxPlayers ? (room.maxPlayers as Integer) : null
       def seats = participants()
       if (most && seats.size() > most) {
-        seats.sort { v -> arrivedAt[v.id.toString()] ?: Long.MAX_VALUE }
+        byArrival(seats)
         seats[most..-1].each { v ->
           g.removePlayer(v.id)
           turnedAway << v.id.toString()

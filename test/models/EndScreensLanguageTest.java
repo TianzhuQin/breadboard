@@ -19,6 +19,12 @@ public class EndScreensLanguageTest {
     }
 
     @Test
+    public void aFullRoomStillCountingDownDoesNotSayTheGameHasStarted() {
+        assertTrue(text(ScriptBoard.sessionFullScreen(false, null, "eng", true)).contains("All places in this session are taken"));
+        assertTrue(text(ScriptBoard.sessionFullScreen(false, null, "zho", true)).contains("本场实验的名额已满，无法再让你加入。"));
+    }
+
+    @Test
     public void inChinese() {
         assertEquals("<h3>本场实验已被停止</h3><p>研究者停止了本场实验。如果研究者重新开始，请再打开一次你收到的链接。否则，感谢你的参与，"
             + "现在可以关闭这个页面了。</p>", text(ScriptBoard.stoppedScreen("zho")));

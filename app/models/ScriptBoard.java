@@ -2094,7 +2094,8 @@ public class ScriptBoard extends UntypedActor {
     ExperimentInstance session = client.experimentInstance;
     Long instanceId = session == null ? null : session.id;
     Long experimentId = session == null || session.experiment == null ? null : session.experiment.id;
-    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId, SessionLanguage.of(instanceId));
+    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId, SessionLanguage.of(instanceId),
+        session != null && !Boolean.TRUE.equals(session.hasStarted));
     client.leftOut = true;
     client.end(screen);
     rememberLastScreens(Collections.singletonList(client));
@@ -2143,6 +2144,10 @@ public class ScriptBoard extends UntypedActor {
 
   /** sessionFullScreen, in the language of the session's texts ({@code lang}). */
   static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang) {
+    return sessionFullScreen(prolific, experimentId, lang, false);
+  }
+
+  static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang, boolean beforeStart) {
     boolean next = experimentId != null && Autopilot.opensNextSoon(experimentId);
     String what;
     if (prolific) {
@@ -2159,7 +2164,7 @@ public class ScriptBoard extends UntypedActor {
     player.put("finished", true);
     player.put("ended", "sessionFull");
     player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.fullTitle"),
-        SystemTexts.sentences(lang, SystemTexts.html(lang, "end.full"), what)));
+        SystemTexts.sentences(lang, SystemTexts.html(lang, beforeStart ? "end.fullWaiting" : "end.full"), what)));
     return frame;
   }
 
