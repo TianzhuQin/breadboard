@@ -31,6 +31,7 @@ if [ ! -s "$RUN/secret" ]; then
 fi
 # The server reads its Groovy engine scripts from <app path>/groovy.
 ln -sfn "$ROOT/groovy" "$STAGE/groovy"
+ln -sfn "$ROOT/docs" "$STAGE/docs"
 
 export JAVA_HOME="$JDK"
 export PATH="$JDK/bin:$PATH"

@@ -7,6 +7,10 @@ and sign in. The previous console is still at `/legacy-admin` (see
 [install.md](install.md); for what experiment scripts can do, [whats-new.md](whats-new.md).
 Shortcuts are written with Ctrl; on a Mac, use Cmd.
 
+**Help** in the menu under your email opens these guides inside the console, from the running
+version's own `docs/` folder, including the Chinese quick start and troubleshooting. GitHub is not
+needed. Each guide also links to the same version on GitHub as a second choice.
+
 ## Signing in
 
 On a new install the console asks for the first researcher account (**Welcome to Breadboard**): an

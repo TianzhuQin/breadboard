@@ -38,6 +38,9 @@ putting it on a server, HTTPS, backups, starting it again by itself, and upgradi
 
 ## Documentation
 
+The console's **Help** menu opens the guides shipped with the running version, including the
+Chinese quick start, without needing GitHub. The same files are in the download's `docs/` folder.
+
 | | |
 |---|---|
 | [Installing and running](docs/install.md) | Requirements, settings, HTTPS, backups, upgrading |

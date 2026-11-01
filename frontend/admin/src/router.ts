@@ -25,6 +25,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/recruit', name: 'recruit', component: () => import('./pages/recruit/RecruitPage.vue'), meta: { title: 'Recruitment' } },
   { path: '/experiments', name: 'experiments', component: () => import('./pages/experiments/ExperimentsPage.vue'), meta: { title: 'Experiments' } },
   { path: '/settings', name: 'settings', component: () => import('./pages/settings/SettingsPage.vue'), meta: { title: 'Settings' } },
+  { path: '/help/:file?', name: 'help', component: () => import('./pages/help/HelpPage.vue'), meta: { title: 'Help' } },
   { path: '/:pathMatch(.*)*', redirect: '/session' },
 ]
 

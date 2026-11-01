@@ -22,7 +22,7 @@ const initial = computed(() => (admin.email || '?').trim().charAt(0).toUpperCase
 async function signOut () {
   if (await confirmSignOut()) await logout()
 }
-const DOCS = 'https://github.com/TianzhuQin/breadboard/blob/main/docs/'
+const DOCS = '/#/help/'
 const open = (url: string) => { window.open(url, '_blank', 'noopener') }
 const items = computed<MenuItem[]>(() => [
   { heading: 'Help' },
