@@ -154,7 +154,11 @@ public class GameListener {
       // account an action only gets it when no tab is registered (e.g. the autopilot's output, which
       // then writes it to the log).
       User fresh = User.findByEmail(user.email);
-      com.fasterxml.jackson.databind.node.ObjectNode json = (fresh != null ? fresh : user).toJson();
+      // The account may have been removed while its session kept running. Its lazy reference can
+      // no longer be loaded; there is then no account console left to refresh. The session's data,
+      // the autopilot and the other consoles were already updated above.
+      if (fresh == null) return;
+      com.fasterxml.jackson.databind.node.ObjectNode json = fresh.toJson();
       if (!ScriptBoard.toAccount(user.email, json) && this.out != null) {
         this.out.write(json);
       }

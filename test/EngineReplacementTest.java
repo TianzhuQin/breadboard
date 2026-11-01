@@ -52,8 +52,8 @@ public class EngineReplacementTest extends BaseTest {
         user.saveManyToManyAssociations("ownedExperiments");
         t.send("SelectExperiment", "experimentId", experiment.id);
         await("selected", () -> experiment.id.equals(engineExperimentId()));
-        // The JVM's first engines can stay through Groovy's caches of Vertex's metaclasses (see
-        // EngineCleanupTest): one played before the engine under test takes that place.
+        // Exercise an earlier replacement as well; EngineCleanupTest separately checks the very
+        // first engine, including the library's inherited-method and call-site caches.
         play(t);
         reload(t);
         play(t);
@@ -320,12 +320,38 @@ public class EngineReplacementTest extends BaseTest {
             assertHistoryNotKept("the current session", listener.experimentInstance.experiment, n);
             assertHistoryNotKept("the session's account", listener.user.selectedExperiment, n);
         }
+        assertEquals("scripts can still explicitly ask for the complete history", 6,
+            engine().eval("c.selectedExperiment.instances.size()"));
         Experiment fromDatabase = Experiment.findById(experiment.id);
         assertEquals("the saved history can still be read through experiment.instances", 6, fromDatabase.instances.size());
         for (ExperimentInstance saved : fromDatabase.instances) {
             assertEquals("each saved session keeps its launch parameter", "rounds", saved.data.get(0).name);
             assertEquals("3", saved.data.get(0).value);
         }
+    }
+
+    @Test
+    public void aSessionCanFinishAfterItsResearcherAccountWasRemoved() throws Exception {
+        User user = user("removed-owner");
+        AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Removed owner");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        t.send("LaunchGame", "name", "Without its account", "parameters", play.libs.Json.newObject());
+        await("a running session", () -> ExperimentInstance.find.where().eq("name", "Without its account")
+            .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
+        Field f = ScriptBoard.class.getDeclaredField("engineGameListener");
+        f.setAccessible(true);
+        GameListener listener = (GameListener) f.get(null);
+        Long id = listener.experimentInstance.id;
+        User other = user("remaining-researcher");
+        play.mvc.Result removed = play.test.Helpers.route(play.test.Helpers.fakeRequest("POST", "/researchers/remove")
+            .withSession("uid", other.uid).withJsonBody(play.libs.Json.newObject().put("email", user.email)));
+        assertEquals(200, play.test.Helpers.status(removed));
+        listener.finish();
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(id).status);
     }
 
     private static void assertHistoryNotKept(String holder, Experiment experiment, int opened) {
