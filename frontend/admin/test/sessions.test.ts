@@ -17,7 +17,7 @@ vi.mock('@/store/admin', async () => {
     instance: null as any,
     events: [] as any[],
     engine: 'ready',
-    email: 'r@lab.org',
+    email: 'r@example.org',
     user: null as any,
   })
   const graph = { nodes: new Map() }
@@ -482,7 +482,7 @@ describe('useSessionActions', () => {
 
   it('warns about sessions another account or the autopilot runs on the shared engine, as the server reports them', async () => {
     store.admin.instance = null
-    store.admin.user = { engine: { experimentId: 6, experimentName: 'Public goods', sessionId: 30, sessionName: 'their run', owner: 'boss@lab.org' } }
+    store.admin.user = { engine: { experimentId: 6, experimentName: 'Public goods', sessionId: 30, sessionName: 'their run', owner: 'boss@example.org' } }
     httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
       ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: { id: 8, name: 'auto 3', status: 'RUNNING' } } }
       : null)
@@ -493,7 +493,7 @@ describe('useSessionActions', () => {
       expect(req.danger).toBe(true)
       expect(req.message).not.toContain('Your session')
       expect(req.message).toContain('The autopilot has session “auto 3” open.')
-      expect(req.message).toContain('boss@lab.org has session “their run” of “Public goods” running.')
+      expect(req.message).toContain('boss@example.org has session “their run” of “Public goods” running.')
       expect(store.actions.selectInstance).not.toHaveBeenCalled()
     } finally {
       httpMod.http.get.mockReset()
@@ -601,7 +601,7 @@ describe('useSessionActions', () => {
     httpMod.http.get.mockImplementation(async (url: string) => url === '/autopilot'
       ? { source: 'admin', settings: { enabled: true, experimentId: 5 }, status: { on: true, experimentId: 5, instance: null } }
       : null)
-    store.admin.user = { engine: { experimentId: 5, experimentName: 'Trust game', sessionId: 2, sessionName: 'pilot 2', owner: 'r@lab.org' } }
+    store.admin.user = { engine: { experimentId: 5, experimentName: 'Trust game', sessionId: 2, sessionName: 'pilot 2', owner: 'r@example.org' } }
     store.actions.stopInstance.mockImplementationOnce(async () => {
       store.admin.experiment.instances[1].status = 'STOPPED'
       return { user: {} }
@@ -770,7 +770,7 @@ describe('SessionEventsDrawer', () => {
     store.actions.instanceEvents.mockResolvedValueOnce({ name: 'Autopilot · 10', events: [
       { id: 1, name: 'stepFailed', datetime: at(1), data: [{ name: 'step', value: 'RoundStep' }, { name: 'error', value: 'line 81: No such property: roundNoteText' }] },
       { id: 2, name: 'connectionGap', datetime: at(2), data: [{ name: 'player', value: 'p1' }, { name: 'awayMs', value: '2140' }] },
-      { id: 3, name: 'engineReloaded', datetime: at(3), data: [{ name: 'by', value: 'r@lab.org' }, { name: 'restarted', value: 'true' }] },
+      { id: 3, name: 'engineReloaded', datetime: at(3), data: [{ name: 'by', value: 'r@example.org' }, { name: 'restarted', value: 'true' }] },
       { id: 4, name: 'sessionStalled', datetime: at(4), data: [{ name: 'step', value: 'RoundStep' }, { name: 'line', value: '86' }] },
       { id: 5, name: 'clientDisconnected', datetime: at(5), data: [{ name: 'clientId', value: 'p2' }] },
       { id: 6, name: 'ColourPick', datetime: at(6), data: [{ name: 'choice', value: 'Blue' }] },
