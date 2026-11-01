@@ -144,8 +144,9 @@ export function sortSessions<T extends Pick<Instance, 'id' | 'name' | 'status' |
 
 /**
  * Text as the search compares it: lower case, and every run of spaces of any kind one plain space. The
- * autopilot's session names have no-break spaces ("Autopilot · 2026-10-30 13:20:47 UTC"), which
- * typing the name, or pasting it (browsers copy them as plain spaces), never matched.
+ * autopilot named its sessions with no-break spaces before 3.1 ("Autopilot · 2026-10-30 13:20:47 UTC";
+ * now "Autopilot #12"), which typing the name, or pasting it (browsers copy them as plain spaces),
+ * never matched; such names stay as they were.
  */
 function searchable (text: unknown): string {
   return `${text ?? ''}`.replace(/\s+/gu, ' ').toLowerCase()
@@ -330,9 +331,10 @@ export function eventsToWideCsv (events: readonly SessionEvent[], keys?: readonl
 export function safeFileName (name: string, fallback = 'session'): string {
   // eslint-disable-next-line no-control-regex
   // (letters in any script, digits, spaces and . _ ( ) - only: "Autopilot · 2026-10-30 13:20:47 UTC"
-  // becomes "Autopilot - 2026-10-30 13-20-47 UTC", easier in a shell or an analysis script. Any space
-  // is a plain one first: the autopilot's names have no-break spaces, which became "-".)
-  const cleaned = (name || '').replace(/\s+/gu, ' ').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
+  // becomes "Autopilot - 2026-10-30 13-20-47 UTC", and "Autopilot #12" "Autopilot 12", easier in a
+  // shell or an analysis script. Any space is a plain one first: the autopilot's names before 3.1
+  // have no-break spaces, which became "-".)
+  const cleaned = (name || '').replace(/\s+/gu, ' ').replace(/[,;#]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
   return (cleaned || fallback).slice(0, 120)
 }
 

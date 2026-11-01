@@ -863,3 +863,23 @@ test.async("an onCancel that sets no text still replaces the waiting text", 4000
     }
   }
 }
+
+
+test("a private finished onCancel screen ends waiting for those here and those who return later") {
+  def ap = pilot('ap-private-end-', [:])
+  try {
+    ap.waitingRoom([minPlayers: 3, onCancel: { players -> players.each {
+      it.private.text = 'Custom waiting credit'
+      it.private.finished = true
+    } }])
+    def here = arrive(ap, 'ap-private-end-here')
+    def away = arrive(ap, 'ap-private-end-away')
+    leave(ap, 'ap-private-end-away')
+    ap.giveUp()
+    assert here.private.finished && here._system.autopilot == null
+    arrive(ap, 'ap-private-end-away')
+    assert away.private.finished && away._system.autopilot == null
+  } finally {
+    ap.stop()
+  }
+}

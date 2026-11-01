@@ -131,6 +131,29 @@ public class SessionEndTest extends BaseTest {
         return frame == null ? "" : frame.path("player").path("ended").asText();
     }
 
+    /**
+     * What the session's data says ended it: each sessionStopped as "by reason" (its account and
+     * why), and whether anything was recorded after the last one.
+     */
+    private static String stoppedRecord(ExperimentInstance s) {
+        List<String> said = new ArrayList<>();
+        Long last = null;
+        for (Event e : Event.find.fetch("eventData").where().eq("experimentInstance.id", s.id).eq("name", "sessionStopped")
+                .orderBy("id asc").findList()) {
+            String by = null;
+            String reason = null;
+            for (EventData d : e.eventData) {
+                if ("by".equals(d.name)) by = d.value;
+                if ("reason".equals(d.name)) reason = d.value;
+            }
+            said.add(by + " " + reason);
+            last = e.id;
+        }
+        if (last == null) return "";
+        int after = Event.find.where().eq("experimentInstance.id", s.id).gt("id", last).findRowCount();
+        return String.join(", ", said) + (after > 0 ? " (then " + after + " more)" : "");
+    }
+
     private AdminSocketsTest.Tab loggedIn(User user) throws Exception {
         final AdminSocketsTest.Tab t = new AdminSocketsTest.Tab(user.uid);
         tabs.add(t);
@@ -337,6 +360,8 @@ public class SessionEndTest extends BaseTest {
         console.send("StopGame", "id", session.id);
         await("both told", () -> playing.closed && coded.closed && watcher.closed);
         assertEquals(ExperimentInstance.Status.STOPPED, ExperimentInstance.findById(session.id).status);
+        // (its data says who stopped it, and how, as it says for every other way it can end)
+        assertEquals(user.email + " stopSession", stoppedRecord(session));
         assertEquals(playing.frames.toString(), "stopped", ended(playing.last()));
         // Their screen with the code, then the end, which their page shows only without an end of its own.
         for (Page page : new Page[]{coded, watcher}) {
@@ -350,6 +375,39 @@ public class SessionEndTest extends BaseTest {
         JsonNode back = connect("p2").frames.get(0);
         assertEquals(back.toString(), "C0DE42", back.path("player").path("_system").path("recruitment").path("completionCode").asText());
         assertEquals("stopped", ended(connect("p1").frames.get(0)));
+    }
+
+    @Test
+    public void someoneFromProlificIsToldHowToGoOnThereWhenTheSessionIsStopped() throws Throwable {
+        Page plain = connect("p1");
+        Page fromProlific = connect("p2");
+        engine().eval("recruitment.registerProlific(g.getVertex('p2')); null");
+        console.send("StopGame", "id", session.id);
+        await("both told", () -> plain.closed && fromProlific.closed);
+        assertEquals("stopped", ended(fromProlific.last()));
+        assertTrue(text(fromProlific.last()), text(fromProlific.last()).contains("open the study again from Prolific"));
+        assertTrue(text(fromProlific.last()), text(fromProlific.last()).contains("return the study on Prolific"));
+        // (the others, as before)
+        assertEquals("stopped", ended(plain.last()));
+        assertTrue(text(plain.last()), text(plain.last()).contains("open the link you were given once more"));
+        assertFalse(text(plain.last()), text(plain.last()).contains("Prolific"));
+        // and a page of theirs that comes back is told the same
+        assertTrue(text(connect("p2").frames.get(0)).contains("open the study again from Prolific"));
+        assertTrue(text(connect("p1").frames.get(0)).contains("open the link you were given once more"));
+    }
+
+    @Test
+    public void someoneFromProlificIsToldHowToGoOnThereWhenARebuildEndsTheSession() throws Throwable {
+        Page plain = connect("p1");
+        Page fromProlific = connect("p2");
+        engine().eval("recruitment.registerProlific(g.getVertex('p2')); null");
+        // Stop it and create
+        launchSession(console, "T");
+        await("both told", () -> plain.closed && fromProlific.closed);
+        assertEquals("stopped", ended(fromProlific.lastPlayer()));
+        assertTrue(text(fromProlific.lastPlayer()), text(fromProlific.lastPlayer()).contains("open the study again from Prolific"));
+        assertFalse(text(plain.lastPlayer()), text(plain.lastPlayer()).contains("Prolific"));
+        assertTrue(text(connect(session, "p2", false).frames.get(0)).contains("open the study again from Prolific"));
     }
 
     // ---- a session a rebuild of the engine ends, ends as Stop ends it -----------------------------
@@ -395,6 +453,9 @@ public class SessionEndTest extends BaseTest {
         // Stop it and create: the console sends LaunchGame alone, which rebuilds the engine.
         ExperimentInstance next = launchSession(console, "T");
         toldItWasStopped(pages);
+        // Its data says so, as Stop's does: it used to stop at whatever its game recorded last.
+        assertEquals(user.email + " newSession", stoppedRecord(session));
+        assertEquals("", stoppedRecord(next));
         assertNull("not in the new session", client("p1"));
         assertEquals(ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(next.id).status);
     }
@@ -408,6 +469,8 @@ public class SessionEndTest extends BaseTest {
         await("the earlier one resumed", () -> ExperimentInstance.findById(earlier.id).status == ExperimentInstance.Status.RUNNING
             && earlier.id.equals(engineSessionId()));
         toldItWasStopped(pages);
+        assertEquals(user.email + " otherSession", stoppedRecord(session));
+        assertEquals("", stoppedRecord(earlier));
     }
 
     @Test
@@ -429,6 +492,12 @@ public class SessionEndTest extends BaseTest {
             && ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
         assertEquals(0, theirs.count(AdminSocketsTest.error("ReloadEngine")));
         toldItWasStopped(pages);
+        // by the other account, which reloaded: only the server's log used to say so
+        assertEquals(other.email + " reloadEngine", stoppedRecord(session));
+        // and every console hears it as it is recorded, the one of the account whose session it was too
+        await("the event reaches its account's console", () -> console.count(f -> f.has("event")
+            && "sessionStopped".equals(f.get("event").path("name").asText())
+            && other.email.equals(f.get("event").path("data").path("by").asText())) == 1);
     }
 
     // ---- someone away when a rebuild carried the session on, back after its end -------------------

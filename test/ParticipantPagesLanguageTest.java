@@ -127,6 +127,43 @@ public class ParticipantPagesLanguageTest extends BaseTest {
     }
 
     @Test
+    public void aCarriedIdJoinsTheNextSessionWithoutAskingForItAgain() throws Exception {
+        ExperimentInstance next = openSession("Next", "zho");
+        String id = "participant & 中文";
+        String query = "?id=" + java.net.URLEncoder.encode(id, "UTF-8");
+        Result stable = route(fakeRequest(GET, "/play/" + e + "/login" + query));
+        assertEquals("/game/" + e + "/" + next.id + "/login" + query, header("Location", stable));
+        Result joined = route(fakeRequest(GET, header("Location", stable)));
+        assertEquals(SEE_OTHER, status(joined));
+        assertTrue(ParticipantAuth.isClaimed(next.id.toString(), id));
+        assertNotNull(cookie(ParticipantAuth.cookieName(next.id.toString()), joined));
+        // Carrying an ID does not take a seat another browser already holds, nor a reserved AI seat.
+        assertEquals(FORBIDDEN, status(route(fakeRequest(GET, "/game/" + e + "/" + next.id + "/login" + query))));
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/game/" + e + "/" + next.id + "/login?id=_2"))));
+    }
+
+    @Test
+    public void aCarriedIdDoesNotBypassAParticipantPassword() throws Exception {
+        ExperimentInstance next = openSession("Password", "eng");
+        Field field = ScriptBoard.class.getDeclaredField("engine");
+        field.setAccessible(true);
+        Object previous = field.get(null);
+        javax.script.ScriptEngine temporary = new javax.script.ScriptEngineManager().getEngineByName("groovy");
+        temporary.put("password", "test-fixture");
+        field.set(null, temporary);
+        try {
+            Result result = route(fakeRequest(GET, "/game/" + e + "/" + next.id + "/login?id=carried-id"));
+            assertEquals(OK, status(result));
+            String page = contentAsString(result);
+            assertTrue(page, page.contains("value=\"carried-id\""));
+            assertTrue(page, page.contains("type=\"password\""));
+            assertFalse(ParticipantAuth.isClaimed(next.id.toString(), "carried-id"));
+        } finally {
+            field.set(null, previous);
+        }
+    }
+
+    @Test
     public void aSessionInALanguageBreadboardHasNoWordsInOrNoneGetsEnglish() throws Exception {
         ExperimentInstance spanish = openSession("Español", "spa");
         assertTrue(page("/game/" + e + "/" + spanish.id + "/login").contains("<h1>Join the session</h1>"));
@@ -242,6 +279,7 @@ public class ParticipantPagesLanguageTest extends BaseTest {
                 || waiting.contains("<h1>有一场实验正在进行</h1>") && waiting.contains("这一场结束后，下一场就会开放，这个页面会自动带你进入"));
             assertTrue(waiting, waiting.contains("如果等不及，请在 Prolific 上退回这项研究。"));
             assertTrue(waiting, waiting.contains("每隔几秒检查一次…"));
+            assertTrue(waiting, waiting.contains("http-equiv=\"refresh\" content=\"1\""));
         } finally {
             Http.Context.current.remove();
         }
@@ -291,6 +329,35 @@ public class ParticipantPagesLanguageTest extends BaseTest {
             String page = contentAsString(notFoundPage(path));
             assertTrue(path + ": " + page, page.contains("<html lang=\"en\">") && page.contains(ENGLISH_INVALID));
         }
+    }
+
+    @Test
+    public void badParticipantRequestsGetFriendlyPagesInTheStudyLanguage() throws Exception {
+        ExperimentInstance chinese = openSession("中文", "zho");
+        String raw = "?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}";
+        for (String path : new String[]{"/play/" + e + "/prolific", "/game/" + e + "/" + chinese.id + "/prolific"}) {
+            Http.RequestHeader request = play.core.j.JavaHelpers$.MODULE$.createJavaRequest(fakeRequest(GET, path + raw).getWrappedRequest());
+            Result result = new Global().onBadRequest(request, "invalid escape sequence %PR").get(10000);
+            String page = contentAsString(result);
+            assertEquals(BAD_REQUEST, status(result));
+            assertTrue(page, page.contains("<html lang=\"zh-CN\">"));
+            assertTrue(page, page.contains("<h1>缺少 Prolific ID</h1>"));
+            assertFalse(page, page.contains("invalid escape sequence"));
+        }
+        Http.RequestHeader request = play.core.j.JavaHelpers$.MODULE$.createJavaRequest(
+            fakeRequest(GET, "/game/" + e + "/" + chinese.id + "/login?x=%XX").getWrappedRequest());
+        String invalid = contentAsString(new Global().onBadRequest(request, "invalid escape").get(10000));
+        assertTrue(invalid, invalid.contains(SystemTexts.text("zho", "link.invalidTitle")));
+        assertFalse(invalid, invalid.contains("invalid escape"));
+    }
+
+    @Test
+    public void aUrlEncodedProlificPlaceholderIsStillAMissingId() throws Exception {
+        ExperimentInstance chinese = openSession("中文", "zho");
+        Result result = route(fakeRequest(GET, "/game/" + e + "/" + chinese.id
+            + "/prolific?PROLIFIC_PID=%7B%7B%25PROLIFIC_PID%25%7D%7D"));
+        assertEquals(BAD_REQUEST, status(result));
+        assertTrue(contentAsString(result).contains("<h1>缺少 Prolific ID</h1>"));
     }
 
     @Test

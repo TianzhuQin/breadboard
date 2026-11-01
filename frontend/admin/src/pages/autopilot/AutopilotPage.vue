@@ -224,7 +224,7 @@
                   </BInput>
                 </template>
               </BField>
-              <BField label="Maximum players" optional :error="errors['waitingRoom.maxPlayers']" hint="When this many are here, the countdown starts at once. Empty: no maximum.">
+              <BField label="Maximum players" optional :error="errors['waitingRoom.maxPlayers']" hint="At most this many play. The countdown starts when every seat is taken; anyone later is told the session is full. Empty: no maximum.">
                 <template #default="{ id, describedby }">
                   <BInput
                     :id="id"

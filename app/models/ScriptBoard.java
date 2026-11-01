@@ -531,29 +531,49 @@ public class ScriptBoard extends UntypedActor {
 
   /**
    * The researcher stopped this session: its participants' pages say so (instead of a game that
-   * no longer answers), and keep saying so if they reconnect. See endParticipants(Long, ObjectNode).
+   * no longer answers), each in the words for them (stoppedScreens), and keep saying so if they
+   * reconnect. See endParticipants(Long, ObjectNode).
    */
   static void endParticipants(Long instanceId) {
-    endParticipants(instanceId, stoppedScreen(SessionLanguage.of(instanceId)));
+    endParticipants(instanceId, stoppedScreens(instanceId));
   }
 
   /** What the participants of a session a researcher stopped see (in English). */
   static ObjectNode stoppedScreen() {
-    return stoppedScreen(null);
+    return stoppedScreen(false, null);
+  }
+
+  /** stoppedScreen(false, lang): the words for someone who didn't come from Prolific. */
+  static ObjectNode stoppedScreen(String lang) {
+    return stoppedScreen(false, lang);
   }
 
   /**
    * What the participants of a session a researcher stopped see, in the language of its texts
-   * ({@code lang}, SessionLanguage: Breadboard's own words follow it, see SystemTexts).
+   * ({@code lang}, SessionLanguage: Breadboard's own words follow it, see SystemTexts). A
+   * {@code prolific} participant is told to open the study again from Prolific, or to return it, as
+   * the other end screens tell them: "open the link you were given once more" left them without a
+   * word about Prolific, and with a submission still open there.
    */
-  static ObjectNode stoppedScreen(String lang) {
+  static ObjectNode stoppedScreen(boolean prolific, String lang) {
     ObjectNode frame = Json.newObject();
     ObjectNode player = frame.putObject("player");
     player.putObject("_system");
     player.put("finished", true);
     player.put("ended", "stopped");
-    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.stoppedTitle"), SystemTexts.html(lang, "end.stopped")));
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.stoppedTitle"),
+        SystemTexts.html(lang, prolific ? "end.stoppedProlific" : "end.stopped")));
     return frame;
+  }
+
+  /** The stopped screens of a session's participants (stoppedScreen, per participant). */
+  static java.util.function.Function<Client, ObjectNode> stoppedScreens(Long sessionId) {
+    final String lang = SessionLanguage.of(sessionId);
+    return perParticipant(sessionId, new java.util.function.Function<Boolean, ObjectNode>() {
+      public ObjectNode apply(Boolean prolific) {
+        return stoppedScreen(prolific, lang);
+      }
+    });
   }
 
   private static boolean hasPlayer(String clientId) {
@@ -1242,18 +1262,43 @@ public class ScriptBoard extends UntypedActor {
     }
   }
 
+  // Why a researcher's action stopped a live session: sessionStopped's "reason" (with "by", the account).
+  /** Stop session. */
+  static final String STOPPED_BY_STOP = "stopSession";
+  /** Reload engine, when it doesn't carry the session on (another account's, or another experiment's). */
+  static final String STOPPED_BY_RELOAD = "reloadEngine";
+  /** New session (Stop it and create), or a session launched some other way. */
+  static final String STOPPED_BY_NEW_SESSION = "newSession";
+  /** Another session resumed or selected (Resume, Make current). */
+  static final String STOPPED_BY_OTHER_SESSION = "otherSession";
+  /** The autopilot took the engine for its session, as a save of its settings asked (Save and end it now). */
+  static final String STOPPED_BY_AUTOPILOT = "autopilot";
+
+  /** sessionStopped's data: who ended the session ({@code by}, an account) and how ({@code reason}, STOPPED_BY_...). */
+  static LinkedHashMap<Object, Object> stoppedData(User by, String reason) {
+    LinkedHashMap<Object, Object> data = new LinkedHashMap<Object, Object>();
+    if (by != null && by.email != null) {
+      data.put("by", by.email);
+    }
+    data.put("reason", reason);
+    return data;
+  }
+
   /**
    * A rebuild of the engine is about to end the live session {@code listener} runs (a launch over it,
    * as Stop it and create does, another session opened, a reload that doesn't carry it on): it ends
-   * for its participants first, as Stop ends it. The computer players go off, the session is marked
-   * stopped (a page that comes back is given its end screen), its participants and the previews
-   * watching them are told the session was stopped (a completion code on screen stays), the game's
-   * timers stop and nothing more is recorded in it. The rebuild used to close their sockets without
-   * a word and keep each page's game view as its last screen: a page that came back showed a round
-   * whose buttons did nothing, for as long as it stayed open. Nothing for a session that isn't live,
-   * nor for the test session. Under the engine lock.
+   * for its participants first, as Stop ends it. Its data says so, as Stop's does: sessionStopped, by
+   * the account whose action ended it ({@code by}), with the {@code reason} (STOPPED_BY_...), after
+   * which its game records nothing more; the data of a session ended so used to stop at whatever its
+   * game recorded last, and only the server's log said why. The computer players go off, the session
+   * is marked stopped (a page that comes back is given its end screen), its participants and the
+   * previews watching them are told the session was stopped (a completion code on screen stays), the
+   * game's timers stop and nothing more is recorded in it. The rebuild used to close their sockets
+   * without a word and keep each page's game view as its last screen: a page that came back showed a
+   * round whose buttons did nothing, for as long as it stayed open. Nothing for a session that isn't
+   * live, nor for the test session. Under the engine lock.
    */
-  private static void endBeforeRebuild(GameListener listener) {
+  private static void endBeforeRebuild(GameListener listener, User by, String reason) {
     Long id = instanceIdOf(listener);
     if (id == null || Experiment.TEST_INSTANCE_ID.equals(id)) {
       return;
@@ -1262,12 +1307,17 @@ public class ScriptBoard extends UntypedActor {
     if (live == null || !id.equals(live.id)) {
       return;
     }
+    // Nothing its game still does is recorded after sessionStopped, as for Stop (a participant's choice
+    // made meanwhile, a task of its timers). Recorded in the session itself, whichever session the
+    // server's tracker was last pointed at.
+    retireEngineTracker();
+    EventTracker.record(live, "sessionStopped", stoppedData(by, reason));
     // (the computer players first, as for Stop: a takeover as the pages close would play on)
     if (playerActions != null) {
       playerActions.turnAIOff();
     }
     stopSession(listener);
-    endParticipants(id, stoppedScreen(SessionLanguage.of(id)));
+    endParticipants(id, stoppedScreens(id));
     cancelEngineTimers();
     eventTracker.disable();
   }
@@ -2049,7 +2099,8 @@ public class ScriptBoard extends UntypedActor {
     ExperimentInstance session = client.experimentInstance;
     Long instanceId = session == null ? null : session.id;
     Long experimentId = session == null || session.experiment == null ? null : session.experiment.id;
-    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId, SessionLanguage.of(instanceId));
+    ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId, SessionLanguage.of(instanceId),
+        session != null && !Boolean.TRUE.equals(session.hasStarted), clientId);
     client.leftOut = true;
     client.end(screen);
     rememberLastScreens(Collections.singletonList(client));
@@ -2098,12 +2149,20 @@ public class ScriptBoard extends UntypedActor {
 
   /** sessionFullScreen, in the language of the session's texts ({@code lang}). */
   static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang) {
+    return sessionFullScreen(prolific, experimentId, lang, false);
+  }
+
+  static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang, boolean beforeStart) {
+    return sessionFullScreen(prolific, experimentId, lang, beforeStart, null);
+  }
+
+  static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang, boolean beforeStart, String clientId) {
     boolean next = experimentId != null && Autopilot.opensNextSoon(experimentId);
     String what;
     if (prolific) {
       what = SystemTexts.html(lang, next ? "end.fullNextProlific" : "end.fullProlific");
     } else if (next) {
-      String link = "<a href=\"/play/" + experimentId + "/login\">" + SystemTexts.html(lang, "end.fullNextLink") + "</a>";
+      String link = nextSessionLink(experimentId, clientId, lang);
       what = SystemTexts.html(lang, "end.fullNext", "link", new SystemTexts.Html(link));
     } else {
       what = SystemTexts.html(lang, "end.fullOther");
@@ -2114,7 +2173,110 @@ public class ScriptBoard extends UntypedActor {
     player.put("finished", true);
     player.put("ended", "sessionFull");
     player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.fullTitle"),
-        SystemTexts.sentences(lang, SystemTexts.html(lang, "end.full"), what)));
+        SystemTexts.sentences(lang, SystemTexts.html(lang, beforeStart ? "end.fullWaiting" : "end.full"), what)));
+    return frame;
+  }
+
+  /** A participant's ID follows them through the holding page into the next session. */
+  private static String nextSessionLink(Long experimentId, String clientId, String lang) {
+    String query = clientId == null ? "" : "?id=" + entryEncode(clientId);
+    return "<a href=\"/play/" + experimentId + "/login" + query + "\">"
+        + SystemTexts.html(lang, "end.fullNextLink") + "</a>";
+  }
+
+  private static String entryEncode(String value) {
+    try {
+      return java.net.URLEncoder.encode(value, "UTF-8");
+    } catch (java.io.UnsupportedEncodingException impossible) {
+      throw new IllegalStateException(impossible);
+    }
+  }
+
+  /**
+   * A waiting room gave up. Remember its end before finish() can open a new session, then close its
+   * pages outside the waiting room's monitor, as for a full room (closeTurnedAway). Its own session
+   * may offer the next one only while the autopilot will open it; a manually run room promises none.
+   */
+  public static void waitingRoomCancelled(GameListener listener, Collection<String> handled) {
+    if (listener == null || listener.experimentInstance == null
+        || (listener.engine != null && !inService(listener.engine))) {
+      return;
+    }
+    final ExperimentInstance session = listener.experimentInstance;
+    final Long id = session.id;
+    final Long experimentId = session.experiment == null ? null : session.experiment.id;
+    if (id == null || session.isTestInstance()) return;
+    final String lang = SessionLanguage.of(id);
+    final boolean next = Autopilot.isAutopilotsSession(id) && Autopilot.opensNextSoon(experimentId);
+    // Strings only: the remembered ends must hold no player, listener or script engine after a reload.
+    final Map<String, String> prolificLinks = new HashMap<String, String>();
+    for (Client client : clients.values()) {
+      if (client.experimentInstance != null && id.equals(client.experimentInstance.id)) {
+        Map<String, Object> details = Recruitment.entryDetails(client.id);
+        if (details != null && details.get("prolificPid") != null) {
+          String url = "/play/" + experimentId + "/prolific?PROLIFIC_PID=" + entryEncode(details.get("prolificPid").toString());
+          for (String[] field : new String[][]{{"studyId", "STUDY_ID"}, {"sessionId", "SESSION_ID"}}) {
+            if (details.get(field[0]) != null) url += "&" + field[1] + "=" + entryEncode(details.get(field[0]).toString());
+          }
+          prolificLinks.put(client.id, "<a href=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(url)
+              + "\">" + SystemTexts.html(lang, "end.fullNextLink") + "</a>");
+        }
+      }
+    }
+    final java.util.function.Function<Client, ObjectNode> screens = new java.util.function.Function<Client, ObjectNode>() {
+      public ObjectNode apply(Client client) {
+        boolean prolific = fromProlific(client, id);
+        String link = prolific ? prolificLinks.get(client.id) : nextSessionLink(experimentId, client.id, lang);
+        return waitingCancelledScreen(prolific, next, link, lang);
+      }
+    };
+    // Keep the first factory: its links belong to this cancelled session, even after an offline
+    // participant returns. Only the participants whose onCancel has run may be ended/removed now.
+    // An offline Client stays until cancelLate runs their callback once, then calls back with its ID.
+    java.util.function.Function<Client, ObjectNode> previous = sessionEnds.get(id);
+    final java.util.function.Function<Client, ObjectNode> use = previous == null ? screens : previous;
+    if (previous == null) sessionEnded(id, use);
+    final List<Client> ready = new ArrayList<Client>();
+    Set<String> ids = handled == null ? Collections.<String>emptySet() : new HashSet<String>(handled);
+    for (Client client : clients.values()) {
+      if (client.experimentInstance != null && id.equals(client.experimentInstance.id) && ids.contains(client.id)) ready.add(client);
+    }
+    Thread end = new Thread(new Runnable() {
+      public void run() {
+        for (Client client : ready) {
+          try {
+            synchronized (REBUILD_LOCK) {
+              // A later session may already have a player with the same ID. Never refresh this
+              // old Client from that player's private state, nor remove the replacement Client.
+              if (clients.get(client.id) == client) endParticipant(client, use);
+            }
+          } catch (Throwable failure) {
+            Logger.error("Could not close a page of a cancelled waiting room", failure);
+          }
+        }
+      }
+    }, "breadboard-waiting-cancelled");
+    end.setDaemon(true);
+    end.start();
+  }
+
+  static ObjectNode waitingCancelledScreen(boolean prolific, boolean next, String link, String lang) {
+    String what;
+    if (next && link != null) {
+      what = SystemTexts.html(lang, prolific ? "end.cancelledNextProlific" : "end.cancelledNext",
+          "link", new SystemTexts.Html(link));
+    } else if (next && prolific) {
+      what = SystemTexts.html(lang, "end.fullNextProlific");
+    } else {
+      what = SystemTexts.html(lang, prolific ? "end.cancelledProlific" : "end.cancelledOther");
+    }
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "waitingCancelled");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "waiting.cancelledTitle"),
+        SystemTexts.sentences(lang, SystemTexts.html(lang, "end.cancelled"), what)));
     return frame;
   }
 
@@ -2582,9 +2744,7 @@ public class ScriptBoard extends UntypedActor {
           // Nothing its game still does is recorded after sessionStopped: a participant's choice made
           // while this runs (their page holds the seat until endParticipants), a task of its timers.
           retireEngineTracker();
-          LinkedHashMap<Object, Object> stopped = new LinkedHashMap<Object, Object>();
-          stopped.put("by", breadboardMessage.user.email);
-          trackEvent("sessionStopped", stopped);
+          trackEvent("sessionStopped", stoppedData(breadboardMessage.user, STOPPED_BY_STOP));
           changeStage("stopping");
           // The computer players off before the timers stop, as a rebuild does: while they are on, a
           // pick asked for afterwards starts a timer of its own, so a takeover as the participants'
@@ -2671,7 +2831,7 @@ public class ScriptBoard extends UntypedActor {
             && own.experiment.id.equals(selectedExperiment.id);
         if (previous != null && !carriesOn) {
           pauseAutopilotIfItsSession(previous, breadboardMessage.user, "ended when %s reloaded the engine", null);
-          endBeforeRebuild(previous);
+          endBeforeRebuild(previous, breadboardMessage.user, STOPPED_BY_RELOAD);
           stopSession(previous);
           if (previous == gameListener) {
             gameListener.experimentInstance = null;
@@ -3383,7 +3543,8 @@ public class ScriptBoard extends UntypedActor {
       if (!byAutopilot) {
         pauseAutopilotIfItsSession(previous, user, "ended when %s launched another session", null);
       }
-      endBeforeRebuild(previous);
+      // (the autopilot ends another experiment's live session only when a save of its settings asked it to)
+      endBeforeRebuild(previous, user, byAutopilot ? STOPPED_BY_AUTOPILOT : STOPPED_BY_NEW_SESSION);
       rebuildScriptBoard(experiment, byAutopilot ? null : user.email);
       stopSession(previous);
       ExperimentInstance instance = startGame(launchGame.name, user.experimentInstanceId, parameters, experiment, user, onAccount);
@@ -3558,7 +3719,7 @@ public class ScriptBoard extends UntypedActor {
       }
       // (the engine's session, unless it is the one selected, which carries on)
       if (previous != null && (continuing == null || !continuing.equals(instanceIdOf(previous)))) {
-        endBeforeRebuild(previous);
+        endBeforeRebuild(previous, user, STOPPED_BY_OTHER_SESSION);
       }
       // The engine's live session selected again carries on in the new engine, as with a reload.
       boolean carriesOn = continuing != null && continuing.equals(instanceIdOf(previous)) && !resuming;
@@ -5302,31 +5463,47 @@ public class ScriptBoard extends UntypedActor {
     sessionEnded(instanceId, screenFor);
     for (Client client : clients.values()) {
       if (client.experimentInstance != null && instanceId.equals(client.experimentInstance.id)) {
-        endParticipant(client, screenFor.apply(client));
+        endParticipant(client, screenFor);
       }
     }
   }
 
-  // One participant of endParticipants; nothing for one whose end is settled already (a page of theirs
-  // that came back while the server's stop ran settled it: see addClient).
-  private static void endParticipant(Client client, ObjectNode frame) {
-    // Their player is looked up before their Client's monitor is taken, never under it: the lookup
-    // waits for the graph's structureLock, whose holder may be updating this very participant's page
-    // (the lock order is written at structureLock, in groovy/graph.groovy). Looked up under the
-    // monitor, a Stop that came while the game added a tie deadlocked the engine.
+  // One participant of endParticipants, with the end screen {@code screenFor} gives them: worked out
+  // once their player has been looked up, and, as that lookup, outside their Client's monitor (it may
+  // look them up again: whether they came from Prolific, fromProlific).
+  private static void endParticipant(Client client, java.util.function.Function<Client, ObjectNode> screenFor) {
     Vertex player = enginePlayer(client.id);
+    endParticipant(client, player, screenFor.apply(client));
+  }
+
+  // One participant of endParticipants, with {@code frame} as their end screen.
+  private static void endParticipant(Client client, ObjectNode frame) {
+    endParticipant(client, enginePlayer(client.id), frame);
+  }
+
+  // Nothing for one whose end is settled already (a page of theirs that came back while the server's
+  // stop ran settled it: see addClient). Their {@code player} is looked up before their Client's
+  // monitor is taken, never under it: the lookup waits for the graph's structureLock, whose holder may
+  // be updating this very participant's page (the lock order is written at structureLock, in
+  // groovy/graph.groovy). Looked up under the monitor, a Stop that came while the game added a tie
+  // deadlocked the engine.
+  private static void endParticipant(Client client, Vertex player, ObjectNode frame) {
     JsonNode last;
     synchronized (client) {
       if (client.ended()) {
         return;
       }
       Vertex completed = completed(player);
-      boolean keep = completed != null || ownEnd(client.lastFrame);
-      if (completed != null) {
+      Object privateValues = player == null ? null : player.getProperty("private");
+      Object finished = privateValues instanceof Map && ((Map<?, ?>) privateValues).containsKey("finished")
+          ? ((Map<?, ?>) privateValues).get("finished") : player == null ? null : player.getProperty("finished");
+      boolean ownFinished = Boolean.TRUE.equals(finished);
+      boolean keep = completed != null || ownFinished || ownEnd(client.lastFrame);
+      if (completed != null || ownFinished) {
         try {
           // Their screen as it is, with the code: a change inside _system alone isn't sent by itself,
           // so a code given a moment ago may not have reached the page (or its last screen) yet.
-          client.updateGraph(completed);
+          client.updateGraph(player);
         } catch (Exception e) {
           Logger.debug("Could not show " + client.id + " their screen as the session ended: " + e);
         }

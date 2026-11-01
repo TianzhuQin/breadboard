@@ -435,8 +435,8 @@ watch(eventsOpen, (open) => {
 .ss__chev:hover { background: var(--surface-hover); color: var(--text); }
 .ss__chev svg { transition: transform var(--duration) var(--ease); }
 .ss__row.is-open .ss__chev svg { transform: rotate(90deg); }
-/* Long names (the autopilot's "Autopilot · Oct 28, 22:42:41 UTC") wrap rather than widen the
-   table past the page at laptop widths. */
+/* Long names (the autopilot's before 3.1, "Autopilot · Oct 28, 22:42:41 UTC") wrap rather than widen
+   the table past the page at laptop widths. */
 .ss__name { min-width: 160px; max-width: 300px; }
 .ss__name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
 .ss__name-text { font-weight: 600; color: var(--text); overflow-wrap: anywhere; min-width: 0; }

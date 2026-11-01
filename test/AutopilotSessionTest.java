@@ -108,7 +108,7 @@ public class AutopilotSessionTest extends BaseTest {
     private User user(String prefix) {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
-        return createUser(prefix + "-" + UUID.randomUUID() + "@test.org", prefix, "secret-1", lang);
+        return createUser(prefix + "-" + UUID.randomUUID() + "@example.org", prefix, "secret-1", lang);
     }
 
     private static Result post(User user, JsonNode body) {
@@ -1387,7 +1387,8 @@ public class AutopilotSessionTest extends BaseTest {
         Thread.sleep(500);
         assertEquals("one session", 1, sessions(experiment).size());
         final ExperimentInstance first = sessions(experiment).get(0);
-        assertTrue(first.name, first.name.matches("Autopilot\u00a0· \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\u00a0UTC"));
+        // numbered, with plain spaces: the console shows its time beside the name
+        assertEquals("Autopilot #1", first.name);
         await("the console's waiting room over the experiment's own",
             () -> Integer.valueOf(3).equals(engineValue("autopilot.room?.minPlayers")));
         assertEquals(true, engineValue("autopilot.room.onCancel != null"));
@@ -1788,6 +1789,10 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals(0, Event.find.where().eq("experimentInstance.id", first.id).eq("name", "sessionStopped").findRowCount());
 
         await("the next session", () -> sessions(auto).size() == 2 && running(auto) == 1);
+        // numbered one after the other
+        java.util.Set<String> names = new java.util.TreeSet<String>();
+        for (ExperimentInstance s : sessions(auto)) names.add(s.name);
+        assertEquals(new java.util.TreeSet<String>(java.util.Arrays.asList("Autopilot #1", "Autopilot #2")), names);
     }
 
     // (Ids don't always grow with time here, so sessions are told apart by status.)

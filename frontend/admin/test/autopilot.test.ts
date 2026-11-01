@@ -513,13 +513,13 @@ describe('Autopilot page', () => {
 
   it('explains a pause for a mistake in a step as the Steps page does, with a link to the step at that line', async () => {
     const tail = '. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
-    const loadFailed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 24: No such property: five), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
+    const loadFailed = 'It is paused: the steps of its session "Autopilot #3" didn\'t load (InitStep: line 24: No such property: five), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
     expect(pauseFailure(loadFailed)).toEqual({
       step: 'InitStep',
       line: 24,
       in: null,
       message: 'No such property: five',
-      text: 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load, so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail,
+      text: 'It is paused: the steps of its session "Autopilot #3" didn\'t load, so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail,
     })
     const stalled = 'It is paused: the step "RoundStep" failed during its session "A (1)" (line 71: No signature of method: foo() is applicable for argument types: (java.lang.String)), and then the game had nothing left to do, so that session was stopped. Fix the step on the Steps page first' + tail
     expect(pauseFailure(stalled)).toMatchObject({ step: 'RoundStep', line: 71, message: 'No signature of method: foo() is applicable for argument types: (java.lang.String)' })
@@ -589,7 +589,7 @@ describe('Autopilot page', () => {
   })
 
   it('names the autopilot\'s experiment in the link to the failing step when the console works on another one', async () => {
-    const failed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 23: No such property: two), so that session was stopped before anyone could join. Fix the step on the Steps page first. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    const failed = 'It is paused: the steps of its session "Autopilot #3" didn\'t load (InitStep: line 23: No such property: two), so that session was stopped before anyone could join. Fix the step on the Steps page first. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
     // (this console works on "Public goods", id 12)
     http.get.mockResolvedValue(stateJson({
       settings: { ...DEFAULTS, enabled: true, experimentId: 13 },

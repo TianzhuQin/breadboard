@@ -191,6 +191,7 @@ import {
 } from './live'
 import { busy, dismissedErrorId, downloadData, resumeSession, startGame, stopSession } from './controls'
 import { autopilotRuns, useAutopilotStatus } from './autopilot'
+import { stoppedByText } from './stopped'
 import { stepAt } from '../steps/stepsModel'
 
 const route = useRoute()
@@ -343,7 +344,11 @@ const explanation = computed(() => {
     if (stepsCall(admin.experiment?.steps, 'waitingRoom')) return 'People can join with the links below. This experiment has a waiting room: once enough people are here, the game starts by itself (you can also start it yourself).'
     return 'People can join with the links below. When everyone you need is here, start the game: everyone waiting is let in and newcomers are turned away.'
   }
-  if (i.status === 'STOPPED') return 'This session is stopped, so nobody can join. Resuming it runs its game again from the beginning: its scripts restart, which disconnects anyone still on the page. The data recorded so far is kept.'
+  if (i.status === 'STOPPED') {
+    // who stopped it and how, as its data says: another researcher's reload or new session, say
+    const who = stoppedByText(allEvents.value, admin.email)
+    return `${who ? `${who} Nobody can join it now.` : 'This session is stopped, so nobody can join.'} Resuming it runs its game again from the beginning: its scripts restart, which disconnects anyone still on the page. The data recorded so far is kept.`
+  }
   const gaveUp = room.value?.state === 'cancelled'
   const ap = autopilot.value
   // (a paused autopilot opens nothing until Resume, whatever its settings say)

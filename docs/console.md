@@ -265,13 +265,16 @@ starts it. If a session is running, the button reads **Stop it and create**.
 | Button | Shown when | What it does |
 |---|---|---|
 | **Start the game** | The session runs and its game hasn't started | Runs `initStep.start()`: everyone waiting is let in and the experiment begins. Later arrivals are turned away, and a waiting room is cut short. Once started, it does nothing more until the engine is reloaded. |
-| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (someone who was given a completion code keeps it on screen), and nothing more is recorded in it, not even a choice made as it stops. Its game can't finish it afterwards, so it can be resumed. Stopping the autopilot's session pauses the autopilot. |
+| **Stop session** | The session runs | Nobody new can join and its game stops: its participants see a page saying the session was stopped (those who came from Prolific read that they can open the study again from Prolific in a few minutes, or return it; someone who was given a completion code keeps it on screen), and nothing more is recorded in it, not even a choice made as it stops. Its game can't finish it afterwards, so it can be resumed. Stopping the autopilot's session pauses the autopilot. |
 | **Resume session** | The session was stopped by another researcher, the autopilot or a restart of the server (one you stop yourself is no longer shown here: see below) | Restarts the experiment's scripts with the session's launch parameters: the network is emptied and everyone is disconnected, then people can join again with its links, and its game starts again from the beginning. The data so far is kept. |
 | **Download data** | The session has finished | Its events as CSV. A finished session can't be resumed; start a new one. |
 
 A session you stop yourself is no longer the one shown: the page says **No session is open** and
 lists it under **Recent sessions**, the experiment's five newest. Its **Resume** there, or on
-**Sessions & data**, takes it up again; the confirmation's button reads **Resume session**.
+**Sessions & data**, takes it up again; the confirmation's button reads **Resume session**. A session
+of yours that someone else stopped says who did it and how (stopped it, reloaded the engine,
+created or resumed another session), as its data does. If the console follows a replacement
+session, a notice keeps the old session's name and who stopped it, on every page until you dismiss it.
 
 Start, stop and resume ask before they act. Below them, **In the network**, **Connected now**,
 **AI seats** and **Ties** count who is there; while an autopilot waiting room fills, a bar shows
@@ -362,8 +365,9 @@ old game that fails as it is replaced isn't reported as the restarted game's. Be
 the console asks while that session's game is in progress or anyone is connected to it, and says
 that the game starts again from the beginning and that the people in it rejoin by themselves.
 Creating a session and resuming one restart the engine too, and so does switching experiments while
-no session is running. While anyone is using it, the console says who before doing any of these, and
-whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
+no session is running. While anyone is using it, the console says who before doing any of these,
+that it stops a session of another researcher or of the autopilot (its participants are told it was
+stopped, and it can be resumed), and whether it pauses the autopilot. While another experiment's session is running, a reload is refused:
 it would end that session.
 
 ## Running sessions with nobody at the console
@@ -388,9 +392,9 @@ page suggests the experiment you're working on and leaves to its steps whatever 
 | **Longest session** | 120 minutes | Counted from the start of the game. A game that reaches it is ended (see below). Empty: no limit. New settings start at 120 minutes; settings saved with an older release keep no limit until you set one. |
 | **Use the waiting room set here** | on (off when the steps set one) | The waiting room: people who arrive early see a waiting page, and the game starts by itself. |
 | **Minimum players** | 2 | The game can start once this many people are here. |
-| **Maximum players** | none | At most this many play, the first to arrive. When this many are here (or away for a moment, keeping their seat), the countdown starts at once and the links send nobody more; anyone else there as the game starts is told the session is full and how to join the next one (a `sessionFull` event). |
+| **Maximum players** | none | At most this many play, the first to arrive. When this many are here (or away for a moment, keeping their seat), the countdown starts at once and the links send nobody more; anyone who arrives after the last seat is taken is told at once that the session is full and how to join the next one (a `sessionFull` event). |
 | **Wait for more people** | 60 seconds | Once the minimum is here, how long to wait for latecomers. |
-| **Give up after** | 600 seconds | Counted from the first arrival. If the minimum isn't reached by then, the session is called off and everyone waiting is told. Empty: wait as long as it takes. |
+| **Give up after** | 600 seconds | Counted from the first arrival. If the minimum isn't reached by then, the session is called off. Its own continuous session offers **Join the next session**, with Prolific instructions where needed; otherwise the page says no next session is scheduled. Empty: wait as long as it takes. |
 | **Countdown** | 5 seconds | Participants see "Starting in … seconds" before the game begins. |
 | **Let the computer play for people who leave, as set here** | on (off when the steps set it) | The computer plays the seat of someone who closes their page during the game. |
 | **Take over after** | 30 seconds | A grace period, so a page reload or a short network drop doesn't hand the seat over. |
@@ -405,6 +409,11 @@ pages and data work as usual. To run or test another experiment, stop the autopi
 first (that pauses it) or open a session of the other experiment (which ends the autopilot's,
 after asking), then press **Resume** here when you are done.
 
+The sessions it opens are named **Autopilot #1**, **Autopilot #2**, and so on, counting its
+sessions of the experiment; Sessions & data and Live session show when each was created, in your
+computer's time. (Before 3.1 it named them by the time they opened, in UTC, as in "Autopilot ·
+2026-10-30 13:20:47 UTC"; those keep their names, and the data files write them with plain spaces.)
+
 The top of the page shows the autopilot's state, its **Open session** (with **Watch it live**), its
 recent activity (games started, seats the computer took over, step failures, including those the
 game went on after, and what ended or stopped it), any problem that keeps it from opening sessions,
@@ -413,8 +422,11 @@ and the **Participant links**: the **Sign-in link** (`/play/<experiment id>/logi
 working from one session to the next. While none takes participants (its game is under way, its full
 waiting room counts down, or the next one is about to open), they show a page that says a session is
 in progress and the next one opens when it ends (or, just before the next one opens, that it opens
-in a moment); it checks again every few seconds and takes people in once a session opens (Prolific
-participants read that they can keep it open, or return the study if they can't wait). When the
+in a moment); it checks every second between sessions, or every four seconds during a game, and takes people in once a session opens (Prolific
+participants read that they can keep it open, or return the study if they can't wait).
+The next-session link on a full-room or cancelled waiting-room screen carries the ID already entered; after the holding
+page it joins the next session with that ID. If that session requires a password, the ID is
+filled in and the password is still required. When the
 autopilot is off, paused or done, doesn't open the next session by itself (**Open the next session
 when one finishes** is off), or something keeps it from opening the next session (another
 experiment's session is running, a researcher has another experiment loaded, the disk is almost
@@ -487,6 +499,8 @@ Settings saved on this page take precedence over the server's settings file, `co
 Until some are saved, a `breadboard.autopilot.experiment` line in `conf/local.conf` turns the
 autopilot on, and the page only shows the settings
 ([whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot) lists them).
+As here, it opens the next session when one finishes unless the file says
+`breadboard.autopilot.continuous = false`.
 Remove the `breadboard.autopilot.*` lines and restart the server to manage them here.
 
 ## Recruiting participants
@@ -602,7 +616,7 @@ of event with a column per data name.
 
 | Download | Where | Contents |
 |---|---|---|
-| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. A participant's page that connects again after its connection dropped is recorded as `connectionGap`, with `awayMs`: how long it was out of touch, also when that was too short to count as leaving. An outage too short for the page to notice (it notices after 15 to 20 seconds without a word from the server), which its connection lives through, isn't recorded. A choice or tie change that reached the server more than 10 seconds after it was given (sent just before a connection died without a word, and delivered as it came back) doesn't count, and is recorded as `answerDropped`, with `ageMs`. |
+| **Download data** | Live session, Sessions & data | `<session>_<id>.csv`: one row per data item of each event (an event without data, such as `Finished`, gets one row with empty data columns), with the columns `id`, `event`, `event_date`, `data_name`, `data_value`, in the order the events happened. A researcher stopping and resuming the session is recorded as `sessionStopped` and `sessionResumed`; after a resume the game starts again from the beginning. `sessionStopped` is recorded however a researcher's action ended the running session, with `by` (the account) and `reason`: `stopSession` (**Stop session**), `reloadEngine` (a **Reload engine** that doesn't carry it on, such as another account's), `newSession` (a new session was created, as **Stop it and create** does), `otherSession` (another session was resumed or selected) or `autopilot` (the autopilot opened its session over it, after a save that asked it to); nothing the session's game does is recorded after it. A researcher's preview signing in as a player is recorded as `clientLogIn` with `preview` = `true`, and so are the `clientConnected` / `clientDisconnected` of a preview that plays a test player's seat. A participant's page that connects again after its connection dropped is recorded as `connectionGap`, with `awayMs`: how long it was out of touch, also when that was too short to count as leaving. An outage too short for the page to notice (it notices after 15 to 20 seconds without a word from the server), which its connection lives through, isn't recorded. A choice or tie change that reached the server more than 10 seconds after it was given (sent just before a connection died without a word, and delivered as it came back) doesn't count, and is recorded as `answerDropped`, with `ageMs`. |
 | **Download all data** | Sessions & data | `<experiment>_data.csv`: the events of every session listed (all of them, or those the search and filter leave), in one file. Each row starts with `session_id`, `session_name`, `session_status` and a column per launch parameter, then the columns of a session's own file. Sessions oldest first. A session the server was running when it stopped has a `sessionInterrupted` event; one whose steps didn't load when the autopilot opened it, `stepsFailedToLoad`. |
 | **Download list** | Sessions & data | `<experiment>.csv`: one row per session, with `id`, `instance` (its name), `status`, `created_at` and a column per launch parameter. |
 | **Export all**, **Export filtered** | A session's events | The same columns and times as the session's file. Events without data keep a row. |
