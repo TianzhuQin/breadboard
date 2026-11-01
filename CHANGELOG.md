@@ -1,6 +1,6 @@
 # Changelog
 
-### [v3.1.0] - 2026-10-29
+### [v3.1.0] - 2026-11-01
 Easier to install, safe to leave running by itself, steadier for participants on weak connections,
 in Chinese for participants of a Chinese study, and ready for a lab of several researchers. Existing
 experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/install.md#upgrading).
