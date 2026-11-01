@@ -414,6 +414,13 @@ for f in db backups logs db/* backups/* logs/*; do
   fi
 done
 
+# A copied extraction name must not silently leave the restored database unused.
+for f in db/*.h2.db; do
+  [ -f "$f" ] || continue
+  [ "$f" = db/breadboard.h2.db ] && continue
+  echo "$f isn't used: rename it to breadboard.h2.db in db/ to restore it, replacing the existing file while Breadboard is stopped." >&2
+done
+
 # application.secret must not be a published value. Use $APPLICATION_SECRET if set; otherwise
 # generate one on first start and keep it in conf/application.secret. The server reads it from the
 # environment (conf/application-prod.conf), not from the command line, where anyone on the machine

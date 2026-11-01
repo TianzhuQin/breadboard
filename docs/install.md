@@ -427,9 +427,13 @@ change how often, how many and where.
 The copies are on the same disk as the database, so copy them somewhere else now and then (or set
 `breadboard.backup.dir` to a folder on another disk or a synced drive).
 
-**To go back to a backup**: stop Breadboard, unzip the backup (it holds one file,
-`breadboard.h2.db`) into the `db` folder, replacing the file there, and start Breadboard again.
-Everything since that backup is gone, so download the data of later sessions first if you need it.
+**To go back to a backup**:
+
+1. Stop Breadboard. Download later sessions' data first if you need it: changes since this backup will be gone.
+2. Double-click the backup zip (on Windows, choose **Extract All**).
+3. Drag its `breadboard.h2.db` into Breadboard's `db/` folder and choose **Replace**.
+   The name must be exactly `breadboard.h2.db`, with no extra spaces, numbers or `.db` suffix.
+4. Start Breadboard again. A warning about another `.h2.db` file means that file is not being used.
 
 You can also export each experiment from the console's Experiments page, and download each
 session's data from Sessions & data.
@@ -483,9 +487,12 @@ launcher goes on with the others. Point it at the JDK's folder, or remove it.
 rest of Breadboard isn't. Right-click the zip, **Extract All**, and open `breadboard.bat` in the new
 folder.
 
-**"Another program is using port 9000"** (on Windows **"Port 9000 is in use"**), or **"Breadboard
-is already running on port 9000"**: another program, or a Breadboard started earlier, holds the
-port. If it is Breadboard, open its address. Otherwise stop that program, or use another port: the
+**"Breadboard … is already running from another folder on port 9000"**: another copy holds the
+port. The message gives its version and address, and a desktop start opens its console. To run
+this copy instead, close the other copy's window or stop its service first.
+
+**"Another program is using port 9000"** (on Windows **"Port 9000 is in use"**): stop that program,
+or use another port: the
 line `http.port=9001` in `conf/local.conf` for every start, or `-Dhttp.port=9001` once, as the
 message shows. (A proxy set for the internet, such as `http_proxy`, doesn't matter: the launchers
 check the port directly.)

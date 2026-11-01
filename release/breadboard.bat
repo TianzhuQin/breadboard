@@ -180,6 +180,9 @@ IF DEFINED UNWRITABLE (
   EXIT /B 1
 )
 
+REM Only the exact database name is opened, even when Explorer gives a copy another name.
+FOR %%D IN ("db\*.h2.db") DO IF EXIST "%%~fD" IF /I NOT "%%~nxD"=="breadboard.h2.db" CALL :warnbackup "%%~nxD"
+
 REM application.secret must not be a published value. Use APPLICATION_SECRET if set; otherwise
 REM generate one on first start and keep it in conf\application.secret. The server reads it from
 REM the environment (conf\application-prod.conf), not from the command line.
@@ -681,4 +684,8 @@ GOTO :EOF
 :startcause
 REM Keep error text out of CALL's command parsing: it can contain quotes, ampersands or brackets.
 powershell -NoProfile -Command "$cause = Get-Content -LiteralPath 'logs\start-errors.log' -ErrorAction SilentlyContinue | Where-Object { $_.Trim() -and $_ -notmatch '\A(Breadboard|Once it listens|if nothing else|newest logs|\s+at )' } | Select-Object -First 1; if ($cause) { $message = 'Start failed: ' + $cause.Trim() + '. Full details are in logs\start-errors.log; correct the cause, then start Breadboard again.' } else { $message = 'Read logs\start-errors.log and the newest logs\jvm-pid*.log for the cause before starting it again.' }; [IO.File]::AppendAllText((Join-Path (Get-Location) 'logs\application.log'), $message + [Environment]::NewLine); [Console]::WriteLine($message)"
+GOTO :EOF
+
+:warnbackup
+ECHO "db\%~1" isn't used: rename it to breadboard.h2.db in db\ to restore it, replacing the existing file while Breadboard is stopped.
 GOTO :EOF

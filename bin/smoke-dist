@@ -375,7 +375,7 @@ pages
 get /autopilot 401
 get /languages
 LANG_ID="$(json "[l['id'] for l in d['languages'] if l['code'] == 'eng'][0]")"
-EMAIL="smoke@breadboard.test"
+EMAIL="smoke@example.org"
 PASSWORD="smoke-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 code="$(curl -s --max-time 30 -o "$WORK/body" -w '%{http_code}' -H 'Content-Type: application/json' \
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"defaultLanguageId\":$LANG_ID}" "$BASE/createFirstUser")"

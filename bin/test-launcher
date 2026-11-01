@@ -121,6 +121,14 @@ exit 255
         self.assertIn('stop that Breadboard first', said)
         self.assertFalse((self.home / 'starts').exists())
 
+    def test_other_database_names_are_warned_about_before_start(self):
+        (self.home / 'db/breadboard copy.h2.db').touch()
+        (self.home / 'db/breadboard.h2.db').touch()
+        said = self.result()
+        self.assertIn("db/breadboard copy.h2.db isn't used", said)
+        self.assertIn('rename it to breadboard.h2.db', said)
+        self.assertNotIn("db/breadboard.h2.db isn't used", said)
+
 
 if __name__ == '__main__':
     unittest.main()
