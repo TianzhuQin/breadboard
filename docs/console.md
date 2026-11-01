@@ -404,6 +404,11 @@ pages and data work as usual. To run or test another experiment, stop the autopi
 first (that pauses it) or open a session of the other experiment (which ends the autopilot's,
 after asking), then press **Resume** here when you are done.
 
+The sessions it opens are named **Autopilot #1**, **Autopilot #2**, and so on, counting its
+sessions of the experiment; Sessions & data and Live session show when each was created, in your
+computer's time. (Before 3.1 it named them by the time they opened, in UTC, as in "Autopilot ·
+2026-10-30 13:20:47 UTC"; those keep their names, and the data files write them with plain spaces.)
+
 The top of the page shows the autopilot's state, its **Open session** (with **Watch it live**), its
 recent activity (games started, seats the computer took over, step failures, including those the
 game went on after, and what ended or stopped it), any problem that keeps it from opening sessions,

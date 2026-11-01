@@ -367,7 +367,7 @@ public class Application extends Controller {
       }
       List<Object> row = new ArrayList<Object>();
       row.add(instance.id);
-      row.add(instance.name);
+      row.add(plainSpaces(instance.name));
       row.add(instance.status);
       row.add(instance.creationDate == null ? null : Timestamps.csv(instance.creationDate));
       for (String parameterName : parameterNames) {
@@ -430,7 +430,7 @@ public class Application extends Controller {
     header.addAll(Arrays.asList("id", "event", "event_date", "data_name", "data_value"));
     csvRow(csv, header);
     for (ExperimentInstance instance : sessions) {
-      List<Object> lead = new ArrayList<Object>(Arrays.<Object>asList(instance.id, instance.name, instance.status));
+      List<Object> lead = new ArrayList<Object>(Arrays.<Object>asList(instance.id, plainSpaces(instance.name), instance.status));
       HashMap<String, String> values = new HashMap<>();
       for (Data d : instance.data) {
         values.put(d.name, d.value);
@@ -454,6 +454,15 @@ public class Application extends Controller {
       }
     }
     return csvFile(csv, excel);
+  }
+
+  /**
+   * A session's name as the data files write it: with plain spaces. The autopilot named its sessions
+   * with no-break spaces before 3.1 ("Autopilot · 2026-10-30 13:20:47 UTC"), which a filter typed with
+   * plain ones (in R, pandas or Excel) didn't match; the names stay as they are in the database.
+   */
+  static String plainSpaces(String name) {
+    return name == null ? null : name.replace('\u00a0', ' ');
   }
 
   /** A session's events by time; events in the same millisecond in the order they were recorded. */

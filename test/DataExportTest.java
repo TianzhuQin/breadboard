@@ -35,7 +35,7 @@ public class DataExportTest extends BaseTest {
     @Test
     public void everySessionsEventsComeInOneFileWithTheirSessionAndParameters() {
         Language lang = createLanguage("eng", "English");
-        User me = createUser("pi@lab.org", "PI", "password123", lang);
+        User me = createUser("pi@example.org", "PI", "password123", lang);
         Experiment experiment = createExperiment("Net");
         ExperimentInstance a = createInstance("first", experiment);
         ExperimentInstance b = createInstance("second", experiment);
@@ -65,6 +65,27 @@ public class DataExportTest extends BaseTest {
     }
 
     /**
+     * A session name stored with no-break spaces, as the autopilot named its sessions before 3.1
+     * ("Autopilot · 2026-10-30 13:20:47 UTC"), is written with plain spaces in the session list and in
+     * Download all data, so a filter typed as the name is shown (R, pandas, Excel) matches it. The name
+     * in the database stays as it is.
+     */
+    @Test
+    public void storedNamesWithNoBreakSpacesComeOutWithPlainSpaces() {
+        Language lang = createLanguage("eng", "English");
+        User me = createUser("pi@example.org", "PI", "password123", lang);
+        Experiment experiment = createExperiment("Net");
+        ExperimentInstance auto = createInstance("Autopilot\u00a0· 2026-10-30 13:20:47\u00a0UTC", experiment);
+        event(auto, "Finished");
+        for (String url : new String[]{"/csv/instances/" + experiment.id, "/csv/experiment/" + experiment.id + "/data"}) {
+            String file = contentAsString(route(fakeRequest(GET, url).withSession("uid", me.uid)));
+            assertTrue(url + ": " + file, file.contains("\"Autopilot · 2026-10-30 13:20:47 UTC\""));
+            assertFalse(url, file.contains("\u00a0"));
+        }
+        assertEquals("Autopilot\u00a0· 2026-10-30 13:20:47\u00a0UTC", ExperimentInstance.findById(auto.id).name);
+    }
+
+    /**
      * ?excel=true, the console's "For Excel": the same file with the UTF-8 byte-order mark first, without
      * which Excel and WPS read it in the computer's own encoding and Chinese turns into garbage. Without
      * it, the files are as they always were: analysis scripts read them.
@@ -72,7 +93,7 @@ public class DataExportTest extends BaseTest {
     @Test
     public void forExcelTheFilesStartWithAByteOrderMarkAndAreOtherwiseTheSame() {
         Language lang = createLanguage("eng", "English");
-        User me = createUser("pi@lab.org", "PI", "password123", lang);
+        User me = createUser("pi@example.org", "PI", "password123", lang);
         Experiment experiment = createExperiment("网络小游戏");
         ExperimentInstance pilot = createInstance("试点1", experiment);
         param(pilot, "rounds", "3");
@@ -108,7 +129,7 @@ public class DataExportTest extends BaseTest {
     @Test
     public void eventsOfTheSameMillisecondComeOutInTheOrderTheyWereRecorded() {
         Language lang = createLanguage("eng", "English");
-        User me = createUser("pi@lab.org", "PI", "password123", lang);
+        User me = createUser("pi@example.org", "PI", "password123", lang);
         Experiment experiment = createExperiment("Busy");
         ExperimentInstance session = createInstance("busy", experiment);
         java.util.Date now = new java.util.Date();

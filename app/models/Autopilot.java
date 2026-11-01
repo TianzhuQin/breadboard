@@ -12,11 +12,9 @@ import play.libs.Json;
 import play.mvc.WebSocket;
 
 import java.io.File;
-import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.TimeZone;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -1111,7 +1109,7 @@ public final class Autopilot {
       sessionBeforeLaunch = before == null ? null : before.id;
       launchRequestedAt = System.currentTimeMillis();
       // No parameters: LaunchGame gives each its default.
-      scriptBoard.tell(new Breadboard.LaunchGame(user, experiment, sessionName(), new LinkedHashMap(), output(user.email),
+      scriptBoard.tell(new Breadboard.LaunchGame(user, experiment, sessionName(experiment.id), new LinkedHashMap(), output(user.email),
           onlyIfIdle, automatic), null);
       Logger.info("Autopilot: opening a new session of \"" + experiment.name + "\" as " + user.email + " (" + why + ")");
     } catch (Exception ex) {
@@ -1246,26 +1244,55 @@ public final class Autopilot {
     return users.isEmpty() ? null : users.get(0);
   }
 
-  private static String sessionName() {
-    return sessionName(new Date());
+  // The names it gave its sessions: "Autopilot #12"; and, before 3.1, the time they opened, in UTC
+  // ("Autopilot · 2026-10-30 13:20:47 UTC", with no-break spaces, or "Autopilot · Oct 28, 13:16:05 UTC").
+  private static final java.util.regex.Pattern NUMBERED = java.util.regex.Pattern.compile("^Autopilot #(\\d{1,9})$");
+  private static final java.util.regex.Pattern DATED = java.util.regex.Pattern.compile("^Autopilot[\u00a0 ]·[\u00a0 ].*UTC$");
+
+  /**
+   * The name of the next session it opens of this experiment: "Autopilot #N", N counting its sessions of
+   * the experiment (see below). Its sessions used to be named by when they opened, in UTC ("Autopilot ·
+   * 2026-10-30 13:20:47 UTC"), which a researcher whose console shows the session's own time beside its
+   * name (in their time zone) read as two different dates for the same session, from 16:00 UTC on in
+   * China; and the name had no-break spaces, so a filter on it in the data, typed with plain spaces,
+   * matched nothing. Sessions already named so keep their names. Never throws: it counts what it can
+   * read.
+   */
+  static String sessionName(Long experimentId) {
+    List<String> names = new java.util.ArrayList<String>();
+    try {
+      for (com.avaje.ebean.SqlRow row : com.avaje.ebean.Ebean.createSqlQuery(
+          "select name as name from experiment_instances where experiment_id = :experiment and name like 'Autopilot%'")
+          .setParameter("experiment", experimentId).findList()) {
+        names.add(row.getString("name"));
+      }
+    } catch (RuntimeException e) {
+      Logger.warn("Autopilot: could not count its sessions of experiment " + experimentId + ": " + e);
+    }
+    return sessionName(names);
   }
 
   /**
-   * The name of a session it opens at {@code at}, e.g. "Autopilot · 2026-10-30 13:20:47 UTC": the date
-   * in numbers, as in the data, which reads the same in any language and sorts; the time in UTC, said
-   * so, since the server can't know the researcher's time zone (the console shows local times next to
-   * it); the seconds keep sessions opened within a minute of each other, as short games are, apart.
-   * No-break spaces keep "Autopilot ·" and "13:20:47 UTC" each in one piece, so a column too narrow for
-   * the name breaks it between the date and the time (Sessions & data at 1280 px), the same in every
-   * row: it used to break at different places from one row to the next ("Oct 30," / "13:44:37 UTC",
-   * "13:27:15" / "UTC"). The date and the time are not joined: that made one piece too wide for the
-   * column, which the console then broke inside the date. It was "Autopilot · Oct 28, 13:16:05 UTC", an
-   * English month next to UTC; sessions named so keep their names.
+   * "Autopilot #N" after the sessions named {@code earlier} (of one experiment): N counts its sessions
+   * there, those named so and those named by when they opened, and is above every "Autopilot #k" there,
+   * so it is a new name also after some were deleted (or a researcher named one so). Plain spaces only.
    */
-  static String sessionName(Date at) {
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.ENGLISH);
-    format.setTimeZone(TimeZone.getTimeZone("UTC"));
-    return "Autopilot\u00a0· " + format.format(at) + "\u00a0UTC";
+  static String sessionName(java.util.Collection<String> earlier) {
+    int count = 0;
+    int highest = 0;
+    for (String name : earlier) {
+      if (name == null) {
+        continue;
+      }
+      java.util.regex.Matcher numbered = NUMBERED.matcher(name);
+      if (numbered.matches()) {
+        count++;
+        highest = Math.max(highest, Integer.parseInt(numbered.group(1)));
+      } else if (DATED.matcher(name).matches()) {
+        count++;
+      }
+    }
+    return "Autopilot #" + (Math.max(count, highest) + 1);
   }
 
   // ---- what the engine is doing --------------------------------------------------------------------

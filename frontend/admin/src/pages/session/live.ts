@@ -334,7 +334,7 @@ export function formatWhen (at: number, now = Date.now()): string {
 /** A file name the browser and every OS accept. */
 export function safeFileName (s: string): string {
   // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only, any space a
-  // plain one first, as the autopilot's names have no-break spaces)
-  const cleaned = (s || '').replace(/\s+/gu, ' ').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
+  // plain one first, as the autopilot's names before 3.1 have no-break spaces)
+  const cleaned = (s || '').replace(/\s+/gu, ' ').replace(/[,;#]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
   return (cleaned || 'session').slice(0, 120)
 }
