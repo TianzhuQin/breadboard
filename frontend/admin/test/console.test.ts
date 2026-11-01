@@ -283,6 +283,8 @@ describe('engine errors', () => {
     expect(e.title).toBe('Unknown name “foo”')
     expect(e.message).toBe('No such property: foo')
     expect(e.raw).toContain('for class: Script12')
+    expect(parseGroovyError('No such property: x for class: Script12Model').message)
+      .toBe('No such property: x for class: Script12Model')
     expect(e.places[0]).toEqual({ file: 'Script12.groovy', line: 3, kind: 'own' })
     expect(e.places.map(p => p.kind)).toEqual(['own', 'library', 'other'])
   })

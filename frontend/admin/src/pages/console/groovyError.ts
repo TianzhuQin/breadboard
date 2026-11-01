@@ -172,7 +172,7 @@ export function parseGroovyError (raw: string, opts: ParseOptions = {}): GroovyE
 }
 
 function explain (type: string, message: string, compileMessage: string | null): { title: string, hint: string | null, cleaned: string } {
-  const msg = message.trim().replace(/\s+for class: Script\d+(?:\$[\w$]+)?/g, '')
+  const msg = message.trim().replace(/\s+for class: Script\d+(?:\$[\w$]+)?(?![\w$])/g, '')
   if (/initStep started already/i.test(msg)) {
     return {
       title: 'The game has already started',
