@@ -1134,6 +1134,9 @@ public class Breadboard extends UntypedActor {
     final String requestId;
     // The saved step whose code this is (SendStep's id), or null (-1: a step not saved yet).
     final Long stepId;
+    // The name of the step whose code this is (SendStep's), which the lines of its errors are named
+    // after (StepScripts); null when not known.
+    final String stepName;
 
     public RunStep(User user, String source, ThrottledWebSocketOut out) {
       this(user, source, out, null);
@@ -1153,12 +1156,18 @@ public class Breadboard extends UntypedActor {
 
     public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation, String requestId,
                    Long stepId) {
+      this(user, source, out, request, generation, requestId, stepId, null);
+    }
+
+    public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation, String requestId,
+                   Long stepId, String stepName) {
       super(user, out);
       this.source = source;
       this.request = request;
       this.generation = generation;
       this.requestId = requestId;
       this.stepId = stepId;
+      this.stepName = stepName == null || stepName.trim().isEmpty() ? null : stepName.trim();
     }
 
     @Override

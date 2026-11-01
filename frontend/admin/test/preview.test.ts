@@ -1048,6 +1048,38 @@ describe('PreviewPage', () => {
     }
   })
 
+  // After a Reload engine (or a Stop and Resume), the players the researcher previewed aren't in the network until
+  // they join again. Their tiles stay, saying so, but the list counts only the players in it: it read
+  // "Players · 3 of 1 shown".
+  it('counts only the shown players who are in the network, and shows one again once they are back', async () => {
+    addPlayer('p2')
+    await settle()
+    previewMemory.instanceId = 44
+    previewMemory.ids = ['p1', 'p2', 'p3']
+    const w = await mountPage()
+    try {
+      await settle()
+      expect(w.findAll('.pt')).toHaveLength(3)
+      expect(w.find('.pv__side-toggle').text()).toContain('Players · 1 of 1 shown')
+      expect(w.find('.pp__count').text()).toBe('1 of 1 shown')
+      addPlayer('p1')
+      await settle()
+      expect(w.find('.pv__side-toggle').text()).toContain('Players · 2 of 2 shown')
+      expect(w.find('.pp__count').text()).toBe('2 of 2 shown')
+      expect(previewMemory.ids).toEqual(['p1', 'p2', 'p3'])
+      const tile = (id: string) => w.findAll('.pt').find(t => t.find('.pt__id').text() === id)!
+      expect(tile('p1').find('.pt__note').exists()).toBe(false)
+      expect(tile('p3').find('.pt__note').text()).toMatch(/^Not in the game right now/)
+      // someone not shown who joins counts in the list only
+      addPlayer('p4')
+      await settle()
+      expect(w.find('.pv__side-toggle').text()).toContain('Players · 2 of 3 shown')
+      expect(w.find('.pp__count').text()).toBe('2 of 3 shown')
+    } finally {
+      w.unmount()
+    }
+  })
+
   // (named as the console names it everywhere else: "AI 1 (_1)", not the bare id)
   it('says that a single computer player is one, by its name', async () => {
     addPlayer('_1', { ai: 1 })

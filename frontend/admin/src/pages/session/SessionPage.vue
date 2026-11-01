@@ -14,14 +14,16 @@
         </p>
         <!-- "Line 71 of RoundStep", which opens that step at that line, when the server names the step (in the
              experiment the engine runs, which the Steps page asks to switch to when it isn't the one worked on):
-             the line in that step's own code, also when another step started it (in-step) -->
+             the line in that step's own code, also when another step started it (in-step), and where it went
+             wrong in another step's code it called ("in isHuman (InitStep line 30)"), each opening its step -->
         <EngineError
           class="live-err__text"
           :error="latestError.text"
+          :frames="latestError.frames"
           :own-name="latestError.step || 'a step'"
           :from-line="latestError.step ? 1 : null"
           :in-step="!!latestError.step"
-          @goto="(line: number) => latestError?.step && router.push(stepAt(latestError.step, line, errorExperiment.id))"
+          @goto="(line: number, _col?: number, step?: string) => openStep(step || latestError?.step, line)"
         />
       </div>
       <div class="live-err__actions">
@@ -385,6 +387,11 @@ const errorExperiment = computed(() => {
   const id = e?.experimentId ?? null
   return { id, name: e?.experimentName ?? null, elsewhere: id !== null && id !== admin.experiment?.id }
 })
+
+/** The Steps page, at a line of a step of the experiment the engine runs (the error's). */
+function openStep (step: string | undefined, line: number) {
+  if (step) void router.push(stepAt(step, line, errorExperiment.value.id))
+}
 
 function clock (at: number) {
   return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })

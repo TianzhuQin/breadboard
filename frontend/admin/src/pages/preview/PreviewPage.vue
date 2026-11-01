@@ -67,7 +67,7 @@
         <aside class="pv__side" :class="{ 'is-collapsed': !pickerOpen }">
           <button type="button" class="pv__side-toggle" :aria-expanded="pickerOpen ? 'true' : 'false'" aria-controls="pv-picker" @click="togglePicker">
             <Users :size="16" aria-hidden="true" />
-            <span>Players · {{ memory.ids.length }} of {{ players.length }} shown</span>
+            <span>Players · {{ shownCount }} of {{ players.length }} shown</span>
             <ChevronDown :size="16" class="pv__side-chev" aria-hidden="true" />
           </button>
           <div id="pv-picker" class="pv__picker">
@@ -212,6 +212,12 @@ const players = computed<PlayerLike[]>(() => {
 const testCount = computed(() => players.value.filter(isTestPlayer).length)
 const aiCount = computed(() => players.value.filter(isAIPlayer).length)
 const selected = computed(() => new Set(memory.ids))
+/**
+ * How many of the players in the network are shown: not those shown before who aren't in it now (a
+ * Reload engine or a Resume, until they join again), whose tiles stay, saying so. They counted, and the
+ * list read "Players · 3 of 1 shown".
+ */
+const shownCount = computed(() => players.value.filter(p => selected.value.has(p.id)).length)
 const tiles = computed(() => {
   void graph.version.value
   return sortPlayers(memory.ids.map(id => {

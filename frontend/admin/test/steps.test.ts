@@ -690,6 +690,31 @@ describe('StepsPage', () => {
     w.unmount()
   })
 
+  it('names the lines of a run\'s error by step, and opens another step\'s where it went wrong there', async () => {
+    const { w } = await open()
+    await w.findAll('.sitem__name').find(n => n.text() === 'Round')!.trigger('click')
+    await nextTick()
+    expect(w.find('.steps__title').text()).toBe('Round')
+    await w.find('textarea.code-stub').setValue('second = "p2"\n\nisHuman(second)')
+    post.mockResolvedValueOnce({ id: 3, name: 'Round', source: 'second = "p2"\n\nisHuman(second)' })
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }))
+    await flushPromises()
+    expect(actions.runStep).toHaveBeenCalledWith({ id: 3, name: 'Round', source: 'second = "p2"\n\nisHuman(second)' })
+    const id = actions.runStep.mock.results[actions.runStep.mock.results.length - 1].value
+    // its code (Script960, the newest) called InitStep's isHuman at its line 3, which threw at InitStep's line 6
+    admin.output.push({
+      id: 9001, kind: 'error', source: 'SendStep', requestId: id, at: Date.now(),
+      text: 'Caught error: IllegalStateException: isHuman fails for p2\n  at Script531.groovy:6\n  at Script960.groovy:3\n',
+      frames: [{ file: 'Script531.groovy', line: 6, step: 'InitStep', name: 'isHuman' }, { file: 'Script960.groovy', line: 3, step: 'Round', own: true }],
+    })
+    await flushPromises()
+    expect(w.findAll('.srun .eng-err__places li').map(li => li.text())).toEqual(['Line 3 of this step', 'in isHuman (InitStep line 6)'])
+    await w.findAll('.srun button.eng-err__place')[1].trigger('click')
+    await flushPromises()
+    expect(w.find('.steps__title').text()).toBe('InitStep')
+    w.unmount()
+  })
+
   it('is read only in file mode and says why', async () => {
     const { w } = await open(true)
     expect(w.text()).toContain('Read from files')

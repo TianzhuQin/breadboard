@@ -2,7 +2,7 @@
   <section class="pp" aria-labelledby="pp-title">
     <header class="pp__head">
       <h3 id="pp-title" class="pp__title">Players</h3>
-      <span class="pp__count tabular">{{ selected.size }} of {{ players.length }} shown</span>
+      <span class="pp__count tabular">{{ shownCount }} of {{ players.length }} shown</span>
     </header>
 
     <div class="pp__picks" role="group" aria-label="Quick picks">
@@ -86,6 +86,8 @@ const query = ref('')
 const firstN = ref<number | null>(4)
 const visible = computed(() => props.players.filter(p => matchesPlayer(p, query.value)))
 const testCount = computed(() => props.players.filter(isTestPlayer).length)
+// (of those listed: a player shown before who isn't in the network now isn't, see PreviewPage)
+const shownCount = computed(() => props.players.filter(p => props.selected.has(p.id)).length)
 const aiCount = computed(() => props.players.filter(isAIPlayer).length)
 
 // Where their seat is, also for a player shown here: that used to be all it said, so someone away

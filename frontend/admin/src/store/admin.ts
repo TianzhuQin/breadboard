@@ -5,7 +5,7 @@ import { LiveGraph } from '@/lib/graph'
 import { notify } from '@/ui/toast'
 import { settleConfirm } from '@/ui/confirm'
 import type {
-  AuthState, EngineInfo, EngineState, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
+  AuthState, EngineInfo, EngineState, ErrorFrame, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
 } from './types'
 
 /**
@@ -72,15 +72,36 @@ const EVENTS_CAP = 1000
 export const NOT_CONNECTED = 'Not connected to the server'
 let outputSeq = 0
 
-function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string, step?: string) {
+function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string, step?: string, frames?: ErrorFrame[]) {
   if (!text) return
   const entry: OutputEntry = { id: ++outputSeq, kind, text, source, at: Date.now() }
   if (requestId) entry.requestId = requestId
   if (step) entry.step = step
+  if (frames) entry.frames = frames
   state.output.push(entry)
   if (state.output.length > OUTPUT_CAP) state.output.splice(0, state.output.length - OUTPUT_CAP)
   // (not for code the researcher ran from the Script console or a step's Run: those pages show it)
   if (kind === 'error' && !isResearcherRun(source)) state.unseenErrors++
+}
+
+/** The server's named lines of an engine error (its frame's "frames"), those well formed; undefined when there are none. */
+export function readFrames (raw: unknown): ErrorFrame[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const frames: ErrorFrame[] = []
+  for (const f of raw) {
+    if (!f || typeof f !== 'object') continue
+    const file = (f as any).file
+    const line = Number((f as any).line)
+    if (typeof file !== 'string' || !/^Script\d+\.groovy$/.test(file) || !Number.isInteger(line) || line <= 0) continue
+    const frame: ErrorFrame = { file, line }
+    const step = (f as any).step
+    if (typeof step === 'string' && step.trim()) frame.step = step.trim()
+    if ((f as any).own === true) frame.own = true
+    const name = (f as any).name
+    if (typeof name === 'string' && name.trim()) frame.name = name.trim()
+    frames.push(frame)
+  }
+  return frames.length ? frames : undefined
 }
 
 /** Output answering code a researcher ran themselves, rather than the experiment running. */
@@ -153,9 +174,10 @@ function handle (m: any) {
   // the id of the script request it answers, echoed by newer servers
   const requestId = typeof m.requestId === 'string' && m.requestId ? m.requestId : undefined
   if (typeof m.error === 'string' && m.error.trim()) {
-    // the step an engine error happened in, when the server knows it ("Line 71 of RoundStep")
+    // the step an engine error happened in, when the server knows it ("Line 71 of RoundStep"), and the
+    // step each of its lines is in (newer servers)
     const step = typeof m.step === 'string' && m.step.trim() ? m.step.trim() : undefined
-    pushOutput('error', m.error.trim(), source, requestId, step)
+    pushOutput('error', m.error.trim(), source, requestId, step, readFrames(m.frames))
     if (typeof m.request === 'string') state.requestError = { request: m.request, text: m.error.trim(), at: Date.now() }
     // a rebuild that threw: the server answers only the console that asked, and never says Reloaded
     if (state.engine === 'loading' && REBUILDS.has(m.request)) engineDidNotFinish(ENGINE_FAILED)

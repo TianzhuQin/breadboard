@@ -573,8 +573,14 @@ restarts the running session.
 - **Autopilot events:** `autopilotStart` (with `players`, and `away` and `leftOut` when anyone was),
   `missedStart` (someone its start left out), `sessionFull` (someone a full room left out, with
   `clientId`), `autopilotCancelled`, `aiTakeover`, `aiReturned`.
+- **Step failures:** `stepFailed` (`step`, `error`) when a step's code throws while the game runs.
+  Its `error` starts with the line of the step's own code, `line 71: …`, also when another step
+  started it (RoundStep starts FinishStep) or the waiting room did; when that line called a function
+  another step defines and it went wrong there, with that too: `line 14, in isHuman (InitStep line
+  30): …`.
 - **How the autopilot ended its session:** `sessionFailed` (a step failure stalled its game: `step`,
-  `line`, `error`; the `stepFailed` before it doesn't say whether the failure stalled the game),
+  `line`, `error`, which then starts with `in isHuman (InitStep line 30): `; the `stepFailed` before
+  it doesn't say whether the failure stalled the game),
   `sessionStalled` (its game had nothing left to do after a step failed: `step`, `error`) and
   `sessionTooLong` (`minutes`, `limit`).
 - **Engine reloads:** `engineReloaded` (`restarted`: whether a game under way starts again, `by`: the

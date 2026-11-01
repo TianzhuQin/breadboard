@@ -1,4 +1,4 @@
-import type { Step } from '@/store/types'
+import type { ErrorFrame, Step } from '@/store/types'
 
 /**
  * The Steps page's rules, kept free of Vue and the server so they can be tested on their own:
@@ -117,6 +117,8 @@ export interface StepRun {
   status: 'pending' | 'ok' | 'error' | 'noreply' | 'notsent'
   values: string[]
   error: string | null
+  /** The error's lines named by step, when the server sent them. */
+  frames?: ErrorFrame[]
   at: number
 }
 

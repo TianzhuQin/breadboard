@@ -72,9 +72,10 @@
               <EngineError
                 v-else-if="r.status === 'error' && r.error"
                 :error="r.error"
+                :frames="r.frames"
                 :from-line="r.fromLine"
                 :own-name="r.fromLine != null ? 'your script' : 'the script'"
-                @goto="(line: number, col?: number) => emit('goto', line, col)"
+                @goto="(line: number, col?: number, step?: string) => emit('goto', line, col, step)"
               />
               <p v-else class="run__note is-warn">
                 No answer from the engine. The connection may have dropped or the engine may be stuck; check the output panel, or reload the engine.
@@ -99,7 +100,8 @@ const props = defineProps<{ runs: ConsoleRun[], modKey: string }>()
 const emit = defineEmits<{
   restore: [run: ConsoleRun]
   rerun: [run: ConsoleRun]
-  goto: [line: number, column?: number]
+  /** `step`: a line of that step's code (the server names it), not of the script */
+  goto: [line: number, column?: number, step?: string]
   clear: []
   output: []
   try: [code: string]
