@@ -315,7 +315,7 @@ describe('reloading the engine from the top bar', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ status: { ...status, paused: true } })))
     w = await askToReload()
     await vi.waitFor(() => expect(confirmState.open).toBe(true))
-    expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
+    expect(confirmState.req!.message).not.toContain('The autopilot has session “Auto 3” open.')
     expect(confirmState.req!.message).not.toContain('pauses the autopilot')
     settleConfirm(true)
     await tick()
