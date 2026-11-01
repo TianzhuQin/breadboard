@@ -772,6 +772,12 @@ public class Breadboard extends UntypedActor {
    * running.
    */
   private void logIn(User user, ThrottledWebSocketOut out) {
+    // The frame was authenticated before it waited in this actor's mailbox. A password reset,
+    // sign-out or removal can overtake it while no Admin exists for revocation to close yet.
+    if (!ScriptBoard.consoleSignInIsCurrent(user, out)) {
+      ScriptBoard.closeExpiredConsole(user, out);
+      return;
+    }
     ActorRef scriptBoard = instances.get(user.email);
     boolean firstIntoEngine = false;
     boolean firstSinceStart = scriptBoard == null;
@@ -796,10 +802,11 @@ public class Breadboard extends UntypedActor {
     }
     // User JSON first, then the network (the ScriptBoard actor writes it after this).
     ObjectNode userJson = user.toJson();
-    out.write(userJson);
-    // Registered now, not only when the engine actor gets to it (it may be busy for seconds), so
-    // this tab already hears of changes made in the account's other tabs.
-    ScriptBoard.registerAdmin(user, scriptBoard, out);
+    // Serialization can take time. Revalidate and register before any account data is sent, so
+    // revocation either rejects this sign-in or sees the registered socket and marks it closed.
+    if (ScriptBoard.registerAdmin(user, scriptBoard, out) == null) return;
+    out.writeIfOpen(userJson);
+    if (out.isClosed()) return;
     if (followed) {
       // The account's other tabs show the session it follows now too, not the one it had.
       ScriptBoard.toOtherTabs(user.email, userJson, out);
@@ -1134,6 +1141,9 @@ public class Breadboard extends UntypedActor {
     final String requestId;
     // The saved step whose code this is (SendStep's id), or null (-1: a step not saved yet).
     final Long stepId;
+    // The name of the step whose code this is (SendStep's), which the lines of its errors are named
+    // after (StepScripts); null when not known.
+    final String stepName;
 
     public RunStep(User user, String source, ThrottledWebSocketOut out) {
       this(user, source, out, null);
@@ -1153,12 +1163,18 @@ public class Breadboard extends UntypedActor {
 
     public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation, String requestId,
                    Long stepId) {
+      this(user, source, out, request, generation, requestId, stepId, null);
+    }
+
+    public RunStep(User user, String source, ThrottledWebSocketOut out, String request, Long generation, String requestId,
+                   Long stepId, String stepName) {
       super(user, out);
       this.source = source;
       this.request = request;
       this.generation = generation;
       this.requestId = requestId;
       this.stepId = stepId;
+      this.stepName = stepName == null || stepName.trim().isEmpty() ? null : stepName.trim();
     }
 
     @Override

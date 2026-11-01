@@ -13,6 +13,10 @@ public class GameListener {
   }
 
   public void hasStarted() {
+    ServerContext.run(() -> hasStartedInServerContext());
+  }
+
+  private void hasStartedInServerContext() {
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.setHasStarted(Boolean.TRUE);
       this.experimentInstance.save();
@@ -34,6 +38,10 @@ public class GameListener {
    * and is saved, so a game that never began doesn't turn away the people it is waiting for.
    */
   public void startFailed(Boolean before) {
+    ServerContext.run(() -> startFailedInServerContext(before));
+  }
+
+  private void startFailedInServerContext(Boolean before) {
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.setHasStarted(before);
       this.experimentInstance.save();
@@ -91,6 +99,10 @@ public class GameListener {
   }
 
   public void start() {
+    ServerContext.run(() -> startInServerContext());
+  }
+
+  private void startInServerContext() {
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.start();
       this.experimentInstance.save();
@@ -98,6 +110,10 @@ public class GameListener {
   }
 
   public void stop() {
+    ServerContext.run(() -> stopInServerContext());
+  }
+
+  private void stopInServerContext() {
     if (this.experimentInstance != null && (!this.experimentInstance.isTestInstance())) {
       this.experimentInstance.stop();
       this.experimentInstance.save();
@@ -113,6 +129,10 @@ public class GameListener {
    * could no longer be resumed.
    */
   public void finish() {
+    ServerContext.run(() -> finishInServerContext());
+  }
+
+  private void finishInServerContext() {
     if (this.engine != null && !ScriptBoard.inService(this.engine)) {
       play.Logger.info("The game of an engine that is being replaced came to its end; its session goes on in the new one");
       return;
@@ -134,7 +154,11 @@ public class GameListener {
       // account an action only gets it when no tab is registered (e.g. the autopilot's output, which
       // then writes it to the log).
       User fresh = User.findByEmail(user.email);
-      com.fasterxml.jackson.databind.node.ObjectNode json = (fresh != null ? fresh : user).toJson();
+      // The account may have been removed while its session kept running. Its lazy reference can
+      // no longer be loaded; there is then no account console left to refresh. The session's data,
+      // the autopilot and the other consoles were already updated above.
+      if (fresh == null) return;
+      com.fasterxml.jackson.databind.node.ObjectNode json = fresh.toJson();
       if (!ScriptBoard.toAccount(user.email, json) && this.out != null) {
         this.out.write(json);
       }

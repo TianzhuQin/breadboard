@@ -98,7 +98,16 @@ public class ResearchersTest extends BaseTest {
         assertEquals(OK, status(signIn("ra@lab.org", password)));
         Result oldSession = route(fakeRequest(GET, "/state").withSession("uid", raOldUid).withSession("email", "ra@lab.org"));
         assertEquals("browsers signed in before are signed out", UNAUTHORIZED, status(oldSession));
-        assertEquals("ended", Json.parse(contentAsString(oldSession)).get("reason").asText());
+        // ... and their sign-in page says another researcher gave the account a new password (it said
+        // that the account had signed out, or changed its password, somewhere else)
+        assertEquals("reset", Json.parse(contentAsString(oldSession)).get("reason").asText());
+
+        // signing out everywhere later is the account's own doing again
+        String raNewUid = User.findByEmail("ra@lab.org").uid;
+        route(fakeRequest(POST, "/logout").withSession("uid", raNewUid).withSession("email", "ra@lab.org"));
+        Result afterSignOut = route(fakeRequest(GET, "/state").withSession("uid", raNewUid).withSession("email", "ra@lab.org"));
+        assertEquals(UNAUTHORIZED, status(afterSignOut));
+        assertEquals("ended", Json.parse(contentAsString(afterSignOut)).get("reason").asText());
     }
 
     @Test

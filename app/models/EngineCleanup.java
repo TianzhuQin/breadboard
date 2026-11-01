@@ -75,6 +75,20 @@ public final class EngineCleanup {
   }
 
   /**
+   * The new engine has installed its interface extensions. Its compilation may have rebuilt a
+   * server class's ordinary metaclass before those methods were replaced; discard that cache once
+   * more now, or it immediately recaptures the first engine (see forgetInheritedMethods).
+   */
+  public static void afterScriptsLoaded() {
+    if (RELEASED.isEmpty()) return;
+    try {
+      forgetClasses(null);
+    } catch (Exception e) {
+      Logger.error("Could not refresh server lookups after loading scripts; old engines may stay loaded", e);
+    }
+  }
+
+  /**
    * Collects garbage, which unloads the engines dropped before this one. On its own the JVM collects
    * in full only now and then: when the old generation fills up, or when the class space reaches a
    * limit that it then raises to 1.67 times what it has committed. So over a long run the class space
@@ -119,13 +133,12 @@ public final class EngineCleanup {
    * before go as well, should they be back: their loaders are kept, weakly, in {@link #RELEASED}.
    *
    * @param scripts the loader the dropped engine compiled with: only classes loaded under it or under
-   *     the loader of an engine dropped before are touched, never those of an engine in use (the next
-   *     one isn't built yet; a test may hold one).
+   *     the loader of an engine dropped before are touched, never those of an engine still in use.
    */
   static void forgetClasses(GroovyClassLoader scripts) {
     Set<ClassLoader> dropped = Collections.newSetFromMap(new IdentityHashMap<ClassLoader, Boolean>());
     synchronized (RELEASED) {
-      RELEASED.add(scripts);
+      if (scripts != null) RELEASED.add(scripts);
       dropped.addAll(RELEASED);
     }
     AbstractConcurrentMap<?, ?> classInfos = groovyCache(ClassInfo.class.getName(), "globalClassSet");
@@ -145,16 +158,17 @@ public final class EngineCleanup {
         }
       }
     }
-    for (Class<?> c : scripts.getLoadedClasses()) {
-      classes.add(c);
+    if (scripts != null) {
+      for (Class<?> c : scripts.getLoadedClasses()) {
+        classes.add(c);
+      }
     }
     for (Object entry : known) {
       Class<?> c = keyOf(entry);
       if (c != null && loadedUnder(c, dropped)) {
         classes.add(c);
       } else if (c != null && entry instanceof ClassInfo) {
-        forgetChoices(((ClassInfo) entry).getStrongMetaClass());
-        forgetChoices(((ClassInfo) entry).getWeakMetaClass());
+        forgetInheritedMethods((ClassInfo) entry, c);
       }
     }
     for (Object entry : entries(classNodes)) {
@@ -224,12 +238,22 @@ public final class EngineCleanup {
    * caches (those of Breadboard's scripts only set up empty maps).
    */
   private static void forgetStaticCaches(Class<?> c) {
+    forgetCallSites(c);
+    if (staticField(c, "$staticClassInfo") != null) {
+      setStaticField(c, "$staticClassInfo", null);
+    }
+  }
+
+  /**
+   * Groovy classes supplied by libraries (Gremlin in particular) also cache calls into a script's
+   * interface extensions. A call site's captured metaclass outlives the registry's ordinary cache,
+   * keeping the first neighbors closure and its engine softly. Clear just the disposable call-site
+   * array, never the library's metaclass or its installed extensions.
+   */
+  private static void forgetCallSites(Class<?> c) {
     Object callSites = staticField(c, "$callSiteArray");
     if (callSites instanceof Reference) {
       ((Reference<?>) callSites).clear();
-    }
-    if (staticField(c, "$staticClassInfo") != null) {
-      setStaticField(c, "$staticClassInfo", null);
     }
   }
 
@@ -296,6 +320,38 @@ public final class EngineCleanup {
         Logger.debug("Could not empty the method choices of " + metaClass + ": " + e);
       }
     }
+  }
+
+  /**
+   * Ordinary metaclasses of server classes cache what they inherited from interfaces, including
+   * Vertex.on/off closures installed by the first engine. ClassInfo calls these weak metaclasses
+   * but keeps them softly; their inherited methods and reflection caches can keep that engine's
+   * types until memory runs short, even after the interface's methods have been replaced. They are
+   * disposable lookup caches: the next call rebuilds them from the current interface extensions.
+   * Explicitly installed/custom metaclasses are kept strongly and stay installed. Classes belonging
+   * to any script engine stay alone too, so a task still running in another engine is not disturbed.
+   */
+  private static void forgetInheritedMethods(ClassInfo info, Class<?> type) {
+    boolean serverClass = !scriptClass(type);
+    // Reading a static field may initialize its class. Do that outside Groovy's ClassInfo lock.
+    if (serverClass) forgetCallSites(type);
+    info.lock();
+    try {
+      MetaClass strong = info.getStrongMetaClass();
+      MetaClass cached = info.getWeakMetaClass();
+      forgetChoices(strong);
+      forgetChoices(cached);
+      if (serverClass && strong == null && cached != null) info.setWeakMetaClass(null);
+    } finally {
+      info.unlock();
+    }
+  }
+
+  private static boolean scriptClass(Class<?> type) {
+    for (ClassLoader loader = type.getClassLoader(); loader != null; loader = loader.getParent()) {
+      if (loader instanceof GroovyClassLoader) return true;
+    }
+    return false;
   }
 
   private static final Field METHOD_INDEX = accessible(MetaClassImpl.class, "metaMethodIndex");

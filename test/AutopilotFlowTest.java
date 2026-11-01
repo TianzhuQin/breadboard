@@ -132,7 +132,7 @@ public class AutopilotFlowTest extends BaseTest {
     private User user(String prefix) {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
-        return createUser(prefix + "-" + UUID.randomUUID() + "@test.org", prefix, "secret-1", lang);
+        return createUser(prefix + "-" + UUID.randomUUID() + "@example.org", prefix, "secret-1", lang);
     }
 
     private static Result post(User user, JsonNode body) {
@@ -225,6 +225,133 @@ public class AutopilotFlowTest extends BaseTest {
         return experiment;
     }
 
+    @Test
+    public void aGivenUpWaitingRoomEndsPagesWithTheWayToTheNextSessionAndProlificInstructions() throws Exception {
+        User researcher = user("cancelled");
+        Experiment experiment = experimentOf(researcher, "Cancelled room");
+        ObjectNode saved = settings(experiment, 4, 4, 30);
+        saved.put("nextSessionDelaySeconds", 30);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        SessionLanguage.record(session.id, "zho");
+        Page manual = connect(experiment, session, "same-id");
+        Recruitment.prolificEntry("from-prolific", "PID-CANCEL", "STUDY-CANCEL", "SESSION-CANCEL");
+        Page prolific = connect(experiment, session, "from-prolific");
+        Page ownEnd = connect(experiment, session, "own-end");
+        engine().eval("autopilot.room.onCancel = { players -> def v=g.getVertex('own-end'); v.private.text='Custom waiting credit'; v.private.finished=true }; autopilot.giveUp(); null");
+        assertTrue("the cancelled room's pages end instead of keeping the waiting animation",
+            within(1500, () -> manual.closed && prolific.closed && ownEnd.closed));
+        JsonNode player = manual.lastPlayer();
+        assertEquals("waitingCancelled", player.get("ended").asText());
+        assertTrue(player.get("finished").asBoolean());
+        assertFalse(player.get("_system").has("autopilot"));
+        String text = player.get("text").asText();
+        assertTrue(text, text.contains("人数不足，本场实验未能开始。"));
+        assertTrue(text, text.contains("/play/" + experiment.id + "/login?id=same-id"));
+        String prolificText = prolific.lastPlayer().get("text").asText();
+        assertTrue(prolificText, prolificText.contains("Prolific"));
+        assertTrue(prolificText, prolificText.contains("PID-CANCEL"));
+        assertEquals("Custom waiting credit", ownEnd.lastPlayer().get("text").asText());
+        assertFalse(ownEnd.lastPlayer().get("_system").has("autopilot"));
+        assertEquals(1, events(session, "autopilotCancelled").size());
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
+        // A page coming back retains its end after the cancellation, even before the next session opens.
+        assertEquals("waitingCancelled", connect(experiment, session, "same-id").lastPlayer().get("ended").asText());
+    }
+
+    @Test
+    public void aGivenUpWaitingRoomPromisesNoNextSessionWhenContinuousIsOff() throws Exception {
+        User researcher = user("cancelledonce");
+        Experiment experiment = experimentOf(researcher, "One cancelled room");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("continuous", false);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        Page participant = connect(experiment, session, "waiting-alone");
+        engine().eval("autopilot.giveUp(); null");
+        assertTrue(within(1500, () -> participant.closed));
+        String text = participant.lastPlayer().get("text").asText();
+        assertTrue(text, text.contains("No next session is scheduled"));
+        assertFalse(text, text.contains("Join the next session"));
+    }
+
+    @Test
+    public void aGivenUpWaitingRoomPromisesNoNextSessionWhilePausedOrRunByHand() throws Exception {
+        User researcher = user("cancelledpaused");
+        Experiment experiment = experimentOf(researcher, "No next room");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("nextSessionDelaySeconds", 600);
+        for (String mode : new String[]{"paused", "manual", "off"}) {
+            assertEquals(OK, status(post(researcher, saved)));
+            ExperimentInstance session = openSession(experiment);
+            Page participant = connect(experiment, session, mode + "-alone");
+            if ("paused".equals(mode)) setAutopilot("pausedBecause", "test pause");
+            if ("manual".equals(mode)) setAutopilot("openedSession", null);
+            if ("off".equals(mode)) Ebean.createSqlUpdate("update autopilot_settings set enabled = false").execute();
+            engine().eval("autopilot.giveUp(); null");
+            assertTrue(mode, within(1500, () -> participant.closed));
+            String text = participant.lastPlayer().get("text").asText();
+            assertTrue(text, text.contains("No next session is scheduled"));
+            assertFalse(text, text.contains("Join the next session"));
+            setAutopilot("pausedBecause", null);
+        }
+    }
+
+    @Test
+    public void aGivenUpWaitingRoomRunsAnAwayParticipantsOnCancelOnceWhenTheyReturn() throws Throwable {
+        User researcher = user("cancelledaway");
+        Experiment experiment = experimentOf(researcher, "Cancelled with someone away");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("continuous", false);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        Page away = connect(experiment, session, "away-end");
+        engine().eval("cancelledIds=[]; autopilot.room.onCancel={ players -> cancelledIds.addAll(players*.id); players.each { it.private.text='Away waiting credit'; it.private.finished=true } }; null");
+        for (F.Callback0 close : away.in.closeCallbacks) close.invoke();
+        engine().eval("autopilot.giveUp(); null");
+        assertEquals(0, engineValue("cancelledIds.size()"));
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
+        Page back = connect(experiment, session, "away-end");
+        assertTrue(within(1500, () -> back.closed));
+        assertEquals(1, engineValue("cancelledIds.size()"));
+        assertEquals("Away waiting credit", back.lastPlayer().get("text").asText());
+        assertTrue(back.lastPlayer().get("finished").asBoolean());
+        assertFalse(back.lastPlayer().get("_system").has("autopilot"));
+        Page again = connect(experiment, session, "away-end");
+        assertEquals(1, engineValue("cancelledIds.size()"));
+        assertEquals("Away waiting credit", again.lastPlayer().get("text").asText());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void aGivenUpWaitingRoomDoesNotRefreshAnOldClientFromAReplacementPlayersPrivateState() throws Exception {
+        User researcher = user("cancelledreplacement");
+        Experiment experiment = experimentOf(researcher, "Cancelled during replacement");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("continuous", false);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        Page oldPage = connect(experiment, session, "same-id");
+        Client old = client("same-id");
+        BreadboardGraphChangedListener listener = (BreadboardGraphChangedListener) scriptBoardField("graphChangedListener").get(null);
+        listener.removeClientListener(old); // isolate the deferred end from the normal graph updater
+        Client replacement = new Client("same-id", session);
+        Object rebuild = scriptBoardField("REBUILD_LOCK").get(null);
+        synchronized (old) {
+            synchronized (rebuild) {
+                engine().eval("autopilot.giveUp(); null");
+                ((Map<String, Client>) scriptBoardField("clients").get(null)).put("same-id", replacement);
+                engine().eval("g.getVertex('same-id').private.text='Replacement private result'; g.getVertex('same-id').private.finished=true; null");
+            }
+        }
+        Thread.sleep(250);
+        assertSame(replacement, client("same-id"));
+        String oldText = old.lastFrame == null ? "" : old.lastFrame.path("player").path("text").asText();
+        assertFalse(oldText, oldText.contains("Replacement private result"));
+        // The old socket must not be sent another session's participant-only result either.
+        for (JsonNode frame : oldPage.frames) assertFalse(frame.toString().contains("Replacement private result"));
+    }
+
     // ---- Maximum players --------------------------------------------------------------------------
 
     @Test
@@ -253,7 +380,7 @@ public class AutopilotFlowTest extends BaseTest {
         assertEquals("sessionFull", screen.get("ended").asText());
         String text = screen.get("text").asText();
         assertTrue(text, text.contains("This session is full"));
-        assertTrue("it leads to the next session: " + text, text.contains("href=\"/play/" + experiment.id + "/login\""));
+        assertTrue("it leads to the next session: " + text, text.contains("href=\"/play/" + experiment.id + "/login?id=f-3\""));
         List<Event> full = events(session, "sessionFull");
         assertEquals(1, full.size());
         assertEquals("f-3", value(full.get(0), "clientId"));
@@ -587,7 +714,7 @@ public class AutopilotFlowTest extends BaseTest {
         await("finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
         String between = page(login);
         assertTrue(between, between.contains("The next session opens soon"));
-        assertTrue(between, between.contains("http-equiv=\"refresh\""));
+        assertTrue(between, between.contains("http-equiv=\"refresh\" content=\"1\""));
 
         // Paused or done, or off, nothing opens by itself: the page says so, and asks nobody to wait.
         setAutopilot("pausedBecause", "a test paused it");

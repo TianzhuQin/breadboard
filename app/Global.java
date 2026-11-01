@@ -856,6 +856,25 @@ public class Global extends GlobalSettings {
     return super.onHandlerNotFound(request);
   }
 
+  /** Malformed participant links use the same friendly, translated pages as other entry errors. */
+  @Override
+  public F.Promise<play.mvc.SimpleResult> onBadRequest(Http.RequestHeader request, String error) {
+    String path = request.path();
+    if (path.startsWith("/game/") || path.startsWith("/play/")) {
+      java.util.regex.Matcher named = PARTICIPANT_LINK.matcher(path);
+      String experimentId = null;
+      String sessionId = null;
+      if (named.find()) {
+        experimentId = named.group(1) != null ? named.group(1) : named.group(2);
+        sessionId = named.group(3);
+      }
+      boolean prolific = path.matches("/(?:play/\\d+|game/\\d+/\\d+)/prolific/?");
+      return F.Promise.pure((play.mvc.SimpleResult) play.mvc.Results.badRequest(
+          controllers.ClientLogin.badRequestPage(experimentId, sessionId, prolific)));
+    }
+    return super.onBadRequest(request, error);
+  }
+
   // The ids at the start of a participant's link: /play/{experiment}/..., /game/{experiment}/{session}/...
   private static final java.util.regex.Pattern PARTICIPANT_LINK =
       java.util.regex.Pattern.compile("^/(?:play/(\\d+)|game/(\\d+)(?:/(\\d+))?)(?:/|$)");

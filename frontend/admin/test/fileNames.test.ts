@@ -2,10 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { safeFileName } from '../src/pages/sessions/sessionData'
 import { safeFileName as liveFileName } from '../src/pages/session/live'
 
-// The names of the data files Sessions & data and Live session download. The autopilot names its
-// sessions with no-break spaces, which keep "Autopilot ·" and "13:20:47 UTC" in one piece in the
-// console's narrow columns: each of them became a "-" in the file's name ("Autopilot- 2026-10-30
-// 13-20-47-UTC_14.csv").
+// The names of the data files Sessions & data and Live session download. The autopilot named its
+// sessions with no-break spaces before 3.1 ("Autopilot #12" now), and those names stay: each of
+// them became a "-" in the file's name ("Autopilot- 2026-10-30 13-20-47-UTC_14.csv").
 describe('download file names', () => {
   it('turn any kind of space into a plain one', () => {
     const name = 'Autopilot · 2026-10-30 13:20:47 UTC'
@@ -13,6 +12,12 @@ describe('download file names', () => {
     expect(liveFileName(name)).toBe('Autopilot - 2026-10-30 13-20-47 UTC')
     expect(safeFileName('a b c\td')).toBe('a b c d')
     expect(liveFileName('a b c\td')).toBe('a b c d')
+  })
+
+  it('name the autopilot\'s sessions as they are now, "Autopilot #12"', () => {
+    expect(safeFileName('Autopilot #12')).toBe('Autopilot 12')
+    expect(liveFileName('Autopilot #12')).toBe('Autopilot 12')
+    expect(safeFileName('Session #3, pilot')).toBe('Session 3 pilot')
   })
 
   it('name the autopilot\'s older sessions as before', () => {

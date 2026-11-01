@@ -80,6 +80,29 @@ describe('the first account', () => {
     w.unmount()
   })
 
+  it('says "Loading languages…" in the Default language list only until the languages are there', async () => {
+    ;(admin as any).setupCodeRequired = false
+    let answer!: (v: any) => void
+    http.get.mockReturnValueOnce(new Promise(resolve => { answer = resolve }))
+    const w = mount(SetupPage)
+    const options = () => w.find('select').findAll('option').map(o => o.text())
+    expect(options()).toEqual(['Loading languages…'])
+    answer({ languages: [{ id: 2, code: 'zho', name: 'Chinese' }, { id: 1, code: 'eng', name: 'English' }] })
+    await flushPromises()
+    // (it used to stay at the top of the list, greyed out)
+    expect(options()).toEqual(['Chinese (zho)', 'English (eng)'])
+    expect((w.find('select').element as HTMLSelectElement).selectedOptions[0].text).toBe('English (eng)')
+    w.unmount()
+
+    // a list that couldn't be loaded says so, there too
+    http.get.mockRejectedValueOnce(new HttpError(500, 'Server error'))
+    const failed = mount(SetupPage)
+    await flushPromises()
+    expect(failed.find('select').findAll('option').map(o => o.text())).toEqual(['Couldn’t load the languages'])
+    expect(failed.find('[role="alert"]').text()).toBe('Could not load the list of languages.')
+    failed.unmount()
+  })
+
   it('says what the default language does, and that the console stays in English', async () => {
     ;(admin as any).setupCodeRequired = false
     const w = mount(SetupPage)

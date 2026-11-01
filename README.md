@@ -36,7 +36,14 @@ Java) and unzip it. Then double-click `Start Breadboard.command` (macOS) or `bre
 researcher account, and add your colleagues' in Settings. [docs/install.md](docs/install.md) covers
 putting it on a server, HTTPS, backups, starting it again by itself, and upgrading from v2.
 
+To restore a backup, stop Breadboard, double-click the backup zip (on Windows, **Extract All**),
+then drag its `breadboard.h2.db` into `db/` and choose **Replace**. The filename must be exactly
+`breadboard.h2.db`. Start Breadboard again; changes made after that backup will be gone.
+
 ## Documentation
+
+The console's **Help** menu opens the guides shipped with the running version, including the
+Chinese quick start, without needing GitHub. The same files are in the download's `docs/` folder.
 
 | | |
 |---|---|

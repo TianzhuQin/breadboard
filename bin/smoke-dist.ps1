@@ -98,6 +98,15 @@ function Get-Said([string]$out) {
 }
 
 $server = Start-Breadboard $app $Port 'out.log' 'err.log'
+# A second double-click while Java is still starting must leave the first one's lock and pid alone.
+$claimDeadline = (Get-Date).AddSeconds(60)
+while (-not (Test-Path -LiteralPath (Join-Path $app 'logs\start.lock')) -and
+       -not (Test-Path -LiteralPath (Join-Path $app 'RUNNING_PID')) -and -not $server.HasExited) {
+  if ((Get-Date) -gt $claimDeadline) { Fail 'the first start did not claim its start lock' }
+  Start-Sleep -Milliseconds 20
+}
+$race = Start-Breadboard $app $Port 'race.log' 'race-err.log'
+
 $deadline = (Get-Date).AddSeconds(240)
 $health = $null
 while (-not $health) {
@@ -110,6 +119,14 @@ if ($health.status -ne 'ok') { Fail "/health says $($health | ConvertTo-Json -Co
 # (HEAD too, for uptime monitors that check that way)
 $head = Invoke-WebRequest -Uri "$base/health" -Method Head -UseBasicParsing
 if ($head.StatusCode -ne 200) { Fail "HEAD /health answered $($head.StatusCode)" }
+$race.WaitForExit(60000) | Out-Null
+$raceSaid = Get-Said 'race.log'
+if (-not $race.HasExited -or $race.ExitCode -ne 1 -or
+    -not ($raceSaid.Contains('starting or running from this folder') -or $raceSaid.Contains('already running from this folder'))) {
+  Fail "a simultaneous second start was not safely refused: $raceSaid"
+}
+if (Test-Path -LiteralPath (Join-Path $app 'logs\start.lock')) { Fail 'the start lock was not released after the server listened' }
+Pass 'two simultaneous starts leave one server and release the start lock'
 Pass 'server started (from a folder whose path has spaces, parentheses and an "&")'
 
 $java = Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($app) } | Select-Object -First 1
@@ -120,7 +137,7 @@ Pass 'it runs on the Java that comes with it'
 # where one that takes no output (a click into it starts selecting text) would hold Java up for good.
 # (breadboard.bat writes Java's %p, the process id, as %%p.)
 $jvmLog = Join-Path $app "logs\jvm-pid$($java.ProcessId).log"
-if (-not $java.CommandLine.Contains(' -XX:-DisplayVMOutput ') -or -not $java.CommandLine.Contains(' -XX:LogFile=logs\jvm-%p.log ') -or -not (Test-Path -LiteralPath $jvmLog)) {
+if (-not $java.CommandLine.Contains(' -XX:-DisplayVMOutput ') -or -not $java.CommandLine.Contains('-XX:OnOutOfMemoryError=') -or (Test-Path -LiteralPath $jvmLog)) {
   Fail "what Java itself says doesn't go into logs\jvm-pid$($java.ProcessId).log: $($java.CommandLine)"
 }
 Pass 'what Java itself says goes into logs\jvm-pid<N>.log, not the window'
@@ -139,7 +156,7 @@ Pass 'console and participant bundles load'
 
 $languages = Invoke-RestMethod -Uri "$base/languages"
 $english = ($languages.languages | Where-Object { $_.code -eq 'eng' } | Select-Object -First 1).id
-$email = 'smoke@breadboard.test'
+$email = 'smoke@example.org'
 $password = 'smoke-' + [Guid]::NewGuid().ToString('N').Substring(0, 16)
 $body = @{ email = $email; password = $password; defaultLanguageId = $english } | ConvertTo-Json
 Invoke-RestMethod -Uri "$base/createFirstUser" -Method Post -ContentType 'application/json' -Body $body | Out-Null
@@ -171,7 +188,7 @@ $other = Expand-Release (Join-Path $work 'another copy! (2)')
 $third = Start-Breadboard $other $Port 'third.log' 'third-err.log' -Wait
 $said = Get-Said 'third.log'
 # (with a command for another port that works from any Command Prompt: breadboard.bat's full path)
-if ($third.ExitCode -ne 1 -or -not $said.Contains("Port $Port is in use") -or -not $said.Contains("\breadboard.bat`" -Dhttp.port=$($Port + 1)")) {
+if ($third.ExitCode -ne 1 -or -not $said.Contains("is already running from another folder on port $Port") -or -not $said.Contains('stop that Breadboard first')) {
   Fail "another copy started on the same port didn't say the port is in use, with a command for another one (exit code $($third.ExitCode)): $said"
 }
 Pass 'another copy on the same port says the port is in use (from a folder whose path has a "!")'
@@ -184,10 +201,25 @@ Remove-Item Env:BREADBOARD_SERVICE
 $otherLog = Join-Path $other 'logs\application.log'
 $logged = ''
 if (Test-Path -LiteralPath $otherLog) { $logged = "$(Get-Content -LiteralPath $otherLog -Raw)" }
-if ($fourth.ExitCode -ne 1 -or -not $logged.Contains("Port $Port is in use") -or -not $logged.Contains('from breadboard.bat in launcher')) {
+if ($fourth.ExitCode -ne 1 -or -not $logged.Contains("is already running from another folder on port $Port") -or -not $logged.Contains('from breadboard.bat in launcher')) {
   Fail "as a service, a start turned away didn't say why in logs\application.log (exit code $($fourth.ExitCode)): $logged"
 }
 Pass 'as a service, why a start was turned away is in logs\application.log'
+
+# A failed start-lock mkdir is a folder problem, not another server. A file at that name
+# exercises the refusal without needing administrator privileges to change Windows ACLs.
+$brokenLock = Join-Path $other 'logs\start.lock'
+Set-Content -LiteralPath $brokenLock -Value 'not a directory'
+$badLock = Start-Breadboard $other ($Port + 9) 'bad-lock.log' 'bad-lock-err.log' -Wait
+$said = Get-Said 'bad-lock.log'
+Remove-Item -LiteralPath $brokenLock
+if ($badLock.ExitCode -ne 1 -or -not $said.Contains("logs\start.lock can't be written") -or
+    $said.Contains('starting or running from this folder')) {
+  Fail "a start-lock folder failure was called another running server: $said"
+}
+$kept = Get-Content -LiteralPath (Join-Path $other 'logs\start-errors.log') -Raw
+if (-not $kept.Contains("logs\start.lock can't be written")) { Fail 'the start-lock refusal was not kept' }
+Pass 'a failed start-lock directory is reported as a folder problem and kept in start-errors.log'
 
 # As a service, what Java prints as errors itself goes into logs\service-errors.log: a mistake in
 # conf\local.conf (here a Windows path with single backslashes) is said only there, before the
@@ -235,7 +267,10 @@ if ($sixth.ExitCode -eq 0 -or -not $said.Contains('(it could not start, exit cod
   Fail "a server that couldn't start was started again, or that wasn't said, or logs\start-errors.log doesn't say why (exit code $($sixth.ExitCode)): $said / $kept"
 }
 Remove-Item -LiteralPath $localConf
-Pass "a server that can't start isn't started again, and logs\start-errors.log says why"
+if (-not $said.Contains('Start failed: Configuration error')) {
+  Fail 'the final launcher message does not name the configuration error'
+}
+Pass "a server that can't start isn't started again, and its final message names the cause"
 
 # With no -Dhttp.port, it starts on the port its conf\local.conf gives (http.port), with the memory it
 # gives (breadboard.memory). (Keep running is on, for the check after this one.)
@@ -301,7 +336,10 @@ if ($eighth.ExitCode -ne 1 -or -not $said.Contains('Line 2 of conf\local.conf ha
   Fail "curly quotes in conf\local.conf weren't named before Java started (exit code $($eighth.ExitCode)): $said"
 }
 Remove-Item -LiteralPath $localConf
-Pass 'curly quotes in conf\local.conf are named before Java starts'
+if (-not (Get-Content -LiteralPath (Join-Path $other 'logs\start-errors.log') -Raw).Contains('curly quotes')) {
+  Fail 'the curly-quotes refusal was not kept in logs\start-errors.log'
+}
+Pass 'curly quotes in conf\local.conf are named before Java starts and kept in start-errors.log'
 
 # A program on the port's IPv6 loopback address only (::1) is reported as using the port: the
 # browser, which tries ::1 first for localhost, would open it in Breadboard's place.
@@ -343,7 +381,7 @@ Remove-Item -LiteralPath (Join-Path $other 'logs\out-of-memory.hprof') -ErrorAct
 if ($tenth.ExitCode -eq 0 -or -not $said.Contains('stopped before the server started (it ran out of memory: a script may keep too much data. -Xmx64m in JAVA_OPTS gives it 64m, and wins over breadboard.memory: raise that, e.g. to -Xmx128m,') -or $said.Contains('Starting Breadboard again')) {
   Fail "a server that ran out of memory while starting was started again, or breadboard.bat didn't say how to give it more (exit code $($tenth.ExitCode)): $said"
 }
-if ($window.Contains('Terminating due to') -or -not $jvmSaid.Contains('Terminating due to java.lang.OutOfMemoryError')) {
+if ($window.Contains('Terminating due to') -or -not $jvmSaid.Contains('java.lang.OutOfMemoryError: Java memory exhausted.')) {
   Fail "what Java said as it ran out of memory isn't in logs\jvm-pid<N>.log, or went into the window: $window / $jvmSaid"
 }
 Pass 'a server that runs out of memory while starting isn''t started again; breadboard.bat says how to give it more (the -Xmx in JAVA_OPTS), and logs\jvm-pid<N>.log what Java said'

@@ -4,9 +4,9 @@ Breadboard runs experiments in which people interact over a network: each partic
 neighbors, makes choices, and may add or cut ties, while the researcher watches and steers the
 session from a web console, or lets the autopilot run it.
 
-The full documentation is in `docs/` (also at
-<https://github.com/TianzhuQin/breadboard/tree/main/docs>); `docs/zh-CN.md` is a quick start in
-Chinese.
+Open **Help** in the console's menu under your email for the guides included with this version;
+they work without GitHub. The same files are in `docs/`, including `docs/zh-CN.md`, a quick start
+in Chinese. Each guide in the console also links to its version on GitHub.
 
 ## What you need
 
@@ -120,8 +120,12 @@ On macOS and Linux, only the account that runs Breadboard can read `db/`, `backu
 The server copies its database into `backups/` once a day, and before a newer release changes it.
 The console's Settings → Backups shows them, makes one when you ask, and downloads them. The newest
 14 of each kind (daily, made by hand, before an upgrade) are kept. Copy them to another disk now and
-then. To go back to one: stop Breadboard, unzip the copy into `db/` (replacing `breadboard.h2.db`),
-and start Breadboard again.
+then. To go back to one:
+
+1. Stop Breadboard. Double-click the backup zip (on Windows, choose **Extract All**).
+2. Drag the `breadboard.h2.db` it gives into Breadboard's `db/` folder and choose **Replace**.
+   Its name must be exactly `breadboard.h2.db`, with no extra spaces, numbers or `.db` suffix.
+3. Start Breadboard again. Everything since that backup is gone.
 
 ## Upgrading from an earlier release
 

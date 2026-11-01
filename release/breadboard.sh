@@ -29,6 +29,18 @@ cd "$(dirname "$0")"
 # set again below for the server when this script starts it again
 unset BREADBOARD_RESTARTED
 
+# Refusals made before Java starts must survive closing this window too. Keep only this
+# refusal's lines; a successful start replaces this file, as launcher.Main already does.
+REFUSAL_LOGGED=""
+refuse() {
+  if [ -z "$REFUSAL_LOGGED" ]; then
+    (umask 077; mkdir -p logs; : > logs/start-errors.log) 2>/dev/null || true
+    REFUSAL_LOGGED=1
+  fi
+  (umask 077; printf '%s\n' "$1" >> logs/start-errors.log) 2>/dev/null || true
+  printf '%s\n' "$1" >&2
+}
+
 # Java 8: JAVA is the first one found. OTHER is the first Java found that isn't Java 8, to name it if
 # there is no Java 8 at all.
 JAVA=""
@@ -68,34 +80,27 @@ if [ -z "$JAVA" ]; then
 fi
 if [ -z "$JAVA" ]; then
   if [ -n "$OTHER" ]; then
-    echo "Breadboard needs Java 8, but $OTHER is:" >&2
+    refuse "Breadboard needs Java 8, but $OTHER is:"
     "$OTHER" -version >&2 || true
-    echo "Download the Breadboard release that includes Java, or install a Java 8 JDK (for example" >&2
-    echo "Azul Zulu 8) and set JAVA8_HOME to it." >&2
+    refuse "Download the Breadboard release that includes Java, or install a Java 8 JDK (for example"
+    refuse "Azul Zulu 8) and set JAVA8_HOME to it."
   else
-    echo "Breadboard needs Java 8. Download the Breadboard release that includes Java (its name ends in" >&2
-    echo "-macos-arm64, -macos-x64 or -linux-x64), or install a Java 8 JDK (for example Azul Zulu 8)" >&2
-    echo "and set JAVA8_HOME to it." >&2
+    refuse "Breadboard needs Java 8. Download the Breadboard release that includes Java (its name ends in"
+    refuse "-macos-arm64, -macos-x64 or -linux-x64), or install a Java 8 JDK (for example Azul Zulu 8)"
+    refuse "and set JAVA8_HOME to it."
   fi
   exit 1
 fi
 
-# Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
-# and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-# would fill the disk): delete logs/out-of-memory.hprof once it has been looked at. What Java itself
-# says then (that it ran out of memory, and of what; the heap dump) goes into logs/jvm-pid<its
-# process id>.log, not to this window: Java writes it to the window directly, and one that doesn't
-# take output (paused, or a pipe nobody reads) held it up there for good, before it ended, so that
-# it was never started again (Keep running, below). Each start has a file of its own: launcher.Main
-# deletes the earlier ones in which Java said nothing, and keeps at most 10. These options need Java
-# 8u92 or newer; an older Java 8 runs without them.
-MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
-# shellcheck disable=SC2086 # a list of options
-if "$JAVA" $MEMORY_OPTS -version >/dev/null 2>&1; then
-  # (not in the check: there, Java would make such a file too)
-  MEMORY_OPTS="$MEMORY_OPTS -XX:+LogVMOutput -XX:LogFile=logs/jvm-%p.log"
-else
+# Native Java output must never block on a paused window. HotSpot's LogVMOutput also writes
+# dependency_failed XML at every engine rebuild, without a size limit, so leave it off. The OOM
+# hook writes one short diagnostic of its own; heap dumps and hs_err_pid crash reports stay.
+MEMORY_OPTS="-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs/out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput -XX:-LogVMOutput"
+OOM_NOTE="-XX:OnOutOfMemoryError=echo java.lang.OutOfMemoryError: Java memory exhausted. See logs/out-of-memory.hprof and raise breadboard.memory. > logs/jvm-pid%p.log"
+# shellcheck disable=SC2086 # a list of options; the OOM hook is deliberately one argument
+if ! "$JAVA" $MEMORY_OPTS "$OOM_NOTE" -version >/dev/null 2>&1; then
   MEMORY_OPTS=""
+  OOM_NOTE=""
 fi
 
 # The real folder, not a symbolic link to it (e.g. /opt/breadboard), which may be moved to the next
@@ -110,18 +115,18 @@ HERE="$(pwd -P)"
 ME="$(id -un 2>/dev/null || echo "${USER:-this account}")"
 cannot_write() {
   if [ -O "$2" ]; then
-    echo "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:" >&2
+    refuse "$1 can't be ${3:-written} by $ME, its owner; give it access, e.g.:"
     if [ -d "$2" ]; then
-      echo "  chmod -R u+rwX \"$2\"" >&2
+      refuse "  chmod -R u+rwX \"$2\""
     else
-      echo "  chmod u+rw \"$2\"" >&2
+      refuse "  chmod u+rw \"$2\""
     fi
   else
-    echo "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:" >&2
+    refuse "$1 can't be ${3:-written} by $ME; fix its owner (or permissions), e.g.:"
     if [ -d "$2" ]; then
-      echo "  sudo chown -R $ME \"$2\"" >&2
+      refuse "  sudo chown -R $ME \"$2\""
     else
-      echo "  sudo chown $ME \"$2\"" >&2
+      refuse "  sudo chown $ME \"$2\""
     fi
   fi
   exit 1
@@ -188,10 +193,10 @@ if [ -r conf/local.conf ]; then
       *,*) WHERE="Lines $CURLY of conf/local.conf have" ;;
       *) WHERE="Line $CURLY of conf/local.conf has" ;;
     esac
-    echo "$WHERE curly quotes ($(printf '\342\200\234 \342\200\235')) where Breadboard needs straight ones (\")," >&2
-    echo "as TextEdit's Smart Quotes (or an input method) types them. Type those quotes again with Smart" >&2
-    echo "Quotes off (in TextEdit: Edit > Substitutions > Smart Quotes), save the file, and start" >&2
-    echo "Breadboard again." >&2
+    refuse "$WHERE curly quotes ($(printf '\342\200\234 \342\200\235')) where Breadboard needs straight ones (\"),"
+    refuse "as TextEdit's Smart Quotes (or an input method) types them. Type those quotes again with Smart"
+    refuse "Quotes off (in TextEdit: Edit > Substitutions > Smart Quotes), save the file, and start"
+    refuse "Breadboard again."
     exit 1
   fi
 fi
@@ -203,8 +208,8 @@ if [ -n "$LOCAL_PORT" ]; then
   esac
   case "$LOCAL_PORT" in
     \?*)
-      echo "conf/local.conf gives http.port as ${LOCAL_PORT#?}, which isn't a port number (1 to 65535): write it as, e.g.," >&2
-      echo "  http.port=8080" >&2
+      refuse "conf/local.conf gives http.port as ${LOCAL_PORT#?}, which isn't a port number (1 to 65535): write it as, e.g.,"
+      refuse "  http.port=8080"
       exit 1
       ;;
   esac
@@ -219,8 +224,8 @@ if [ -n "$LOCAL_MEMORY" ]; then
   case "$LOCAL_MEMORY" in
     [1-9][mMgG]|[1-9][0-9][mMgG]|[1-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][mMgG]|[1-9][0-9][0-9][0-9][0-9][mMgG]) MEMORY="$LOCAL_MEMORY" ;;
     *)
-      echo "conf/local.conf gives breadboard.memory as $LOCAL_MEMORY: write it in megabytes or gigabytes, e.g." >&2
-      echo "  breadboard.memory=2g" >&2
+      refuse "conf/local.conf gives breadboard.memory as $LOCAL_MEMORY: write it in megabytes or gigabytes, e.g."
+      refuse "  breadboard.memory=2g"
       exit 1
       ;;
   esac
@@ -248,6 +253,50 @@ open_console() {
     i=$((i + 1))
   done
 }
+
+# Claim the start before checking the process file or the port: two double-clicks can otherwise
+# both pass those checks before either Java writes RUNNING_PID. mkdir is atomic. Java releases
+# this lock once it listens (or exits); the shell releases it if a preflight check refuses.
+START_LOCK="logs/start.lock"
+BREADBOARD_START_LOCK_PID="$$"
+export BREADBOARD_START_LOCK_PID
+release_start_lock() {
+  [ -f "$START_LOCK/pid" ] || return 0
+  [ "$(cat "$START_LOCK/pid" 2>/dev/null)" = "$$" ] || return 0
+  rm -f "$START_LOCK/pid"
+  rmdir "$START_LOCK" 2>/dev/null || true
+}
+trap 'release_start_lock' EXIT
+pid_alive() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$(ps -p "$1" -o pid= 2>/dev/null)" ]
+}
+claim_start_lock() {
+  umask 077
+  mkdir -p logs 2>/dev/null || cannot_write "logs/" "$HERE/logs"
+  [ -w logs ] || cannot_write "logs/" "$HERE/logs"
+  # An empty lock may be between mkdir and writing its pid. Leave it alone for a minute.
+  while ! mkdir "$START_LOCK" 2>/dev/null; do
+    OWNER="$(cat "$START_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$OWNER" ] && ! pid_alive "$OWNER" && mkdir "$START_LOCK/recover" 2>/dev/null; then
+      OWNER="$(cat "$START_LOCK/pid" 2>/dev/null || true)"
+      if [ -n "$OWNER" ] && ! pid_alive "$OWNER"; then
+        rm -f "$START_LOCK/pid"
+      fi
+      rmdir "$START_LOCK/recover" 2>/dev/null || true
+      rmdir "$START_LOCK" 2>/dev/null || true
+      continue
+    fi
+    if [ -z "$OWNER" ] && [ -n "$(find "$START_LOCK" -prune -mmin +1 2>/dev/null)" ]; then
+      rmdir "$START_LOCK" 2>/dev/null && continue
+    fi
+    echo "Breadboard is starting or running from this folder. Once it answers, open $URL. To start it again, stop it first." >&2
+    if [ -n "$OPENER" ]; then (trap '' HUP; open_console "$PORT" &); fi
+    return 1
+  done
+  printf '%s\n' "$$" > "$START_LOCK/pid"
+}
+claim_start_lock || exit 1
 
 # Whether a Breadboard runs from this folder now: the pid file names it (its process id, written by
 # Play), and a crash or power cut leaves the file behind, naming a process that is gone or another
@@ -291,6 +340,7 @@ fi
 # 127.0.0.1. -g: the brackets are the address's, not a range.)
 port_taken() {
   TAKEN=""
+  OTHER_BREADBOARD=""
   command -v curl >/dev/null 2>&1 || return 1
   for HOST in 127.0.0.1 '[::1]'; do
     if ANSWER="$(curl -g -s --noproxy '*' --max-time 8 "http://$HOST:$PORT/health" 2>/dev/null)"; then
@@ -306,7 +356,9 @@ port_taken() {
   done
   [ "$CURL" -ne 7 ] || return 1
   if printf '%s' "$ANSWER" | grep -q '"database"'; then
-    TAKEN="Breadboard is already running on port $PORT: open $URL"
+    OTHER_BREADBOARD=1
+    VERSION="$(printf '%s' "$ANSWER" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')"
+    TAKEN="Breadboard${VERSION:+ $VERSION} is already running from another folder on port $PORT: open $URL. To start this copy, stop that Breadboard first (close its window, or stop its service)."
   elif [ -n "$PORT_OPT" ]; then
     TAKEN="Another program is using port $PORT (http.port in conf/local.conf). Stop it, or change that
 line to another port, e.g.  http.port=$((PORT + 1))"
@@ -318,7 +370,10 @@ start, with the line  http.port=$((PORT + 1))  in conf/local.conf, or once, with
   fi
 }
 if port_taken; then
-  echo "$TAKEN" >&2
+  refuse "$TAKEN"
+  if [ -n "$OTHER_BREADBOARD" ] && [ -n "$OPENER" ]; then
+    (trap '' HUP; open_console "$PORT" &)
+  fi
   exit 1
 fi
 
@@ -350,6 +405,13 @@ for f in db backups logs db/* backups/* logs/*; do
   if [ -e "$f" ] && [ -O "$f" ]; then
     chmod go-rwx "$f" 2>/dev/null || true
   fi
+done
+
+# A copied extraction name must not silently leave the restored database unused.
+for f in db/*.h2.db; do
+  [ -f "$f" ] || continue
+  [ "$f" = db/breadboard.h2.db ] && continue
+  echo "$f isn't used: rename it to breadboard.h2.db in db/ to restore it, replacing the existing file while Breadboard is stopped." >&2
 done
 
 # application.secret must not be a published value. Use $APPLICATION_SECRET if set; otherwise
@@ -386,7 +448,15 @@ fi
 
 # Play refuses to start while its pid file exists: one left behind by a crash or a power cut goes.
 remove_pid_file() {
-  [ "$PID_FILE" = /dev/null ] || rm -f "$PID_FILE"
+  [ "$PID_FILE" = /dev/null ] && return 0
+  if [ -f "$PID_FILE" ]; then
+    OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if pid_alive "$OLD_PID"; then
+      refuse "$PID_FILE names a live process ($OLD_PID), so it is left in place. Another Breadboard from this folder may have the database open; stop it before starting this one."
+      return 1
+    fi
+    rm -f "$PID_FILE"
+  fi
 }
 remove_pid_file
 
@@ -415,7 +485,13 @@ esac
 # This computer's IPv4 addresses, where the other computers on its network (a lab's) reach it, one
 # per line: first those of the interface its default route goes through, then those of every other
 # active interface (an Ethernet adapter, a second network; a lab's network may hand out public
-# addresses). Only loopback (127.x) and link-local (169.254.x) addresses are left out.
+# addresses), in the order of their interfaces. Left out are loopback (127.x) and link-local
+# (169.254.x) addresses, and the networks only this computer is on: VPNs (point-to-point, below),
+# and those of virtual machines, containers and the like, by their interfaces' names (Parallels'
+# vnic0, UTM's, Apple's and Internet Sharing's bridge100, VMware's vmnet8, AirDrop's awdl0, Docker's
+# docker0 and br-..., libvirt's virbr0), whose addresses reach nothing but this computer, unless the
+# default route goes through one (a Linux server whose network is on a bridge). The console lists the
+# same (app/controllers/LanAddresses.java).
 lan_addresses() {
   if [ "$(uname)" = Darwin ]; then
     DEFAULT_IF="$(route -n get default 2>/dev/null | awk '/interface:/ { print $2 }')"
@@ -425,21 +501,26 @@ lan_addresses() {
     DEFAULT_IF=""
   fi
   interface_addresses \
-    | awk -v d="$DEFAULT_IF" '$1 == d { print $2; next } { rest[++n] = $2 } END { for (i = 1; i <= n; i++) print rest[i] }' \
+    | awk -v d="$DEFAULT_IF" '
+      $1 == d { print $2; next }
+      $1 ~ /^(bridge|vnic|vmnet|vmenet|feth|utun|awdl|llw|anpi|ap|gif|stf|ipsec|ppp|docker|br-|virbr|veth|vboxnet|lxc|lxdbr|cni|flannel|cali|podman|tun|tap|wg|zt|tailscale)/ { next }
+      { rest[++n] = $2 }
+      END { for (i = 1; i <= n; i++) print rest[i] }' \
     | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -vE '^(127|169\.254)\.' | awk '!seen[$0]++'
 }
 # "interface address", one per line, for the interfaces that are up and connected (macOS: not
-# "status: inactive"; Linux: LOWER_UP)
+# "status: inactive"; Linux: LOWER_UP), in their order, other than point-to-point ones (VPNs: utun,
+# tun, wg)
 interface_addresses() {
   if [ "$(uname)" = Darwin ]; then
     ifconfig 2>/dev/null | awk '
       function flush() { if (up && !inactive) for (i = 0; i < n; i++) print name, addr[i]; n = 0 }
-      /^[^ \t]/ { flush(); name = $1; sub(/:$/, "", name); up = /[<,]UP[,>]/ && /[<,]RUNNING[,>]/; inactive = 0; next }
+      /^[^ \t]/ { flush(); name = $1; sub(/:$/, "", name); up = /[<,]UP[,>]/ && /[<,]RUNNING[,>]/ && !/[<,]POINTOPOINT[,>]/; inactive = 0; next }
       /^[ \t]+inet / { addr[n++] = $2 }
       /^[ \t]+status: inactive/ { inactive = 1 }
       END { flush() }'
   elif command -v ip >/dev/null 2>&1; then
-    ip -o link show up 2>/dev/null | awk -F': ' '/LOWER_UP/ { sub(/@.*/, "", $2); print $2 }' | while read -r NAME; do
+    ip -o link show up 2>/dev/null | awk -F': ' '/LOWER_UP/ && !/[<,]POINTOPOINT[,>]/ { sub(/@.*/, "", $2); print $2 }' | while read -r NAME; do
       ip -4 -o addr show dev "$NAME" 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $2, $4 }'
     done
   else
@@ -513,7 +594,7 @@ fi
 # the server up, nor, with MEMORY_OPTS (above), Java as it runs out of memory. (Only a crash of Java
 # itself, which is rare, still waits for the window to take its first lines.)
 # shellcheck disable=SC2086 # MEMORY_OPTS and JAVA_OPTS are lists of options, PORT_OPT one or none
-set -- "$JAVA" "-Xmx$MEMORY" -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS $JAVA_OPTS \
+set -- "$JAVA" "-Xmx$MEMORY" -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m $MEMORY_OPTS ${OOM_NOTE:+"$OOM_NOTE"} $JAVA_OPTS \
   -Duser.timezone=UTC \
   -Dconfig.file=conf/application-prod.conf -Dlogger.file=conf/logger.xml \
   -cp "$CP" \
@@ -651,7 +732,7 @@ stop_server() {
 trap 'stop_server 130' INT
 trap 'stop_server 143' TERM
 trap 'stop_server 129' HUP
-trap '[ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null; let_said_out' EXIT
+trap 'release_start_lock; [ -z "$KILLER" ] || kill "$KILLER" 2>/dev/null; [ -z "$OPENER_PID" ] || kill "$OPENER_PID" 2>/dev/null; let_said_out' EXIT
 
 RESTARTS=""   # when the server was started again (in seconds), within the last 10 minutes
 CODE=""       # how the last Java ended (none yet)
@@ -686,7 +767,18 @@ while :; do
   # The server never started (a mistake in conf/local.conf, its port taken by then, Java that can't
   # start at all): started again, it would only fail the same way.
   if [ -f logs/start-errors.log ]; then
-    note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs/start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+    if grep -qF "Locked by another process" logs/start-errors.log; then
+      note "Breadboard could not start: another Breadboard from this folder has the database open. Stop that one before starting this one; logs/start-errors.log keeps the details."
+      exit "$CODE"
+    fi
+    CAUSE="$(awk '
+      /^[[:space:]]*$/ || /^Breadboard/ || /^Once it listens/ || /^if nothing else/ || /^newest logs/ || /^[[:space:]]+at / { next }
+      { sub(/^[[:space:]]+/, ""); print; exit }' logs/start-errors.log)"
+    if [ -n "$CAUSE" ]; then
+      note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)): $CAUSE. Full details are in logs/start-errors.log; correct the cause, then start Breadboard again."
+    else
+      note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)), so it is left stopped. Read logs/start-errors.log and the newest logs/jvm-pid*.log for the cause before starting it again."
+    fi
     exit "$CODE"
   fi
 
@@ -725,7 +817,8 @@ while :; do
     note "Breadboard is not started again. $TAKEN"
     exit "$CODE"
   fi
-  remove_pid_file
+  claim_start_lock || exit "$CODE"
+  remove_pid_file || exit "$CODE"
   RESTARTS="$RESTARTS $NOW"
   # (the server doesn't redo what -Dbreadboard.resetPassword asked for: see Global)
   BREADBOARD_RESTARTED=$((${BREADBOARD_RESTARTED:-0} + 1))

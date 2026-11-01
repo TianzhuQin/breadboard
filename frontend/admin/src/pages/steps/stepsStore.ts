@@ -203,6 +203,7 @@ export function runDraft (d: StepDraft, experimentId?: number): boolean {
     // not worth showing)
     run.values = reply.values.filter((v: string) => !/^Script\d+\$_[\w$]*@[0-9a-f]+$/.test(String(v).trim()))
     run.error = reply.error
+    if (reply.frames) run.frames = reply.frames
     if (reply.ok && d.source === source) {
       d.engineBehind = false
       engineCaughtUp()

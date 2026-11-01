@@ -89,7 +89,7 @@
                     <BBadge v-if="isCurrent(s)" tone="accent" class="ss__current">Current</BBadge>
                   </div>
                   <div class="ss__sub">
-                    <span class="mono" title="The session's ID in the data (IDs are given out in blocks, so they skip numbers)">ID {{ s.id }}</span>
+                    <span class="mono" title="The session's ID in the data">ID {{ s.id }}</span>
                     <span class="ss__sub-narrow">{{ createdText(s) }}</span>
                     <BBadge class="ss__sub-narrow" :tone="statusMeta(s.status).tone" dot :pulse="statusMeta(s.status).pulse">{{ statusMeta(s.status).label }}</BBadge>
                   </div>
@@ -435,8 +435,8 @@ watch(eventsOpen, (open) => {
 .ss__chev:hover { background: var(--surface-hover); color: var(--text); }
 .ss__chev svg { transition: transform var(--duration) var(--ease); }
 .ss__row.is-open .ss__chev svg { transform: rotate(90deg); }
-/* Long names (the autopilot's "Autopilot · Oct 28, 22:42:41 UTC") wrap rather than widen the
-   table past the page at laptop widths. */
+/* Long names (the autopilot's before 3.1, "Autopilot · Oct 28, 22:42:41 UTC") wrap rather than widen
+   the table past the page at laptop widths. */
 .ss__name { min-width: 160px; max-width: 300px; }
 .ss__name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; }
 .ss__name-text { font-weight: 600; color: var(--text); overflow-wrap: anywhere; min-width: 0; }

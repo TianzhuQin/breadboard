@@ -1,5 +1,6 @@
 import { reactive, watch } from 'vue'
 import { actions } from '@/store/admin'
+import type { ErrorFrame } from '@/store/types'
 import { expectReply, lastOutputId } from './engineReplies'
 
 /**
@@ -23,6 +24,8 @@ export interface ConsoleRun {
   status: 'pending' | 'ok' | 'error' | 'noreply'
   values: string[]
   error: string | null
+  /** The error's lines named by step, when the server sent them. */
+  frames?: ErrorFrame[]
   doneAt: number | null
 }
 
@@ -157,6 +160,7 @@ export function runConsoleScript (script: string, meta: { label: string, fromLin
     run.status = reply.ok ? 'ok' : 'error'
     run.values = reply.values
     run.error = reply.error
+    if (reply.frames) run.frames = reply.frames
     markHistory(consoleState.history, script, reply.ok)
   })
   return run

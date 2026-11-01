@@ -542,8 +542,10 @@ export default LinkAware.extend({
       const e = this.edits
       if (!e.enabled) return ''
       if (this.link === 'watching') {
-        return computerPlayer()
-          ? 'Watching only: the computer plays this seat, so you can’t change its ties.'
+        if (computerPlayer()) return 'Watching only: the computer plays this seat, so you can’t change its ties.'
+        // (another preview, perhaps in another researcher's console, stands in for someone away)
+        return this.watchedBy === 'preview'
+          ? 'Watching only: another preview of this player answers for them, so you can’t change their ties here.'
           : 'Watching only: their own page is connected, so you can’t change their ties.'
       }
       if (this.link === 'reconnecting') return t('network.reconnecting')

@@ -142,6 +142,7 @@ public class ScriptTestHarness {
                     System.err.println("ScriptTestHarness: skipping non-core script " + name + " -> " + ex.getMessage());
                 }
             }
+            models.EngineCleanup.afterScriptsLoaded();
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {

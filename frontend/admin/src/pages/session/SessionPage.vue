@@ -14,14 +14,16 @@
         </p>
         <!-- "Line 71 of RoundStep", which opens that step at that line, when the server names the step (in the
              experiment the engine runs, which the Steps page asks to switch to when it isn't the one worked on):
-             the line in that step's own code, also when another step started it (in-step) -->
+             the line in that step's own code, also when another step started it (in-step), and where it went
+             wrong in another step's code it called ("in isHuman (InitStep line 30)"), each opening its step -->
         <EngineError
           class="live-err__text"
           :error="latestError.text"
+          :frames="latestError.frames"
           :own-name="latestError.step || 'a step'"
           :from-line="latestError.step ? 1 : null"
           :in-step="!!latestError.step"
-          @goto="(line: number) => latestError?.step && router.push(stepAt(latestError.step, line, errorExperiment.id))"
+          @goto="(line: number, _col?: number, step?: string) => openStep(step || latestError?.step, line)"
         />
       </div>
       <div class="live-err__actions">
@@ -131,7 +133,7 @@
         <div class="live-stat">
           <dt class="live-stat__label"><Wifi :size="15" aria-hidden="true" /> Connected now</dt>
           <dd class="live-stat__value tabular">{{ stats.connected }}</dd>
-          <dd class="live-stat__sub">{{ stats.people ? `${stats.people - stats.connected} not on the page` : 'nobody has joined yet' }}</dd>
+          <dd class="live-stat__sub">{{ !isRunning ? 'the session isn’t running' : stats.people ? `${stats.people - stats.connected} not on the page` : 'nobody has joined yet' }}</dd>
         </div>
         <div class="live-stat">
           <dt class="live-stat__label"><Bot :size="15" aria-hidden="true" /> AI seats</dt>
@@ -189,6 +191,7 @@ import {
 } from './live'
 import { busy, dismissedErrorId, downloadData, resumeSession, startGame, stopSession } from './controls'
 import { autopilotRuns, useAutopilotStatus } from './autopilot'
+import { stoppedByText } from './stopped'
 import { stepAt } from '../steps/stepsModel'
 
 const route = useRoute()
@@ -220,7 +223,8 @@ const feed = computed(() => allEvents.value.length > FEED_CAP ? allEvents.value.
 
 const stats = computed(() => {
   void graph.version.value
-  return networkStats(graph.nodes.values(), graph.links.size)
+  // (a stopped session's participants aren't connected, whatever their players last said)
+  return networkStats(graph.nodes.values(), graph.links.size, isRunning.value)
 })
 const room = computed(() => {
   void graph.version.value
@@ -341,7 +345,11 @@ const explanation = computed(() => {
     if (stepsCall(admin.experiment?.steps, 'waitingRoom')) return 'People can join with the links below. This experiment has a waiting room: once enough people are here, the game starts by itself (you can also start it yourself).'
     return 'People can join with the links below. When everyone you need is here, start the game: everyone waiting is let in and newcomers are turned away.'
   }
-  if (i.status === 'STOPPED') return 'This session is stopped, so nobody can join. Resuming it runs its game again from the beginning: its scripts restart, which disconnects anyone still on the page. The data recorded so far is kept.'
+  if (i.status === 'STOPPED') {
+    // who stopped it and how, as its data says: another researcher's reload or new session, say
+    const who = stoppedByText(allEvents.value, admin.email)
+    return `${who ? `${who} Nobody can join it now.` : 'This session is stopped, so nobody can join.'} Resuming it runs its game again from the beginning: its scripts restart, which disconnects anyone still on the page. The data recorded so far is kept.`
+  }
   const gaveUp = room.value?.state === 'cancelled'
   const ap = autopilot.value
   // (a paused autopilot opens nothing until Resume, whatever its settings say)
@@ -385,6 +393,11 @@ const errorExperiment = computed(() => {
   const id = e?.experimentId ?? null
   return { id, name: e?.experimentName ?? null, elsewhere: id !== null && id !== admin.experiment?.id }
 })
+
+/** The Steps page, at a line of a step of the experiment the engine runs (the error's). */
+function openStep (step: string | undefined, line: number) {
+  if (step) void router.push(stepAt(step, line, errorExperiment.value.id))
+}
 
 function clock (at: number) {
   return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })

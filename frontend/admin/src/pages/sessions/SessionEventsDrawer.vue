@@ -103,7 +103,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(e, i) in shownTimeline" :key="e.id ?? `n${i}`">
+              <tr v-for="({ e, plain }, i) in shownTimeline" :key="e.id ?? `n${i}`">
                 <td class="sev__time tabular" :title="timeTitle(e)">
                   <span v-if="multiDay" class="sev__day">{{ formatDay(e.time) }}</span>{{ formatClock(e.time) }}
                 </td>
@@ -111,12 +111,13 @@
                   <button
                     type="button"
                     class="sev__name"
+                    :class="toneClass(e.name)"
                     :title="`Show only “${e.name}” events`"
                     @click="nameFilter = e.name"
                   >
                     {{ e.name }}
                   </button>
-                  <span v-if="describeEvent(e.name)" class="sev__plain">{{ describeEvent(e.name) }}</span>
+                  <span v-if="plain" class="sev__plain">{{ plain }}</span>
                 </td>
                 <td class="sev__data">
                   <span v-for="(d, j) in e.data" :key="j" class="sev__kv">
@@ -145,7 +146,7 @@
               @click="toggleGroup(g.name)"
             >
               <ChevronRight class="sev__chev" :size="16" aria-hidden="true" />
-              <span class="sev__gname">{{ g.name }}</span>
+              <span class="sev__gname" :class="toneClass(g.name)">{{ g.name }}</span>
               <BBadge>{{ g.events.length.toLocaleString() }}</BBadge>
               <span class="sev__gtime">{{ groupTime(g) }}</span>
               <span v-if="g.keys.length" class="sev__gkeys">{{ g.keys.join(' · ') }}</span>
@@ -202,7 +203,7 @@ import {
   groupEvents, liveEventOf, mergeEvents, normalizeEvent, safeFileName, sameDay, sortEvents, type EventGroup, type SessionEvent,
 } from './sessionData'
 import { loadSessionEvents } from './eventsLoader'
-import { describeEvent } from '../session/events'
+import { describeEvent, eventTone } from '../session/events'
 
 const props = defineProps<{ open: boolean, session: Instance | null }>()
 const emit = defineEmits<{ 'update:open': [value: boolean], download: [session: Instance] }>()
@@ -234,10 +235,24 @@ const events = computed(() => sortEvents(mergeEvents(loaded.value, live.value)))
 
 const isFiltered = computed(() => !!query.value.trim() || !!nameFilter.value)
 const filtered = computed(() => filterEvents(events.value, { query: query.value, name: nameFilter.value }))
+/**
+ * The rows shown, each with what it means in plain words, from its data as Live session's list says
+ * it: the step and line of a failure, whether the game started again, how long a connection dropped.
+ */
 const shownTimeline = computed(() => {
   const list = newestFirst.value ? [...filtered.value].reverse() : filtered.value
-  return list.slice(0, limit.value)
+  return list.slice(0, limit.value).map(e => ({ e, plain: plainWords(e) }))
 })
+function plainWords (e: SessionEvent): string {
+  const data: Record<string, unknown> = {}
+  for (const d of e.data) data[d.name] = d.value
+  return describeEvent(e.name, data)
+}
+/** Failures in red and warnings in amber, as Live session's list shows them; other events as they are. */
+function toneClass (name: string): string | undefined {
+  const tone = eventTone(name)
+  return tone === 'danger' || tone === 'warning' ? `is-${tone}` : undefined
+}
 const groups = computed(() => groupEvents(filtered.value))
 const multiDay = computed(() => {
   const list = events.value
@@ -447,6 +462,9 @@ async function exportGroup (name: string) {
   cursor: pointer;
 }
 .sev__name:hover { border-color: var(--accent); color: var(--accent); }
+.sev__name.is-danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); color: var(--danger-soft-text); }
+.sev__name.is-warning { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); color: var(--warning-soft-text); }
+.sev__name.is-danger:hover, .sev__name.is-warning:hover { border-color: var(--accent); }
 .sev__data { min-width: 180px; }
 .sev__kv {
   display: inline-flex;
@@ -489,6 +507,8 @@ async function exportGroup (name: string) {
 .sev__chev { color: var(--muted); transition: transform var(--duration) var(--ease); flex: none; }
 .sev__group.is-open .sev__chev { transform: rotate(90deg); }
 .sev__gname { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; }
+.sev__gname.is-danger { color: var(--danger); }
+.sev__gname.is-warning { color: var(--warning-soft-text); }
 .sev__gtime { font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .sev__gkeys {
   flex-basis: 100%;

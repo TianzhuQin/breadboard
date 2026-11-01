@@ -1,4 +1,5 @@
 import { http } from '@/lib/http'
+import { failureWhere, readBrief, stepLineAt, type StepLine } from '../console/groovyError'
 
 /** The autopilot settings and state the server keeps (GET/POST /autopilot). */
 
@@ -86,6 +87,25 @@ export interface AutopilotStatus {
    */
   notice: string | null
   noticeAt: string | null
+  /**
+   * The last step failure in its own session that the game went on after, kept until the settings are
+   * saved or Resume is pressed (newer servers); see FailureNotice.
+   */
+  failureNotice: FailureNotice | null
+}
+/**
+ * A step failure in the autopilot's own session that the game went on after (GET /autopilot's
+ * status.failureNotice): the step, its line and what went wrong there, the session, when, and how
+ * many such failures there have been since the settings were saved or Resume was pressed.
+ */
+export interface FailureNotice {
+  step: string
+  line: number | null
+  error: string | null
+  sessionId: number | null
+  session: string | null
+  at: string | null
+  count: number
 }
 export interface AutopilotState {
   settings: AutopilotSettings
@@ -178,6 +198,33 @@ function normalizeEngineSession (raw: any): EngineSession | null {
   }
 }
 
+function normalizeFailureNotice (raw: any): FailureNotice | null {
+  if (!raw || typeof raw !== 'object' || !text(raw.step)) return null
+  const line = Number(raw.line)
+  const at = text(raw.at)
+  const count = Number(raw.count)
+  return {
+    step: text(raw.step)!,
+    line: Number.isInteger(line) && line > 0 ? line : null,
+    error: text(raw.error),
+    sessionId: idOrNull(raw.sessionId),
+    session: text(raw.session),
+    at: at && !isNaN(Date.parse(at)) ? at : null,
+    count: Number.isInteger(count) && count > 0 ? count : 1,
+  }
+}
+
+/**
+ * The notice's line: "RoundStep failed at line 81 in “Autopilot #12” (the game
+ * went on).", and how many such failures there have been, when more than one.
+ */
+export function failureNoticeText (n: FailureNotice): string {
+  const where = n.line ? ` at line ${n.line}` : ''
+  const session = n.session ? ` in “${n.session}”` : n.sessionId != null ? ` in session #${n.sessionId}` : ''
+  const more = n.count > 1 ? ` The latest of ${n.count} such failures since the settings were saved or Resume was pressed.` : ''
+  return `${n.step} failed${where}${session} (the game went on).${more}`
+}
+
 function normalizeHandSession (raw: any): HandSession | null {
   if (!raw || typeof raw !== 'object' || idOrNull(raw.id) == null) return null
   return {
@@ -215,6 +262,7 @@ export function normalizeState (raw: any): AutopilotState {
       engineSession: normalizeEngineSession(s.engineSession),
       notice: text(s.notice),
       noticeAt: noticeAt && !isNaN(Date.parse(noticeAt)) ? noticeAt : null,
+      failureNotice: normalizeFailureNotice(s.failureNotice),
     },
   }
 }
@@ -283,31 +331,37 @@ export function haltOf (state: Pick<AutopilotState, 'settings' | 'status'> | nul
 }
 /**
  * The step failure a pause names (status.problem: the steps of its session didn't load, or a step
- * failed during its game): which step, on which line, and what went wrong in the server's brief
- * words ("No such property: five"); `text` is the problem without them. Null for any other pause.
+ * failed during its game): which step, on which line, where it went wrong when that was in another
+ * step's code that line called (`in`: "in isHuman (InitStep line 30)"), and what went wrong in the
+ * server's brief words ("No such property: five"); `text` is the problem without them. Null for any
+ * other pause.
  */
 export interface PauseFailure {
   step: string
   line: number | null
+  in: StepLine | null
   message: string
   text: string
 }
 export function pauseFailure (problem: string | null | undefined): PauseFailure | null {
   if (!problem) return null
   // "the steps of its session "S" didn't load (InitStep: line 24: No such property: five), so that session was stopped …"
-  const load = /didn't load (\(([^:()]+): (?:line (\d+): )?([\s\S]*?)\))(?=, so that session was stopped)/.exec(problem)
+  const load = /didn't load (\(([^:()]+): ([\s\S]*?)\))(?=, so that session was stopped)/.exec(problem)
   // "the step "RoundStep" failed during its session "S" (line 71: No such property: x), so that session was stopped …"
-  // (or ", and then the game had nothing left to do, …")
-  const game = load ? null : /the step "([^"]+)" failed during its session "[\s\S]*?" (\((?:line (\d+): )?([\s\S]*?)\))(?=, (?:so that session was stopped|and then the game))/.exec(problem)
-  if (load) return failureOf(load[2], load[3], load[4], problem, load[1])
-  if (game) return failureOf(game[1], game[3], game[4], problem, game[2])
+  // (or ", and then the game had nothing left to do, …"); "(line 14, in isHuman (InitStep line 30): …)" when it went
+  // wrong in another step's code
+  const game = load ? null : /the step "([^"]+)" failed during its session "[\s\S]*?" (\(([\s\S]*?)\))(?=, (?:so that session was stopped|and then the game))/.exec(problem)
+  if (load) return failureOf(load[2], load[3], problem, load[1])
+  if (game) return failureOf(game[1], game[3], problem, game[2])
   return null
 }
-function failureOf (step: string, line: string | undefined, message: string, problem: string, bracket: string): PauseFailure {
+function failureOf (step: string, brief: string, problem: string, bracket: string): PauseFailure {
+  const where = readBrief(brief)
   return {
     step: step.trim(),
-    line: line ? Number(line) : null,
-    message: message.trim(),
+    line: where.line,
+    in: where.in,
+    message: where.message.trim(),
     text: problem.replace(` ${bracket}`, '').replace(bracket, ''),
   }
 }
@@ -578,16 +632,14 @@ const AUTOPILOT_EVENTS = new Set([
 
 export type ActivityTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral'
 
-/** The line a failure was on: the event's own `line`, or the "line 72: …" its error starts with. */
-function lineOf (d: Record<string, any>): number | null {
-  const n = Number(d.line)
-  if (Number.isInteger(n) && n > 0) return n
-  const m = /^line (\d+):/.exec(String(d.error ?? ''))
-  return m ? Number(m[1]) : null
-}
-/** "RoundStep failed at line 72" */
-function failedAt (step: unknown, line: number | null): string {
-  return `${step ? String(step) : 'A step'} failed${line ? ` at line ${line}` : ''}`
+/**
+ * "RoundStep failed at line 72", with where it went wrong in another step's code that line called:
+ * "RoundStep failed at line 14, in isHuman at InitStep line 30". `d`: the event's data (its own `line`, or
+ * the "line 72: …" its error starts with).
+ */
+function failedAt (step: unknown, d: Record<string, any>): string {
+  const { line, in: where } = failureWhere(d)
+  return `${step ? String(step) : 'A step'} failed${line ? ` at line ${line}` : ''}${where ? `${line ? ',' : ''} ${stepLineAt(where)}` : ''}`
 }
 
 /** The autopilot's recent events in words, newest first: its games, takeovers, failures and stops. */
@@ -615,19 +667,19 @@ export function autopilotActivity (events: { name: string, datetime: string, dat
     }
     if (e.name === 'sessionFailed') {
       endedFor = d.step ? String(d.step) : ''
-      text = `Ended: ${failedAt(d.step, lineOf(d))} and stalled the game`
+      text = `Ended: ${failedAt(d.step, d)} and stalled the game`
       tone = 'danger'
     }
     if (e.name === 'stepFailed') {
       const stalled = endedFor !== null && (endedFor === '' || endedFor === String(d.step ?? ''))
       if (stalled) endedFor = null
-      text = stalled ? failedAt(d.step, lineOf(d)) : `${failedAt(d.step, lineOf(d))}; the game went on`
+      text = stalled ? failedAt(d.step, d) : `${failedAt(d.step, d)}; the game went on`
       tone = stalled ? 'danger' : 'warning'
     }
     if (e.name === 'stepsFailedToLoad') {
       // "InitStep: line 24: No such property: five"
-      const m = /^([^:]+): (?:line (\d+):)?/.exec(String(d.error ?? ''))
-      text = `Stopped before anyone joined: ${m ? failedAt(m[1].trim(), m[2] ? Number(m[2]) : null) : 'a step failed'} as the steps loaded`
+      const m = /^([^:]+): ([\s\S]*)$/.exec(String(d.error ?? ''))
+      text = `Stopped before anyone joined: ${m ? failedAt(m[1].trim(), { error: m[2] }) : 'a step failed'} as the steps loaded`
       tone = 'danger'
     }
     if (e.name === 'sessionStopped') { text = `Stopped${d.by ? ` by ${d.by}` : ' by a researcher'}`; tone = 'warning' }
@@ -640,6 +692,22 @@ export function autopilotActivity (events: { name: string, datetime: string, dat
     out.push({ key: `${i}-${e.name}`, at: e.datetime, text, tone })
   }
   return out
+}
+
+/** What the page suggests for Give up after: a lone participant is told after ten minutes, rather than waiting for good. */
+export const SUGGESTED_MAX_WAIT_SECONDS = 600
+
+/**
+ * The give-up time of the experiment's own waiting room: `maxWaitSeconds` in its steps'
+ * `autopilot.waitingRoom(…)` call, when it is written there as a number (600 in the example); null
+ * when the steps set none, or work it out in code.
+ */
+export function stepsMaxWait (steps: { source: string }[] | undefined): number | null {
+  const call = stepsCall(steps, 'waitingRoom', 4000)
+  const m = call ? /\bmaxWaitSeconds\s*:\s*(\d+)\s*[,\])]/.exec(call) : null
+  if (!m) return null
+  const n = Number(m[1])
+  return n >= 1 && n <= MAX_SECONDS ? n : null
 }
 
 /**

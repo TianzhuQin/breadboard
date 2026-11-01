@@ -54,6 +54,7 @@ class Autopilot {
   def startFailed  // closure, given what went wrong: the session is dealt with (ScriptBoard.gameStartFailed)
   def leftOut      // closure, given the id of someone launch() takes out: their page is told so when it
                    // comes back, even after the engine was rebuilt (ScriptBoard.leftOutAtStart)
+  def waitingCancelled // closure: settles the server's end screens when the room gives up
   def sessionFull  // closure, given the id of someone launch() takes out as the room is full: their page
                    // is told so now, and when it comes back (ScriptBoard.sessionFullAtStart)
   // closures: Breadboard's own words to participants, in the language of the session's texts
@@ -130,9 +131,11 @@ class Autopilot {
       countdownSeconds: opts.countdownSeconds == null ? 5 : opts.countdownSeconds,
       departureGraceSeconds: opts.departureGraceSeconds == null ? 15 : opts.departureGraceSeconds,
       waitingText     : opts.containsKey("waitingText") ? opts.waitingText : { here, min, max ->
-        def target = max ? "${min}–${max}" : "${min}"
-        // (in the language of the session's texts, as the page's own waiting screen, BBWaiting)
-        String count = sentences(texts('waiting.joinedSoFar', [n: here]), texts('waiting.startsWhen', [target: target, n: max ?: min]))
+        // (in the language of the session's texts, as the page's own waiting screen, BBWaiting): the
+        // least and the most it takes, not a range ("3–8"), which read as either
+        String starts = max && max != min ? texts('waiting.startsWhen', [min: min, max: max, n: min])
+            : texts('waiting.startsWhenMin', [min: min, n: min])
+        String count = sentences(texts('waiting.joinedSoFar', [n: here]), starts)
         "<h3>${texts('waiting.otherParticipants')}</h3><p>${count}</p><p>${texts('waiting.keepPageOpen')}</p>"
       },
       onStart         : opts.onStart,
@@ -340,6 +343,7 @@ class Autopilot {
       try {
         int here = connectedPlayers().size()
         // (those away too, as in evaluate)
+        turnAwayOverflow()
         participants().each { countdown(it, seconds, here) }
       } finally {
         countdownTimer = schedule(seconds) { launch() }
@@ -354,7 +358,32 @@ class Autopilot {
     def v = g.getVertex(clientId)
     if (v == null || !isParticipant(v) || room == null || countdownEndsAt == null) return
     int seconds = Math.max(1, (int) Math.ceil((countdownEndsAt - System.currentTimeMillis()) / 1000d))
-    countdown(v, seconds, connectedPlayers().size())
+    turnAwayOverflow()
+    if (g.getVertex(clientId) != null) countdown(v, seconds, connectedPlayers().size())
+  }
+
+  // Count seats in arrival order, including those kept during a short disconnection. The map's
+  // insertion order settles arrivals in the same millisecond, so a later page never takes an earlier seat.
+  private List<Vertex> byArrival(List<Vertex> players) {
+    def order = arrivedAt.keySet().toList()
+    players.sort { left, right ->
+      int time = (arrivedAt[left.id.toString()] ?: Long.MAX_VALUE) <=> (arrivedAt[right.id.toString()] ?: Long.MAX_VALUE)
+      time ?: (order.indexOf(left.id.toString()) <=> order.indexOf(right.id.toString()))
+    }
+  }
+
+  // A full countdown has no seat for a newcomer. Say so now, rather than making them watch a
+  // countdown for a game they will not join. launch() keeps its own check for simultaneous arrivals.
+  private void turnAwayOverflow() {
+    Integer most = room?.maxPlayers ? (room.maxPlayers as Integer) : null
+    if (!most) return
+    def seats = byArrival(seated(System.currentTimeMillis()))
+    if (seats.size() <= most) return
+    seats[most..-1].each { v ->
+      String id = v.id.toString()
+      g.removePlayer(id)
+      tellFull(id)
+    }
   }
 
   private void countdown(Vertex v, int seconds, int here) {
@@ -394,7 +423,7 @@ class Autopilot {
       Integer most = room?.maxPlayers ? (room.maxPlayers as Integer) : null
       def seats = participants()
       if (most && seats.size() > most) {
-        seats.sort { v -> arrivedAt[v.id.toString()] ?: Long.MAX_VALUE }
+        byArrival(seats)
         seats[most..-1].each { v ->
           g.removePlayer(v.id)
           turnedAway << v.id.toString()
@@ -441,8 +470,12 @@ class Autopilot {
     } finally {
       // Everyone's page says so, also of those who are away right now and see it when they
       // return, even if onCancel failed.
-      participants().each { status(it, [state: "cancelled"]) }
-      gameListener?.finish()
+      participants().each { cancelledStatus(it) }
+      try {
+        if (waitingCancelled != null) waitingCancelled(cancelHandled.toList())
+      } finally {
+        gameListener?.finish()
+      }
     }
   }
 
@@ -456,8 +489,18 @@ class Autopilot {
     try {
       runCancel([v])
     } finally {
-      status(v, [state: "cancelled"])
+      cancelledStatus(v)
+      if (waitingCancelled != null) waitingCancelled([clientId])
     }
+  }
+
+  // private.finished is the documented participant-only end. As in the participant view, a
+  // private value overrides the public one; neither kind of own end keeps the waiting animation.
+  private void cancelledStatus(Vertex v) {
+    def own = v.getProperty("private")
+    def finished = own instanceof Map && own.containsKey("finished") ? own.finished : v.getProperty("finished")
+    boolean ended = finished == true || v.getProperty("_system")?.recruitment?.completed == true
+    status(v, ended ? null : [state: "cancelled"])
   }
 
   // The default notice replaces the autopilot's own waiting text first, so a page that onCancel
@@ -620,6 +663,7 @@ autopilot = new Autopilot(g: g, a: a, gameListener: gameListener, eventTracker: 
     texts: bbText, sentences: bbSentences,
     startGame: { models.ScriptBoard.processScript("initStep.start()", null, "autopilot") },
     startFailed: { String failed -> gameListener.gameStartFailed(failed) },
+    waitingCancelled: { Collection<String> handled -> models.ScriptBoard.waitingRoomCancelled(gameListener, handled) },
     leftOut: { String clientId -> models.ScriptBoard.leftOutAtStart(clientId) },
     sessionFull: { String clientId -> models.ScriptBoard.sessionFullAtStart(clientId) })
 

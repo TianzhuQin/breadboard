@@ -38,7 +38,7 @@ const store = vi.hoisted(() => ({
 vi.mock('@/store/admin', async () => {
   const { reactive, computed, ref } = await import('vue')
   const admin = reactive<any>({
-    experiment: null, instance: null, user: null, output: [], events: [], engineReloadedAt: 0, engine: 'ready', email: 'me@lab.org',
+    experiment: null, instance: null, user: null, output: [], events: [], engineReloadedAt: 0, engine: 'ready', email: 'me@example.org',
     engineInfoCurrent: true, engineInfoAt: 0,
   })
   return {
@@ -294,10 +294,18 @@ describe('event feed', () => {
     expect(describeEvent('myEvent')).toBe('')
   })
 
-  it('says a preview\'s sign-in is a researcher\'s, and names computer players as the other pages do', () => {
+  it('says a preview\'s sign-in and connections are a researcher\'s, and names computer players as the other pages do', () => {
     expect(describeEvent('clientLogIn', { clientId: '_6', preview: 'true' })).toBe('A researcher’s preview signed in as AI 6')
     expect(describeEvent('clientLogIn', { clientId: 't1', preview: true })).toBe('A researcher’s preview signed in as t1')
     expect(describeEvent('clientLogIn', { clientId: 'p1' })).toBe('Someone signed in')
+    // so are the connections a preview that plays a test player's seat causes: not a participant coming and going
+    expect(describeEvent('clientConnected', { clientId: 'tester1', preview: 'true' })).toBe('A researcher’s preview connected as tester1')
+    expect(describeEvent('clientDisconnected', { clientId: 'tester2', preview: true })).toBe('A researcher’s preview of tester2 disconnected')
+    expect(describeEvent('clientDisconnected', { preview: true })).toBe('A researcher’s preview disconnected')
+    expect(describeEvent('clientConnected', { clientId: 'p1' })).toBe('A participant connected')
+    expect(describeEvent('clientDisconnected', { clientId: 'p1', preview: false })).toBe('A participant lost connection')
+    // (only those three: an experiment's own event that happens to carry preview = true keeps its words)
+    expect(describeEvent('aiTakeover', { clientId: 'p1', preview: true })).toMatch(/took over/)
     expect(summarizeData({ player: '_4', choice: 'Blue', playerId: 'p2' }).shown).toEqual([['player', 'AI 4 (_4)'], ['choice', 'Blue'], ['playerId', 'p2']])
     expect(formatDataValue('clientId', '_12')).toBe('AI 12 (_12)')
     // other data keeps its values as recorded
@@ -336,6 +344,14 @@ describe('event feed', () => {
     expect(describeEvent('engineReloaded', { restarted: false, by: 'a@example.org' })).toBe('A researcher reloaded the engine; the session carried on')
     expect(describeEvent('connectionGap', { player: 'p1', awayMs: '25300' })).toBe('A participant’s connection dropped for 25 s, then came back')
     expect(describeEvent('answerDropped', { player: 'p1', ageMs: 8000 })).toBe('A participant’s answer was dropped: it waited 8 s for the connection')
+    // where it went wrong in another step's function the failing step called (stepFailed's error, sessionFailed's line
+    // and error), and the innermost line alone when the failing step's own isn't known
+    expect(describeEvent('stepFailed', { step: 'RoundStep', error: 'line 14, in isHuman (InitStep line 30): isHumanStrict fails' }))
+      .toBe('A step failed (RoundStep, line 14, in isHuman at InitStep line 30): its code threw an error')
+    expect(describeEvent('sessionFailed', { step: 'RoundStep', line: '14', error: 'in isHuman (InitStep line 30): isHumanStrict fails' }))
+      .toBe('A step failure (RoundStep, line 14, in isHuman at InitStep line 30) stalled the game, so the autopilot ended the session')
+    expect(describeEvent('stepFailed', { step: 'Probe', error: 'line 30 of InitStep: isHumanStrict fails' }))
+      .toBe('A step failed (Probe, in InitStep line 30): its code threw an error')
     // without that data, the plain line
     expect(describeEvent('stepFailed', {})).toBe('A step failed: its code threw an error')
     expect(describeEvent('engineReloaded')).toBe('A researcher reloaded the engine')
@@ -377,6 +393,9 @@ describe('live session state', () => {
       node('_bot1', { _system: { connected: true } }),
     ], 4)
     expect(s).toEqual({ people: 4, connected: 2, aiSeats: 2, bots: 1, takenOver: 1, ties: 4 })
+    // a session that isn't running has nobody connected, whatever its players last said
+    expect(networkStats([node('p1', { _system: { connected: true } }), node('p2', { _system: { connected: true } })], 1, false))
+      .toEqual({ people: 2, connected: 0, aiSeats: 0, bots: 0, takenOver: 0, ties: 1 })
   })
 
   it('summarises the waiting room from the players\' autopilot status', () => {
@@ -427,6 +446,38 @@ describe('live session state', () => {
     const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })
     expect(w.find('.live-links__ids').text()).toBe('With the first two links, participants type an ID to join: any name or number you give them, one seat per ID. People from Prolific don\'t type one.')
     w.unmount()
+  })
+
+  // One note above all three links offered the lab's network for the Prolific study URL too, which
+  // Prolific's people, from the internet, can't use; Recruitment and the Autopilot page say so.
+  it('words the lab-network note as about the first two links, and puts the internet-only note under the Prolific study URL', async () => {
+    const { admin } = await import('@/store/admin') as any
+    admin.lanAddresses = ['http://10.0.0.5:9000']
+    const host = window.location.host
+    const JoinLinks = (await import('../src/pages/session/JoinLinks.vue')).default
+    const w = mount(JoinLinks, { props: { experimentId: 12, instanceId: 44, joinable: true } })
+    try {
+      const notes = w.findAll('.local-note')
+      expect(notes).toHaveLength(2)
+      const lab = notes[0].text().replace(/\s+/g, ' ')
+      expect(lab).toContain(`The first two links use ${host}, which only works on this computer.`)
+      expect(lab).toContain('For people on the same network (say, the lab\'s computers), open the console at http://10.0.0.5:9000')
+      // the first note comes before the links, the second in the Prolific study URL's own block, after its hint
+      const blocks = w.findAll('.live-link')
+      expect(blocks.map(b => b.find('.live-link__label').text())).toEqual(['This session', 'Whichever session is open', 'Prolific study URL'])
+      expect(blocks[0].find('.local-note').exists()).toBe(false)
+      expect(blocks[1].find('.local-note').exists()).toBe(false)
+      const prolific = blocks[2].find('.local-note')
+      expect(prolific.element).toBe(notes[1].element)
+      expect(prolific.classes()).toContain('is-compact')
+      const text = prolific.text().replace(/\s+/g, ' ')
+      expect(text).toContain(`This URL uses ${host}, which only works on this computer.`)
+      expect(text).toContain('Prolific sends people from the internet, so it needs the server’s public address')
+      expect(text).not.toContain('same network')
+    } finally {
+      w.unmount()
+      admin.lanAddresses = []
+    }
   })
 
   it('says a link for Prolific needs the server\'s public address, without the tip for the lab\'s network', async () => {
@@ -547,7 +598,7 @@ describe('live session state', () => {
   })
 
   it('takes the engine\'s flag only when it is current and about this session', () => {
-    const engine = { experimentId: 1, experimentName: 'E', sessionId: 9, sessionName: 'S', owner: 'me@lab.org', gameStarted: false }
+    const engine = { experimentId: 1, experimentName: 'E', sessionId: 9, sessionName: 'S', owner: 'me@example.org', gameStarted: false }
     expect(engineGameFlag(engine, true, 9, 1234)).toEqual({ started: false, at: 1234 })
     expect(engineGameFlag({ ...engine, gameStarted: true }, true, 9, 1234)).toEqual({ started: true, at: 1234 })
     // a rebuild under way, another session, nothing said (an older server), no engine
@@ -684,11 +735,26 @@ describe('session controls', () => {
   })
 
   it('refuses to start while the engine runs another experiment', async () => {
-    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@lab.org' }
+    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@example.org' }
     await startGame(ctx)
     expect(confirmState.open).toBe(false)
     expect(store.startGame).not.toHaveBeenCalled()
     expect(toasts[toasts.length - 1].detail).toMatch(/running “Other study” right now, not this session/)
+  })
+
+  it('explains a failed start in the notification without generated script names', async () => {
+    store.nextMessage.mockImplementationOnce(async (match: any) => {
+      const m = { request: 'RunGame', error: 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: roundz for class: Script35\n  at Script35.groovy:2' }
+      return match(m) ? m : null
+    })
+    const done = startGame(ctx)
+    settleConfirm(true)
+    await done
+    const note = toasts.find(t => t.title === 'The game could not start')!
+    expect(note.detail).toContain('Unknown name “roundz”')
+    expect(note.detail).toContain('Check its spelling')
+    expect(note.detail).not.toMatch(/Script\d+|ScriptException/)
+    expect(note.action?.label).toBe('Open output')
   })
 
   it('names whoever the restart disconnects before resuming', async () => {
@@ -889,7 +955,7 @@ describe('SessionPage', () => {
     const w = await mountPage()
     const card = w.find('.live-err')
     expect(card.findAll('.eng-err__places li').map(li => li.text()))
-      .toEqual(['Line 5 of finishStep', 'Script684.groovy, line 82 an earlier script or a step'])
+      .toEqual(['Line 5 of finishStep'])
     await card.find('button.eng-err__place').trigger('click')
     expect(routerPush).toHaveBeenCalledWith({ path: '/steps', query: { step: 'finishStep', line: '5' } })
     // InitStep failing at its line 47, started by the OnJoinStep (its line 5) in the script the server runs for a
@@ -901,10 +967,92 @@ describe('SessionPage', () => {
     }]
     await nextTick()
     expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual([
-      'Line 47 of InitStep', 'Script202.groovy, line 5 an earlier script or a step', 'Script205.groovy, line 1 an earlier script or a step',
+      'Line 47 of InitStep',
     ])
     await w.find('.live-err button.eng-err__place').trigger('click')
     expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '47' } })
+    w.unmount()
+  })
+
+  // What newer servers send beside the text: each line named by the step whose code it is, and the failing step's own
+  // line. The network game's steps load in name order: FinishStep is Script530, InitStep Script531, RoundStep Script534.
+  it('names each line by its step as the server does, and opens each: the failing step\'s line and the function of another step it called', async () => {
+    // RoundStep (in round 2) calls InitStep's isHuman at its line 14, which throws at InitStep's line 65 (as sent)
+    const text = 'Caught error: IllegalStateException: isHumanStrict fails\n  at Script531.groovy:65\n  at Script534.groovy:14\n' +
+      '  at Script534.groovy:12\n  at step.groovy:64\n  at step.groovy:-1\n  at Script534.groovy:80\n  at step.groovy:200\n  at timer.groovy:76\n'
+    const frames = [
+      { file: 'Script531.groovy', line: 65, step: 'InitStep', name: 'isHuman' },
+      { file: 'Script534.groovy', line: 14, step: 'RoundStep', own: true },
+      { file: 'Script534.groovy', line: 12, step: 'RoundStep' },
+      { file: 'Script534.groovy', line: 80, step: 'RoundStep' },
+    ]
+    store2.admin.output = [{ id: 10, kind: 'error', text, source: 'RoundStep', step: 'RoundStep', frames, at: Date.now() }]
+    routerPush.mockClear()
+    const w = await mountPage()
+    const card = w.find('.live-err')
+    expect(card.findAll('.eng-err__places li').map(li => li.text()))
+      .toEqual(['Line 14 of RoundStep', 'in isHuman (InitStep line 65)', 'Line 12 of RoundStep', 'Line 80 of RoundStep'])
+    // (it used to read "Line 65 of RoundStep", and RoundStep's own lines "an earlier script or a step")
+    expect(card.text()).not.toMatch(/an earlier script|Line 65 of/)
+    const links = card.findAll('button.eng-err__place')
+    await links[0].trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'RoundStep', line: '14' } })
+    await links[1].trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'InitStep', line: '65' } })
+
+    // FinishStep (its variable finishStep names it) failing at its line 6, where it calls isHuman, started by RoundStep's
+    // done at its line 82: the step's code by the name on the Steps page
+    store2.admin.output = [{
+      id: 11, kind: 'error', source: 'finishStep', step: 'finishStep', at: Date.now(),
+      text: 'Caught error: IllegalStateException: isHumanStrict fails\n  at Script531.groovy:65\n  at Script530.groovy:6\n  at Script530.groovy:5\n' +
+        '  at step.groovy:64\n  at step.groovy:-1\n  at Script534.groovy:82\n',
+      frames: [
+        { file: 'Script531.groovy', line: 65, step: 'InitStep', name: 'isHuman' },
+        { file: 'Script530.groovy', line: 6, step: 'FinishStep', own: true },
+        { file: 'Script530.groovy', line: 5, step: 'FinishStep' },
+        { file: 'Script534.groovy', line: 82, step: 'RoundStep' },
+      ],
+    }]
+    await nextTick()
+    expect(w.findAll('.live-err .eng-err__places li').map(li => li.text()))
+      .toEqual(['Line 6 of FinishStep', 'in isHuman (InitStep line 65)', 'Line 5 of FinishStep', 'RoundStep line 82'])
+    const finish = w.findAll('.live-err button.eng-err__place')
+    await finish[0].trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'FinishStep', line: '6' } })
+    await finish[3].trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'RoundStep', line: '82' } })
+
+    // InitStep failing at its line 47 as the waiting room's initStep.start() (Script900, no step's) started the game
+    store2.admin.output = [{
+      id: 12, kind: 'error', source: 'InitStep', step: 'InitStep', at: Date.now(),
+      text: 'Caught error: IllegalStateException: InitStep fails\n  at Script531.groovy:47\n  at step.groovy:64\n  at step.groovy:-1\n' +
+        '  at Script900.groovy:1\n  at autopilot.groovy:621\n',
+      frames: [{ file: 'Script531.groovy', line: 47, step: 'InitStep', own: true }, { file: 'Script900.groovy', line: 1 }],
+    }]
+    await nextTick()
+    expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual(['Line 47 of InitStep'])
+    expect(w.findAll('.live-err button.eng-err__place')).toHaveLength(1)
+
+    // RoundStep failing in its own code, at its line 66 (in its g.V.each at line 64), on its timer
+    store2.admin.output = [{
+      id: 14, kind: 'error', source: 'RoundStep', step: 'RoundStep', at: Date.now(),
+      text: 'Caught error: MissingPropertyException: No such property: pickz for class: Script534\n  at Script534.groovy:66\n' +
+        '  at Script534.groovy:64\n  at step.groovy:200\n',
+      frames: [{ file: 'Script534.groovy', line: 66, step: 'RoundStep', own: true }, { file: 'Script534.groovy', line: 64, step: 'RoundStep' }],
+    }]
+    await nextTick()
+    expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual(['Line 66 of RoundStep', 'Line 64 of RoundStep'])
+    await w.find('.live-err button.eng-err__place').trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ path: '/steps', query: { step: 'RoundStep', line: '66' } })
+
+    // RoundStep failing as it loads, at its line 2, where it calls isHuman (the steps loading say so, "source": "Steps")
+    store2.admin.output = [{
+      id: 13, kind: 'error', source: 'Steps', step: 'RoundStep', at: Date.now(),
+      text: 'Caught error: ScriptException: java.lang.IllegalStateException: isHuman fails for p1\n  at Script531.groovy:6\n  at Script534.groovy:2\n',
+      frames: [{ file: 'Script531.groovy', line: 6, step: 'InitStep', name: 'isHuman' }, { file: 'Script534.groovy', line: 2, step: 'RoundStep', own: true }],
+    }]
+    await nextTick()
+    expect(w.findAll('.live-err .eng-err__places li').map(li => li.text())).toEqual(['Line 2 of RoundStep', 'in isHuman (InitStep line 6)'])
     w.unmount()
   })
 
@@ -912,8 +1060,8 @@ describe('SessionPage', () => {
     const text = 'Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: two for class: Script12\n  at Script12.groovy:23'
     store2.admin.output = [{ id: 7, kind: 'error', text, source: 'initStep', step: 'InitStep', at: Date.now() }]
     const engine = (experimentId: number, experimentName: string) =>
-      ({ experimentId, experimentName, sessionId: 4, sessionName: 'Autopilot · 1', owner: 'me@lab.org', gameStarted: false, stepsChanged: false, autopilotSession: true })
-    store2.admin.user = { email: 'me@lab.org', experiments: [], currentScript: '', engine: engine(12, 'Exp') }
+      ({ experimentId, experimentName, sessionId: 4, sessionName: 'Autopilot · 1', owner: 'me@example.org', gameStarted: false, stepsChanged: false, autopilotSession: true })
+    store2.admin.user = { email: 'me@example.org', experiments: [], currentScript: '', engine: engine(12, 'Exp') }
     routerPush.mockClear()
     const w = await mountPage()
     try {
@@ -953,6 +1101,29 @@ describe('SessionPage', () => {
     w.unmount()
   })
 
+  // The pages of a stopped session's participants show its end and stop connecting, but the players
+  // keep the _system.connected they had: "Connected now 2 / 0 not on the page" for a stopped session.
+  it('counts nobody as connected in a session that has stopped', async () => {
+    const people = [['p1', { _system: { connected: true } }], ['p2', { _system: { connected: true } }]]
+    for (const [id, data] of people) store2.graph.nodes.set(id, { id, data })
+    try {
+      const connected = (w: VueWrapper) => w.findAll('.live-stat').find(d => d.text().includes('Connected now'))!
+      const w = await mountPage()
+      expect(connected(w).find('.live-stat__value').text()).toBe('2')
+      expect(connected(w).find('.live-stat__sub').text()).toBe('0 not on the page')
+      w.unmount()
+      store2.admin.instance = { ...store2.admin.instance, status: 'STOPPED' }
+      const stopped = await mountPage()
+      expect(connected(stopped).find('.live-stat__value').text()).toBe('0')
+      expect(connected(stopped).find('.live-stat__sub').text()).toBe('the session isn’t running')
+      // (they were in the network all the same)
+      expect(stopped.findAll('.live-stat').find(d => d.text().includes('In the network'))!.find('.live-stat__value').text()).toBe('2')
+      stopped.unmount()
+    } finally {
+      store2.graph.nodes.clear()
+    }
+  })
+
   it('offers Start the game again after a start that threw', async () => {
     store2.admin.instance = { ...store2.admin.instance, hasStarted: true }
     store2.admin.events = [startEvent('InitStepStart', Date.now() - 1000)]
@@ -976,7 +1147,7 @@ describe('SessionPage', () => {
   it('offers Start the game when the engine was reloaded since the game started (the engine says so)', async () => {
     store2.admin.instance = { ...store2.admin.instance, hasStarted: true }
     store2.admin.events = [startEvent('InitStepStart', Date.now() - 600000)]
-    store2.admin.user = { engine: { experimentId: 12, experimentName: 'Exp', sessionId: 9, sessionName: 'Live one', owner: 'me@lab.org', gameStarted: false } }
+    store2.admin.user = { engine: { experimentId: 12, experimentName: 'Exp', sessionId: 9, sessionName: 'Live one', owner: 'me@example.org', gameStarted: false } }
     store2.admin.engineInfoAt = Date.now()
     const w = await mountPage()
     expect(startButton(w)).toBeDefined()
@@ -1025,10 +1196,10 @@ describe('SessionPage', () => {
     expect(autopilotStatusOf(raw({ done: true }))!.halted).toBe('done')
     expect(autopilotStatusOf(raw({ problemKind: 'waiting' }))!.halted).toBe(null)
     // what it waits for, as the Autopilot page reads it: another experiment's session, or the engine
-    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
-    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
-    expect(autopilotStatusOf(raw({ problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other }))!.waiting).toEqual({ session: other })
-    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' }))!.waiting).toEqual({ session: null })
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@example.org' }
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@example.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problem: 'Another session is running: "pilot 3" (a@example.org).', engineSession: other }))!.waiting).toEqual({ session: other })
+    expect(autopilotStatusOf(raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@example.org, who has a console open.' }))!.waiting).toEqual({ session: null })
     expect(autopilotStatusOf(raw({}))!.waiting).toBe(null)
     expect(autopilotStatusOf(raw({ paused: true, problemKind: 'paused', problem: 'It is paused: …', engineSession: other }))!.waiting).toBe(null)
     expect(autopilotStatusOf(raw({ problemKind: 'error', problem: 'There is no admin account to open sessions as.', engineSession: other }))!.waiting).toBe(null)
@@ -1048,16 +1219,16 @@ describe('SessionPage', () => {
   it('tells when the autopilot opens the next session soon, as the server does for the study links, and what keeps it from it', async () => {
     const { autopilotHold, autopilotOpensNextSoon, autopilotStatusOf } = await import('../src/pages/session/autopilot')
     const raw = (status: any, settings: any = {}) => autopilotStatusOf({ settings: { continuous: true, nextSessionDelaySeconds: 10, ...settings }, status: { on: true, experimentId: 12, instance: null, ...status } })
-    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@lab.org' }
+    const other = { id: 4, name: 'pilot 3', experimentId: 5, experimentName: 'Ultimatum', owner: 'a@example.org' }
     // nothing in the way (Autopilot.opensNextSoon): on for this experiment, continuous, neither paused nor done, no problem
     expect(autopilotOpensNextSoon(raw({}), 12)).toBe(true)
     expect(autopilotHold(raw({}), 12)).toBe(null)
     expect(raw({ problem: 'There is no admin account to open sessions as.', problemKind: 'error' })!.problem).toBe('There is no admin account to open sessions as.')
     // another experiment's session on the shared engine, or a researcher who has another experiment loaded there
-    const waitingForSession = raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@lab.org).', engineSession: other })
+    const waitingForSession = raw({ problemKind: 'waiting', problem: 'Another session is running: "pilot 3" (a@example.org).', engineSession: other })
     expect(autopilotOpensNextSoon(waitingForSession, 12)).toBe(false)
     expect(autopilotHold(waitingForSession, 12)).toEqual({ by: 'session', session: other })
-    const waitingForEngine = raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@lab.org, who has a console open.' })
+    const waitingForEngine = raw({ problemKind: 'waiting', problem: '"Ultimatum" is loaded in the engine for b@example.org, who has a console open.' })
     expect(autopilotOpensNextSoon(waitingForEngine, 12)).toBe(false)
     expect(autopilotHold(waitingForEngine, 12)).toEqual({ by: 'engine' })
     // any other problem the Autopilot page shows: the last session reported an error, the disk is almost full, ...
@@ -1069,13 +1240,13 @@ describe('SessionPage', () => {
     // a session of this experiment that a researcher opened by hand: the autopilot opens its own once
     // that one has ended, and the links wait for it during that session's game (the server's note
     // about it holds nothing up); paused or done, the reason stays
-    const hand = { id: 9, name: 'By hand', status: 'RUNNING', gameStarted: true, openToNewcomers: false, owner: 'b@lab.org' }
-    const handOpen = raw({ handSession: hand, problemKind: 'waiting', problem: '"By hand", a session of this experiment that b@lab.org opened by hand, is running. The autopilot opens its own session once that one has ended.' })
+    const hand = { id: 9, name: 'By hand', status: 'RUNNING', gameStarted: true, openToNewcomers: false, owner: 'b@example.org' }
+    const handOpen = raw({ handSession: hand, problemKind: 'waiting', problem: '"By hand", a session of this experiment that b@example.org opened by hand, is running. The autopilot opens its own session once that one has ended.' })
     expect(handOpen!.problem).toBe(null)
     expect(handOpen!.waiting).toBe(null)
     expect(autopilotOpensNextSoon(handOpen, 12)).toBe(true)
     expect(autopilotHold(handOpen, 12)).toBe(null)
-    const handPaused = raw({ handSession: hand, paused: true, problemKind: 'paused', problem: 'It is paused: … Meanwhile "By hand", a session of this experiment that b@lab.org opened by hand, is running. Resume hands it to the autopilot.' })
+    const handPaused = raw({ handSession: hand, paused: true, problemKind: 'paused', problem: 'It is paused: … Meanwhile "By hand", a session of this experiment that b@example.org opened by hand, is running. Resume hands it to the autopilot.' })
     expect(handPaused!.halted).toBe('paused')
     expect(handPaused!.problem).toMatch(/^It is paused/)
     expect(autopilotOpensNextSoon(handPaused, 12)).toBe(false)
@@ -1092,10 +1263,59 @@ describe('SessionPage', () => {
     expect(autopilotOpensNextSoon(null, 12)).toBe(false)
   })
 
+  it('says who stopped the session, and how, when another researcher\'s action ended it', async () => {
+    const at = Date.now() - 5000
+    const stopped = (data: any, id = 40) => ({ id, name: 'sessionStopped', datetime: new Date(at).toISOString(), data })
+    store2.admin.instance = { id: 9, name: 'Hand session', status: 'STOPPED', creationTime: '', data: [], events: [] }
+    // pushed live as it was recorded: another account reloaded the engine
+    store2.admin.events = [stopped({ by: 'bob@example.org', reason: 'reloadEngine' })]
+    const w = await mountPage()
+    const explain = () => w.find('.live-hero__explain').text()
+    expect(explain()).toMatch(/^bob@example\.org reloaded the engine, which stopped this session\. Nobody can join it now\. Resuming it runs its game again/)
+    store2.admin.events = [stopped({ by: 'bob@example.org', reason: 'newSession' })]
+    await nextTick()
+    expect(explain()).toMatch(/^bob@example\.org created a new session, which stopped this one\./)
+    store2.admin.events = [stopped({ by: 'bob@example.org', reason: 'otherSession' })]
+    await nextTick()
+    expect(explain()).toMatch(/^bob@example\.org resumed or selected another session, which stopped this one\./)
+    store2.admin.events = [stopped({ by: 'BOB@example.org', reason: 'stopSession' })]
+    await nextTick()
+    expect(explain()).toMatch(/^BOB@example\.org stopped this session\./)
+    // (this account's own; one recorded by an older server, which gave no reason)
+    store2.admin.events = [stopped({ by: 'Me@Example.org', reason: 'reloadEngine' })]
+    await nextTick()
+    expect(explain()).toMatch(/^You reloaded the engine, which stopped this session\./)
+    store2.admin.events = [stopped({ by: 'bob@example.org' })]
+    await nextTick()
+    expect(explain()).toMatch(/^bob@example\.org stopped this session\./)
+    // nothing said by whom: as before
+    store2.admin.events = [stopped({})]
+    await nextTick()
+    expect(explain()).toMatch(/^This session is stopped, so nobody can join\. Resuming it/)
+    w.unmount()
+  })
+
+  it('names who stopped a session only from its last end, not from one before a resume', async () => {
+    const { stoppedByText } = await import('../src/pages/session/stopped')
+    const ev = (name: string, at: number, data: any = {}) => fromLive({ id: at, name, datetime: new Date(at).toISOString(), data } as any)
+    const stop = ev('sessionStopped', 1000, { by: 'bob@example.org', reason: 'reloadEngine' })
+    expect(stoppedByText([stop], 'me@example.org')).toBe('bob@example.org reloaded the engine, which stopped this session.')
+    // (newest first) resumed since, then cut short by a restart: not bob's doing
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), ev('sessionInterrupted', 3000)], []), 'me@example.org')).toBe('')
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000)], []), 'me@example.org')).toBe('')
+    // a later Stop after the resume names its own account
+    const again = ev('sessionStopped', 4000, { by: 'carl@example.org', reason: 'stopSession' })
+    expect(stoppedByText(mergeFeed([stop, ev('sessionResumed', 2000), again, ev('clientDisconnected', 5000)], []), 'me@example.org'))
+      .toBe('carl@example.org stopped this session.')
+    expect(stoppedByText(mergeFeed([ev('autopilotStart', 1), ev('sessionStopped', 2, { by: 'ann@example.org', reason: 'autopilot' })], []), ''))
+      .toBe('ann@example.org let the autopilot take over the engine for its session, which stopped this one.')
+    expect(stoppedByText([], 'me@example.org')).toBe('')
+  })
+
   it('disables Start the game while the engine runs another experiment, and says why', async () => {
     const w = await mountPage()
     expect(startButton(w)!.attributes('disabled')).toBeUndefined()
-    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@lab.org' }
+    store2.engineElsewhere.value = { experimentId: 2, experimentName: 'Other study', sessionId: 8, sessionName: 'S', owner: 'bob@example.org' }
     await nextTick()
     expect(startButton(w)!.attributes('disabled')).toBeDefined()
     expect(startButton(w)!.attributes('title')).toMatch(/running “Other study” right now/)
@@ -1217,6 +1437,56 @@ describe('NewSessionDialog', () => {
     expect(store.launch).toHaveBeenCalledTimes(1)
     expect(text()).toContain('The server did not confirm the new session.')
     expect(w.emitted('update:open')).toBeFalsy()
+  })
+
+  // The server's answer puts the new session in the store (running, with the name just given) before
+  // the dialog has faded out: worked out live, the closing form flashed a warning that creating stops
+  // that very session, and that its name was taken.
+  it('closes as it was, saying Creating…, without warnings about the session it has just created', async () => {
+    const w = await open()
+    await numberInput().setValue('3')
+    let answer!: (v: any) => void
+    store.launch.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    await submit()
+    const create = () => page().findAll('button').find(b => b.attributes('type') === 'submit')!
+    expect(create().text()).toBe('Creating…')
+    // the new session reaches the store before the launch is answered
+    const made = { id: 4, name: 'Session 2', status: 'RUNNING' }
+    admin.experiment = { ...admin.experiment, instances: [...admin.experiment.instances, made] }
+    admin.instance = made
+    await flushPromises()
+    const shown = () => ({
+      warn: page().find('.nsd-warn').exists(),
+      nameTaken: text().includes('already has this name'),
+      button: create().text(),
+    })
+    expect(shown()).toEqual({ warn: false, nameTaken: false, button: 'Creating…' })
+    answer({ user: {} })
+    await flushPromises()
+    const opens = w.emitted('update:open') || []
+    expect(opens[opens.length - 1]).toEqual([false])
+    // fading out (the parent has yet to close it): as it was
+    expect(shown()).toEqual({ warn: false, nameTaken: false, button: 'Creating…' })
+    // opened again, it shows what runs now, and the next free name
+    await w.setProps({ open: false })
+    await w.setProps({ open: true })
+    await nextTick()
+    expect(page().find('.nsd-warn').text()).toContain('“Session 2” is running.')
+    expect((page().findAll('input')[0].element as HTMLInputElement).value).toBe('Session 3')
+    expect(create().text()).toBe('Stop it and create')
+  })
+
+  it('shows the live state again after a launch that didn\'t happen', async () => {
+    await open()
+    await numberInput().setValue('3')
+    store.launch.mockImplementationOnce(async () => {
+      // meanwhile someone else's session started
+      admin.instance = { id: 9, name: 'Theirs', status: 'RUNNING' }
+      return null
+    })
+    await submit()
+    expect(text()).toContain('The server did not confirm the new session.')
+    expect(page().find('.nsd-warn').text()).toContain('“Theirs” is running.')
   })
 
   it('warns that a running session will be stopped', async () => {

@@ -9,9 +9,12 @@ vi.mock('@/lib/http', async (orig) => {
 })
 vi.mock('@/store/admin', async () => {
   const { computed, reactive, ref, shallowRef } = await import('vue')
+  // the experiments' steps, by id, for a test to set (none by default)
+  const expSteps = reactive<Record<number, any>>({})
   return {
     admin: reactive({ experiment: { id: 12, name: 'Public goods' }, instance: null, events: [] }),
-    experiments: computed(() => [{ id: 12, name: 'Public goods' }, { id: 13, name: 'Trust' }]),
+    experiments: computed(() => [{ id: 12, name: 'Public goods', steps: expSteps[12] }, { id: 13, name: 'Trust', steps: expSteps[13] }]),
+    expSteps,
     running: ref(false),
     graph: { version: shallowRef(0), nodes: new Map() },
   }
@@ -23,7 +26,7 @@ import {
   DEFAULTS, autopilotActivity, describeEngineSession, describeWaitingRoom, haltOf, humanSeconds, normalizeSettings, normalizeState,
   participantLinks, pauseFailure, pausedLine, problemKind, resumeLabel, stopPausesAutopilot, takeOverTarget, toForm, toSettings, validateAutopilot, waitingRoomLive,
   type AutopilotForm,
-  stepsCall,
+  stepsCall, stepsMaxWait, failureNoticeText,
 } from '../src/pages/autopilot/autopilot'
 import { HttpError } from '../src/lib/http'
 import { unsavedTotal } from '../src/shell/unsaved'
@@ -128,6 +131,20 @@ describe('reading the server\'s answer', () => {
     expect(st.noticeAt).toBe('2026-10-29T10:05:00Z')
     expect(normalizeState({ status: { on: true } }).status).toMatchObject({ notice: null, noticeAt: null })
     expect(normalizeState({ status: { notice: ' ', noticeAt: 'later' } }).status).toMatchObject({ notice: null, noticeAt: null })
+  })
+  it('reads the notice of a step failure the game went on after, and says it in words', () => {
+    const raw = { step: 'RoundStep', line: 81, error: 'No such property: roundNoteText for class: Script12', sessionId: 12, session: 'Autopilot · 2026-10-31 19:23:41 UTC', at: '2026-10-31T19:41:30.120Z', count: 1 }
+    const n = normalizeState({ status: { on: true, failureNotice: raw } }).status.failureNotice!
+    expect(n).toEqual(raw)
+    expect(failureNoticeText(n)).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on).')
+    expect(failureNoticeText({ ...n, count: 4 })).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on). '
+      + 'The latest of 4 such failures since the settings were saved or Resume was pressed.')
+    expect(failureNoticeText({ ...n, line: null, session: null })).toBe('RoundStep failed in session #12 (the game went on).')
+    // an older server, or nothing to say
+    expect(normalizeState({ status: { on: true } }).status.failureNotice).toBeNull()
+    expect(normalizeState({ status: { failureNotice: { step: ' ' } } }).status.failureNotice).toBeNull()
+    expect(normalizeState({ status: { failureNotice: { step: 'X', line: '7', count: 'two', at: 'later' } } }).status.failureNotice)
+      .toMatchObject({ step: 'X', line: 7, count: 1, at: null, error: null, session: null })
   })
   it('reads the state, with unknown sources as "off"', () => {
     const st = normalizeState({ source: 'weird', status: { on: 1, instance: { id: 3, name: 'auto', status: 'RUNNING' } } })
@@ -321,6 +338,19 @@ describe('words and links', () => {
     expect(autopilotActivity([{ name: 'engineReloaded', datetime: at(5), data: { restarted: 'true', by: 'a@lab.org' } }])[0])
       .toMatchObject({ text: 'The engine was reloaded by a@lab.org; the game started again from the beginning', tone: 'info' })
   })
+
+  it('says where a failure went wrong in another step\'s function the failing step called', () => {
+    const at = (m: number) => `2026-10-30T10:${String(m).padStart(2, '0')}:00Z`
+    expect(autopilotActivity([
+      { name: 'stepFailed', datetime: at(2), data: { step: 'RoundStep', error: 'line 14, in isHuman (InitStep line 30): isHumanStrict fails' } },
+      { name: 'sessionFailed', datetime: at(2), data: { step: 'RoundStep', line: '14', error: 'in isHuman (InitStep line 30): isHumanStrict fails' } },
+    ]).map(a => a.text)).toEqual([
+      'Ended: RoundStep failed at line 14, in isHuman at InitStep line 30 and stalled the game',
+      'RoundStep failed at line 14, in isHuman at InitStep line 30',
+    ])
+    expect(autopilotActivity([{ name: 'stepsFailedToLoad', datetime: at(5), data: { error: 'RoundStep: line 2, in isHuman (InitStep line 6): isHuman fails for p1' } }])[0])
+      .toMatchObject({ text: 'Stopped before anyone joined: RoundStep failed at line 2, in isHuman at InitStep line 6 as the steps loaded' })
+  })
 })
 
 // ---- the page --------------------------------------------------------------------------------------
@@ -498,14 +528,69 @@ describe('Autopilot page', () => {
     w.unmount()
   })
 
+  // For the example, whose steps set their own waiting room, both switches start off. Switching the
+  // room on here left Give up after empty ("Never"), so a lone participant waited for good, with nobody
+  // at the console: it takes the steps' own give-up time (600 s in the example), or else ten minutes.
+  it('fills an empty Give up after with the steps\' own give-up time, or ten minutes, when the waiting room set here is switched on', async () => {
+    const steps = (await import('@/store/admin') as any).expSteps
+    const exampleRoom = 'autopilot.waitingRoom([minPlayers: paramOr("minPlayers", 2) as Integer, maxPlayers: NETWORK_SIZE,\n' +
+      '                       waitSeconds: paramOr("waitSeconds", 20) as Integer,\n                       maxWaitSeconds: 450, countdownSeconds: 5])'
+    expect(stepsMaxWait([{ source: `x = 1\n${exampleRoom}` }])).toBe(450)
+    expect(stepsMaxWait([{ source: 'autopilot.waitingRoom([minPlayers: 2, maxWaitSeconds: giveUp])' }])).toBeNull()
+    expect(stepsMaxWait([{ source: '// autopilot.waitingRoom([maxWaitSeconds: 30])' }])).toBeNull()
+    expect(stepsMaxWait([{ source: 'autopilot.waitingRoom([maxWaitSeconds: 0])' }])).toBeNull()
+    expect(stepsMaxWait(undefined)).toBeNull()
+
+    const room = () => w.findAll('.ap-sec').find(sec => sec.text().includes('Use the waiting room set here'))!
+    const giveUp = () => room().findAll('.b-field').find(f => f.find('label').text().startsWith('Give up after'))!.find('input')
+    const roomSwitch = () => room().find('input[role="switch"]')
+    const saved = (more: any = {}) => stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12, waitingRoom: { ...DEFAULTS.waitingRoom, enabled: false, maxWaitSeconds: null, ...more } } })
+    steps[12] = [{ source: exampleRoom }]
+    http.get.mockResolvedValue(saved())
+    let w = await mountPage()
+    try {
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('450')
+      // switched off and on again, it stays as it is now
+      await giveUp().setValue('120')
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('120')
+      // emptied here, empty is the researcher's choice
+      await giveUp().setValue('')
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('')
+      w.unmount()
+
+      // steps whose waiting room gives up in code: ten minutes
+      steps[12] = [{ source: 'autopilot.waitingRoom([minPlayers: 2, maxWaitSeconds: giveUp])' }]
+      w = await mountPage()
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('600')
+      w.unmount()
+
+      // saved with this waiting room on and no limit: that was chosen, so switching it off and on keeps it
+      http.get.mockResolvedValue(saved({ enabled: true }))
+      w = await mountPage()
+      await roomSwitch().setValue(false)
+      await roomSwitch().setValue(true)
+      expect((giveUp().element as HTMLInputElement).value).toBe('')
+    } finally {
+      w.unmount()
+      delete steps[12]
+    }
+  })
+
   it('explains a pause for a mistake in a step as the Steps page does, with a link to the step at that line', async () => {
     const tail = '. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
-    const loadFailed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 24: No such property: five), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
+    const loadFailed = 'It is paused: the steps of its session "Autopilot #3" didn\'t load (InitStep: line 24: No such property: five), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
     expect(pauseFailure(loadFailed)).toEqual({
       step: 'InitStep',
       line: 24,
+      in: null,
       message: 'No such property: five',
-      text: 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load, so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail,
+      text: 'It is paused: the steps of its session "Autopilot #3" didn\'t load, so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail,
     })
     const stalled = 'It is paused: the step "RoundStep" failed during its session "A (1)" (line 71: No signature of method: foo() is applicable for argument types: (java.lang.String)), and then the game had nothing left to do, so that session was stopped. Fix the step on the Steps page first' + tail
     expect(pauseFailure(stalled)).toMatchObject({ step: 'RoundStep', line: 71, message: 'No signature of method: foo() is applicable for argument types: (java.lang.String)' })
@@ -527,11 +612,55 @@ describe('Autopilot page', () => {
     expect(link.text()).toBe('Open InitStep at line 24')
     // (the step of the autopilot's experiment: the Steps page asks to switch when it is another one)
     expect(link.attributes('href')).toBe('/steps?step=InitStep&line=24&experiment=12')
+    expect(box.findAll('a.apst__open-step')).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('links to the failing step\'s line and to where it went wrong in another step\'s function it called', async () => {
+    const tail = '. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    const stalled = 'It is paused: the step "RoundStep" failed during its session "A (1)" (line 14, in isHuman (InitStep line 30): isHumanStrict fails), so that session was stopped. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(stalled)).toEqual({
+      step: 'RoundStep',
+      line: 14,
+      in: { step: 'InitStep', line: 30, name: 'isHuman' },
+      message: 'isHumanStrict fails',
+      text: 'It is paused: the step "RoundStep" failed during its session "A (1)", so that session was stopped. Fix the step on the Steps page first' + tail,
+    })
+    const loads = 'It is paused: the steps of its session "S" didn\'t load (RoundStep: line 2, in InitStep line 6: isHuman fails for p1), so that session was stopped before anyone could join. Fix the step on the Steps page first' + tail
+    expect(pauseFailure(loads)).toMatchObject({ step: 'RoundStep', line: 2, in: { step: 'InitStep', line: 6, name: null }, message: 'isHuman fails for p1' })
+
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem: stalled },
+    }))
+    const w = await mountPage()
+    const links = w.find('.apst__problem').findAll('a.apst__open-step')
+    expect(links.map(a => a.text())).toEqual(['Open RoundStep at line 14', 'Open InitStep at line 30, where it went wrong in isHuman'])
+    expect(links.map(a => a.attributes('href'))).toEqual([
+      '/steps?step=RoundStep&line=14&experiment=12', '/steps?step=InitStep&line=30&experiment=12',
+    ])
+    expect(w.find('.apst__problem').text()).toContain('isHumanStrict fails')
+    w.unmount()
+  })
+
+  it('explains a compiler failure without exposing its generated file outside Full error', async () => {
+    const problem = 'It is paused: the steps of its session "S" didn\'t load (FinishStep: line 3: Constructor call must be the first statement in a constructor. at line: 3 column: 6. File: Script160.groovy), so that session was stopped before anyone could join. Fix the step on the Steps page first.'
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, paused: true, problemKind: 'paused', experimentId: 12, experimentName: 'Public goods', instance: null, links: null, problem },
+    }))
+    const w = await mountPage()
+    expect(w.find('.eng-err__title').text()).toBe('Syntax error')
+    expect(w.find('.eng-err__hint').text()).toContain('Check the brackets')
+    expect(w.find('.eng-err__msg').text()).not.toMatch(/Script\d+|File:/)
+    expect(w.find('.eng-err__places').text()).toContain('Line 3, column 6 of FinishStep')
+    expect(w.find('.eng-err__raw pre').text()).toContain('Script160.groovy')
+    expect(w.find('a.apst__open-step').text()).toBe('Open FinishStep at line 3')
     w.unmount()
   })
 
   it('names the autopilot\'s experiment in the link to the failing step when the console works on another one', async () => {
-    const failed = 'It is paused: the steps of its session "Autopilot · Oct 30, 13:20:47 UTC" didn\'t load (InitStep: line 23: No such property: two), so that session was stopped before anyone could join. Fix the step on the Steps page first. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
+    const failed = 'It is paused: the steps of its session "Autopilot #3" didn\'t load (InitStep: line 23: No such property: two), so that session was stopped before anyone could join. Fix the step on the Steps page first. It opens no new session until someone presses Resume (or saves the settings) on the Autopilot page.'
     // (this console works on "Public goods", id 12)
     http.get.mockResolvedValue(stateJson({
       settings: { ...DEFAULTS, enabled: true, experimentId: 13 },
@@ -909,6 +1038,36 @@ describe('Autopilot page', () => {
     http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null } }))
     const w2 = await mountPage()
     expect(w2.find('.apst__notice').exists()).toBe(false)
+    w2.unmount()
+  })
+
+  // While its session ran, recent activity said "RoundStep failed at line 81; the game went on"; once
+  // the next session had opened, 10 s after the game ended, nothing on the page said so any more.
+  it('keeps a step failure the game went on after, once the next session has opened, with the way to the step', async () => {
+    const failureNotice = { step: 'RoundStep', line: 81, error: 'No such property: roundNoteText for class: Script306', sessionId: 10,
+      session: 'Autopilot · 2026-10-31 19:23:41 UTC', at: new Date().toISOString(), count: 2 }
+    http.get.mockResolvedValue(stateJson({
+      settings: { ...DEFAULTS, enabled: true, experimentId: 12 },
+      status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: { id: 11, name: 'Autopilot · 2026-10-31 19:41:47 UTC', status: 'RUNNING' }, links: null, failureNotice },
+    }))
+    const w = await mountPage()
+    const box = w.findAll('.apst__notice').find(b => b.text().includes('the game went on'))!
+    expect(box.attributes('role')).toBe('status')
+    expect(box.find('.apst__problem-title').text()).toMatch(/^A step failed, and the game went on \(at .+\)$/)
+    expect(box.find('.apst__problem-text').text()).toBe('RoundStep failed at line 81 in “Autopilot · 2026-10-31 19:23:41 UTC” (the game went on). '
+      + 'The latest of 2 such failures since the settings were saved or Resume was pressed.')
+    // what went wrong, in the words the Steps page uses
+    expect(box.text()).toContain('Unknown name “roundNoteText”')
+    const link = box.find('a.apst__open-step')
+    expect(link.text()).toBe('Open RoundStep at line 81')
+    expect(link.attributes('href')).toBe('/steps?step=RoundStep&line=81&experiment=12')
+    // the autopilot runs on: nothing to resume
+    expect(w.find('.apst__title').text()).toBe('The autopilot is on')
+    w.unmount()
+
+    http.get.mockResolvedValue(stateJson({ settings: { ...DEFAULTS, enabled: true, experimentId: 12 }, status: { on: true, experimentId: 12, experimentName: 'Public goods', instance: null, links: null, failureNotice: null } }))
+    const w2 = await mountPage()
+    expect(w2.text()).not.toContain('the game went on')
     w2.unmount()
   })
 

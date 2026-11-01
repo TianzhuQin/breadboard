@@ -65,7 +65,18 @@ public class ClientLogin extends Controller {
       // Say so before anyone types their ID in (e.g. a participant sent here after a restart).
       return ok(notRunning(experimentId, experimentInstanceId));
     }
-    return ok(signInPage(experimentId, experimentInstanceId, Form.form(CLogin.class)));
+    Form<CLogin> form = Form.form(CLogin.class);
+    String carried = request().getQueryString("id");
+    if (carried != null) {
+      CLogin values = new CLogin();
+      values.id = carried;
+      form = form.fill(values);
+      // A password belongs to the experiment's current session: never carry it in a URL or skip it.
+      if (!ScriptBoard.hasPassword()) {
+        return joinSession(experimentId, experimentInstanceId, form);
+      }
+    }
+    return ok(signInPage(experimentId, experimentInstanceId, form));
   }
 
   /**
@@ -137,6 +148,13 @@ public class ClientLogin extends Controller {
     String lang = experimentInstanceId != null && sessionExists(experimentId, experimentInstanceId)
         ? SessionLanguage.of(experimentInstanceId) : SessionLanguage.ofExperiment(experimentId);
     return invalidLink(lang);
+  }
+
+  /** Friendly participant response for a malformed query, without exposing Play's parser details. */
+  public static play.api.templates.Html badRequestPage(String experimentId, String instanceId, boolean prolific) {
+    String lang = instanceId != null && sessionExists(experimentId, instanceId)
+        ? SessionLanguage.of(instanceId) : SessionLanguage.ofExperiment(experimentId);
+    return prolific ? message(lang, "prolific.missingIdTitle", "prolific.missingId") : invalidLink(lang);
   }
 
   static play.api.templates.Html invalidLink(String lang) {
@@ -269,8 +287,12 @@ public class ClientLogin extends Controller {
     if (loginForm.hasErrors()) {
       Logger.debug("loginForm.hasErrors()");
       return badRequest(signInPage(experimentId, experimentInstanceId, loginForm));
-    } else {
-      Logger.debug("! loginForm.hasErrors()");
+    }
+    return joinSession(experimentId, experimentInstanceId, loginForm);
+  }
+
+  /** Shared entry checks for a submitted ID and one carried from a full or cancelled session. */
+  private static Result joinSession(String experimentId, String experimentInstanceId, Form<CLogin> loginForm) {
       // (Pasted ids often bring a space along: " p1 " would be another seat that looks like p1.)
       String clientId = loginForm.get().id == null ? null : loginForm.get().id.trim();
       // (the errors are the keys of their words, which the page shows in the session's language)
@@ -313,7 +335,6 @@ public class ClientLogin extends Controller {
         return forbidden(signInPage(experimentId, experimentInstanceId, loginForm));
       }
       return enterGame(experimentId, experimentInstanceId, clientId, token, null);
-    }
   }
 
   /**
@@ -333,7 +354,7 @@ public class ClientLogin extends Controller {
     String sessionId = request().getQueryString("SESSION_ID");
     // (the language of the session's texts, which Breadboard's own words here follow)
     String lang = SessionLanguage.of(experimentInstanceId);
-    if (pid == null || pid.trim().isEmpty()) {
+    if (pid == null || pid.trim().isEmpty() || pid.trim().startsWith("{{")) {
       return badRequest(message(lang, "prolific.missingIdTitle", "prolific.missingId"));
     }
     pid = pid.trim();
@@ -476,7 +497,7 @@ public class ClientLogin extends Controller {
     String title = texts.t(underWay ? "holding.underWayTitle" : "holding.soonTitle");
     String message = texts.t((underWay ? "holding.underWay" : "holding.soon") + (prolific ? "Prolific" : ""));
     response().setHeader("Cache-Control", "no-store");
-    return ok(participantHolding.render(title, message, HOLDING_RETRY_SECONDS, texts));
+    return ok(participantHolding.render(title, message, underWay ? HOLDING_RETRY_SECONDS : 1, texts));
   }
 
   private static final String PLAY_COOKIE = "bb_seat_";

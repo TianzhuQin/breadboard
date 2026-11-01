@@ -68,6 +68,9 @@ cleanup () {
 }
 trap cleanup EXIT
 # Anything else that fails (set -e) says where, instead of stopping without a word.
+
+# Fast checks of launcher preflight races and refusals before unpacking a release.
+"$(dirname "$0")/test-launcher"
 trap 'fail "unexpected failure at line $LINENO"' ERR
 
 fail () {
@@ -142,6 +145,65 @@ use_proxy () {
   fi
 }
 
+# Stand-ins for what the launcher asks about the networks this computer is on (ifconfig and route on
+# macOS, ip on Linux), first on its PATH when NETWORKS is set: Wi-Fi (the default route's, 10.20.30.40)
+# and an Ethernet adapter (192.168.1.20), which "On this network" lists, in that order, and networks
+# only this computer is on, which it leaves out: two virtual machines' (macOS: Parallels' vnic0, UTM's
+# bridge100; Linux: Docker's docker0, libvirt's virbr0) and a VPN's (point-to-point).
+NETWORKS=""
+FAKE_NETWORKS="$WORK/networks"
+mkdir -p "$FAKE_NETWORKS"
+if [ "$(uname)" = Darwin ]; then
+  cat > "$FAKE_NETWORKS/ifconfig" <<'EOF'
+#!/bin/sh
+cat <<'END'
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+	inet 127.0.0.1 netmask 0xff000000
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 10.20.30.40 netmask 0xffffff00 broadcast 10.20.30.255
+	status: active
+en7: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 192.168.1.20 netmask 0xffffff00 broadcast 192.168.1.255
+	status: active
+utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380
+	inet 100.64.0.2 --> 100.64.0.2 netmask 0xffffffff
+vnic0: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 10.211.55.2 netmask 0xffffff00 broadcast 10.211.55.255
+	status: active
+bridge100: flags=8a63<UP,BROADCAST,SMART,RUNNING,ALLMULTI,SIMPLEX,MULTICAST> mtu 1500
+	inet 192.168.64.1 netmask 0xffffff00 broadcast 192.168.64.255
+	status: active
+END
+EOF
+  printf '#!/bin/sh\necho "  interface: en0"\n' > "$FAKE_NETWORKS/route"
+else
+  cat > "$FAKE_NETWORKS/ip" <<'EOF'
+#!/bin/sh
+case "$*" in
+  "-4 route show default") echo "default via 10.20.30.1 dev eth0 proto dhcp metric 100" ;;
+  "-o link show up")
+    echo '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN'
+    echo '2: docker0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP'
+    echo '3: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP'
+    echo '4: virbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP'
+    echo '5: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN'
+    echo '6: enx00e04c680001: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP' ;;
+  "-4 -o addr show dev lo") echo '1: lo    inet 127.0.0.1/8 scope host lo' ;;
+  "-4 -o addr show dev docker0") echo '2: docker0    inet 172.17.0.1/16 scope global docker0' ;;
+  "-4 -o addr show dev eth0") echo '3: eth0    inet 10.20.30.40/24 scope global dynamic eth0' ;;
+  "-4 -o addr show dev virbr0") echo '4: virbr0    inet 192.168.122.1/24 scope global virbr0' ;;
+  "-4 -o addr show dev tun0") echo '5: tun0    inet 100.64.0.2/32 scope global tun0' ;;
+  "-4 -o addr show dev enx00e04c680001") echo '6: enx00e04c680001    inet 192.168.1.20/24 scope global enx00e04c680001' ;;
+esac
+EOF
+fi
+chmod +x "$FAKE_NETWORKS"/*
+use_networks () {
+  if [ -n "$NETWORKS" ]; then
+    export PATH="$NETWORKS:$PATH"
+  fi
+}
+
 # The caffeinate that keeps this Mac awake for the process $1, if one does
 awake_for () {
   pgrep -f "^caffeinate -i -s -w $1\$" 2>/dev/null || true
@@ -150,13 +212,16 @@ awake_for () {
 # start "what this start is" [more settings for the server]
 # (on the port given as -Dhttp.port, or, with PORT_IN_LOCAL_CONF set, on the one conf/local.conf gives)
 PORT_IN_LOCAL_CONF=""
+# (FROM: the first line of the server's output that is this start's)
+FROM=1
 start () {
   local what="$1" from port_arg="-Dhttp.port=$PORT"
   shift
   [ -z "$PORT_IN_LOCAL_CONF" ] || port_arg=""
   touch "$WORK/server.log"
   from=$(( $(wc -l < "$WORK/server.log") + 1 ))
-  (cd "$APP" && use_proxy && exec ./breadboard.sh ${port_arg:+"$port_arg"} "$@") >> "$WORK/server.log" 2>&1 &
+  FROM=$from
+  (cd "$APP" && use_proxy && use_networks && exec ./breadboard.sh ${port_arg:+"$port_arg"} "$@") >> "$WORK/server.log" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 180); do
     if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi
@@ -294,7 +359,14 @@ backups () {
   pass "a backup made in the console downloads as a zip of the database"
 }
 
+NETWORKS="$FAKE_NETWORKS"
 if [ -n "$OLD_DB" ]; then start "an older release's database"; else start "empty database"; fi
+NETWORKS=""
+NETWORK_LINES="$(tail -n +"$FROM" "$WORK/server.log" | sed -n 's/^  On this network: //p')"
+EXPECTED_NETWORK_LINES="$(printf '%s\n' "http://10.20.30.40:$PORT" "http://192.168.1.20:$PORT")"
+[ "$NETWORK_LINES" = "$EXPECTED_NETWORK_LINES" ] || fail "the launcher listed virtual adapters or put the default network last: $NETWORK_LINES"
+pass "the default network comes first and virtual-machine and VPN addresses are left out"
+
 [ -s "$APP/conf/application.secret" ] || fail "no conf/application.secret was generated"
 if [ -n "$OLD_DB" ]; then
   ls "$APP"/backups/breadboard-*-upgrade.zip >/dev/null 2>&1 || fail "no backup was made before upgrading the older database"
@@ -302,7 +374,9 @@ if [ -n "$OLD_DB" ]; then
 fi
 # What Java itself says (that it ran out of memory) goes into logs/jvm-pid<N>.log, not the window,
 # where one that takes no output would hold Java up for good (see the check at the end).
-ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- " -XX:-DisplayVMOutput " && [ -f "$APP/logs/jvm-pid$SERVER.log" ] \
+ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- " -XX:-DisplayVMOutput " \
+  && ps -ww -o args= -p "$SERVER" 2>/dev/null | grep -qF -- "-XX:OnOutOfMemoryError=" \
+  && [ ! -f "$APP/logs/jvm-pid$SERVER.log" ] \
   || fail "what Java itself says doesn't go into logs/jvm-pid$SERVER.log: $(ls "$APP/logs")"
 pass "what Java itself says goes into logs/jvm-pid<N>.log, not the window"
 pages
@@ -310,7 +384,7 @@ pages
 get /autopilot 401
 get /languages
 LANG_ID="$(json "[l['id'] for l in d['languages'] if l['code'] == 'eng'][0]")"
-EMAIL="smoke@breadboard.test"
+EMAIL="smoke@example.org"
 PASSWORD="smoke-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 code="$(curl -s --max-time 30 -o "$WORK/body" -w '%{http_code}' -H 'Content-Type: application/json' \
   -d "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"defaultLanguageId\":$LANG_ID}" "$BASE/createFirstUser")"
@@ -397,7 +471,7 @@ if (cd "$APP" && use_proxy && exec ./breadboard.sh -Dhttp.port="$PORT" -Dpidfile
     > "$WORK/same-port.log" 2>&1 < /dev/null; then
   fail "another Breadboard started on the port this one uses"
 fi
-grep -qF "Breadboard is already running on port $PORT" "$WORK/same-port.log" \
+grep -qF "is already running from another folder on port $PORT" "$WORK/same-port.log" \
   || fail "another Breadboard on the same port, with a proxy set, wasn't told this one runs there: $(cat "$WORK/same-port.log")"
 pass "another Breadboard on the same port, with a proxy set, is told this one runs there"
 PROXY=""
@@ -523,12 +597,13 @@ if wait "$LAUNCHER"; then
   fail "a launcher whose server couldn't start ended as if all went well"
 fi
 rm -f "$APP/conf/local.conf"
-grep -q "before the server started (it could not start, exit code 255), so it is not started again" "$WORK/start-failure.log" \
+grep -q "before the server started (it could not start, exit code 255): Configuration error" "$WORK/start-failure.log" \
   && ! grep -q "Starting Breadboard again" "$WORK/start-failure.log" \
   || fail "a server that couldn't start was started again, or the launcher didn't say it isn't, and why: $(cat "$WORK/start-failure.log")"
 grep -q "conf/local.conf: 1" "$APP/logs/start-errors.log" 2>/dev/null \
   || fail "logs/start-errors.log doesn't say why the server couldn't start: $(cat "$APP/logs/start-errors.log" 2>&1)"
-pass "a server that can't start isn't started again, and logs/start-errors.log says why"
+tail -n 1 "$WORK/start-failure.log" | grep -q "Configuration error" || fail "the last message does not name the configuration error"
+pass "a server that can't start isn't started again, and its last message names the configuration error"
 
 # With keep running on and nobody reading its window (here a pipe that is full, as a paused window
 # is), a server that runs out of memory is started again all the same: Java says so in
@@ -623,7 +698,7 @@ EOF
     if kill -0 "$FIRST" 2>/dev/null; then STILL=", which is still there"; fi
     fail "with nobody reading its window, a server that ran out of memory (process $FIRST$STILL) wasn't started again: $(tail -20 "$APP/logs/application.log")"
   fi
-  grep -q "Terminating due to java.lang.OutOfMemoryError: Java heap space" "$APP/logs/jvm-pid$FIRST.log" 2>/dev/null \
+  grep -q "java.lang.OutOfMemoryError: Java memory exhausted." "$APP/logs/jvm-pid$FIRST.log" 2>/dev/null \
     || fail "logs/jvm-pid$FIRST.log doesn't say that Java ran out of memory: $(tail -5 "$APP/logs/jvm-pid$FIRST.log" 2>&1)"
   grep -qF "Breadboard stopped by itself (it ran out of memory: a script may keep too much data. -Xmx192m in JAVA_OPTS gives it 192m, and wins over breadboard.memory: raise that, e.g. to -Xmx384m," "$APP/logs/application.log" \
     || fail "the launcher didn't say that the server ran out of memory, and how to give it more: $(tail -20 "$APP/logs/application.log")"
@@ -745,7 +820,7 @@ rm -f "$APP/logs/out-of-memory.hprof"
   || fail "a server that ran out of memory while starting was started again, or the launcher didn't say how to give it more (exit code $CODE): $(cat "$WORK/start-out-of-memory.log")"
 JVM_LOG="$(ls -t "$APP"/logs/jvm-pid*.log 2>/dev/null | head -1 || true)"
 ! grep -q "Terminating due to" "$WORK/start-out-of-memory.log" \
-  && grep -q "Terminating due to java.lang.OutOfMemoryError" "$JVM_LOG" \
+  && grep -q "java.lang.OutOfMemoryError: Java memory exhausted." "$JVM_LOG" \
   || fail "what Java said as it ran out of memory isn't in logs/jvm-pid<N>.log, or went into the window: $(tail -3 "$JVM_LOG" 2>&1)"
 pass "a server that runs out of memory while starting isn't started again; the launcher says how to give it more (the -Xmx given to breadboard.sh), and logs/jvm-pid<N>.log what Java said"
 echo "The release in $(basename "$ZIP") works."

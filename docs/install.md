@@ -99,7 +99,7 @@ Mac mini or iMac, System Settings → Energy).
 
 When the server runs out of memory it stops at once rather than limping on, and writes
 `logs/out-of-memory.hprof` (delete it once you no longer need it: the next one is only written when
-that file is gone). Java says so, and what it ran out of, in `logs/jvm-pid<N>.log` (see below). To
+that file is gone). A short diagnostic is kept in `logs/jvm-pid<N>.log` (see below). To
 give it more memory, set `breadboard.memory` in `conf/local.conf`. A server whose shutdown is stuck
 (an experiment's script that never ends) is stopped after 20 seconds. When it stops normally, a
 running session's game stops at once (no page joins it again, no computer player or timer plays it
@@ -116,7 +116,7 @@ On first start the launcher creates:
 | `conf/application.secret` | A random key that signs researchers' sign-ins and participants' invitation links. Keep it private and keep it across upgrades. Set `APPLICATION_SECRET` in the environment to use your own instead. |
 | `conf/local.conf` | Your settings ([Settings](#settings)), with only comments at first. On macOS and Linux the launcher lets only its owner read it, as it may hold keys. The account the server runs as must be able to read it. |
 | `logs/application.log` | The server's log. A new one starts every day, and the last 30 days are kept (`application.<date>.log`). How much it records is set in `conf/logger.xml`. |
-| `logs/jvm-pid<N>.log` | What Java itself says, such as that the server ran out of memory, which would otherwise go to the server's window. One for each start, N being Java's process id; at the next start, those in which Java said nothing are deleted, and at most 10 are kept. |
+| `logs/jvm-pid<N>.log` | A short diagnostic made only when Java runs out of memory, N being its process id. At startup, the newest two earlier diagnostics are kept, leaving room for this process's; at most three stay. HotSpot's growing internal XML log is disabled. Crash reports remain in `hs_err_pid*.log`. |
 | `backups/` | Copies of the database (see [Backups](#backups)). |
 
 On macOS and Linux, `db/`, `backups/` and `logs/`, and what is in them, can be read only by the
@@ -427,9 +427,13 @@ change how often, how many and where.
 The copies are on the same disk as the database, so copy them somewhere else now and then (or set
 `breadboard.backup.dir` to a folder on another disk or a synced drive).
 
-**To go back to a backup**: stop Breadboard, unzip the backup (it holds one file,
-`breadboard.h2.db`) into the `db` folder, replacing the file there, and start Breadboard again.
-Everything since that backup is gone, so download the data of later sessions first if you need it.
+**To go back to a backup**:
+
+1. Stop Breadboard. Download later sessions' data first if you need it: changes since this backup will be gone.
+2. Double-click the backup zip (on Windows, choose **Extract All**).
+3. Drag its `breadboard.h2.db` into Breadboard's `db/` folder and choose **Replace**.
+   The name must be exactly `breadboard.h2.db`, with no extra spaces, numbers or `.db` suffix.
+4. Start Breadboard again. A warning about another `.h2.db` file means that file is not being used.
 
 You can also export each experiment from the console's Experiments page, and download each
 session's data from Sessions & data.
@@ -483,9 +487,12 @@ launcher goes on with the others. Point it at the JDK's folder, or remove it.
 rest of Breadboard isn't. Right-click the zip, **Extract All**, and open `breadboard.bat` in the new
 folder.
 
-**"Another program is using port 9000"** (on Windows **"Port 9000 is in use"**), or **"Breadboard
-is already running on port 9000"**: another program, or a Breadboard started earlier, holds the
-port. If it is Breadboard, open its address. Otherwise stop that program, or use another port: the
+**"Breadboard … is already running from another folder on port 9000"**: another copy holds the
+port. The message gives its version and address, and a desktop start opens its console. To run
+this copy instead, close the other copy's window or stop its service first.
+
+**"Another program is using port 9000"** (on Windows **"Port 9000 is in use"**): stop that program,
+or use another port: the
 line `http.port=9001` in `conf/local.conf` for every start, or `-Dhttp.port=9001` once, as the
 message shows. (A proxy set for the internet, such as `http_proxy`, doesn't matter: the launchers
 check the port directly.)

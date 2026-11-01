@@ -67,7 +67,7 @@
         <aside class="pv__side" :class="{ 'is-collapsed': !pickerOpen }">
           <button type="button" class="pv__side-toggle" :aria-expanded="pickerOpen ? 'true' : 'false'" aria-controls="pv-picker" @click="togglePicker">
             <Users :size="16" aria-hidden="true" />
-            <span>Players · {{ memory.ids.length }} of {{ players.length }} shown</span>
+            <span>Players · {{ shownCount }} of {{ players.length }} shown</span>
             <ChevronDown :size="16" class="pv__side-chev" aria-hidden="true" />
           </button>
           <div id="pv-picker" class="pv__picker">
@@ -130,14 +130,16 @@
                 :test="isTestPlayer(t)"
                 :ai="isAIPlayer(t)"
                 :role="t.missing ? null : previewRole(t)"
+                :aside="!t.missing && watchesAnotherPreview(frames[t.id])"
                 :paused="focusId === t.id ? 'focus' : tabbed.has(t.id) ? 'tab' : null"
                 :frame-key="`${globalNonce}-${nonces[t.id] || 0}`"
-                :note="noteOf(t)"
+                :note="noteOf(t, frames[t.id])"
                 @focus="focusId = t.id"
                 @reload="reload(t.id)"
                 @open-tab="openTab(t.id)"
                 @remove="remove(t.id)"
                 @resume="tabbed.delete(t.id); reload(t.id)"
+                @connection="(state) => { frames[t.id] = state }"
               />
             </ul>
           </div>
@@ -152,10 +154,12 @@
         :initial-device="memory.device"
         :reload-key="focusId ? nonces[focusId] || 0 : 0"
         :role="focusTile && !focusTile.missing ? previewRole(focusTile) : null"
-        :note="focusTile ? noteOf(focusTile) : ''"
+        :aside="!!focusTile && !focusTile.missing && watchesAnotherPreview(focusFrame)"
+        :note="focusTile ? noteOf(focusTile, focusFrame) : ''"
         @close="closeFocus"
         @step="step"
         @open-tab="focusId && openTab(focusId)"
+        @connection="(state) => { focusFrame = state }"
       />
     </template>
   </BPage>
@@ -183,7 +187,7 @@ import PreviewFocus from './PreviewFocus.vue'
 import {
   FIRST_LOOK_MAX_MS, FIRST_LOOK_QUIET_MS, MAX_PREVIEWS, PLAYER_LIST_WIDTH, autoPicked, awayText, isAIPlayer, isComputerPlayer,
   isTestPlayer, joinUrl, previewMemory as memory, previewPageUrl, previewRole, quickPick, shownReadOnly, sortPlayers, tileWidth,
-  type PlayerLike, type PreviewTarget, type QuickPick,
+  watchesAnotherPreview, type FrameConnection, type PlayerLike, type PreviewTarget, type QuickPick,
 } from './preview'
 import { fetchPreviewToken } from './previewLink'
 
@@ -212,6 +216,12 @@ const players = computed<PlayerLike[]>(() => {
 const testCount = computed(() => players.value.filter(isTestPlayer).length)
 const aiCount = computed(() => players.value.filter(isAIPlayer).length)
 const selected = computed(() => new Set(memory.ids))
+/**
+ * How many of the players in the network are shown: not those shown before who aren't in it now (a
+ * Reload engine or a Resume, until they join again), whose tiles stay, saying so. They counted, and the
+ * list read "Players · 3 of 1 shown".
+ */
+const shownCount = computed(() => players.value.filter(p => selected.value.has(p.id)).length)
 const tiles = computed(() => {
   void graph.version.value
   return sortPlayers(memory.ids.map(id => {
@@ -220,13 +230,29 @@ const tiles = computed(() => {
   }))
 })
 
-/** What a tile says under the page: they aren't in the game, or they are away and the preview stands in. */
-function noteOf (t: { id: string, data: Record<string, any>, missing: boolean }): string {
+/**
+ * What a tile says under the page: they aren't in the game, or they are away and the preview stands
+ * in, or another one does, perhaps another console's, while this one only watches, as its page
+ * (`frame`) says.
+ */
+function noteOf (t: { id: string, data: Record<string, any>, missing: boolean }, frame?: FrameConnection | null): string {
   if (t.missing) return admin.engine !== 'loading' ? 'Not in the game right now: a preview adds nobody. Their page shows here once they join.' : ''
   if (previewRole(t) !== 'away') return ''
   const known = takeover.value?.instanceId === inst.value?.id ? takeover.value : null
-  return awayText(t, { gameStarted: gameStarted.value, takeoverSeconds: known?.seconds ?? null, returnToHuman: known?.returnToHuman ?? null })
+  return awayText(t, {
+    gameStarted: gameStarted.value,
+    takeoverSeconds: known?.seconds ?? null,
+    returnToHuman: known?.returnToHuman ?? null,
+    anotherPreview: watchesAnotherPreview(frame),
+  })
 }
+
+/**
+ * What the page of each tile, and the one shown full size, says of its connection (PreviewFrame):
+ * whether it stands in for someone away, or only watches while another preview does.
+ */
+const frames = reactive<Record<string, FrameConnection | null>>({})
+const focusFrame = ref<FrameConnection | null>(null)
 
 /**
  * The session's game has started, as Live session says it: the engine's own word, when it runs this

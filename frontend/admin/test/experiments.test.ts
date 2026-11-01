@@ -721,6 +721,36 @@ describe('Experiments page', () => {
     w.unmount()
   })
 
+  // The page a newcomer lands on after creating the first account (Live session, which needs an
+  // experiment) said only what an experiment is: it points to the example, as the Experiments page does.
+  it('points to the example on the page a newcomer lands on too, in the Experiments page\'s words', async () => {
+    store.exps.splice(0, store.exps.length)
+    ;(store as any).admin.experiment = null
+    const NeedsExperiment = (await import('../src/shell/NeedsExperiment.vue')).default
+    const router = makeRouter()
+    router.push('/session')
+    await router.isReady()
+    const w = mount(NeedsExperiment, { global: { plugins: [router] }, attachTo: document.body })
+    const words = (el: any) => el.find('.b-empty__text').text().replace(/\s+/g, ' ').trim()
+    expect(w.find('.b-empty__title').text()).toBe('Create your first experiment')
+    expect(words(w)).toContain('To see Breadboard at work, start from Example: network game, a complete study that runs as it is.')
+    expect(w.find('.b-empty__text strong').text()).toBe('Example: network game')
+    const page = await mountAt('/experiments')
+    expect(words(w)).toBe(words(page.w.find('.xempty')))
+    page.w.unmount()
+    // New experiment opens the Experiments page's dialog, which has the example chosen
+    await w.findAll('button').find(b => b.text() === 'New experiment')!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/experiments?action=new')
+    w.unmount()
+    // with experiments, it asks to choose one
+    store.exps.splice(0, store.exps.length, A, B)
+    const again = mount(NeedsExperiment, { global: { plugins: [router] }, attachTo: document.body })
+    expect(again.find('.b-empty__title').text()).toBe('Choose an experiment')
+    expect(words(again)).toBe('This page works on one experiment. Pick it in the switcher at the top left, or here.')
+    again.unmount()
+  })
+
   // Opened with the page (the switcher's New), the dialog chose the example but left its name empty.
   it('names the example when the New dialog opens with the page', async () => {
     store.exps.splice(0, store.exps.length)

@@ -225,15 +225,14 @@ export function groovyString (s: string): string {
  * The code for the step where a participant finishes: it completes Prolific participants only
  * (completeProlific does nothing for anyone else, and the server's log says why; it used to throw,
  * which stopped the step), and says that `p` stands for whatever the step calls the participant.
+ * No `message`: one in English would show above the code on a finish page that is otherwise in the
+ * session's language (Breadboard's own words on it follow it); the card says how to add one.
  */
 export function completionSnippet (code: string): string {
   return [
     '// p is the participant: use the name your step gives them (often player, or p in g.V.each { p -> ... })',
     'if (p._system?.recruitment?.source == "prolific") {',
-    '  recruitment.completeProlific(p, [',
-    `    completionCode: ${groovyString(code.trim() || 'YOUR-CODE')},`,
-    `    message: ${groovyString('Thank you for taking part!')}`,
-    '  ])',
+    `  recruitment.completeProlific(p, [completionCode: ${groovyString(code.trim() || 'YOUR-CODE')}])`,
     '}',
   ].join('\n')
 }

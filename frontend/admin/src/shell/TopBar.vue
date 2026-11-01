@@ -101,7 +101,7 @@ const engineState = computed(() => {
   if (admin.engine === 'stale' && !admin.engineProblem && (!live || autopilotsSession.value)) return 'saved'
   return admin.engine
 })
-const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', saved: 'Steps saved', stale: 'Reload needed' }[engineState.value]))
+const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Engine rebuilt', saved: 'Steps saved', stale: 'Reload needed' }[engineState.value]))
 const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, saved: CircleCheck, stale: TriangleAlert }[engineState.value]))
 const engineTitle = computed(() => engineState.value === 'saved'
   ? autopilotsSession.value
@@ -120,6 +120,12 @@ const engineHeading = computed(() => {
 })
 
 async function reload () {
+  // nothing to load before an experiment is chosen: said at once, without asking first (the server
+  // would refuse it over a live session anyway)
+  if (!admin.experiment) {
+    notify.info('Choose an experiment first', 'Reload engine loads the chosen experiment’s steps. Pick one in the experiment switcher at the top of the sidebar.')
+    return
+  }
   // not over another experiment's live session, which a reload would end (the server refuses it too)
   if (reloadBlocked.value) {
     notify.info('The engine can’t be reloaded now', reloadBlocked.value)

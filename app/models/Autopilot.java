@@ -12,11 +12,9 @@ import play.libs.Json;
 import play.mvc.WebSocket;
 
 import java.io.File;
-import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.TimeZone;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -56,7 +54,8 @@ import java.util.concurrent.TimeUnit;
  * <pre>
  * breadboard.autopilot.experiment = "My experiment"   # experiment name; unset = autopilot off
  * breadboard.autopilot.user = "researcher@lab.org"    # admin account it runs as (default: first user)
- * breadboard.autopilot.continuous = true              # open a new session when one finishes
+ * breadboard.autopilot.continuous = true              # open a new session when one finishes (the default;
+ *                                                     # false: one session, then it is done)
  * breadboard.autopilot.nextSessionDelaySeconds = 10
  * breadboard.autopilot.maxSessionMinutes = 120        # longest a session's game may run; 0 or unset = no limit
  * </pre>
@@ -131,6 +130,12 @@ public final class Autopilot {
   // (status.notice); kept until the settings are saved or Resume is pressed.
   private static volatile String notice = null;
   private static volatile long noticeAt = 0L;
+  // The last step failure in its own session that the game went on after (failureWentOn), with how many
+  // there have been, for the console (status.failureNotice); kept, like the notice above, until the
+  // settings are saved or Resume is pressed: in an unattended run, the session may have finished and
+  // the next one opened before anyone looks. failuresSeenAt is when that last happened.
+  private static volatile FailureNotice failureNotice = null;
+  private static volatile long failuresSeenAt = 0L;
   // How long its own session's game may have nothing to wait for, after a step failure was recorded
   // in it, before it is ended (watchForStall). A field so tests can shorten it.
   static volatile long stallMs = 60000L;
@@ -212,7 +217,9 @@ public final class Autopilot {
     s.enabled = true;
     Experiment experiment = findExperimentByName(experimentName);
     s.experimentId = experiment == null ? null : experiment.id;
-    s.continuous = conf.getBoolean("breadboard.autopilot.continuous", false);
+    // (left out: on, as the console suggests; a lab that wrote only the experiment's line got one
+    // session, then "The autopilot is done")
+    s.continuous = conf.getBoolean("breadboard.autopilot.continuous", true);
     s.nextSessionDelaySeconds = Math.max(0, conf.getInt("breadboard.autopilot.nextSessionDelaySeconds", 10));
     // (left out, or 0 or less: no limit. A study set up in the file before there was a limit goes on as
     // it was: its games may run longer than the 2 hours new settings start with.)
@@ -780,6 +787,65 @@ public final class Autopilot {
     return true;
   }
 
+  /** A step failure in its own session that the game went on after: where, in which session, how many so far. */
+  static final class FailureNotice {
+    final String step;
+    final Integer line;
+    final String error;
+    final Long sessionId;
+    final String session;
+    final long at;
+    final int count;
+
+    FailureNotice(String step, Integer line, String error, Long sessionId, String session, long at, int count) {
+      this.step = step;
+      this.line = line;
+      this.error = error;
+      this.sessionId = sessionId;
+      this.session = session;
+      this.at = at;
+      this.count = count;
+    }
+  }
+
+  /**
+   * A step failed in the game of session {@code sessionId} and the game went on: the failure didn't keep
+   * the next step from getting going (ScriptBoard.gameFailed). {@code error} is "line N: what went
+   * wrong". When that is its own session, the Autopilot page says so (status.failureNotice) until the
+   * settings are saved or Resume is pressed, as it does for a session that ran out of time: its recent
+   * activity, which also lists it, is about the open session only, and the next one opens a few seconds
+   * after a game ends. Any other session's failure is left to the researcher running it, who sees it.
+   */
+  static void failureWentOn(final Long sessionId, final String step, final String error) {
+    if (!isOwnSession(sessionId)) {
+      return;
+    }
+    final long at = System.currentTimeMillis();
+    later(new Runnable() {
+      public void run() {
+        // (not one from before a save or Resume that got here after it)
+        if (at < failuresSeenAt) {
+          return;
+        }
+        ExperimentInstance instance = ExperimentInstance.findById(sessionId);
+        String name = instance == null ? null : instance.name;
+        // (the step, its line and what went wrong, as sessionFailed records them)
+        LinkedHashMap<Object, Object> place = ScriptBoard.sessionFailedData(step, error);
+        Integer line = null;
+        try {
+          line = place.get("line") == null ? null : Integer.valueOf(place.get("line").toString());
+        } catch (NumberFormatException tooLong) {
+          line = null;
+        }
+        Object what = place.get("error");
+        FailureNotice before = failureNotice;
+        failureNotice = new FailureNotice(step, line, what == null ? null : what.toString(), sessionId, name, at,
+            (before == null ? 0 : before.count) + 1);
+        Logger.info("Autopilot: the step " + step + " failed during session " + name + " (" + error + "); the game went on");
+      }
+    });
+  }
+
   /**
    * Whether this is the session the autopilot opened (or was handed, see adoptLiveSession), and it has
    * been neither paused nor done since. A researcher's Launch while its session runs pauses it first,
@@ -902,6 +968,9 @@ public final class Autopilot {
     notice = null;
     noticeAt = 0L;
     tooLongInARow = 0;
+    // and so did the step failures its sessions went on after
+    failuresSeenAt = System.currentTimeMillis();
+    failureNotice = null;
   }
 
   /**
@@ -1108,7 +1177,7 @@ public final class Autopilot {
       sessionBeforeLaunch = before == null ? null : before.id;
       launchRequestedAt = System.currentTimeMillis();
       // No parameters: LaunchGame gives each its default.
-      scriptBoard.tell(new Breadboard.LaunchGame(user, experiment, sessionName(), new LinkedHashMap(), output(user.email),
+      scriptBoard.tell(new Breadboard.LaunchGame(user, experiment, sessionName(experiment.id), new LinkedHashMap(), output(user.email),
           onlyIfIdle, automatic), null);
       Logger.info("Autopilot: opening a new session of \"" + experiment.name + "\" as " + user.email + " (" + why + ")");
     } catch (Exception ex) {
@@ -1243,26 +1312,55 @@ public final class Autopilot {
     return users.isEmpty() ? null : users.get(0);
   }
 
-  private static String sessionName() {
-    return sessionName(new Date());
+  // The names it gave its sessions: "Autopilot #12"; and, before 3.1, the time they opened, in UTC
+  // ("Autopilot · 2026-10-30 13:20:47 UTC", with no-break spaces, or "Autopilot · Oct 28, 13:16:05 UTC").
+  private static final java.util.regex.Pattern NUMBERED = java.util.regex.Pattern.compile("^Autopilot #(\\d{1,9})$");
+  private static final java.util.regex.Pattern DATED = java.util.regex.Pattern.compile("^Autopilot[\u00a0 ]·[\u00a0 ].*UTC$");
+
+  /**
+   * The name of the next session it opens of this experiment: "Autopilot #N", N counting its sessions of
+   * the experiment (see below). Its sessions used to be named by when they opened, in UTC ("Autopilot ·
+   * 2026-10-30 13:20:47 UTC"), which a researcher whose console shows the session's own time beside its
+   * name (in their time zone) read as two different dates for the same session, from 16:00 UTC on in
+   * China; and the name had no-break spaces, so a filter on it in the data, typed with plain spaces,
+   * matched nothing. Sessions already named so keep their names. Never throws: it counts what it can
+   * read.
+   */
+  static String sessionName(Long experimentId) {
+    List<String> names = new java.util.ArrayList<String>();
+    try {
+      for (com.avaje.ebean.SqlRow row : com.avaje.ebean.Ebean.createSqlQuery(
+          "select name as name from experiment_instances where experiment_id = :experiment and name like 'Autopilot%'")
+          .setParameter("experiment", experimentId).findList()) {
+        names.add(row.getString("name"));
+      }
+    } catch (RuntimeException e) {
+      Logger.warn("Autopilot: could not count its sessions of experiment " + experimentId + ": " + e);
+    }
+    return sessionName(names);
   }
 
   /**
-   * The name of a session it opens at {@code at}, e.g. "Autopilot · 2026-10-30 13:20:47 UTC": the date
-   * in numbers, as in the data, which reads the same in any language and sorts; the time in UTC, said
-   * so, since the server can't know the researcher's time zone (the console shows local times next to
-   * it); the seconds keep sessions opened within a minute of each other, as short games are, apart.
-   * No-break spaces keep "Autopilot ·" and "13:20:47 UTC" each in one piece, so a column too narrow for
-   * the name breaks it between the date and the time (Sessions & data at 1280 px), the same in every
-   * row: it used to break at different places from one row to the next ("Oct 30," / "13:44:37 UTC",
-   * "13:27:15" / "UTC"). The date and the time are not joined: that made one piece too wide for the
-   * column, which the console then broke inside the date. It was "Autopilot · Oct 28, 13:16:05 UTC", an
-   * English month next to UTC; sessions named so keep their names.
+   * "Autopilot #N" after the sessions named {@code earlier} (of one experiment): N counts its sessions
+   * there, those named so and those named by when they opened, and is above every "Autopilot #k" there,
+   * so it is a new name also after some were deleted (or a researcher named one so). Plain spaces only.
    */
-  static String sessionName(Date at) {
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.ENGLISH);
-    format.setTimeZone(TimeZone.getTimeZone("UTC"));
-    return "Autopilot\u00a0· " + format.format(at) + "\u00a0UTC";
+  static String sessionName(java.util.Collection<String> earlier) {
+    int count = 0;
+    int highest = 0;
+    for (String name : earlier) {
+      if (name == null) {
+        continue;
+      }
+      java.util.regex.Matcher numbered = NUMBERED.matcher(name);
+      if (numbered.matches()) {
+        count++;
+        highest = Math.max(highest, Integer.parseInt(numbered.group(1)));
+      } else if (DATED.matcher(name).matches()) {
+        count++;
+      }
+    }
+    return "Autopilot #" + (Math.max(count, highest) + 1);
   }
 
   // ---- what the engine is doing --------------------------------------------------------------------
@@ -1529,6 +1627,25 @@ public final class Autopilot {
     } else {
       status.put("notice", said);
       status.put("noticeAt", Timestamps.iso(new Date(saidAt)));
+    }
+    // The last step failure in its own session that the game went on after (failureWentOn), until a
+    // save or Resume.
+    FailureNotice failed = failureNotice;
+    if (failed == null) {
+      status.putNull("failureNotice");
+    } else {
+      ObjectNode failure = status.putObject("failureNotice");
+      failure.put("step", failed.step);
+      if (failed.line == null) {
+        failure.putNull("line");
+      } else {
+        failure.put("line", failed.line);
+      }
+      failure.put("error", failed.error);
+      failure.put("sessionId", failed.sessionId);
+      failure.put("session", failed.session);
+      failure.put("at", Timestamps.iso(new Date(failed.at)));
+      failure.put("count", failed.count);
     }
     return status;
   }

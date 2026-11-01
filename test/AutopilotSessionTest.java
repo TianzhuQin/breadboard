@@ -108,7 +108,7 @@ public class AutopilotSessionTest extends BaseTest {
     private User user(String prefix) {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
-        return createUser(prefix + "-" + UUID.randomUUID() + "@test.org", prefix, "secret-1", lang);
+        return createUser(prefix + "-" + UUID.randomUUID() + "@example.org", prefix, "secret-1", lang);
     }
 
     private static Result post(User user, JsonNode body) {
@@ -258,18 +258,18 @@ public class AutopilotSessionTest extends BaseTest {
         JsonNode status = state(researcher).get("status");
         assertTrue(status.toString(), status.get("paused").asBoolean());
         String problem = status.get("problem").asText();
-        // (FinishStep has no name of its own: it is called by the variable that holds it)
-        assertTrue(problem, problem.contains("the step \"finishStep\" failed during its session \"" + session.name + "\""));
+        // (FinishStep has no explicit name: the saved step code supplies its name.)
+        assertTrue(problem, problem.contains("the step \"FinishStep\" failed during its session \"" + session.name + "\""));
         assertTrue(problem, problem.contains("line 3: No such property: roundz"));
         assertTrue(problem, problem.contains("Steps page"));
         List<Event> failed = events(session, "stepFailed");
         assertEquals(1, failed.size());
-        assertEquals("finishStep", value(failed.get(0), "step"));
+        assertEquals("FinishStep", value(failed.get(0), "step"));
         assertTrue(value(failed.get(0), "error"), value(failed.get(0), "error").startsWith("line 3: No such property: roundz"));
         // and that the autopilot ended the session for it: where, and what went wrong there
         List<Event> ended = events(session, "sessionFailed");
         assertEquals(1, ended.size());
-        assertEquals("finishStep", value(ended.get(0), "step"));
+        assertEquals("FinishStep", value(ended.get(0), "step"));
         assertEquals("3", value(ended.get(0), "line"));
         assertTrue(value(ended.get(0), "error"), value(ended.get(0), "error").startsWith("No such property: roundz"));
         assertTrue("after the failure", ended.get(0).id > failed.get(0).id);
@@ -343,8 +343,8 @@ public class AutopilotSessionTest extends BaseTest {
         tab.send("RunGame");
         // As processScript tells of an error, from the step, which it names: the Live session page shows it.
         await("the error on the console", () -> tab.count(f -> f.has("error") && f.has("source")
-            && "finishStep".equals(f.get("source").asText()) && f.get("error").asText().startsWith("Caught error: ")
-            && f.get("error").asText().contains("roundz") && "finishStep".equals(f.path("step").asText())) == 1);
+            && "FinishStep".equals(f.get("source").asText()) && f.get("error").asText().startsWith("Caught error: ")
+            && f.get("error").asText().contains("roundz") && "FinishStep".equals(f.path("step").asText())) == 1);
         await("the event", () -> events(session, "stepFailed").size() == 1);
         Thread.sleep(500);
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
@@ -425,7 +425,7 @@ public class AutopilotSessionTest extends BaseTest {
 
         tab.send("RunGame");
         await("the error on the console", () -> tab.count(f -> f.has("error") && f.has("source")
-            && "finishStep".equals(f.get("source").asText()) && f.get("error").asText().contains("roundz")) == 1);
+            && "FinishStep".equals(f.get("source").asText()) && f.get("error").asText().contains("roundz")) == 1);
         await("the event", () -> events(byHand, "stepFailed").size() == 1);
         Thread.sleep(500);
         assertEquals("the researcher decides", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(byHand.id).status);
@@ -916,7 +916,7 @@ public class AutopilotSessionTest extends BaseTest {
         JsonNode status = state(researcher).get("status");
         assertTrue(status.toString(), status.get("paused").asBoolean());
         String problem = status.get("problem").asText();
-        assertTrue(problem, problem.contains("the step \"onJoinStep\" failed during its session \"" + session.name + "\""));
+        assertTrue(problem, problem.contains("the step \"OnJoinStep\" failed during its session \"" + session.name + "\""));
         assertTrue(problem, problem.contains("line 3: No such property: welcomee"));
         assertEquals(1, events(session, "stepFailed").size());
         watchdog();
@@ -940,7 +940,7 @@ public class AutopilotSessionTest extends BaseTest {
 
         arrives("joinroom-1");
         await("the event", () -> events(session, "stepFailed").size() == 1);
-        assertEquals("onJoinStep", value(events(session, "stepFailed").get(0), "step"));
+        assertEquals("OnJoinStep", value(events(session, "stepFailed").get(0), "step"));
         Thread.sleep(1000);
         assertEquals("it waits for the next person", ExperimentInstance.Status.RUNNING, ExperimentInstance.findById(session.id).status);
         assertFalse(state(researcher).get("status").get("paused").asBoolean());
@@ -1070,7 +1070,7 @@ public class AutopilotSessionTest extends BaseTest {
         engine().eval("def v = g.getVertex('leaver-2'); v._system.connected = false; autopilot.onConnection('leaver-2', false); null");
         await("the event", () -> events(session, "stepFailed").size() == 1);
         Event failed = events(session, "stepFailed").get(0);
-        assertEquals("onLeaveStep", value(failed, "step"));
+        assertEquals("OnLeaveStep", value(failed, "step"));
         assertTrue(value(failed, "error"), value(failed, "error").startsWith("line 2: No such property: leaverss"));
         await("the consoles are told", () -> tab.count(f -> from("OnLeaveStep").matches(f) && f.has("error")
             && f.get("error").asText().contains("leaverss")) == 1);
@@ -1117,7 +1117,7 @@ public class AutopilotSessionTest extends BaseTest {
         JsonNode status = state(researcher).get("status");
         assertTrue(status.toString(), status.get("paused").asBoolean());
         String problem = status.get("problem").asText();
-        assertTrue(problem, problem.contains("the step \"finishStep\" failed during its session \"by hand\""));
+        assertTrue(problem, problem.contains("the step \"FinishStep\" failed during its session \"by hand\""));
         assertTrue(problem, problem.contains("line 3: No such property: roundz"));
         assertEquals(1, events(byHand, "stepFailed").size());
         assertNull("the link leads nowhere now", Autopilot.openInstance(experiment.id));
@@ -1153,7 +1153,7 @@ public class AutopilotSessionTest extends BaseTest {
         JsonNode status = state(researcher).get("status");
         assertTrue(status.toString(), status.get("paused").asBoolean());
         String problem = status.get("problem").asText();
-        assertTrue(problem, problem.contains("the step \"finishStep\" failed during its session \"by hand\""));
+        assertTrue(problem, problem.contains("the step \"FinishStep\" failed during its session \"by hand\""));
         assertEquals(1, events(byHand, "stepFailed").size());
     }
 
@@ -1387,7 +1387,8 @@ public class AutopilotSessionTest extends BaseTest {
         Thread.sleep(500);
         assertEquals("one session", 1, sessions(experiment).size());
         final ExperimentInstance first = sessions(experiment).get(0);
-        assertTrue(first.name, first.name.matches("Autopilot\u00a0· \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\u00a0UTC"));
+        // numbered, with plain spaces: the console shows its time beside the name
+        assertEquals("Autopilot #1", first.name);
         await("the console's waiting room over the experiment's own",
             () -> Integer.valueOf(3).equals(engineValue("autopilot.room?.minPlayers")));
         assertEquals(true, engineValue("autopilot.room.onCancel != null"));
@@ -1788,6 +1789,10 @@ public class AutopilotSessionTest extends BaseTest {
         assertEquals(0, Event.find.where().eq("experimentInstance.id", first.id).eq("name", "sessionStopped").findRowCount());
 
         await("the next session", () -> sessions(auto).size() == 2 && running(auto) == 1);
+        // numbered one after the other
+        java.util.Set<String> names = new java.util.TreeSet<String>();
+        for (ExperimentInstance s : sessions(auto)) names.add(s.name);
+        assertEquals(new java.util.TreeSet<String>(java.util.Arrays.asList("Autopilot #1", "Autopilot #2")), names);
     }
 
     // (Ids don't always grow with time here, so sessions are told apart by status.)

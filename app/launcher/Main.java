@@ -3,6 +3,7 @@ package launcher;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
@@ -25,9 +26,9 @@ import java.io.UnsupportedEncodingException;
  * written into it. A launcher that finds the file after Java ended knows that the server never
  * started, and doesn't start it again: it would only fail the same way.
  *
- * What Java itself says (that it ran out of memory), which it writes straight to the window, the
- * launchers send into a file of each start's own instead, logs/jvm-pid&lt;N&gt;.log: this deletes
- * the earlier ones in which Java said nothing, and keeps the newest of the others (JvmLogs).
+ * Native Java output is kept out of the window, and its out-of-memory hook writes a short
+ * diagnostic to logs/jvm-pid&lt;N&gt;.log. Leave room for that file, keep the newest two earlier
+ * diagnostics, and remove older releases' empty VM logs (JvmLogs).
  */
 public final class Main {
 
@@ -43,16 +44,19 @@ public final class Main {
     QueuedOutput err = new QueuedOutput(new FileOutputStream(FileDescriptor.err), "breadboard-stderr", startErrors);
     // As Java makes them (System.initializeSystemClass): the console's encoding, when it has one
     System.setOut(printStream(out, System.getProperty("sun.stdout.encoding")));
-    System.setErr(printStream(err, System.getProperty("sun.stderr.encoding")));
+    OutputStream errors = connectionErrors(err, () -> play.Logger.debug("A participant WebSocket closed while a reply was being sent."));
+    System.setErr(printStream(errors, System.getProperty("sun.stderr.encoding")));
     // What is printed just before the process ends (why the server can't start) still goes out.
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      try { errors.flush(); } catch (IOException ignored) { }
       startErrors.writeIfTheServerNeverListened();
       long until = System.nanoTime() + DRAIN_AT_EXIT_MS * 1000000L;
       err.drain(until);
       out.drain(until);
+      StartLock.release(home, System.getenv("BREADBOARD_START_LOCK_PID"));
     }, "breadboard-console-at-exit"));
     try {
-      JvmLogs.prune(new File(home, "logs"), JvmLogs.KEEP, JvmLogs.ownName());
+      JvmLogs.prune(new File(home, "logs"), JvmLogs.KEEP - 1, JvmLogs.ownName());
     } catch (RuntimeException e) {
       // they stay until the next start
     }
@@ -62,9 +66,15 @@ public final class Main {
     // (System.exit), except when the folder it is given isn't there: then it only says so.
     if (play.api.Play.maybeApplication().isDefined()) {
       startErrors.serverListens();
+      StartLock.release(home, System.getenv("BREADBOARD_START_LOCK_PID"));
     } else {
       System.exit(-1);
     }
+  }
+
+  /** The stderr path used by the launcher; kept separate so its actual wiring can be tested. */
+  static OutputStream connectionErrors(OutputStream out, Runnable note) {
+    return new DisconnectedOutput(out, note);
   }
 
   /**

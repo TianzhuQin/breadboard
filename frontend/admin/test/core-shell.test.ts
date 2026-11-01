@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { mount } from '@vue/test-utils'
 import { h, nextTick } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -149,8 +152,14 @@ describe('the shell', () => {
         const notice = w.find('.conn-notice')
         expect(notice.attributes('role')).toBe('status')
         expect(notice.text()).toContain('Not connected to the server.')
-        expect(notice.text()).toContain('If Breadboard was stopped, start it again; the console reconnects by itself.')
+        expect(notice.text()).toContain('If Breadboard was stopped, start it again; the console reconnects by itself, within a few seconds of the server answering.')
       }
+      // or at once, when asked
+      const tryNow = vi.spyOn(connection, 'tryNow').mockImplementation(() => {})
+      const button = w.find('.conn-notice').findAll('button').find(b => b.text() === 'Try now')!
+      await button.trigger('click')
+      expect(tryNow).toHaveBeenCalledTimes(1)
+      expect(button.attributes('aria-busy')).toBe('true')
       // the chip keeps its words at every width (a short one on a phone)
       const chip = w.find('.topbar__conn')
       expect(chip.find('.topbar__conn-text').text()).toBe('Reconnecting…')
@@ -295,8 +304,52 @@ describe('reloading the engine from the top bar', () => {
     return w
   }
 
+  // A new account, with no experiment chosen, was asked to confirm, and then nothing visible happened
+  // but a red "1" on the Output button: the server's refusal went into the engine error card.
+  it('says "Choose an experiment first" without asking when no experiment is chosen', async () => {
+    const chosen = admin.experiment
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experiment: '', experimentInstance: '' })
+    expect(admin.experiment).toBeNull()
+    connection.state.value = 'open'
+    const send = vi.spyOn(connection, 'send').mockReturnValue(true)
+    toasts.splice(0)
+    const w = await askToReload()
+    await tick()
+    expect(confirmState.open).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    expect(toasts.map(t => [t.kind, t.title])).toEqual([['info', 'Choose an experiment first']])
+    expect(toasts[0].detail).toContain('Pick one in the experiment switcher')
+    connection.state.value = 'idle'
+    w.unmount()
+    admin.experiment = chosen
+  })
+
+  it('shows the server\'s refusal to reload as a message, not as an error of the experiment\'s scripts', async () => {
+    admin.engine = 'ready'
+    toasts.splice(0)
+    const errorsBefore = admin.unseenErrors
+    const why = 'Nothing was reloaded: the engine is running “Network game” (the autopilot\'s session “Autopilot · 1”), and reloading it would end that session for everyone in it. Select an experiment first.'
+    __receive({ error: why, request: 'ReloadEngine' })
+    expect(toasts.map(t => [t.kind, t.title, t.detail])).toEqual([['warning', 'The engine wasn’t reloaded', why]])
+    // in the output panel as a note, not counted as a new error, and not the engine's failure
+    const last = admin.output[admin.output.length - 1]
+    expect(last).toMatchObject({ kind: 'info', text: why })
+    expect(admin.unseenErrors).toBe(errorsBefore)
+    expect(admin.engine).toBe('ready')
+    expect(admin.requestError).toMatchObject({ request: 'ReloadEngine', text: why })
+    // a reload that failed once begun is still the engine's failure
+    __receive({ notify: { ScriptEngineReloading: 1 } })
+    __receive({ error: 'Caught error: boom', request: 'ReloadEngine' })
+    expect(admin.output[admin.output.length - 1]).toMatchObject({ kind: 'error', text: 'Caught error: boom' })
+    expect(admin.engine).toBe('stale')
+    expect(toasts).toHaveLength(1)
+    admin.engine = 'ready'
+    admin.engineProblem = ''
+  })
+
   it('says that it pauses the autopilot when the engine runs the autopilot\'s session', async () => {
-    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
+    const exp = { id: 1, name: 'A', uid: 'u1', fileMode: false, steps: [], languages: [], content: [], parameters: [], instances: [], images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 }
+    __receive({ user: { email: 'r', experiments: [exp], currentScript: '' }, experiment: exp, experimentInstance: '' })
     graph.clear()
     connection.state.value = 'open'
     const send = vi.spyOn(connection, 'send').mockReturnValue(true)
@@ -315,7 +368,7 @@ describe('reloading the engine from the top bar', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ status: { ...status, paused: true } })))
     w = await askToReload()
     await vi.waitFor(() => expect(confirmState.open).toBe(true))
-    expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
+    expect(confirmState.req!.message).not.toContain('The autopilot has session “Auto 3” open.')
     expect(confirmState.req!.message).not.toContain('pauses the autopilot')
     settleConfirm(true)
     await tick()
@@ -328,6 +381,45 @@ describe('reloading the engine from the top bar', () => {
 describe('the top bar\'s engine chip', () => {
   const exp = (id: number, name: string, instances: any[] = []) => ({ id, name, uid: 'u' + id, fileMode: false, steps: [], languages: [], content: [], parameters: [], instances, images: [], style: '', clientGraphHash: 0, clientHtmlHash: 0 })
   const session = { id: 9, name: 'Auto 3', status: 'RUNNING' }
+
+  it('says the engine rebuilt without claiming its steps compiled, and keeps their error after the chip clears', async () => {
+    __receive({
+      user: { email: 'researcher@example.org', experiments: [exp(1, 'A')], currentScript: '' },
+      experiment: exp(1, 'A'),
+      experimentInstance: '',
+      engine: { experimentId: 1, experimentName: 'A', sessionId: null, stepsChanged: false },
+    })
+    actions.clearOutput()
+    vi.spyOn(connection, 'send').mockReturnValue(true)
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] })
+    const w = mount(TopBar, { props: { outputOpen: false }, global: { plugins: [router] }, attachTo: document.body })
+    const chip = () => w.find('.topbar__chip')
+    const error = 'Line 3 of FinishStep: unexpected token: ;'
+    vi.useFakeTimers()
+    try {
+      __receive({ notify: { ScriptEngineReloading: 1 } })
+      await nextTick()
+      expect(chip().text()).toBe('Loading steps…')
+      // This notification describes the engine rebuild; its steps compile afterwards and can fail.
+      __receive({ notify: { ScriptEngineReloaded: 2 } })
+      __receive({ error, source: 'Steps', step: 'FinishStep' })
+      await nextTick()
+      expect(chip().text()).toBe('Engine rebuilt')
+      expect(chip().text()).not.toContain('Steps loaded')
+      expect(admin.output).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'error', text: error, source: 'Steps' })]))
+      await vi.advanceTimersByTimeAsync(2499)
+      expect(chip().text()).toBe('Engine rebuilt')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(chip().text()).toBe('Engine')
+      expect(admin.output).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'error', text: error })]))
+    } finally {
+      w.unmount()
+      // Let the graph's batched reset finish too, before returning this shared store to real timers.
+      await vi.runOnlyPendingTimersAsync()
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
 
   it('says "Reload needed" as the server says, and that the autopilot\'s next session uses the saved steps while its session is open', async () => {
     __receive({ notify: { ScriptEngineReloading: 1 } })
@@ -396,6 +488,21 @@ describe('the engine running another experiment', () => {
   const button = (w: any, label: string) => w.findAll('button').find((b: any) => b.text() === label)
 
   afterEach(() => { connection.state.value = 'idle' })
+
+  it('gives its text the whole line beside the icon on a narrow window, so the buttons wrap below it', () => {
+    // (with flex: 1 alone, the text's basis was 0: at phone width it stayed beside the buttons, one
+    // letter per line, and pushed the page some 3,600 px down. jsdom lays nothing out, so this reads the rule.)
+    const file = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'shell', 'EngineNotice.vue'), 'utf8')
+    const narrow = /@media \(max-width: 900px\) \{([\s\S]*?)\n\}/.exec(file)
+    expect(narrow).not.toBeNull()
+    expect(narrow![1]).toMatch(/\.engine-notice \{[^}]*flex-wrap: wrap/)
+    const rule = /\.engine-notice__text \{([^}]*)\}/.exec(narrow![1])
+    expect(rule).not.toBeNull()
+    // the icon (16px) and the gap (12px) take the rest of the line
+    expect(rule![1]).toMatch(/flex: 1 1 calc\(100% - 28px\)/)
+    expect(file).toMatch(/\.engine-notice__icon \{ flex: none; \}/)
+    expect(file).toMatch(/\.engine-notice \{[^}]*gap: 12px;/)
+  })
 
   it('says what the engine runs and what that means here, and switching to it rebuilds nothing', async () => {
     admin.email = 'r@lab'

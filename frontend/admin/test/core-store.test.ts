@@ -133,6 +133,37 @@ describe('the server closing this console after a sign-out or password change el
   })
 })
 
+describe('the sign-in page saying why', () => {
+  // Another researcher's New password closed this console with that reason, but the sign-in page
+  // said the account had signed out, or changed its password, in another browser.
+  it('says that another researcher gave the account a new password, or removed it, as the server says', async () => {
+    const LoginPage = (await import('../src/pages/auth/LoginPage.vue')).default
+    const { mount } = await import('@vue/test-utils')
+    const CLOSED = { error: 'Another researcher gave this account a new password. Ask them for it, then sign in again.', status: 'unauthorized' }
+    for (const [reason, words] of [
+      ['reset', 'You were signed out because another researcher gave this account a new password. Ask them for it, then sign in again.'],
+      ['removed', 'You were signed out because another researcher removed this account. Ask them to add it again if you still need it.'],
+      ['ended', 'You were signed out because this account signed out, or its password was changed, in another browser or tab. Sign in again to continue here.'],
+    ]) {
+      signedInAs('r@lab', 'old')
+      get.mockReset()
+      get.mockRejectedValue(new HttpError(401, 'please login', { status: 'unauthorized', reason }))
+      __receive(CLOSED)
+      await vi.waitFor(() => expect(admin.auth).toBe('signedOut'))
+      expect(admin.signOutReason).toBe(reason)
+      const w = mount(LoginPage)
+      expect(w.find('.auth__note[role="status"]').text().replace(/\s+/g, ' ')).toBe(words)
+      w.unmount()
+    }
+    // a reason it doesn't know: none
+    signedInAs('r@lab', 'old')
+    get.mockRejectedValue(new HttpError(401, 'please login', { status: 'unauthorized', reason: 'other' }))
+    __receive(CLOSED)
+    await vi.waitFor(() => expect(admin.auth).toBe('signedOut'))
+    expect(admin.signOutReason).toBe(null)
+  })
+})
+
 describe('a new password', () => {
   it('reconnects with the new sign-in at once, and tells the other tabs', async () => {
     get.mockResolvedValue({ uid: 'u1', email: 'r@lab', connectSocket: 'ws://lab/connect' })
@@ -282,16 +313,22 @@ describe('asking before an engine rebuild', () => {
     settleConfirm(false)
     await answer
 
-    // paused already, or switched off (its session still open): nothing more to pause
-    for (const status of [{ ...live, paused: true }, { ...live, on: false }]) {
+    // paused already, done, or switched off (its session still open, maybe resumed by hand): nothing
+    // more to pause, and the session isn't the autopilot's, as the server still names it its session
+    // (status.instance), but the account's that runs it
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '',
+      engine: { experimentId: 3, experimentName: 'Trust', sessionId: 9, sessionName: 'Auto 3', owner: 'other@lab' } })
+    for (const status of [{ ...live, paused: true }, { ...live, done: true }, { ...live, on: false }]) {
       get.mockResolvedValue({ status })
       answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
       await vi.waitFor(() => expect(confirmState.open).toBe(true))
-      expect(confirmState.req!.message).toContain('The autopilot has session “Auto 3” open.')
+      expect(confirmState.req!.message).toContain('other@lab has session “Auto 3” of “Trust” running. This stops their session “Auto 3”')
+      expect(confirmState.req!.message).not.toContain('The autopilot has')
       expect(confirmState.req!.message).not.toContain('pauses the autopilot')
       settleConfirm(false)
       await answer
     }
+    __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })
 
   it('names the session the engine runs, also another account\'s', async () => {
@@ -301,7 +338,9 @@ describe('asking before an engine rebuild', () => {
     get.mockRejectedValue(new TypeError('Failed to fetch'))
     let answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
     await vi.waitFor(() => expect(confirmState.open).toBe(true))
-    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 2” of “Trust” running.')
+    // and that it stops their session, which they would otherwise learn only from their own console
+    expect(confirmState.req!.message).toContain('other@lab has session “Pilot 2” of “Trust” running. This stops their session “Pilot 2”: '
+      + 'its participants are told it was stopped, and it can be resumed.')
     settleConfirm(false)
     expect(await answer).toBe(false)
 
@@ -337,7 +376,10 @@ describe('asking before an engine rebuild', () => {
     answer = confirmEngineRebuild({ title: 'Switch?', action: 'Switching experiments' })
     await vi.waitFor(() => expect(confirmState.open).toBe(true))
     const message = confirmState.req!.message || ''
-    expect(message).toContain('The autopilot has session “Auto 3” open. The engine is running session “Pilot 2” of “Trust”.')
+    expect(message).toContain('The autopilot has session “Auto 3” open. This stops it: its participants are told it was stopped, and it can be resumed. '
+      + 'The engine is running session “Pilot 2” of “Trust”.')
+    // (this account's own: no word of stopping someone else's)
+    expect(message).not.toContain('their session')
     expect(message.match(/Pilot 2/g)!.length).toBe(1)
     settleConfirm(false)
     await answer
@@ -378,7 +420,7 @@ describe('what a reload or resume carries on', () => {
     expect(reloadKeeps()).toBeUndefined()
     expect((await engineUse()).who).toContain('The autopilot has session “Auto 3” open.')
     get.mockResolvedValue({ status: { on: false, instance: null } })
-    expect((await engineUse()).who).toContain('other@lab has session “Auto 3” running.')
+    expect((await engineUse()).who).toContain('other@lab has session “Auto 3” running. This stops their session “Auto 3”: its participants are told it was stopped, and it can be resumed.')
     get.mockResolvedValue({ status: { on: true, paused: false, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
     __receive({ user: { email: 'r', experiments: [], currentScript: '' }, experimentInstance: '' })
   })
@@ -411,6 +453,17 @@ describe('what a reload or resume carries on', () => {
     expect(confirmState.req!.message).not.toContain('pauses the autopilot')
     settleConfirm(false)
     expect(await answer).toBe(false)
+
+    // the session the autopilot opened, which it no longer runs (switched off, paused or done: e.g.
+    // resumed by hand after a Stop): this account's session, not the autopilot's, and nothing pauses
+    for (const status of [{ on: false }, { on: true, paused: true }, { on: true, done: true }]) {
+      get.mockResolvedValue({ status: { ...status, instance: { id: 9, name: 'Auto 3', status: 'RUNNING' } } })
+      use = await engineUse(9)
+      expect(use.who).toBe('Your session “Auto 3” carries on, but its game is in progress: reloading starts the game again from the beginning. '
+        + 'The 2 people in it are disconnected for a moment and rejoin by themselves.')
+      expect(use.pausesAutopilot).toBe(false)
+      expect((await engineUse()).who).toMatch(/^Your session “Auto 3” is running\./)
+    }
 
     // this account's own session, before its game: asked while anyone is connected
     get.mockResolvedValue({ status: { on: false, instance: null } })

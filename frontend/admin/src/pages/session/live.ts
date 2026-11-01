@@ -23,7 +23,12 @@ export interface NetworkStats {
   ties: number
 }
 
-export function networkStats (nodes: Iterable<GraphNode>, ties: number): NetworkStats {
+/**
+ * Who is in the network. `live`: whether the session runs; one that has stopped or finished has nobody
+ * connected (its participants' pages closed as it ended), though its players keep the
+ * `_system.connected` they had then.
+ */
+export function networkStats (nodes: Iterable<GraphNode>, ties: number, live = true): NetworkStats {
   let people = 0
   let connected = 0
   let bots = 0
@@ -32,7 +37,7 @@ export function networkStats (nodes: Iterable<GraphNode>, ties: number): Network
     if (isAiId(n.id)) { bots++; continue }
     people++
     const sys = n.data && n.data._system
-    if (sys && typeof sys === 'object' && sys.connected === true) connected++
+    if (live && sys && typeof sys === 'object' && sys.connected === true) connected++
     if (aiFlag(n.data && n.data.ai)) takenOver++
   }
   return { people, connected, aiSeats: bots + takenOver, bots, takenOver, ties }
@@ -334,7 +339,7 @@ export function formatWhen (at: number, now = Date.now()): string {
 /** A file name the browser and every OS accept. */
 export function safeFileName (s: string): string {
   // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only, any space a
-  // plain one first, as the autopilot's names have no-break spaces)
-  const cleaned = (s || '').replace(/\s+/gu, ' ').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
+  // plain one first, as the autopilot's names before 3.1 have no-break spaces)
+  const cleaned = (s || '').replace(/\s+/gu, ' ').replace(/[,;#]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
   return (cleaned || 'session').slice(0, 120)
 }

@@ -266,6 +266,27 @@ describe('ConnectionStatus', () => {
     expect(w.vm.time).toBe(0)
   })
 
+  // Two consoles previewing someone who left: one preview stands in, and the other, which only
+  // watches, said that the player's own page was connected.
+  it('says a preview only watches while another preview answers for the player, and why again as that changes', async () => {
+    breadboard = Object.assign(fakeBreadboard('open', true), { watchingBy: null as string | null })
+    vi.stubGlobal('Breadboard', breadboard)
+    const w = await mountStatus()
+    breadboard.watchingBy = 'page'
+    await become('watching')
+    expect(text(w)).toBe('Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.')
+    // their page goes, and another preview of theirs (perhaps another console's) takes the seat
+    breadboard.watchingBy = 'preview'
+    await become('watching')
+    expect(text(w)).toBe('Watching only: another preview of this player answers for them, so you see their screen but can’t answer here.')
+    expect(buttons(w)).toEqual([])
+    expect(document.documentElement.classList.contains('bb-disconnected')).toBe(false)
+    // the other preview goes: this one stands in
+    breadboard.watchingBy = null
+    await become('open')
+    expect(w.find('.bb-connection').exists()).toBe(false)
+  })
+
   it('says the session is over, without asking to keep the page open, when the page shows no end of its own', async () => {
     const w = await mountStatus()
     await drop(5000)

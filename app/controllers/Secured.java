@@ -1,6 +1,9 @@
 package controllers;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import models.User;
 import play.mvc.Http.Context;
 import play.mvc.Result;
@@ -8,6 +11,25 @@ import play.mvc.Security;
 import play.libs.Json;
 
 public class Secured extends Security.Authenticator {
+  // The sign-ins another researcher's New password ended (ResearchersController.resetPassword), by the
+  // uid their browsers still hold, so that the sign-in page says so ("reset"), as it does when the
+  // account was removed, rather than that it signed out somewhere. In memory, the newest
+  // RESETS_KEPT, until the server restarts (then it says "ended", which is true too).
+  static final int RESETS_KEPT = 1000;
+  private static final Map<String, Boolean> RESETS = Collections.synchronizedMap(new LinkedHashMap<String, Boolean>() {
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+      return size() > RESETS_KEPT;
+    }
+  });
+
+  /** Another researcher gave the account a new password, which ended the sign-ins that hold {@code uid}. */
+  public static void passwordReset(String uid) {
+    if (uid != null && !uid.trim().isEmpty()) {
+      RESETS.put(uid, Boolean.TRUE);
+    }
+  }
+
   @Override
   public String getUsername(Context ctx) {
     String uid = ctx.session().get("uid");
@@ -40,9 +62,10 @@ public class Secured extends Security.Authenticator {
       // its password), which ended this session: the console says so.
       String uid = ctx.session().get("uid");
       if (uid != null && !uid.trim().isEmpty()) {
-        // ... or another researcher removed the account.
+        // ... or another researcher removed the account, or gave it a new password.
         String email = ctx.session().get("email");
-        result.put("reason", email != null && User.findByEmail(email) == null ? "removed" : "ended");
+        result.put("reason", email != null && User.findByEmail(email) == null ? "removed"
+            : RESETS.containsKey(uid) ? "reset" : "ended");
       }
     }
     result.put("message", "please login");

@@ -48,13 +48,20 @@
         <p class="apst__problem-text">{{ failure ? failure.text : infoText }}</p>
         <!-- paused by a mistake in a step: what went wrong, explained as on the Steps page, and the way there -->
         <template v-if="failure">
-          <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" />
+          <EngineError class="apst__problem-err" :error="failure.message" :own-name="failure.step" :own-step="failure.step" in-step />
           <!-- (a step of the autopilot's experiment, which needn't be the one this console works on: named then,
                and the Steps page asks to switch to it) -->
-          <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line, status.experimentId)">
-            Open {{ failure.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ failure.line ? ` at line ${failure.line}` : '' }}
-            <ArrowRight :size="14" aria-hidden="true" />
-          </RouterLink>
+          <div class="apst__open-steps">
+            <RouterLink class="apst__open-step" :to="stepAt(failure.step, failure.line, status.experimentId)">
+              Open {{ failure.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ failure.line ? ` at line ${failure.line}` : '' }}
+              <ArrowRight :size="14" aria-hidden="true" />
+            </RouterLink>
+            <!-- where it went wrong, when that was in another step's code that line called (a function of InitStep's) -->
+            <RouterLink v-if="failure.in" class="apst__open-step" :to="stepAt(failure.in.step, failure.in.line, status.experimentId)">
+              Open {{ failure.in.step }} at line {{ failure.in.line }}, where it went wrong{{ failure.in.name ? ` in ${failure.in.name}` : '' }}
+              <ArrowRight :size="14" aria-hidden="true" />
+            </RouterLink>
+          </div>
         </template>
       </div>
     </div>
@@ -65,6 +72,21 @@
       <div>
         <p class="apst__problem-title">A session ran out of time{{ noticeTime ? ` (at ${noticeTime})` : '' }}</p>
         <p class="apst__problem-text">{{ status.notice }}</p>
+      </div>
+    </div>
+
+    <!-- a step failure in its own session that the game went on after: kept until the settings are saved
+         or Resume is pressed, as the next session opens a few seconds after a game ends -->
+    <div v-if="wentOn" class="apst__problem apst__notice" role="status">
+      <TriangleAlert :size="16" aria-hidden="true" />
+      <div>
+        <p class="apst__problem-title">A step failed, and the game went on{{ wentOnTime ? ` (at ${wentOnTime})` : '' }}</p>
+        <p class="apst__problem-text">{{ failureNoticeText(wentOn) }}</p>
+        <EngineError v-if="wentOn.error" class="apst__problem-err" :error="wentOn.error" :own-name="wentOn.step" />
+        <RouterLink class="apst__open-step" :to="stepAt(wentOn.step, wentOn.line, status.experimentId)">
+          Open {{ wentOn.step }}{{ elsewhere && expName ? ` of “${expName}”` : '' }}{{ wentOn.line ? ` at line ${wentOn.line}` : '' }}
+          <ArrowRight :size="14" aria-hidden="true" />
+        </RouterLink>
       </div>
     </div>
 
@@ -140,7 +162,9 @@ import { BBadge, BButton } from '@/ui'
 import CopyLink from './CopyLink.vue'
 import LocalOnlyNote from '../session/LocalOnlyNote.vue'
 import EngineError from '../console/EngineError.vue'
-import { describeEngineSession, haltOf, pauseFailure, pausedLine, problemKind, type AutopilotState, type WaitingRoomLive } from './autopilot'
+import {
+  describeEngineSession, failureNoticeText, haltOf, pauseFailure, pausedLine, problemKind, type AutopilotState, type WaitingRoomLive,
+} from './autopilot'
 import { stepAt } from '../steps/stepsModel'
 import { admin } from '@/store/admin'
 
@@ -266,15 +290,20 @@ function timeOf (iso: string) {
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-/** When the session in the notice was ended: a time today, else a date and time. */
-const noticeTime = computed(() => {
-  const at = status.value.noticeAt ? new Date(status.value.noticeAt) : null
+/** A time today, else a date and time. */
+function shortWhen (iso: string | null): string {
+  const at = iso ? new Date(iso) : null
   if (!at || isNaN(at.getTime())) return ''
   const today = at.toDateString() === new Date().toDateString()
   return today
     ? at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
     : at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-})
+}
+/** When the session in the notice was ended. */
+const noticeTime = computed(() => shortWhen(status.value.noticeAt))
+/** The last step failure in its own session that the game went on after, and when. */
+const wentOn = computed(() => status.value.failureNotice)
+const wentOnTime = computed(() => shortWhen(wentOn.value?.at ?? null))
 </script>
 
 <style>
@@ -318,7 +347,8 @@ const noticeTime = computed(() => {
 .apst__problem-title { font-weight: 650; }
 .apst__problem-text { margin-top: 2px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .apst__problem-err { margin-top: 6px; }
-.apst__open-step { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; font-weight: 600; color: inherit; }
+.apst__open-steps { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; }
+.apst__open-step { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: inherit; }
 .apst__live { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-soft-text); font-size: var(--text-sm); }
 .apst__local { margin: 6px 0 8px; }
 .apst__link { display: flex; flex-direction: column; gap: 8px; min-width: 0; }

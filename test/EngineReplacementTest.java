@@ -10,6 +10,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.security.AccessControlContext;
+import java.security.ProtectionDomain;
+import com.avaje.ebean.Ebean;
+import com.avaje.ebean.BackgroundExecutor;
+import com.avaje.ebean.event.BeanPersistListener;
+import com.avaje.ebeaninternal.api.SpiEbeanServer;
+import com.avaje.ebeaninternal.server.deploy.BeanDescriptor;
+import com.avaje.ebeaninternal.server.lib.thread.ThreadPool;
 
 import static org.junit.Assert.*;
 
@@ -41,8 +52,8 @@ public class EngineReplacementTest extends BaseTest {
         user.saveManyToManyAssociations("ownedExperiments");
         t.send("SelectExperiment", "experimentId", experiment.id);
         await("selected", () -> experiment.id.equals(engineExperimentId()));
-        // The JVM's first engines can stay through Groovy's caches of Vertex's metaclasses (see
-        // EngineCleanupTest): one played before the engine under test takes that place.
+        // Exercise an earlier replacement as well; EngineCleanupTest separately checks the very
+        // first engine, including the library's inherited-method and call-site caches.
         play(t);
         reload(t);
         play(t);
@@ -184,6 +195,202 @@ public class EngineReplacementTest extends BaseTest {
         assertTrue("the task at work during the reload: " + result, result.matches("made \\d+, failed 0"));
     }
 
+    @Test
+    public void anEventSavedOnAScriptTimerDoesNotKeepThatEnginesClassesInEbeansThreads() throws Exception {
+        databaseTaskDoesNotKeepEngine(Event.class, "eventTracker.track('background-write', [source: 'timer'])");
+    }
+
+    @Test
+    public void dataSavedOnAScriptTimerDoesNotKeepThatEnginesClassesInEbeansThreads() throws Exception {
+        databaseTaskDoesNotKeepEngine(Data.class, "d['background-write'] = 'timer'");
+    }
+
+    @Test
+    public void aSessionFinishedOnAScriptTimerDoesNotKeepThatEnginesClassesInEbeansThreads() throws Exception {
+        databaseTaskDoesNotKeepEngine(ExperimentInstance.class, "gameListener.finish()");
+    }
+
+    /**
+     * Make the real Ebean pool grow while a script timer saves through one of the server's APIs.
+     * A pool worker used to inherit that timer's script protection domains, keeping its whole engine
+     * loaded for the worker's lifetime, even once the task had finished and all caches were emptied.
+     */
+    private <T> void databaseTaskDoesNotKeepEngine(Class<T> model, String write) throws Exception {
+        User user = user("database-task");
+        AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Database task");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        play(t);
+        reload(t);
+        t.send("LaunchGame", "name", "Background write", "parameters", play.libs.Json.newObject());
+        await("a running session", () -> ExperimentInstance.find.where().eq("name", "Background write")
+            .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
+        play(t);
+        WeakReference<ClassLoader> scripts = new WeakReference<ClassLoader>(EngineCleanup.scriptLoader(engine()));
+        BackgroundExecutor executor = Ebean.getServer("default").getBackgroundExecutor();
+        Field poolField = executor.getClass().getDeclaredField("pool");
+        poolField.setAccessible(true);
+        ThreadPool pool = (ThreadPool) poolField.get(executor);
+        CountDownLatch release = new CountDownLatch(1);
+        BeanDescriptor<T> descriptor = ((SpiEbeanServer) Ebean.getServer("default")).getBeanDescriptor(model);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        BeanPersistListener<T> listener = new BeanPersistListener<T>() {
+            public boolean inserted(T bean) { worker.set(Thread.currentThread()); return false; }
+            public boolean updated(T bean, java.util.Set<String> properties) { worker.set(Thread.currentThread()); return false; }
+            public boolean deleted(T bean) { return false; }
+            public void remoteInsert(Object id) {}
+            public void remoteUpdate(Object id) {}
+            public void remoteDelete(Object id) {}
+        };
+        // Ebean 3.2 registers listeners by a concrete generic argument; this helper exercises three
+        // model types, so install its listener directly and restore the descriptor in finally.
+        Field persistListener = BeanDescriptor.class.getDeclaredField("persistListener");
+        persistListener.setAccessible(true);
+        Object originalListener = persistListener.get(descriptor);
+        try {
+            // Keep every existing worker busy, forcing this save to create one. Their tasks are
+            // server/test code only, never closures loaded by the script engine under test.
+            do {
+                CountDownLatch started = new CountDownLatch(1);
+                executor.execute(() -> {
+                    started.countDown();
+                    try { release.await(30, TimeUnit.SECONDS); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                });
+                assertTrue("an Ebean worker started", started.await(5, TimeUnit.SECONDS));
+            } while (pool.getBusyCount() < pool.size());
+            int before = pool.size();
+            persistListener.set(descriptor, listener);
+            // Evaluate directly: SendScript also saves the researcher's buffer before the timer
+            // runs, which would grow the pool from its actor and hide the timer's inherited context.
+            engine().eval("timers.newTimer().runAfter(50) { " + write + " }; null");
+            await("the saved bean's real background notification", () -> worker.get() != null);
+            assertTrue("the script's save grew Ebean's pool", pool.size() > before);
+            assertTrue("the notification ran in Ebean's worker", worker.get().getName().startsWith("Ebean-default."));
+            assertNoScriptDomains(worker.get(), scripts.get());
+        } finally {
+            persistListener.set(descriptor, originalListener);
+            release.countDown();
+        }
+        for (int rebuild = 0; rebuild < 3; rebuild++) { reload(t); play(t); }
+        assertTrue("the engine whose timer grew Ebean's pool is still loaded",
+            EngineCleanupTest.collected(scripts, 20000));
+    }
+
+    private static void assertNoScriptDomains(Thread worker, ClassLoader scripts) throws Exception {
+        Field inherited = Thread.class.getDeclaredField("inheritedAccessControlContext");
+        inherited.setAccessible(true);
+        AccessControlContext context = (AccessControlContext) inherited.get(worker);
+        if (context == null) return;
+        Field domains = AccessControlContext.class.getDeclaredField("context");
+        domains.setAccessible(true);
+        ProtectionDomain[] values = (ProtectionDomain[]) domains.get(context);
+        if (values == null) return;
+        for (ProtectionDomain domain : values) {
+            if (domain == null) continue;
+            for (ClassLoader loader = domain.getClassLoader(); loader != null; loader = loader.getParent()) {
+                assertNotSame("Ebean's idle worker inherited the replaced engine's script domain", scripts, loader);
+            }
+        }
+    }
+
+    @Test
+    public void openingSessionsDoesNotKeepEveryPastSessionAndItsParametersInTheEngine() throws Exception {
+        User user = user("session-records");
+        AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Session records");
+        createParameter(experiment, "rounds", "Integer", "3");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        for (int n = 1; n <= 6; n++) {
+            final String name = "Records " + n;
+            t.send("LaunchGame", "name", name, "parameters", play.libs.Json.newObject());
+            await(name, () -> t.count(m -> m.path("experimentInstance").path("name").asText().equals(name)
+                && m.path("experimentInstance").path("status").asText().equals("RUNNING")) > 0);
+            ContentFetcher content = (ContentFetcher) engine().get("c");
+            assertHistoryNotKept("the content fetcher", content.selectedExperiment, n);
+            Field listenerField = ScriptBoard.class.getDeclaredField("engineGameListener");
+            listenerField.setAccessible(true);
+            GameListener listener = (GameListener) listenerField.get(null);
+            assertHistoryNotKept("the current session", listener.experimentInstance.experiment, n);
+            assertHistoryNotKept("the session's account", listener.user.selectedExperiment, n);
+        }
+        assertEquals("scripts can still explicitly ask for the complete history", 6,
+            engine().eval("c.selectedExperiment.instances.size()"));
+        Experiment fromDatabase = Experiment.findById(experiment.id);
+        assertEquals("the saved history can still be read through experiment.instances", 6, fromDatabase.instances.size());
+        for (ExperimentInstance saved : fromDatabase.instances) {
+            assertEquals("each saved session keeps its launch parameter", "rounds", saved.data.get(0).name);
+            assertEquals("3", saved.data.get(0).value);
+        }
+    }
+
+    @Test
+    public void aSessionCanFinishAfterItsResearcherAccountWasRemoved() throws Exception {
+        User user = user("removed-owner");
+        AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Removed owner");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        t.send("LaunchGame", "name", "Without its account", "parameters", play.libs.Json.newObject());
+        await("a running session", () -> ExperimentInstance.find.where().eq("name", "Without its account")
+            .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
+        Field f = ScriptBoard.class.getDeclaredField("engineGameListener");
+        f.setAccessible(true);
+        GameListener listener = (GameListener) f.get(null);
+        Long id = listener.experimentInstance.id;
+        User other = user("remaining-researcher");
+        play.mvc.Result removed = play.test.Helpers.route(play.test.Helpers.fakeRequest("POST", "/researchers/remove")
+            .withSession("uid", other.uid).withJsonBody(play.libs.Json.newObject().put("email", user.email)));
+        assertEquals(200, play.test.Helpers.status(removed));
+        listener.finish();
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(id).status);
+    }
+
+    @Test
+    public void anOpenConsoleDoesNotKeepTheSessionsItsSignInListed() throws Exception {
+        User user = user("console-history");
+        Experiment experiment = createExperiment("Console history");
+        for (int n = 1; n <= 3; n++) createInstance("Past session " + n, experiment);
+        user.setSelectedExperiment(experiment);
+        user.update();
+        loggedIn(user);
+        Field f = ScriptBoard.class.getDeclaredField("admins");
+        f.setAccessible(true);
+        boolean checked = false;
+        for (Admin console : (java.util.List<Admin>) f.get(null)) {
+            if (console.getUser() != null && user.email.equals(console.getUser().email)) {
+                assertHistoryNotKept("the open console", console.getUser().selectedExperiment, 3);
+                assertEquals("the sign-in's uid remains a snapshot for password-reset revocation", user.uid, console.getUser().uid);
+                checked = true;
+            }
+        }
+        assertTrue("the console was registered", checked);
+        // A password reset can overtake a queued LogIn. Its socket still has the old sign-in;
+        // copying the database's newer uid would make it look current to closeAdminsOf.
+        User signedIn = User.findByEmail(user.email);
+        com.avaje.ebean.Ebean.createSqlUpdate("update users set uid = :next where email = :email")
+            .setParameter("next", java.util.UUID.randomUUID().toString()).setParameter("email", user.email).execute();
+        Admin queuedSignIn = new Admin(signedIn, null, null);
+        assertEquals("a queued sign-in keeps its original uid", signedIn.uid, queuedSignIn.getUser().uid);
+    }
+
+    private static void assertHistoryNotKept(String holder, Experiment experiment, int opened) {
+        if (experiment == null) return;
+        java.util.List<ExperimentInstance> history = experiment.instances;
+        Object actual = history instanceof com.avaje.ebean.bean.BeanCollection
+            ? ((com.avaje.ebean.bean.BeanCollection<?>) history).getActualCollection() : history;
+        int retained = actual instanceof java.util.Collection ? ((java.util.Collection<?>) actual).size() : 0;
+        assertTrue(holder + " keeps " + retained + " session records after opening " + opened, retained <= 1);
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------
 
     /** What the busy task of aTimerTaskAtWorkDuringTheReloadGoesOnWorking and the test tell each other. */
@@ -228,7 +435,7 @@ public class EngineReplacementTest extends BaseTest {
     private User user(String prefix) {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
-        return createUser(prefix + "-" + UUID.randomUUID() + "@test.org", prefix, "secret-1", lang);
+        return createUser(prefix + "-" + UUID.randomUUID() + "@example.org", prefix, "secret-1", lang);
     }
 
     private static void await(String what, Callable<Boolean> condition) throws Exception {

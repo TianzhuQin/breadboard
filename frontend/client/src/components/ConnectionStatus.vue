@@ -31,8 +31,8 @@
     <slot v-else-if="state === 'ended'" name="ended">
       <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
     </slot>
-    <!-- A researcher's preview of a player whose own page is connected, or of a computer player,
-         which only watches -->
+    <!-- A researcher's preview of a player whose own page is connected, of one another preview
+         stands in for, or of a computer player, which only watches -->
     <slot v-else-if="state === 'watching'" name="watching">
       <div class="bb-connection__body"><span class="bb-connection__text">{{ text }}</span></div>
     </slot>
@@ -57,6 +57,9 @@
   }
   // What only a researcher's preview says, in English, as the console does: it watches
   const WATCHING = 'Watching only: this player’s own page is connected, so you see their screen but can’t answer for them.'
+  // ...because another preview of the player (Breadboard.watchingBy 'preview'), perhaps in another
+  // researcher's console, stands in for them while they are away: it said their own page was connected
+  const WATCHING_A_PREVIEW = 'Watching only: another preview of this player answers for them, so you see their screen but can’t answer here.'
   // What a researcher's preview says instead
   const PREVIEW_TEXTS: Record<string, string> = {
     elsewhere: 'This player is open in another preview or tab.',
@@ -73,7 +76,7 @@
    * says when reconnecting won't help: the network blocks the connection, the
    * study is open in another tab (which the participant can take back), or the
    * session is over. On a researcher's preview that only watches its player, it
-   * says so.
+   * says so, and why.
    *
    * The default slot replaces the message while it reconnects; the slots
    * `elsewhere`, `ended` and `watching` replace the others.
@@ -96,6 +99,8 @@
         state: 'connecting',
         preview: false,
         computer: false,
+        // while it only watches, why (Breadboard.watchingBy)
+        watchingBy: null as string | null,
         time: 0,
         finished: false,
         // when the next attempt starts (Date.now()), and the timer counting down to it
@@ -116,7 +121,9 @@
       },
       text (): string {
         return (this.computer && COMPUTER_TEXTS[this.state]) || (this.preview && PREVIEW_TEXTS[this.state])
-          || (this.state === 'watching' ? WATCHING : t(TEXTS[this.state] || TEXTS.lost))
+          || (this.state === 'watching'
+            ? (this.watchingBy === 'preview' ? WATCHING_A_PREVIEW : WATCHING)
+            : t(TEXTS[this.state] || TEXTS.lost))
       },
       tryNowText (): string {
         return t('connection.tryNow')
@@ -156,6 +163,7 @@
     methods: {
       sync () {
         this.state = window.Breadboard.connection
+        this.watchingBy = window.Breadboard.watchingBy || null
         // (no attempt to count down to)
         if (!this.reconnecting) this.stopCountdown()
       },

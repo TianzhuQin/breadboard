@@ -183,6 +183,10 @@ public class EventTracker {
 
   /** The event as saved, or null when it couldn't be. */
   private static Event save(String name, List<Map<String, String>> nameValues, ExperimentInstance instance) {
+    return ServerContext.call(() -> saveInServerContext(name, nameValues, instance));
+  }
+
+  private static Event saveInServerContext(String name, List<Map<String, String>> nameValues, ExperimentInstance instance) {
     Event event = null;
     try {
       event = event(name, nameValues, instance, VALUE_LIMIT);

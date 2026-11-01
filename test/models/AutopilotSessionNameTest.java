@@ -2,35 +2,49 @@ package models;
 
 import org.junit.Test;
 
-import java.util.Date;
+import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.Assert.*;
 
 /**
- * What the autopilot names its sessions (Autopilot.sessionName): "Autopilot · 2026-10-30 13:20:47 UTC",
- * the date in numbers rather than an English month next to UTC, and no-break spaces, so that a narrow
- * column breaks the name in the same place in every row (between the date and the time) or not at all.
+ * What the autopilot names its sessions (Autopilot.sessionName): "Autopilot #N", N counting its
+ * sessions of the experiment, with plain spaces. They were named by when they opened, in UTC
+ * ("Autopilot · 2026-10-30 13:20:47 UTC"), which disagreed with the local time the console shows
+ * beside the name, and had no-break spaces, which a filter in the data typed with plain ones didn't
+ * match. Sessions named so keep their names, and count.
  */
 public class AutopilotSessionNameTest {
 
     @Test
-    public void aSessionIsNamedByItsDateInNumbersAndItsTimeInUtc() {
-        // 2026-10-30 13:20:47 UTC
-        assertEquals("Autopilot\u00a0· 2026-10-30 13:20:47\u00a0UTC", Autopilot.sessionName(new Date(1793366447000L)));
-        // (whatever the server's own time zone)
-        java.util.TimeZone before = java.util.TimeZone.getDefault();
-        try {
-            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Shanghai"));
-            assertEquals("Autopilot\u00a0· 2026-10-30 13:20:47\u00a0UTC", Autopilot.sessionName(new Date(1793366447000L)));
-        } finally {
-            java.util.TimeZone.setDefault(before);
-        }
+    public void itsSessionsAreNumberedOneAfterAnother() {
+        assertEquals("Autopilot #1", Autopilot.sessionName(Collections.<String>emptyList()));
+        assertEquals("Autopilot #2", Autopilot.sessionName(Arrays.asList("Autopilot #1")));
+        assertEquals("Autopilot #3", Autopilot.sessionName(Arrays.asList("Autopilot #2", "Autopilot #1")));
+        // (a researcher's own sessions don't count)
+        assertEquals("Autopilot #3", Autopilot.sessionName(Arrays.asList("Autopilot #1", "Session 1", "Pilot", "Autopilot #2",
+            "Autopilot 7", "Autopilot #x", null)));
     }
 
     @Test
-    public void itBreaksOnlyAfterAutopilotOrBetweenTheDateAndTheTime() {
-        String name = Autopilot.sessionName(new Date(1793366447000L));
-        // ("Autopilot ·" and "13:20:47 UTC" stay whole; the two ordinary spaces are where it may break)
-        assertEquals(java.util.Arrays.asList("Autopilot\u00a0·", "2026-10-30", "13:20:47\u00a0UTC"), java.util.Arrays.asList(name.split(" ")));
+    public void theSessionsNamedByTheTimeTheyOpenedCountToo() {
+        // as 3.1's release candidates named them (no-break spaces), and 3.0
+        assertEquals("Autopilot #4", Autopilot.sessionName(Arrays.asList(
+            "Autopilot · 2026-10-30 13:20:47 UTC", "Autopilot · 2026-10-30 13:21:02 UTC", "Autopilot · Oct 28, 13:16:05 UTC")));
+        assertEquals("Autopilot #3", Autopilot.sessionName(Arrays.asList("Autopilot · 2026-10-30 13:20:47 UTC", "Autopilot #2")));
+    }
+
+    @Test
+    public void aNewNameEvenAfterSomeWereDeleted() {
+        // #2 to #4 deleted: not a second #3
+        assertEquals("Autopilot #6", Autopilot.sessionName(Arrays.asList("Autopilot #1", "Autopilot #5")));
+        assertEquals("Autopilot #10", Autopilot.sessionName(Arrays.asList("Autopilot #9")));
+    }
+
+    @Test
+    public void plainSpacesOnly() {
+        String name = Autopilot.sessionName(Arrays.asList("Autopilot · 2026-10-30 13:20:47 UTC"));
+        assertEquals("Autopilot #2", name);
+        assertFalse(name.contains(" "));
     }
 }

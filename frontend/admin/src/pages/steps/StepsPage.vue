@@ -228,9 +228,11 @@
             <EngineError
               v-if="cur.run.status === 'error' && cur.run.error"
               :error="cur.run.error"
+              :frames="cur.run.frames"
               :from-line="1"
               own-name="this step"
-              @goto="goto"
+              :own-step="cur.name"
+              @goto="gotoStep"
             />
           </div>
           <p v-else-if="runBlocked && !fileMode" class="steps__hint is-blocked" role="note">
@@ -242,6 +244,8 @@
             <template v-if="autopilotsSession">
               Saved: the autopilot’s next session uses it. <strong>Run</strong> loads it into the session it has open now (it doesn't start the step).
             </template>
+            <!-- (with no session running there is nothing to load it into: the next session loads what is saved) -->
+            <template v-else-if="!sessionLive">Saved. The next session you open uses it.</template>
             <template v-else>Saved. The live engine isn't using this version yet: <strong>Run</strong> loads it now (it doesn't start the step).</template>
           </p>
           <p v-else class="steps__hint">
@@ -433,6 +437,11 @@ function focusEditor () {
 function goto (line: number, column?: number) {
   const v = editorView()
   if (v) goToLine(v, line, column)
+}
+/** A line of a run's error: of this step, or of another step's code (`step`, which the server names), opened there. */
+function gotoStep (line: number, column?: number, step?: string) {
+  if (step && step !== current.value?.name) void openAt(step, line)
+  else goto(line, column)
 }
 
 // ---- opened at a step's line (/steps?step=RoundStep&line=71&experiment=4) -----------------------

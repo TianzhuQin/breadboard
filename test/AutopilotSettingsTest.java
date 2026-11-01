@@ -518,6 +518,14 @@ public class AutopilotSettingsTest extends BaseTest {
         assertEquals("off", off.source);
         assertFalse(off.isOn());
 
+        // continuous: on when left out, as the console suggests (a file with only the experiment's line
+        // ran one session, then said the autopilot was done); off when the file says so
+        Map<String, Object> experimentOnly = new HashMap<String, Object>();
+        experimentOnly.put("breadboard.autopilot.experiment", "From the file");
+        assertTrue(Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(experimentOnly))).settings.continuous);
+        experimentOnly.put("breadboard.autopilot.continuous", false);
+        assertFalse(Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(experimentOnly))).settings.continuous);
+
         file.put("breadboard.autopilot.experiment", "No such experiment");
         Autopilot.Effective missing = Autopilot.effective(null, new Configuration(ConfigFactory.parseMap(file)));
         assertEquals("config", missing.source);
