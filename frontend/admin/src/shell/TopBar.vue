@@ -101,7 +101,7 @@ const engineState = computed(() => {
   if (admin.engine === 'stale' && !admin.engineProblem && (!live || autopilotsSession.value)) return 'saved'
   return admin.engine
 })
-const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Steps loaded', saved: 'Steps saved', stale: 'Reload needed' }[engineState.value]))
+const engineLabel = computed(() => ({ ready: 'Engine', loading: 'Loading steps…', loaded: 'Engine rebuilt', saved: 'Steps saved', stale: 'Reload needed' }[engineState.value]))
 const engineIcon = computed(() => ({ ready: Cpu, loading: Cpu, loaded: CircleCheck, saved: CircleCheck, stale: TriangleAlert }[engineState.value]))
 const engineTitle = computed(() => engineState.value === 'saved'
   ? autopilotsSession.value
