@@ -141,9 +141,9 @@ create users, experiments, sessions, steps, content and parameters.
 pool to grow while an experiment's timer saves an event, changes session data, or finishes the
 session, then checks that the worker inherited no script class loader and the old engine can be
 collected. Server work entered from scripts uses `ServerContext` for this reason. The same tests
-open successive sessions and check that the engine's content fetcher, current session and account
-do not retain the experiment's entire history; a fresh `experiment.instances` still returns every
-saved session and its launch parameters.
+open successive sessions and check that the engine's content fetcher, current session and account,
+and an open console's sign-in snapshot, do not retain the experiment's entire history; a fresh
+`experiment.instances` still returns every saved session and its launch parameters.
 
 ### Groovy scripts
 

@@ -354,6 +354,34 @@ public class EngineReplacementTest extends BaseTest {
         assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(id).status);
     }
 
+    @Test
+    public void anOpenConsoleDoesNotKeepTheSessionsItsSignInListed() throws Exception {
+        User user = user("console-history");
+        Experiment experiment = createExperiment("Console history");
+        for (int n = 1; n <= 3; n++) createInstance("Past session " + n, experiment);
+        user.setSelectedExperiment(experiment);
+        user.update();
+        loggedIn(user);
+        Field f = ScriptBoard.class.getDeclaredField("admins");
+        f.setAccessible(true);
+        boolean checked = false;
+        for (Admin console : (java.util.List<Admin>) f.get(null)) {
+            if (console.getUser() != null && user.email.equals(console.getUser().email)) {
+                assertHistoryNotKept("the open console", console.getUser().selectedExperiment, 3);
+                assertEquals("the sign-in's uid remains a snapshot for password-reset revocation", user.uid, console.getUser().uid);
+                checked = true;
+            }
+        }
+        assertTrue("the console was registered", checked);
+        // A password reset can overtake a queued LogIn. Its socket still has the old sign-in;
+        // copying the database's newer uid would make it look current to closeAdminsOf.
+        User signedIn = User.findByEmail(user.email);
+        com.avaje.ebean.Ebean.createSqlUpdate("update users set uid = :next where email = :email")
+            .setParameter("next", java.util.UUID.randomUUID().toString()).setParameter("email", user.email).execute();
+        Admin queuedSignIn = new Admin(signedIn, null, null);
+        assertEquals("a queued sign-in keeps its original uid", signedIn.uid, queuedSignIn.getUser().uid);
+    }
+
     private static void assertHistoryNotKept(String holder, Experiment experiment, int opened) {
         if (experiment == null) return;
         java.util.List<ExperimentInstance> history = experiment.instances;
