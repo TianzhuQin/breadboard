@@ -763,7 +763,7 @@ public class AutopilotGuardTest extends BaseTest {
         // One is dropped (as an idle-drop closure does): the OnLeaveStep's end step fails as it starts.
         engine().eval("g.removePlayer('leave-b'); null");
         await("the failure", () -> events(session, "stepFailed").size() == 1);
-        assertEquals("finishStep", value(events(session, "stepFailed").get(0), "step"));
+        assertEquals("FinishStep", value(events(session, "stepFailed").get(0), "step"));
 
         // The round still waits for its time: nothing ends.
         watchWhileRunning("the round's time is still to come", session, 1000);
@@ -773,12 +773,12 @@ public class AutopilotGuardTest extends BaseTest {
         JsonNode st = autopilotStatus(researcher);
         assertTrue(st.toString(), st.get("paused").asBoolean());
         String problem = st.get("problem").asText();
-        assertTrue(problem, problem.contains("the step \"finishStep\" failed during its session \"" + session.name
+        assertTrue(problem, problem.contains("the step \"FinishStep\" failed during its session \"" + session.name
             + "\" (line 3: No such property: playerz"));
         assertTrue(problem, problem.contains("and then the game had nothing left to do, so that session was stopped"));
         List<Event> stalled = events(session, "sessionStalled");
         assertEquals(1, stalled.size());
-        assertEquals("finishStep", value(stalled.get(0), "step"));
+        assertEquals("FinishStep", value(stalled.get(0), "step"));
         assertEquals(Boolean.FALSE, engineValue("a.ai.isOn"));
         assertNull("its link leads nowhere now", Autopilot.openInstance(experiment.id));
         watchdog();
@@ -931,14 +931,14 @@ public class AutopilotGuardTest extends BaseTest {
         await("the round", () -> ((Number) engineValue("a.actions.size()")).intValue() == 2);
         engine().eval("g.removePlayer('dangle-b'); null");
         await("the failure", () -> events(session, "stepFailed").size() == 1);
-        assertEquals("onLeaveStep", value(events(session, "stepFailed").get(0), "step"));
+        assertEquals("OnLeaveStep", value(events(session, "stepFailed").get(0), "step"));
         watchWhileRunning("the one still here has a choice to make", session, 700);
 
         engine().eval("a.choose(a.actions.find { it.value.player.id == 'dangle-a' }.key); null");
         assertEquals("the round still waits for the removed player", 1, ((Number) engineValue("a.actions.size()")).intValue());
         watchUntil("the session to be stopped", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.STOPPED);
         String problem = autopilotStatus(researcher).get("problem").asText();
-        assertTrue(problem, problem.contains("the step \"onLeaveStep\" failed") && problem.contains("nothing left to do"));
+        assertTrue(problem, problem.contains("the step \"OnLeaveStep\" failed") && problem.contains("nothing left to do"));
     }
 
     @Test

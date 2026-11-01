@@ -203,7 +203,7 @@ public class StepErrorLinesTest extends BaseTest {
     @Test
     public void aStepAnotherStepStartedFailsAtItsOwnLine() throws Exception {
         User researcher = user("started");
-        // FinishStep has no name of its own (the variable that holds it names it); RoundStep's done starts it
+        // FinishStep has no name of its own; its saved code names it, not its variable. RoundStep starts it
         Experiment experiment = experiment(researcher, "Fails in the step started",
             "InitStep", INIT_STEP, "RoundStep", roundStep("  finishStep.start()"),
             "FinishStep", "finishStep = stepFactory.createNoUserActionStep()\n"
@@ -217,9 +217,10 @@ public class StepErrorLinesTest extends BaseTest {
         tab.send("RunGame");
         await("the event", () -> events(session, "stepFailed").size() == 1);
         Event failed = events(session, "stepFailed").get(0);
-        assertEquals("finishStep", value(failed, "step"));
+        assertEquals("FinishStep", value(failed, "step"));
         assertEquals("line 3: No such property: roundz", value(failed, "error"));
         await("the error on the console", () -> errorSaying(tab, "roundz") != null);
+        assertEquals("FinishStep", errorSaying(tab, "roundz").get("step").asText());
         // FinishStep's line 3, and RoundStep's line 5 that started it: neither is the other's
         assertEquals(java.util.Arrays.asList("FinishStep line 3 own", "RoundStep line 5"), frames(errorSaying(tab, "roundz")));
     }

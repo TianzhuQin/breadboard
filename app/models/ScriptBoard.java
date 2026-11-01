@@ -5476,6 +5476,12 @@ public class ScriptBoard extends UntypedActor {
       }
       ScriptEngine in = listener == null ? null : listener.engine;
       if (in != null && step != null) {
+        // Unnamed steps still have the name shown on the Steps page. Their closures identify the
+        // saved code; a variable such as finishStep is only a fallback for code made at runtime.
+        Set<String> saved = StepScripts.stepsOfCode(in, step);
+        if (saved.size() == 1) {
+          return saved.iterator().next();
+        }
         for (Map.Entry<String, Object> binding : in.getBindings(ScriptContext.ENGINE_SCOPE).entrySet()) {
           if (binding.getValue() == step) {
             return binding.getKey();
