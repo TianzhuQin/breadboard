@@ -1381,6 +1381,9 @@ public class ScriptBoard extends UntypedActor {
         if (graphChangedListener != null) {
           graphChangedListener.removeAdminListener(admin);
         }
+        // Only a volatile marker while holding the list lock; socket I/O stays below, outside it.
+        // A first reply that follows registration now observes revocation before accepting a frame.
+        admin.getOut().markClosed();
         closing.add(admin);
       }
     }
@@ -1390,8 +1393,7 @@ public class ScriptBoard extends UntypedActor {
     for (Admin admin : closing) {
       ThrottledWebSocketOut out = admin.getOut();
       try {
-        // Marked first, so a LogIn of this socket still queued registers nothing.
-        out.markClosed();
+        // Already marked under the list lock; the final notice is allowed on a closed marker.
         out.write(signedOut);
         out.close();
       } catch (Exception e) {

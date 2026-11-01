@@ -802,10 +802,11 @@ public class Breadboard extends UntypedActor {
     }
     // User JSON first, then the network (the ScriptBoard actor writes it after this).
     ObjectNode userJson = user.toJson();
-    out.write(userJson);
-    // Registered now, not only when the engine actor gets to it (it may be busy for seconds), so
-    // this tab already hears of changes made in the account's other tabs.
+    // Serialization can take time. Revalidate and register before any account data is sent, so
+    // revocation either rejects this sign-in or sees the registered socket and marks it closed.
     if (ScriptBoard.registerAdmin(user, scriptBoard, out) == null) return;
+    out.writeIfOpen(userJson);
+    if (out.isClosed()) return;
     if (followed) {
       // The account's other tabs show the session it follows now too, not the one it had.
       ScriptBoard.toOtherTabs(user.email, userJson, out);

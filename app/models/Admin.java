@@ -45,7 +45,7 @@ public class Admin implements ClientListener {
   /** Write one frame to this socket. A failing socket must not stop the others from being updated. */
   public void write(JsonNode frame) {
     try {
-      out.write(frame);
+      out.writeIfOpen(frame);
     } catch (Exception e) {
       Logger.debug("Could not write to an admin socket: " + e);
     }
