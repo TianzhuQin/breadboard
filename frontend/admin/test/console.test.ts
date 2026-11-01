@@ -474,7 +474,7 @@ describe('engine errors the server names by step', () => {
     // as Live session shows it: no step of its own, every line named by its step
     const w = mount(EngineError, { props: { error: raw, frames, ownName: 'roundStep', fromLine: 1, inStep: true } })
     expect(w.findAll('.eng-err__places li').map(li => li.text())).toEqual([
-      'Line 14 of RoundStep', 'in isHuman (InitStep line 65)', 'Line 80 of RoundStep', 'Script900.groovy, line 1 another script',
+      'Line 14 of RoundStep', 'in isHuman (InitStep line 65)', 'Line 80 of RoundStep',
     ])
     const links = w.findAll('button.eng-err__place')
     expect(links).toHaveLength(3)
@@ -509,7 +509,8 @@ describe('engine errors the server names by step', () => {
     // an older message: as before
     const old = mount(EngineError, { props: { error: raw, ownName: 'RoundStep', fromLine: 1, inStep: true } })
     expect(old.findAll('.eng-err__places li').map(li => li.text())[0]).toBe('Line 65 of RoundStep')
-    expect(old.findAll('.eng-err__places li').map(li => li.text())).toContain('Script534.groovy, line 14 an earlier script or a step')
+    expect(old.findAll('.eng-err__places li').map(li => li.text())).toEqual(['Line 65 of RoundStep'])
+    expect(old.find('.eng-err__raw pre').text()).toContain('Script534.groovy')
   })
 })
 

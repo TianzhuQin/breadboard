@@ -71,9 +71,9 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ goto: [line: number, column?: number, step?: string] }>()
 
 const parsed = computed(() => parseGroovyError(props.error, { inStep: props.inStep, frames: props.frames }))
-// Breadboard's own files (step.groovy, actions.groovy …) are no place a researcher can change: they
-// are under Full error only
-const places = computed(() => parsed.value.places.filter(p => p.kind !== 'library').slice(0, 6))
+// Only lines a researcher can identify: the failing code and saved steps. Internal Script<N>
+// callers and Breadboard's own files stay under Full error.
+const places = computed(() => parsed.value.places.filter(p => p.kind !== 'library' && (p.kind !== 'other' || !!p.step)).slice(0, 6))
 const canGo = computed(() => props.fromLine != null)
 const showMessage = computed(() => !!parsed.value.message && parsed.value.message !== parsed.value.title)
 
