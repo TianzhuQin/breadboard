@@ -476,7 +476,7 @@ public class ClientLogin extends Controller {
     String title = texts.t(underWay ? "holding.underWayTitle" : "holding.soonTitle");
     String message = texts.t((underWay ? "holding.underWay" : "holding.soon") + (prolific ? "Prolific" : ""));
     response().setHeader("Cache-Control", "no-store");
-    return ok(participantHolding.render(title, message, HOLDING_RETRY_SECONDS, texts));
+    return ok(participantHolding.render(title, message, underWay ? HOLDING_RETRY_SECONDS : 1, texts));
   }
 
   private static final String PLAY_COOKIE = "bb_seat_";

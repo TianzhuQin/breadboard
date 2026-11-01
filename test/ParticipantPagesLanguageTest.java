@@ -242,6 +242,7 @@ public class ParticipantPagesLanguageTest extends BaseTest {
                 || waiting.contains("<h1>有一场实验正在进行</h1>") && waiting.contains("这一场结束后，下一场就会开放，这个页面会自动带你进入"));
             assertTrue(waiting, waiting.contains("如果等不及，请在 Prolific 上退回这项研究。"));
             assertTrue(waiting, waiting.contains("每隔几秒检查一次…"));
+            assertTrue(waiting, waiting.contains("http-equiv=\"refresh\" content=\"1\""));
         } finally {
             Http.Context.current.remove();
         }

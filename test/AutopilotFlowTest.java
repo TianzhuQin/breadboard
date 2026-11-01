@@ -587,7 +587,7 @@ public class AutopilotFlowTest extends BaseTest {
         await("finished", () -> ExperimentInstance.findById(session.id).status == ExperimentInstance.Status.FINISHED);
         String between = page(login);
         assertTrue(between, between.contains("The next session opens soon"));
-        assertTrue(between, between.contains("http-equiv=\"refresh\""));
+        assertTrue(between, between.contains("http-equiv=\"refresh\" content=\"1\""));
 
         // Paused or done, or off, nothing opens by itself: the page says so, and asks nobody to wait.
         setAutopilot("pausedBecause", "a test paused it");

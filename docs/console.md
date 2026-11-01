@@ -417,7 +417,7 @@ and the **Participant links**: the **Sign-in link** (`/play/<experiment id>/logi
 working from one session to the next. While none takes participants (its game is under way, its full
 waiting room counts down, or the next one is about to open), they show a page that says a session is
 in progress and the next one opens when it ends (or, just before the next one opens, that it opens
-in a moment); it checks again every few seconds and takes people in once a session opens (Prolific
+in a moment); it checks every second between sessions, or every four seconds during a game, and takes people in once a session opens (Prolific
 participants read that they can keep it open, or return the study if they can't wait). When the
 autopilot is off, paused or done, doesn't open the next session by itself (**Open the next session
 when one finishes** is off), or something keeps it from opening the next session (another
