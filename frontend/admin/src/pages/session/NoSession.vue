@@ -46,7 +46,7 @@
         <li v-for="s in recent" :key="s.id" class="live-recent__row">
           <div class="live-recent__main">
             <span class="live-recent__name">{{ s.name }}</span>
-            <span class="live-recent__meta">#{{ s.id }} · created {{ formatWhen(parseServerTime(s.creationTime)) }}</span>
+            <span class="live-recent__meta">ID {{ s.id }} · created {{ formatWhen(parseServerTime(s.creationTime)) }}</span>
           </div>
           <BBadge :tone="tone(s.status)" dot>{{ label(s.status) }}</BBadge>
           <div class="live-recent__actions">

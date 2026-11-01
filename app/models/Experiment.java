@@ -102,8 +102,9 @@ public class Experiment extends Model {
   @JsonIgnore
   public static Model.Finder<Long, Experiment> find = new Model.Finder(Long.class, Experiment.class);
 
+  /** Every experiment, oldest first. */
   public static List<Experiment> findAll() {
-    return find.all();
+    return find.orderBy("id").findList();
   }
 
   public static Experiment findByName(String name) {

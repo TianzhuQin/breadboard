@@ -1,21 +1,22 @@
-@(experimentId: String, experimentInstanceId: String, form: Form[ClientLogin.CLogin])
+@(experimentId: String, experimentInstanceId: String, form: Form[ClientLogin.CLogin], texts: models.SystemTexts.Page)
+@* In the language of the session's texts (texts): its errors are the keys of their words. *@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="@texts.lang()">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Sign in</title>
+    <title>@texts.t("signIn.pageTitle")</title>
     <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
     <link rel="stylesheet" href="/assets/css/participant.css?v=@models.AssetVersion.VALUE">
   </head>
   <body class="bb-page">
     <main class="bb-panel">
       @participantMark()
-      <h1>Join the session</h1>
-      <p class="bb-lead">Enter the ID you were given to take your seat.</p>
+      <h1>@texts.t("signIn.title")</h1>
+      <p class="bb-lead">@texts.t("signIn.lead")</p>
 
       @if(form.hasGlobalErrors) {
-        <p id="bb-id-error" class="bb-alert bb-alert--error" role="alert">@form.globalError.message</p>
+        <p id="bb-id-error" class="bb-alert bb-alert--error" role="alert">@texts.t(form.globalError.message)</p>
       }
       @if(flash.contains("success")) {
         <p class="bb-alert bb-alert--success">@flash.get("success")</p>
@@ -23,18 +24,18 @@
 
       @helper.form(routes.ClientLogin.authenticate(experimentId, experimentInstanceId)) {
         <div class="bb-field">
-          <label for="bb-id">Your ID</label>
+          <label for="bb-id">@texts.t("signIn.id")</label>
           <input id="bb-id" type="text" name="id" value="@form("id").value" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64" required autofocus@if(form.hasGlobalErrors) { aria-invalid="true" aria-describedby="bb-id-error"}>
         </div>
         @if(models.ScriptBoard.hasPassword()) {
           <div class="bb-field">
-            <label for="bb-password">Password</label>
+            <label for="bb-password">@texts.t("signIn.password")</label>
             <input id="bb-password" type="password" name="password" required>
           </div>
         }
         <input type="hidden" name="experimentId" value="@experimentId">
         <input type="hidden" name="experimentInstanceId" value="@experimentInstanceId">
-        <button class="bb-button" type="submit">Continue</button>
+        <button class="bb-button" type="submit">@texts.t("signIn.continue")</button>
       }
     </main>
   </body>

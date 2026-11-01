@@ -1,6 +1,6 @@
 import { watch } from 'vue'
 import { admin, connectionState } from '@/store/admin'
-import type { OutputEntry } from '@/store/types'
+import type { ErrorFrame, OutputEntry } from '@/store/types'
 
 /**
  * Pairs the engine's answers with the scripts this console (and the Steps page) sent.
@@ -30,6 +30,8 @@ export interface EngineReply {
   values: string[]
   /** The error text as the server sent it (with "Caught error: "), or null. */
   error: string | null
+  /** The error's lines named by step, when the server sent them (see groovyError). */
+  frames?: ErrorFrame[]
   at: number
 }
 
@@ -138,7 +140,9 @@ function takeFresh () {
     const i = matchReply(waiters, e, serverTags)
     if (i < 0) continue
     const values = e.kind === 'output' ? splitValues(e.text, waiters[i].script) || [] : []
-    settle(i, { ok: e.kind === 'output', values, error: e.kind === 'error' ? e.text : null, at: Date.now() })
+    const reply: EngineReply = { ok: e.kind === 'output', values, error: e.kind === 'error' ? e.text : null, at: Date.now() }
+    if (e.kind === 'error' && e.frames) reply.frames = e.frames
+    settle(i, reply)
   }
 }
 watch(lastOutputId, takeFresh)

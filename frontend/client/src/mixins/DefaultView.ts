@@ -2,6 +2,7 @@ import Vue from 'vue'
 import { BreadboardConfig, Graph, PlayerData } from '@human-nature-lab/breadboard-core'
 
 import { Mutex } from 'async-mutex'
+import { t } from '../lib/texts'
 
 const gremlinsMutex = new Mutex()
 export default Vue.extend({
@@ -9,7 +10,8 @@ export default Vue.extend({
     return {
       graph: new Graph(),
       player: {
-        text: 'Loading...',
+        // (until the first update; in the language of the session's texts)
+        text: t('page.loadingDots'),
         choices: []
       } as Partial<PlayerData>,
       config: null as BreadboardConfig | null

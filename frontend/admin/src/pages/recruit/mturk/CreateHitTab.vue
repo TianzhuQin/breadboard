@@ -141,7 +141,8 @@
                 <span>
                   MTurk only opens public <strong>https</strong> addresses. This console is at
                   <span class="rc-mono">{{ origin }}</span>, so make sure <code>breadboard.rootUrl</code>
-                  is set to the server’s public https address, or MTurk will refuse the HIT.
+                  is set to the server’s public https address (in its settings file,
+                  <code>conf/local.conf</code>), or MTurk will refuse the HIT.
                 </span>
               </div>
             </BPanel>

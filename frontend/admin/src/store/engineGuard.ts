@@ -1,38 +1,45 @@
 import { http } from '@/lib/http'
 import { confirm } from '@/ui/confirm'
-import { admin, graph, running } from './admin'
+import { admin, engineElsewhere, graph, running } from './admin'
+import type { EngineInfo } from './types'
 
 /**
  * The script engine is one for the whole server: every account's console and the autopilot share
- * it (app/models/Breadboard.java). Switching experiment, reloading the engine, and launching or
- * resuming a session all rebuild it, which empties the network and disconnects everyone in it,
- * whoever's session they are in. Ask before doing that while anyone is using it.
+ * it (app/models/Breadboard.java). Reloading the engine, and launching or resuming a session, all
+ * rebuild it, which empties the network and disconnects everyone in it, whoever's session they are
+ * in; so does switching experiments, but only while no session is live there (otherwise switching
+ * changes just what this console works on). Ask before doing that while anyone is using it.
  */
 
 type Named = { id: number, name: string }
 type EngineSession = Named & { experimentName: string | null, owner: string | null }
 
 /**
- * What GET /autopilot says the engine runs right now: `auto`, its session of the autopilot's
- * experiment (status.instance), and `other`, its live session of any other experiment
- * (status.engineSession, with the account that runs it). Both null when it can't be asked; never fails.
- * `autopilotLive`: the autopilot is on, not paused, and `auto` is its session, so a researcher's
- * rebuild that ends it pauses the autopilot (the server's Autopilot.sessionStopped).
+ * What GET /autopilot says the engine runs right now: `auto`, the autopilot's session
+ * (status.instance) while the autopilot runs it (it is on, neither paused nor done), and `other`, its
+ * live session of any other experiment (status.engineSession, with the account that runs it). Both
+ * null when it can't be asked; never fails. `autopilotLive`: `auto` is set, so a researcher's rebuild
+ * that ends it pauses the autopilot (the server's Autopilot.sessionStopped).
  *
  * The server works these out when it is asked, so they also name a session started since this
  * console last heard what the engine runs (admin.user.engine is asked for once the engine says it
  * rebuilt, which can be before the session that rebuild is for has started).
  */
-async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null, autopilotLive: boolean, known: boolean }> {
+async function engineSessions (): Promise<{ auto: Named | null, other: EngineSession | null, autopilotOn: boolean, autopilotLive: boolean, known: boolean }> {
   try {
     const answer = http.get<any>('/autopilot', { quiet401: true })
     const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), 4000))
     const s = await Promise.race([answer, timeout])
     const status = s && s.status && typeof s.status === 'object' ? s.status : null
-    const auto = autopilotSession(status)
-    return { auto, other: otherSession(status), autopilotLive: !!auto && status.on === true && status.paused !== true, known: !!status }
+    const on = !!status && status.on === true
+    // The autopilot's session only while the autopilot runs it: switched on, neither paused nor done.
+    // A session it opened that a researcher resumed by hand while it was off or paused is theirs:
+    // a reload of it from their console said "The autopilot's session … carries on".
+    const runs = on && status.paused !== true && status.done !== true
+    const auto = runs ? autopilotSession(status) : null
+    return { auto, other: otherSession(status), autopilotOn: on, autopilotLive: !!auto, known: !!status }
   } catch (e) {
-    return { auto: null, other: null, autopilotLive: false, known: false }
+    return { auto: null, other: null, autopilotOn: false, autopilotLive: false, known: false }
   }
 }
 
@@ -42,9 +49,9 @@ const idOf = (v: any): number | null => {
 }
 const textOf = (v: any): string | null => (typeof v === 'string' && v ? v : null)
 
-/** The engine's session of the autopilot's experiment, while it has not ended. */
+/** The engine's session of the autopilot's experiment that it opened (or was handed), while it has not ended. */
 function autopilotSession (status: any): Named | null {
-  // (turning the autopilot off leaves its running session open, so "on" does not matter here)
+  // (turning the autopilot off leaves its running session open: whether it still runs it, engineSessions says)
   const inst = status ? status.instance : null
   const id = inst && typeof inst === 'object' ? idOf(inst.id) : null
   if (id === null) return null
@@ -60,12 +67,64 @@ function otherSession (status: any): EngineSession | null {
   return { id, name: String(e.name || id), experimentName: textOf(e.experimentName), owner: textOf(e.owner) }
 }
 
-/** "other@lab has session “S” of “E” running." (or "The engine is running …" when it is no one else's) */
+/** Whether `owner` is another account than this one (an account the server names; null: nobody's). */
+function anotherAccount (owner: string | null | undefined): owner is string {
+  return !!owner && owner.toLowerCase() !== admin.email.toLowerCase()
+}
+
+/**
+ * Said of a session of another account that the rebuild ends: it is stopped, as their Stop would, and
+ * its data records who stopped it and why (the server's sessionStopped, with by and reason).
+ */
+export function stopsTheirSession (name: string): string {
+  return `This stops their session “${name}”: its participants are told it was stopped, and it can be resumed.`
+}
+
+/** Said of the autopilot's session, which the rebuild ends as it ends another account's. */
+const STOPS_IT = 'This stops it: its participants are told it was stopped, and it can be resumed.'
+
+/**
+ * "other@lab has session “S” of “E” running. This stops their session “S”: …" (or "The engine is
+ * running …" when it is no one else's)
+ */
 function runningLine (s: { name: string, experimentName: string | null, owner: string | null }): string {
   const session = `session “${s.name}”${s.experimentName ? ` of “${s.experimentName}”` : ''}`
-  return s.owner && s.owner.toLowerCase() !== admin.email.toLowerCase()
-    ? `${s.owner} has ${session} running.`
+  return anotherAccount(s.owner)
+    ? `${s.owner} has ${session} running. ${stopsTheirSession(s.name)}`
     : `The engine is running ${session}.`
+}
+
+/** People (not computer players) whose page is connected to the engine's network right now. */
+function peopleConnected (): number {
+  let n = 0
+  for (const node of graph.nodes.values()) {
+    if (String(node.id).startsWith('_')) continue
+    const sys = (node.data as any)?._system
+    if (sys && typeof sys === 'object' && sys.connected === true) n++
+  }
+  return n
+}
+
+/**
+ * What a rebuild that carries session `keeping` on means for it, in words, when the engine runs it
+ * now ('' otherwise, or when its game hasn't started and nobody is connected): the session goes on in
+ * the new engine, but its game starts again from the beginning, and the people in it are disconnected
+ * and rejoin by themselves. Also the autopilot's own session (opened as this account, so it is
+ * "yours" to the server): a reload carries it on too, without pausing the autopilot.
+ */
+function carriedOn (keeping: number | undefined, auto: Named | null): string {
+  const e = admin.user?.engine
+  if (keeping == null || !e || e.sessionId !== keeping) return ''
+  const started = e.gameStarted === true
+  const here = peopleConnected()
+  if (!started && !here) return ''
+  const name = e.sessionName || (admin.instance && admin.instance.id === keeping ? admin.instance.name : String(keeping))
+  const whose = auto && auto.id === keeping ? `The autopilot’s session “${name}”` : `Your session “${name}”`
+  const people = here === 1 ? 'The 1 person in it is' : `The ${here} people in it are`
+  const rejoin = here ? ` ${people} disconnected for a moment and ${here === 1 ? 'rejoins' : 'rejoin'} by themselves.` : ''
+  return started
+    ? `${whose} carries on, but its game is in progress: reloading starts the game again from the beginning.${rejoin}`
+    : `${whose} carries on.${rejoin}`
 }
 
 /** Said when a rebuild would end the autopilot's live session (see engineUse). */
@@ -82,19 +141,26 @@ export async function engineUsers (): Promise<string> {
  * engine runs the autopilot's session, and the autopilot is on and not paused (say
  * REBUILD_PAUSES_AUTOPILOT then). A resume or reload that carries a session on passes its id as
  * `keeping`: that session isn't ended (nor the autopilot paused, when it is the autopilot's), though
- * the people in it are disconnected too.
+ * the people in it are disconnected too, and its game starts again: said when its game is in progress
+ * or anyone is connected to it (see carriedOn).
  */
 export async function engineUse (keeping?: number): Promise<{ who: string, pausesAutopilot: boolean, endsSession: boolean }> {
   const lines: string[] = []
   const own = running.value && admin.instance ? admin.instance : null
   const named = new Set<number>(keeping != null ? [keeping] : [])
+  const { auto, other, autopilotLive, known } = await engineSessions()
   if (own && !named.has(own.id)) {
-    lines.push(`Your session “${own.name}” is running.`)
+    // (the running session this console shows needn't be this account's own: it follows the
+    // autopilot's, and a colleague's, of the experiment it works on)
+    const e = admin.user?.engine
+    const owner = e && e.sessionId === own.id ? e.owner : null
+    if (auto && auto.id === own.id) lines.push(`The autopilot has session “${own.name}” open. ${STOPS_IT}`)
+    else if (anotherAccount(owner)) lines.push(`${owner} has session “${own.name}” running. ${stopsTheirSession(own.name)}`)
+    else lines.push(`Your session “${own.name}” is running.`)
     named.add(own.id)
   }
-  const { auto, other, autopilotLive, known } = await engineSessions()
   if (auto && !named.has(auto.id)) {
-    lines.push(`The autopilot has session “${auto.name}” open.`)
+    lines.push(`The autopilot has session “${auto.name}” open. ${STOPS_IT}`)
     named.add(auto.id)
   }
   if (other && !named.has(other.id)) {
@@ -107,6 +173,8 @@ export async function engineUse (keeping?: number): Promise<{ who: string, pause
     lines.push(runningLine({ name: e.sessionName || String(e.sessionId), experimentName: e.experimentName, owner: e.owner }))
   }
   const endsSession = lines.length > 0
+  const carried = carriedOn(keeping, auto)
+  if (carried) lines.unshift(carried)
   const n = graph.nodes.size
   // When the server says no session is running, people left in the network are what a finished or
   // stopped session left behind: clearing them disturbs no one, so it isn't worth a warning.
@@ -141,14 +209,68 @@ export function reloadKeeps (): number | undefined {
  * `detail`, when given, is said after it (e.g. that a named session is stopped).
  */
 export async function confirmEngineRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string, keeping?: number }): Promise<boolean> {
-  const { who, pausesAutopilot } = await engineUse(opts.keeping)
-  if (!who) return true
+  const use = await engineUse(opts.keeping)
+  if (!use.who) return true
+  return askRebuild(opts, use)
+}
+
+function askRebuild (opts: { title: string, action: string, confirmLabel?: string, detail?: string, ask?: string }, use: { who: string, pausesAutopilot: boolean }): Promise<boolean> {
   return confirm({
     title: opts.title,
-    message: `${who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
+    message: (opts.ask ? `${opts.ask}\n\n` : '') +
+      `${use.who}\n\n${opts.action} restarts the script engine, which every researcher on this server shares. Everyone in the network is disconnected and the network is emptied.` +
       (opts.detail ? ` ${opts.detail}` : '') +
-      (pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : ''),
+      (use.pausesAutopilot ? `\n\n${REBUILD_PAUSES_AUTOPILOT}` : ''),
     confirmLabel: opts.confirmLabel || 'Continue anyway',
     danger: true,
   })
+}
+
+/**
+ * Before switching experiments: ask only when the switch rebuilds the engine under someone. While a
+ * session is live in the engine (the autopilot's, or any researcher's), selecting changes only what
+ * this console works on, and the server leaves the engine and that session alone
+ * (ScriptBoard.sessionKeptBySelection): nothing to ask. Otherwise the engine loads the selected
+ * experiment's steps, and this asks as confirmEngineRebuild does (at once true when nobody uses it).
+ * With `ask` (why to switch, for a switch the researcher didn't choose in the switcher, e.g. to open
+ * a step of another experiment), it always asks, saying that first.
+ */
+export async function confirmSwitch (opts: { title: string, action: string, confirmLabel?: string, ask?: string }): Promise<boolean> {
+  const use = await engineUse()
+  if (use.endsSession || !use.who) {
+    return opts.ask ? confirm({ title: opts.title, message: opts.ask, confirmLabel: opts.confirmLabel || 'Switch' }) : true
+  }
+  return askRebuild(opts, use)
+}
+
+/**
+ * What to say after switching experiments while the engine runs another one's session, which the
+ * switch left running; '' when the engine runs the selected experiment or has no live session.
+ */
+export function switchedNote (): string {
+  const e = engineElsewhere.value
+  if (!e || e.sessionId === null) return ''
+  const what = e.experimentName ? `“${e.experimentName}”` : 'another experiment'
+  return `The engine keeps running ${what}${e.sessionName ? ` (session “${e.sessionName}”)` : ''}, untouched. Edit this experiment and see its data here; to run it, end that session first.`
+}
+
+/**
+ * Whose live session the engine runs, in words: "the autopilot’s session “S”" (when `autopilot`),
+ * "your session “S”", "x@lab’s session “S”", or "session “S”" when nobody is named.
+ */
+export function sessionWords (e: Pick<EngineInfo, 'sessionId' | 'sessionName' | 'owner'>, autopilot = false): string {
+  const name = e.sessionName ? `session “${e.sessionName}”` : 'session'
+  if (autopilot) return `the autopilot’s ${name}`
+  if (e.owner && e.owner.toLowerCase() === admin.email.toLowerCase()) return `your ${name}`
+  return e.owner ? `${e.owner}’s ${name}` : name
+}
+
+/**
+ * Whether the engine's live session `id` is the autopilot's, as GET /autopilot says: it is on, and
+ * that is its session, so ending it pauses the autopilot. False when the server can't be asked.
+ */
+export async function isAutopilotSession (id: number | null): Promise<boolean> {
+  if (id === null) return false
+  const { auto, autopilotOn } = await engineSessions()
+  return autopilotOn && !!auto && auto.id === id
 }

@@ -37,25 +37,30 @@
                   <li v-for="(t, i) in row.issues" :key="i"><AlertTriangle :size="13" aria-hidden="true" /><span>{{ t }}</span></li>
                 </ul>
               </th>
+              <!-- (each value cell names itself too, for the stacked layout on a phone, which hides the header) -->
               <td><BBadge :tone="TYPE_TONE[row.p.type] || 'neutral'">{{ typeLabel(row.p.type) }}</BBadge></td>
-              <td class="is-num mono">
+              <td class="is-num mono" :class="{ 'is-blank': !numeric(row.p) }">
+                <span class="pp-lbl">Min </span>
                 <template v-if="numeric(row.p)">{{ row.p.minVal }}</template>
                 <span v-else class="pp-none" title="Only numbers have a range">—</span>
               </td>
-              <td class="is-num mono">
+              <td class="is-num mono" :class="{ 'is-blank': !numeric(row.p) }">
+                <span class="pp-lbl">Max </span>
                 <template v-if="numeric(row.p)">{{ row.p.maxVal }}</template>
                 <span v-else class="pp-none" title="Only numbers have a range">—</span>
               </td>
               <td class="pp-default">
+                <span class="pp-lbl">Default </span>
                 <span v-if="row.p.defaultVal == null" class="pp-missing">not set</span>
                 <span v-else-if="row.p.type === 'Text' && row.p.defaultVal === ''" class="pp-none">empty</span>
                 <code v-else>{{ formatDefault(row.p) }}</code>
               </td>
               <td v-if="sessionValues" class="pp-default">
+                <span class="pp-lbl">Current session </span>
                 <code v-if="sessionValues.has(row.p.name)">{{ sessionValues.get(row.p.name) }}</code>
                 <span v-else class="pp-none" title="This session was created before the parameter existed">—</span>
               </td>
-              <td class="pp-desc">{{ row.p.description }}<span v-if="!row.p.description" class="pp-none">—</span></td>
+              <td class="pp-desc" :class="{ 'is-blank': !row.p.description }">{{ row.p.description }}<span v-if="!row.p.description" class="pp-none">—</span></td>
               <td v-if="!readOnly" class="is-actions">
                 <div class="pp-actions">
                   <BButton size="sm" variant="ghost" :icon="Pencil" :aria-label="`Edit ${row.p.name}`" title="Edit" :disabled="row.p.id == null || !!busyKey" @click="openEdit(row.p)" />
@@ -91,7 +96,7 @@
         </li>
         <li>
           <span class="pp-how__n" aria-hidden="true">2</span>
-          <div><strong>Choose values per session</strong><p>When you create a session, you are asked for every parameter, pre-filled with its default. The values are saved with the session's data.</p></div>
+          <div><strong>Choose values per session</strong><p>When you create a session, you are asked for every parameter: the first time filled in with its default, after that with the last session's values (<em>Use default</em> brings a default back). The autopilot's sessions get the defaults. The values are saved with the session's data.</p></div>
         </li>
         <li>
           <span class="pp-how__n" aria-hidden="true">3</span>
@@ -219,7 +224,8 @@ function onSaved (saved: Parameter) {
     else added.value = [...added.value, saved]
   }
   const found = list.value.find(p => p.id === saved.id) || null
-  if (editing.value) notify.success(`Saved ${saved.name}`, 'Sessions you create from now on use the new settings.')
+  // (New session fills in the last session's values, not a default changed since: Use default takes it)
+  if (editing.value) notify.success(`Saved ${saved.name}`, 'The autopilot’s next sessions get its default. New session fills in the last session’s value: press Use default there to take the new one.')
   else notify.success(`Created ${saved.name}`, 'Sessions you create from now on will ask for it.')
   if (found) flash(found)
   refresh()
@@ -346,5 +352,23 @@ function refresh () {
 }
 @media (max-width: 900px) {
   .pp-how__steps { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+}
+.pp-lbl { display: none; }
+/* On a phone each parameter is a card: its name and buttons, its type and values, then its
+   description. (The table scrolled sideways, with Max cut off and each row as tall as the
+   description squeezed into its column.) */
+@media (max-width: 600px) {
+  .pp-scroll { overflow-x: visible; }
+  .pp-table, .pp-table tbody { display: block; }
+  .pp-table thead { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .pp-table tbody tr { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .pp-table tbody tr:last-child { border-bottom: 0; }
+  .pp-table tbody th, .pp-table tbody td { display: block; padding: 0; border: 0; }
+  .pp-table .is-num { text-align: left; }
+  .pp-table td.is-blank { display: none; }
+  .pp-name { flex: 1 1 100%; min-width: 0; max-width: none; padding-right: 72px !important; }
+  .pp-table .is-actions { position: absolute; top: 7px; right: 8px; width: auto; padding: 0; }
+  .pp-lbl { display: inline; margin-right: 2px; font-family: var(--font); font-size: var(--text-xs); color: var(--muted); }
+  .pp-desc { flex: 1 1 100%; min-width: 0; max-width: none; font-size: var(--text-sm); }
 }
 </style>

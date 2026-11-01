@@ -49,8 +49,17 @@ public class ExperimentController extends Controller {
       example = json.findPath("example").textValue();
     }
 
-    if (newExperimentName == null) {
+    if (newExperimentName == null || newExperimentName.trim().isEmpty()) {
       return badRequest("Please provide a name for the new experiment.");
+    }
+    newExperimentName = newExperimentName.trim();
+    String refused = nameRefused(newExperimentName);
+    if (refused != null) {
+      return badRequest(refused);
+    }
+    String taken = nameTaken(newExperimentName, null);
+    if (taken != null) {
+      return badRequest("There is already an experiment called \"" + taken + "\".");
     }
 
     String uid = session().get("uid");
@@ -91,7 +100,41 @@ public class ExperimentController extends Controller {
     user.update();
     user.saveManyToManyAssociations("ownedExperiments");
 
+    ScriptBoard.experimentsChanged();
     return ok(experiment.toJson());
+  }
+
+  /**
+   * Why an experiment can't be called {@code name}, or null when it can. The name makes folder names
+   * (dev/&lt;name&gt;_&lt;id&gt;/ in file mode), where a "/" (on Windows "\" too) makes a folder in a
+   * folder. Checked wherever an experiment is named: created, imported or renamed (only renaming used
+   * to check). So is its length, which only renaming limited: a name longer than the database keeps
+   * failed to be created with a database error.
+   */
+  static String nameRefused(String name) {
+    // ((?s) lets "." match line breaks too: without it, a name with two of them got through)
+    if (name.contains("/") || name.contains("\\") || name.matches("(?s).*\\p{Cntrl}.*")) {
+      return "Names can't contain / or \\ or line breaks.";
+    }
+    if (name.length() > 120) {
+      return "Keep the name to 120 characters or fewer.";
+    }
+    return null;
+  }
+
+  /**
+   * The name of the experiment already called {@code name} (ignoring case and outer spaces), other
+   * than the one with id {@code exceptId}; null when there is none. Names are unique on a server:
+   * every researcher works on every experiment, and some tools find experiments by name.
+   */
+  static String nameTaken(String name, Long exceptId) {
+    for (Experiment other : Experiment.findAll()) {
+      if ((exceptId == null || !other.id.equals(exceptId)) && other.name != null
+          && other.name.trim().equalsIgnoreCase(name.trim())) {
+        return other.name;
+      }
+    }
+    return null;
   }
 
   /**
@@ -103,7 +146,7 @@ public class ExperimentController extends Controller {
   public static Result renameExperiment(Long experimentId) {
     User user = User.findByUID(session().get("uid"));
     Experiment experiment = Experiment.findById(experimentId);
-    if (user == null || experiment == null || !user.ownedExperiments.contains(experiment)) {
+    if (user == null || experiment == null) {
       return notFound("There is no such experiment.");
     }
     JsonNode json = request().body().asJson();
@@ -112,22 +155,20 @@ public class ExperimentController extends Controller {
     if (name.isEmpty()) {
       return badRequest("Give the experiment a name.");
     }
-    if (name.length() > 120) {
-      return badRequest("Keep the name under 120 characters.");
-    }
-    if (name.contains("/") || name.contains("\\") || name.matches(".*\\p{Cntrl}.*")) {
-      return badRequest("Names can't contain / or \\ or line breaks.");
+    String refused = nameRefused(name);
+    if (refused != null) {
+      return badRequest(refused);
     }
     if (Boolean.TRUE.equals(experiment.fileMode)) {
       return badRequest("Leave file mode first: in file mode, the experiment's folder is named after it.");
     }
-    for (Experiment other : Experiment.findAll()) {
-      if (!other.id.equals(experiment.id) && other.name != null && other.name.trim().equalsIgnoreCase(name)) {
-        return badRequest("There is already an experiment called \"" + other.name + "\".");
-      }
+    String taken = nameTaken(name, experiment.id);
+    if (taken != null) {
+      return badRequest("There is already an experiment called \"" + taken + "\".");
     }
     experiment.name = name;
     experiment.save();
+    ScriptBoard.experimentsChanged();
     return ok(experiment.toJson());
   }
 
@@ -147,6 +188,14 @@ public class ExperimentController extends Controller {
     String name = experimentName == null ? "" : experimentName.trim();
     if (name.isEmpty()) {
       return badRequest("Please provide a name for the imported experiment.");
+    }
+    String refused = nameRefused(name);
+    if (refused != null) {
+      return badRequest(refused);
+    }
+    String taken = nameTaken(name, null);
+    if (taken != null) {
+      return badRequest("There is already an experiment called \"" + taken + "\".");
     }
 
     Http.MultipartFormData body = request().body().asMultipartFormData();
@@ -241,6 +290,7 @@ public class ExperimentController extends Controller {
         }
         return badRequest("The experiment could not be imported: " + e.getMessage());
       }
+      ScriptBoard.experimentsChanged();
       return ok(experiment.toJson());
     } finally {
       FileUtils.deleteQuietly(rootOutputFolder);
@@ -860,13 +910,40 @@ public class ExperimentController extends Controller {
       step.source = source;
       experiment.addStep(step);
     }
+    // The examples are written in English: their texts are English ones, also for an account whose
+    // default language is another (they used to be filed under that language). That language is added
+    // next to English, for its translations, and participants read it: it is the default of the
+    // "language" launch parameter, and a text not translated yet is shown in English.
+    Language english = LanguageController.english();
+    Language own = user.defaultLanguage != null ? user.defaultLanguage : english;
     String parameters = resourceText(root + "parameters.csv");
     if (parameters != null) {
-      experiment.parameters.addAll(getParameters(new StringReader(parameters)));
+      for (Parameter parameter : getParameters(new StringReader(parameters))) {
+        if ("language".equals(parameter.name) && own != null) {
+          parameter.defaultVal = own.getCode();
+        }
+        experiment.parameters.add(parameter);
+      }
+    }
+    // What participants read, on the Content page, so it can be reworded or translated without
+    // changing the steps.
+    for (JsonNode contentName : Json.parse(manifest).path("content")) {
+      String html = resourceText(root + "Content/" + contentName.asText() + ".html");
+      if (html == null) {
+        throw new IOException("The example " + name + " has no content " + contentName.asText());
+      }
+      Translation translation = new Translation();
+      translation.language = english;
+      translation.setHtml(html.trim());
+      Content content = new Content();
+      content.name = contentName.asText();
+      content.translations.add(translation);
+      experiment.content.add(content);
     }
     experiment.setClientHtml(Experiment.defaultClientHTML());
     experiment.setClientGraph(Experiment.defaultClientGraph());
-    experiment.addLanguage(user.defaultLanguage);
+    experiment.addLanguage(english);
+    experiment.addLanguage(own);
     return experiment;
   }
 

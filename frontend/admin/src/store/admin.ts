@@ -2,10 +2,10 @@ import { computed, reactive, watch } from 'vue'
 import { AdminConnection } from '@/lib/connection'
 import { http, HttpError, onUnauthorized } from '@/lib/http'
 import { LiveGraph } from '@/lib/graph'
-import { notify } from '@/ui/toast'
+import { notify, toast } from '@/ui/toast'
 import { settleConfirm } from '@/ui/confirm'
 import type {
-  AuthState, EngineInfo, EngineState, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
+  AuthState, EngineInfo, EngineState, ErrorFrame, Experiment, Instance, LiveEvent, OutputEntry, TieEditResult, User,
 } from './types'
 
 /**
@@ -22,6 +22,8 @@ import type {
 const conn = new AdminConnection()
 const graph = new LiveGraph()
 
+interface SessionEndNotice { sessionId: number, sessionName: string, by: string, reason: string }
+
 const state = reactive({
   auth: 'checking' as AuthState,
   email: '',
@@ -29,9 +31,14 @@ const state = reactive({
   /**
    * Why the sign-in page is showing, when this console didn't sign out itself: 'ended' when the
    * server ended this browser's session (the account signed out somewhere else, or its password
-   * changed). Cleared by the next sign-in.
+   * changed), 'removed' when another researcher removed the account, 'reset' when another researcher
+   * gave it a new password. Cleared by the next sign-in.
    */
-  signOutReason: null as null | 'ended',
+  signOutReason: null as null | 'ended' | 'removed' | 'reset',
+  /** A new server opened from another computer: creating the first account needs its setup code. */
+  setupCodeRequired: false,
+  /** Where computers on the same network reach this server (GET /state), e.g. "http://192.168.1.23:9000". */
+  lanAddresses: [] as string[],
   /** The newest User JSON (null until the first one arrives after sign-in). */
   user: null as User | null,
   experiment: null as Experiment | null,
@@ -56,6 +63,8 @@ const state = reactive({
   unseenErrors: 0,
   /** Events as they are recorded during the session (pushed by the server), newest last. */
   events: [] as LiveEvent[],
+  /** The latest other-account action that ended this account's session; stays until dismissed. */
+  sessionEndNotice: null as SessionEndNotice | null,
   /** The last tie edit's outcome, for the network page. */
   lastTieEdit: null as TieEditResult | null,
   /** The newest error the server sent in reply to a request ({"error", "request"}). */
@@ -67,15 +76,39 @@ const EVENTS_CAP = 1000
 /** What a request says when the connection is down (it is not sent at all). */
 export const NOT_CONNECTED = 'Not connected to the server'
 let outputSeq = 0
+// A repeated live event must not reopen a dismissed notice. Bounded and cleared with the account.
+const sessionEndKeys: string[] = []
 
-function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string) {
+function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string, step?: string, frames?: ErrorFrame[]) {
   if (!text) return
   const entry: OutputEntry = { id: ++outputSeq, kind, text, source, at: Date.now() }
   if (requestId) entry.requestId = requestId
+  if (step) entry.step = step
+  if (frames) entry.frames = frames
   state.output.push(entry)
   if (state.output.length > OUTPUT_CAP) state.output.splice(0, state.output.length - OUTPUT_CAP)
   // (not for code the researcher ran from the Script console or a step's Run: those pages show it)
   if (kind === 'error' && !isResearcherRun(source)) state.unseenErrors++
+}
+
+/** The server's named lines of an engine error (its frame's "frames"), those well formed; undefined when there are none. */
+export function readFrames (raw: unknown): ErrorFrame[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const frames: ErrorFrame[] = []
+  for (const f of raw) {
+    if (!f || typeof f !== 'object') continue
+    const file = (f as any).file
+    const line = Number((f as any).line)
+    if (typeof file !== 'string' || !/^Script\d+\.groovy$/.test(file) || !Number.isInteger(line) || line <= 0) continue
+    const frame: ErrorFrame = { file, line }
+    const step = (f as any).step
+    if (typeof step === 'string' && step.trim()) frame.step = step.trim()
+    if ((f as any).own === true) frame.own = true
+    const name = (f as any).name
+    if (typeof name === 'string' && name.trim()) frame.name = name.trim()
+    frames.push(frame)
+  }
+  return frames.length ? frames : undefined
 }
 
 /** Output answering code a researcher ran themselves, rather than the experiment running. */
@@ -112,6 +145,8 @@ function handle (m: any) {
 
   if ('user' in m && m.user && typeof m.user === 'object') {
     applyUserJson(m)
+  } else if (m.engine && typeof m.engine === 'object') {
+    applyEngineNews(m.engine)
   }
   if (m.notify) {
     if (m.notify.ScriptEngineReloading) {
@@ -145,8 +180,20 @@ function handle (m: any) {
   const source = typeof m.source === 'string' ? m.source : typeof m.request === 'string' ? m.request : undefined
   // the id of the script request it answers, echoed by newer servers
   const requestId = typeof m.requestId === 'string' && m.requestId ? m.requestId : undefined
-  if (typeof m.error === 'string' && m.error.trim()) {
-    pushOutput('error', m.error.trim(), source, requestId)
+  if (typeof m.error === 'string' && m.error.trim() && isReloadRefusal(m)) {
+    // The server refused a Reload engine (another experiment's session holds the engine, say): nothing
+    // was rebuilt, and it is no error of the experiment's scripts, which Live session's error card and
+    // the Output button's count are for. It answers the researcher who asked, where they are.
+    const text = m.error.trim()
+    pushOutput('info', text, source, requestId)
+    state.requestError = { request: m.request, text, at: Date.now() }
+    toast('warning', 'The engine wasn’t reloaded', text, { timeout: 9000 })
+    if (engineInfoPhase === 'rebuilding') askEngineInfo()
+  } else if (typeof m.error === 'string' && m.error.trim()) {
+    // the step an engine error happened in, when the server knows it ("Line 71 of RoundStep"), and the
+    // step each of its lines is in (newer servers)
+    const step = typeof m.step === 'string' && m.step.trim() ? m.step.trim() : undefined
+    pushOutput('error', m.error.trim(), source, requestId, step, readFrames(m.frames))
     if (typeof m.request === 'string') state.requestError = { request: m.request, text: m.error.trim(), at: Date.now() }
     // a rebuild that threw: the server answers only the console that asked, and never says Reloaded
     if (state.engine === 'loading' && REBUILDS.has(m.request)) engineDidNotFinish(ENGINE_FAILED)
@@ -160,10 +207,49 @@ function handle (m: any) {
   if (m.tieEdit) {
     state.lastTieEdit = { ...m.tieEdit, at: Date.now() }
   }
-  if (m.event && typeof m.event === 'object' && isSelectedSessionEvent(m.event)) {
-    state.events.push({ ...m.event, receivedAt: Date.now() })
-    if (state.events.length > EVENTS_CAP) state.events.splice(0, state.events.length - EVENTS_CAP)
+  // An experiment was made, imported, renamed or deleted, maybe by another researcher: every
+  // researcher works on every experiment, so ask for the newest list.
+  if (m.experimentsChanged === true) askUserJsonSoon()
+  if (m.event && typeof m.event === 'object') {
+    rememberSessionEnd(m.event)
+    if (isSelectedSessionEvent(m.event)) {
+      state.events.push({ ...m.event, receivedAt: Date.now() })
+      if (state.events.length > EVENTS_CAP) state.events.splice(0, state.events.length - EVENTS_CAP)
+    }
   }
+}
+
+/**
+ * Only a newly pushed event, never the historical events in a User JSON. Remember it before the
+ * server moves this account to the replacement session and discards the old feed. The engine's
+ * owner also identifies whose session ended while they were looking at another experiment/page.
+ * Keep just the notice's words/ID, without retaining the old session, its events or its participants.
+ */
+function rememberSessionEnd (ev: any) {
+  if (state.auth !== 'signedIn' || ev.name !== 'sessionStopped' || !state.email) return
+  const engine = state.user?.engine
+  const id = Number(ev.experimentInstanceId)
+  const by = typeof ev.data?.by === 'string' ? ev.data.by.trim() : ''
+  const reason = typeof ev.data?.reason === 'string' ? ev.data.reason : ''
+  if (!engine || !engine.owner || engine.owner.toLowerCase() !== state.email.toLowerCase() ||
+      !Number.isFinite(id) || id !== engine.sessionId || !by || by.toLowerCase() === state.email.toLowerCase()) return
+  const key = `${id}:${ev.id ?? ev.datetime}:${by}:${reason}`
+  if (sessionEndKeys.includes(key)) return
+  sessionEndKeys.push(key)
+  if (sessionEndKeys.length > 50) sessionEndKeys.shift()
+  state.sessionEndNotice = { sessionId: id, sessionName: engine.sessionName || `Session ${id}`, by, reason }
+}
+
+export function dismissSessionEndNotice () { state.sessionEndNotice = null }
+
+let askTimer: ReturnType<typeof setTimeout> | null = null
+/** Ask for the newest User JSON once, a moment after the last of a burst of changes. */
+function askUserJsonSoon () {
+  if (askTimer) clearTimeout(askTimer)
+  askTimer = setTimeout(() => {
+    askTimer = null
+    send('Update')
+  }, 250)
 }
 
 /**
@@ -181,8 +267,19 @@ function isSelectedSessionEvent (ev: any): boolean {
 
 // ---- the engine's reload ------------------------------------------------------------------------
 
-/** Requests that rebuild the engine; an error in reply means the rebuild did not finish. */
+/**
+ * Requests that rebuild the engine; an error in reply means the rebuild did not finish. (A selection
+ * rebuilds it only when no session is live there: its answer says engineKept otherwise.)
+ */
 const REBUILDS = new Set(['ReloadEngine', 'SelectExperiment', 'SelectInstance', 'LaunchGame'])
+/**
+ * The server's refusal of a Reload engine ("Nothing was reloaded: …", ScriptBoard.reloadRefusal), which
+ * comes before any rebuild begins; an error after the rebuild has begun (the engine is loading) is its
+ * failure, which may be the experiment's own.
+ */
+function isReloadRefusal (m: any): boolean {
+  return m.request === 'ReloadEngine' && (/^Nothing was reloaded\b/.test(m.error.trim()) || state.engine !== 'loading')
+}
 const ENGINE_FAILED = 'The engine did not finish reloading. The output panel says why. Fix the problem, then reload it.'
 const ENGINE_FAILED_ELSEWHERE = 'The engine did not finish reloading. Reload it to try again.'
 const ENGINE_MISSED = 'The connection dropped while the engine was reloading. Reload it if the experiment does not behave as expected.'
@@ -287,6 +384,8 @@ function engineInfoOf (v: any): EngineInfo | null {
     sessionName: str(v.sessionName),
     owner: str(v.owner),
     gameStarted: typeof v.gameStarted === 'boolean' ? v.gameStarted : null,
+    stepsChanged: typeof v.stepsChanged === 'boolean' ? v.stepsChanged : null,
+    autopilotSession: typeof v.autopilotSession === 'boolean' ? v.autopilotSession : null,
   }
 }
 
@@ -310,6 +409,13 @@ function applyUserJson (m: any) {
   preferUtcTimes(m)
   // the server sends it beside the user (User.toJson)
   m.user.engine = engineInfoOf('engine' in m ? m.engine : m.user.engine)
+  // A selection made while a session is live in the engine changes only the selection, and the
+  // server says so on its answer (engineKept): no rebuild follows, so what it names is current.
+  if (m.engineKept === true && engineInfoPhase === 'rebuilding' && state.engine !== 'loading') {
+    if (engineInfoTimer) clearTimeout(engineInfoTimer)
+    engineInfoTimer = null
+    engineInfoPhase = 'asked'
+  }
   if (engineInfoPhase === 'asked') {
     engineInfoPhase = 'current'
     state.engineInfoCurrent = true
@@ -319,11 +425,16 @@ function applyUserJson (m: any) {
   // missing key = nothing selected (User.java omits it)
   state.experiment = m.experiment && typeof m.experiment === 'object' ? m.experiment : null
   let inst = m.experimentInstance && typeof m.experimentInstance === 'object' ? m.experimentInstance : null
-  // The server can still name a session of the experiment selected before (one that has ended):
-  // it isn't this experiment's, so its page, data and chip mustn't show here.
+  // An older server can still name a session of the experiment selected before: one that has ended,
+  // or one the engine still runs (selecting another experiment leaves a live session running; newer
+  // servers send the account's session only with its own experiment). It isn't this experiment's,
+  // so its page, data and chip mustn't show here; the Run pages say what the engine runs instead.
   const exp = state.experiment
-  if (inst && exp && Array.isArray(exp.instances) && inst.status !== 'RUNNING' && inst.status !== 'TESTING' &&
-    !exp.instances.some((x: any) => x && x.id === inst.id)) inst = null
+  if (inst && exp && Array.isArray(exp.instances) && !exp.instances.some((x: any) => x && x.id === inst.id)) {
+    const live = inst.status === 'RUNNING' || inst.status === 'TESTING'
+    const e = m.user.engine as EngineInfo | null
+    if (!live || (e && e.sessionId === inst.id && e.experimentId !== null && e.experimentId !== exp.id)) inst = null
+  }
   if (!inst || !state.instance || inst.id !== state.instance.id) {
     // a different session: its live event feed starts again from what the server recorded
     state.events = []
@@ -332,7 +443,67 @@ function applyUserJson (m: any) {
   state.ready = true
 }
 
+/**
+ * {"engine": {...}}: what the shared engine runs, as the User JSON's `engine` says it, which the
+ * server sends every console whenever that changes (a session launched, resumed, started, stopped,
+ * finished or ended; the engine rebuilt). Only the account that acted used to hear, so this console
+ * kept refusing Reload and Run for a session that had ended. When a session of the experiment
+ * selected here (or the one shown here) began or ended, the User JSON is asked for too, for the
+ * sessions' states: one followed here that finished went on showing as running.
+ */
+function applyEngineNews (v: any) {
+  const user = state.user
+  // (before the first User JSON: the one that answers LogIn says it)
+  if (!user) return
+  const before = user.engine
+  const now = engineInfoOf(v)
+  user.engine = now
+  if (engineInfoPhase === 'asked') {
+    engineInfoPhase = 'current'
+    state.engineInfoCurrent = true
+  }
+  if (engineInfoPhase === 'current') state.engineInfoAt = Date.now()
+  if (!now || (before && before.sessionId === now.sessionId)) return
+  const selected = state.experiment?.id
+  const shown = state.instance?.id
+  const concernsThis = (e: EngineInfo | null) => !!e &&
+    ((e.sessionId !== null && e.sessionId === shown) || (e.experimentId !== null && e.experimentId === selected))
+  if (concernsThis(before) || concernsThis(now)) askUserJsonSoon()
+}
+
 conn.onMessage(handle)
+
+// ---- "Reload needed", as the server says -------------------------------------------------------
+
+/**
+ * Whether steps of the experiment the engine runs were saved since it loaded them, as the server says
+ * (engine.stepsChanged): every console hears it when a step is saved, so they all say the same, and a
+ * refresh keeps it. Undefined when the server doesn't say (an older one): then the marks this console
+ * makes as it saves are all there is (markEngineStale).
+ */
+function serverStepsChanged (): boolean | undefined {
+  const v = state.user?.engine?.stepsChanged
+  return typeof v === 'boolean' ? v : undefined
+}
+
+/**
+ * "Reload needed" (admin.engine 'stale') follows the server: on while the engine runs the selected
+ * experiment and steps of it were saved since it loaded them; off otherwise, unless a reload didn't
+ * finish (admin.engineProblem), which only a reload clears. Not while the engine rebuilds, nor while
+ * what it runs isn't known yet.
+ */
+function followSavedSteps () {
+  const changed = serverStepsChanged()
+  if (changed === undefined || state.engine === 'loading' || !state.engineInfoCurrent) return
+  const e = state.user?.engine
+  const selected = state.experiment?.id
+  if (changed && e && e.experimentId !== null && selected != null && e.experimentId === selected) {
+    if (state.engine !== 'stale') state.engine = 'stale'
+  } else if (state.engine === 'stale' && !state.engineProblem) {
+    state.engine = 'ready'
+  }
+}
+watch(() => [state.user?.engine?.stepsChanged, state.user?.engine?.experimentId, state.experiment?.id, state.engine, state.engineInfoCurrent], followSavedSteps)
 
 // ---- sign-in ----------------------------------------------------------------------------------
 
@@ -347,6 +518,8 @@ function resetState () {
   state.ready = false
   state.output = []
   state.events = []
+  state.sessionEndNotice = null
+  sessionEndKeys.length = 0
   state.unseenErrors = 0
   state.requestError = null
   state.lastTieEdit = null
@@ -366,19 +539,24 @@ function resetState () {
   for (const w of pending) { clearTimeout(w.timer); w.resolve(null) }
 }
 
+/** Why the server says this browser's session ended (Secured.onUnauthorized's reason). */
+const SIGN_OUT_REASONS = new Set(['ended', 'removed', 'reset'])
+
 /** The session is gone: show the sign-in page (or the first-account form). */
 function signedOut (body?: any) {
   conn.stop()
   // a question asked on a page that is gone now
   settleConfirm(false)
   resetState()
-  state.signOutReason = body && body.reason === 'ended' ? 'ended' : null
+  state.signOutReason = body && SIGN_OUT_REASONS.has(body.reason) ? body.reason : null
   state.auth = body && body.status === 'create-first-user' ? 'firstUser' : 'signedOut'
+  // a new server opened from another computer: the first account needs the code the server printed
+  state.setupCodeRequired = !!(body && body.setupCodeRequired)
 }
 
 onUnauthorized((body) => signedOut(body))
 
-type StateReply = { uid: string, email: string, connectSocket: string }
+type StateReply = { uid: string, email: string, connectSocket: string, lanAddresses?: string[] }
 /** The socket address /state gave (see connection.socketUrl), to reconnect with. */
 let socketSetting: string | undefined
 
@@ -391,6 +569,7 @@ async function boot () {
     if (state.email && cfg.email !== state.email) resetState()
     state.uid = cfg.uid
     state.email = cfg.email
+    state.lanAddresses = Array.isArray(cfg.lanAddresses) ? cfg.lanAddresses.filter(a => typeof a === 'string') : []
     state.signOutReason = null
     state.auth = 'signedIn'
     state.ready = false
@@ -490,8 +669,8 @@ async function logout (): Promise<boolean> {
   return true
 }
 
-async function createFirstUser (email: string, password: string, defaultLanguageId: number) {
-  await http.post('/createFirstUser', { email, password, defaultLanguageId }, { quiet401: true })
+async function createFirstUser (email: string, password: string, defaultLanguageId: number, setupCode?: string) {
+  await http.post('/createFirstUser', { email, password, defaultLanguageId, ...(setupCode ? { setupCode } : {}) }, { quiet401: true })
   await login(email, password)
 }
 
@@ -672,15 +851,27 @@ const actions = {
   markErrorsSeen () {
     state.unseenErrors = 0
   },
-  /** Steps changed since the engine last loaded them (e.g. one was deleted). */
-  markEngineStale () {
-    if (state.engine !== 'loading') state.engine = 'stale'
+  /**
+   * Steps of experiment `experimentId` (the selected one when left out) changed since the engine last
+   * loaded them (e.g. one was deleted). Only while the engine runs that experiment (or that isn't
+   * known): steps of another one are loaded by its next build, and a reload from here would end the
+   * session the engine runs, or load the selected experiment instead of catching up. Nothing when the
+   * server says itself whether the engine runs the saved steps (followSavedSteps).
+   */
+  markEngineStale (experimentId?: number) {
+    if (state.engine === 'loading' || serverStepsChanged() !== undefined) return
+    const id = experimentId ?? state.experiment?.id
+    const e = state.user?.engine
+    if (id != null && e && e.experimentId !== null && state.engineInfoCurrent && e.experimentId !== id) return
+    state.engine = 'stale'
   },
   /**
    * The engine runs the saved steps again (each change was loaded with Run): undo markEngineStale.
-   * A reload that did not finish (admin.engineProblem) stays: only a reload clears that.
+   * A reload that did not finish (admin.engineProblem) stays: only a reload clears that. Nothing when
+   * the server says itself whether the engine runs the saved steps (followSavedSteps).
    */
   markEngineCurrent () {
+    if (serverStepsChanged() !== undefined) return
     if (state.engine === 'stale' && !state.engineProblem) state.engine = 'ready'
   },
   note (text: string) {
@@ -718,12 +909,60 @@ const engineElsewhere = computed<EngineInfo | null>(() => {
   if (!e || e.experimentId === null || !selected || !state.engineInfoCurrent || state.engine === 'loading') return null
   return e.experimentId === selected.id ? null : e
 })
+/** “Trust game”'s session “Pilot 3”, or as much of it as is known. */
+function engineSessionText (e: EngineInfo): string {
+  const of = e.experimentName ? `“${e.experimentName}”’s session` : 'another experiment’s session'
+  return e.sessionName ? `${of} “${e.sessionName}”` : of
+}
+/**
+ * Why the engine can't be reloaded from here now, in words ('' when it can): it runs a live session
+ * of another experiment than the selected one (selecting left it running), which a reload would end
+ * for everyone in it, so the server refuses (ScriptBoard.reloadRefusal). A new session of the
+ * selected experiment can still take the engine over, after asking.
+ */
+const reloadBlocked = computed(() => {
+  const e = engineElsewhere.value
+  if (!e || e.sessionId === null) return ''
+  return `The engine is running ${engineSessionText(e)}, and reloading it would end that session for everyone in it. End that session first, or open a new session of this experiment.`
+})
+/**
+ * Why the selected experiment's code can't run in the engine now ('' when it can): the engine runs
+ * another experiment, so the server refuses Run and the Script console (ScriptBoard.engineRefusal).
+ */
+const runBlocked = computed(() => {
+  const e = engineElsewhere.value
+  if (!e) return ''
+  if (e.sessionId !== null) return `The engine is running ${engineSessionText(e)}, so this experiment’s steps can’t run in it until that session has ended.`
+  return `The engine has ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'} loaded, not this one: reload the engine to load this experiment’s steps, then run.`
+})
+/**
+ * In file mode, why a step file saved now isn't loaded into the engine, and when it is ('' while the
+ * engine runs the selected experiment): it runs another one (ScriptBoard.stepFileSaved).
+ */
+const fileStepsWait = computed(() => {
+  const e = engineElsewhere.value
+  if (!e) return ''
+  if (e.sessionId !== null) return `The engine is running ${engineSessionText(e)}; a saved file loads when this experiment’s next session starts.`
+  return `The engine has ${e.experimentName ? `“${e.experimentName}”` : 'another experiment'} loaded; a saved file loads when this experiment’s next session starts, or when you reload the engine.`
+})
+/**
+ * Why file mode can't be switched on for the selected experiment now ('' when it can): the engine
+ * runs another experiment's live session. In file mode a step file saved on the server runs at
+ * once, which it can't while that session runs (the server refuses too: ScriptBoard.fileModeRefusal).
+ */
+const fileModeBlocked = computed(() => {
+  const e = engineElsewhere.value
+  if (!e || e.sessionId === null) return ''
+  return `The engine is running ${engineSessionText(e)}. In file mode a step file you save runs at once, which it can’t while that session runs. Switch file mode on once it has ended.`
+})
 
 export const admin = state
 export const connection = conn
+/** Try to reconnect now, rather than at the next attempt (the not-connected notice's Try now). */
+export function reconnectNow () { conn.tryNow() }
 export {
   graph, boot, login, logout, createFirstUser, adoptUid, actions, experiments, instances, running, engineInUse,
-  engineElsewhere, ensureConnected, nextMessage,
+  engineElsewhere, reloadBlocked, runBlocked, fileModeBlocked, fileStepsWait, ensureConnected, nextMessage,
 }
 
 /** For tests: feed a message as if it came from the server. */

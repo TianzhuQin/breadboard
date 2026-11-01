@@ -1,0 +1,3 @@
+# Breadboard's own plugin. Play starts its plugins in the order of these numbers and stops them in
+# the reverse order: below play.api.db.BoneCPPlugin's 200, this one stops after the connection pool.
+150:CloseDatabasePlugin

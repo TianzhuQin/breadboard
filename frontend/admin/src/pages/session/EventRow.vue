@@ -6,7 +6,7 @@
     <span class="live-evr__dot" :class="`is-${tone}`" aria-hidden="true" />
     <span class="live-evr__what">
       <span class="live-evr__name">{{ event.name }}</span>
-      <span v-if="plain" class="live-evr__plain">{{ plain }}</span>
+      <span v-if="plain" class="live-evr__plain" :title="plain">{{ plain }}</span>
     </span>
     <span v-if="summary.shown.length" class="live-evr__data">
       <span v-for="[k, v] in summary.shown" :key="k" class="live-evr__chip"><span class="live-evr__k">{{ k }}</span> <span class="live-evr__v">{{ v }}</span></span>
@@ -24,7 +24,7 @@ import { clockParts, describeEvent, eventTone, summarizeData, type FeedEvent } f
 const props = defineProps<{ event: FeedEvent, expandable?: boolean }>()
 const tone = computed(() => eventTone(props.event.name))
 const clock = computed(() => clockParts(props.event.at))
-const plain = computed(() => describeEvent(props.event.name))
+const plain = computed(() => describeEvent(props.event.name, props.event.data))
 const summary = computed(() => summarizeData(props.event.data, 3))
 </script>
 
@@ -46,7 +46,8 @@ const summary = computed(() => summarizeData(props.event.data, 3))
 .live-evr__dot.is-accent { background: var(--accent); }
 .live-evr__what { display: flex; flex-direction: column; min-width: 0; }
 .live-evr__name { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.live-evr__plain { font-size: var(--text-xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* (on up to two lines: what it means is the point of it, "A researcher’s preview signed in as AI 6") */
+.live-evr__plain { font-size: var(--text-xs); color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; }
 .live-evr__data { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .live-evr__chip {
   display: inline-flex;

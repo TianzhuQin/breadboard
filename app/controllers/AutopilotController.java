@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import models.Autopilot;
 import models.AutopilotSettings;
 import models.Experiment;
+import models.ScriptBoard;
 import models.User;
 import play.libs.Json;
 import play.mvc.Controller;
@@ -28,7 +29,8 @@ public class AutopilotController extends Controller {
    * session of the experiment opens now unless one is open, or the engine runs a live session of
    * another experiment (then it waits for that one to end, unless the body has {@code takeOver: true});
    * turned off, no new sessions open (a running one continues). A save also lifts a pause. 400
-   * {message} for a value that can't be accepted; 409 {message} while application.conf is in charge.
+   * {message} for a value that can't be accepted; 409 {message} while the server's settings file is
+   * in charge.
    */
   @Security.Authenticated(Secured.class)
   public static Result save() {
@@ -42,7 +44,7 @@ public class AutopilotController extends Controller {
     }
     Autopilot.Effective current = Autopilot.effective();
     if (Autopilot.CONFIG.equals(current.source)) {
-      return status(CONFLICT, message("The autopilot is set in the server's application.conf (breadboard.autopilot.*), "
+      return status(CONFLICT, message("The autopilot is set in the server's settings file, conf/local.conf (breadboard.autopilot.*), "
           + "so it can't be changed here. Remove those lines and restart the server to manage it from the console."));
     }
     AutopilotSettings next;
@@ -65,13 +67,9 @@ public class AutopilotController extends Controller {
       if (experiment == null) {
         return badRequest(message("There is no experiment with id " + next.experimentId + "."));
       }
-      // Choosing an experiment takes owning it; the one already chosen (maybe by another researcher)
-      // can still be turned on or off, or have its waiting room changed.
-      if (!sameExperiment && !owns(user, experiment)) {
-        return badRequest(message("\"" + experiment.name + "\" isn't one of your experiments."));
-      }
-      // Sessions open as the account that chose the experiment, or as whoever saves when they own it.
-      if (!sameExperiment || owns(user, experiment) || current.settings.operatorEmail == null) {
+      // Sessions open as the account that chose the experiment (any researcher may: they all work on
+      // every experiment), or as whoever saves when none is recorded.
+      if (!sameExperiment || current.settings.operatorEmail == null || User.findByEmail(current.settings.operatorEmail) == null) {
         next.operatorEmail = user.email;
       }
     } else {
@@ -82,6 +80,9 @@ public class AutopilotController extends Controller {
     // live session of another experiment; otherwise the autopilot waits for it to end.
     JsonNode takeOver = body.get("takeOver");
     Autopilot.settingsSaved(next, takeOver != null && takeOver.isBoolean() && takeOver.booleanValue());
+    // Whether the live session is the autopilot's own can change with a save (switched off or on, or
+    // handed a session of its experiment): every console is told (engine.autopilotSession).
+    ScriptBoard.engineChanged();
     return ok(Autopilot.stateJson());
   }
 
@@ -102,17 +103,11 @@ public class AutopilotController extends Controller {
       return badRequest(message("The autopilot is off, so there is nothing to resume. Switch it on and save instead."));
     }
     Autopilot.resume(user);
+    // (Resume can hand it the live session of its experiment: every console is told, as after a save)
+    ScriptBoard.engineChanged();
     return ok(Autopilot.stateJson());
   }
 
-  private static boolean owns(User user, Experiment experiment) {
-    for (Experiment owned : user.ownedExperiments) {
-      if (experiment.id.equals(owned.id)) {
-        return true;
-      }
-    }
-    return false;
-  }
 
   private static ObjectNode message(String text) {
     ObjectNode json = Json.newObject();

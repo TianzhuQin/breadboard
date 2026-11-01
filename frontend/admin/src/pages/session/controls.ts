@@ -1,12 +1,13 @@
 import { reactive, ref } from 'vue'
 import { admin, actions, engineElsewhere, ensureConnected, nextMessage, NOT_CONNECTED } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse } from '@/store/engineGuard'
-import { http, saveText } from '@/lib/http'
+import { csvForExcel, downloadCsv } from '@/lib/csvFiles'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Instance } from '@/store/types'
 import { STOP_PAUSES_AUTOPILOT, autopilotNow, stopPausesAutopilot } from '../autopilot/autopilot'
 import { classifyStartReply, engineElsewhereText, isStartReply, safeFileName } from './live'
+import { parseGroovyError } from '../console/groovyError'
 
 /**
  * The session controls with their confirmations and outcomes, shared by the page's parts.
@@ -47,7 +48,7 @@ export async function startGame (ctx: { connected: number, people: number, waiti
     title: 'Start the game?',
     message: [
       who,
-      'Everyone who is waiting is let in and the experiment begins (it runs initStep.start()). People who arrive after this are turned away.',
+      'Everyone who is waiting is let in and the experiment begins. People who arrive after this are turned away.',
       ctx.waitingRoom ? 'This skips the rest of the waiting room.' : '',
       ctx.again
         ? 'The game started earlier, but the engine was reloaded since then, so this starts it again from the beginning.'
@@ -71,7 +72,8 @@ export async function startGame (ctx: { connected: number, people: number, waiti
     } else if (out.kind === 'already') {
       notify.info('The game had already started', 'It was running already, so nothing changed.')
     } else if (out.kind === 'error') {
-      toast('error', 'The game could not start', out.message, { action: showOutput })
+      const failure = parseGroovyError(out.message)
+      toast('error', 'The game could not start', [failure.title, failure.hint].filter(Boolean).join(' '), { action: showOutput })
     } else {
       toast('warning', 'No answer from the engine yet', 'The game may still be starting. The output panel shows what the engine says.', { action: showOutput })
     }
@@ -88,7 +90,7 @@ export async function stopSession (inst: Instance) {
   try {
     // Stopping the autopilot's session pauses the autopilot (the server's Autopilot.sessionStopped).
     // The session shown here is the selected experiment's.
-    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: inst.id, experimentId: admin.experiment?.id }, admin.user?.engine?.sessionId)
+    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: inst.id })
     const ok = await confirm({
       title: `Stop “${inst.name}”?`,
       message: [
@@ -100,8 +102,15 @@ export async function stopSession (inst: Instance) {
       danger: true,
     })
     if (!ok) return
+    const askedAt = Date.now()
     const m = await actions.stopInstance(inst.id)
     if (!m) {
+      // refused, e.g. it had finished meanwhile: the server says so (and its status follows)
+      const refusal = admin.requestError
+      if (refusal && refusal.request === 'StopGame' && refusal.at >= askedAt) {
+        notify.info(`“${inst.name}” was not stopped`, refusal.text)
+        return
+      }
       notify.error('The server did not confirm the stop', 'Check your connection, then look at Sessions & data to see the session\'s status.')
       return
     }
@@ -161,14 +170,18 @@ export async function resumeSession (inst: Instance) {
   }
 }
 
-/** The session's recorded events as CSV (GET /csv/data/:id), saved as "<name>_<id>.csv". */
+/**
+ * The session's recorded events as CSV (GET /csv/data/:id), saved as "<name>_<id>.csv": for Excel when
+ * that is chosen on Sessions & data, as the same file there is. The checkbox isn't on this page, so
+ * the message says so.
+ */
 export async function downloadData (inst: Instance) {
   if (busy.download != null) return
   busy.download = inst.id
   try {
-    const text = await http.get<string>(`/csv/data/${inst.id}`, { raw: true })
-    saveText(`${safeFileName(inst.name)}_${inst.id}.csv`, text || '')
-    notify.success('Downloaded the session\'s data', `${safeFileName(inst.name)}_${inst.id}.csv`)
+    const file = `${safeFileName(inst.name)}_${inst.id}.csv`
+    await downloadCsv(`/csv/data/${inst.id}`, file)
+    notify.success('Downloaded the session\'s data', csvForExcel.value ? `${file}, for Excel (as chosen on Sessions & data)` : file)
   } catch (e: any) {
     notify.error('Could not download the data', e?.message || 'The server did not answer.')
   } finally {

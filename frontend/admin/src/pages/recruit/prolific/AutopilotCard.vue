@@ -4,70 +4,57 @@
       <div class="pl-side-card__icon" aria-hidden="true"><Bot :size="18" /></div>
       <h3 id="pl-ap-title" class="pl-side-card__title">Run it unattended</h3>
     </div>
+    <!-- (it promises nothing the link may not do: the Study URL card says when it can't open a session) -->
     <p class="rc-muted pl-side-card__text">
-      Autopilot opens a new session whenever none is open, so people arriving from Prolific always
-      find one. It can also hold a waiting room until enough people are there and let an AI take
-      over for anyone who drops out.
+      Autopilot opens a new session whenever none is open, and can hold a waiting room until enough
+      people are there and let an AI take over for anyone who drops out. The Study URL card says when
+      something keeps it from opening one.
     </p>
-    <div v-if="state !== 'unknown'" class="pl-ap__status" aria-live="polite">
-      <BSpinner v-if="state === 'loading'" :size="13" label="Checking Autopilot" />
-      <template v-else-if="state === 'ready' && ap">
-        <BBadge :tone="tone" dot>{{ label }}</BBadge>
-        <span v-if="ap.source === 'config'" class="rc-sub">Set in the server’s configuration</span>
-      </template>
+    <div v-if="status" class="pl-ap__status" aria-live="polite">
+      <BBadge :tone="tone" dot>{{ label }}</BBadge>
+      <span v-if="status.source === 'config'" class="rc-sub">Set in the server’s configuration</span>
     </div>
     <BButton :icon-right="ArrowRight" @click="router.push('/autopilot')">Open Autopilot</BButton>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, Bot } from 'lucide-vue-next'
-import { BBadge, BButton, BSpinner } from '@/ui'
-import { http } from '@/lib/http'
+import { BBadge, BButton } from '@/ui'
+import { autopilotHold, autopilotRuns, type AutopilotStatus } from '../../session/autopilot'
 
-interface AutopilotStatus {
-  source: 'admin' | 'config' | 'off'
+const props = defineProps<{
+  experimentId: number
   /**
-   * paused: a researcher stopped its session; done: its one session finished ("continuous" off).
-   * Either way it opens none, and the Prolific link leads nowhere, until Resume on the Autopilot page.
+   * GET /autopilot, as the Recruitment page asks for it every 10 s and whenever the engine changes
+   * (useAutopilotStatus), so the badge follows a pause, the done state and what holds it up, as the
+   * Study URL card beside it does. It used to be asked for once, as the card appeared. Null while
+   * unknown (an older server, a failed request): the card still leads to the Autopilot page.
    */
-  status: { on: boolean, experimentId: number | null, experimentName: string | null, paused?: boolean, done?: boolean }
-}
-
-const props = defineProps<{ experimentId: number }>()
+  status: AutopilotStatus | null
+}>()
 const router = useRouter()
 
-const state = ref<'loading' | 'ready' | 'unknown'>('loading')
-const ap = ref<AutopilotStatus | null>(null)
-
-const forThis = computed(() => !!ap.value?.status?.on && ap.value.status.experimentId === props.experimentId)
-const paused = computed(() => forThis.value && ap.value?.status?.paused === true)
-const done = computed(() => forThis.value && !paused.value && ap.value?.status?.done === true)
-const tone = computed(() => (paused.value || done.value ? 'warning' : forThis.value ? 'success' : ap.value?.status?.on ? 'warning' : 'neutral'))
-const label = computed(() => {
-  const s = ap.value?.status
-  if (!s?.on) return 'Off'
-  if (paused.value) return 'Paused for this experiment'
-  if (done.value) return 'Done: it opens no more sessions'
-  if (forThis.value) return 'On for this experiment'
-  return `On for ${s.experimentName || 'another experiment'}`
+const forThis = computed(() => autopilotRuns(props.status, props.experimentId))
+/** something keeps it from opening this experiment's next session (another experiment's session, …) */
+const heldUp = computed(() => autopilotHold(props.status, props.experimentId))
+const tone = computed(() => {
+  const s = props.status
+  if (!s?.on) return 'neutral'
+  return !forThis.value || s.halted || heldUp.value ? 'warning' : 'success'
 })
-
-// Only a hint: when the server can't say, the card still leads to the Autopilot page.
-onMounted(async () => {
-  try {
-    const res = await http.get<AutopilotStatus>('/autopilot')
-    if (res && typeof res === 'object' && res.status) {
-      ap.value = res
-      state.value = 'ready'
-    } else {
-      state.value = 'unknown'
-    }
-  } catch (e) {
-    state.value = 'unknown'
-  }
+const label = computed(() => {
+  const s = props.status
+  if (!s?.on) return 'Off'
+  if (!forThis.value) return `On for ${s.experimentName || 'another experiment'}`
+  // paused: a researcher stopped its session (or a step failed); done: its one session finished
+  // ("continuous" off). Either way it opens none, and the Prolific link leads nowhere, until Resume.
+  if (s.halted === 'paused') return 'Paused for this experiment'
+  if (s.halted === 'done') return 'Done: it opens no more sessions'
+  if (heldUp.value) return 'On, but held up for now'
+  return 'On for this experiment'
 })
 </script>
 

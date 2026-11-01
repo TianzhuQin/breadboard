@@ -35,7 +35,7 @@
             @click="newestFirst = !newestFirst"
           />
           <BButton size="sm" variant="ghost" :icon="RotateCw" :loading="loading" aria-label="Load again" title="Load again" @click="load" />
-          <BButton size="sm" :icon="Download" :disabled="!filtered.length || loading" :loading="exporting" title="Save the events listed here as a CSV file" @click="exportView">
+          <BButton size="sm" :icon="Download" :disabled="!filtered.length || loading" :loading="exporting" :title="`Save the events listed here as a CSV file${csvForExcel ? ' for Excel' : ''}`" @click="exportView">
             Export {{ isFiltered ? 'filtered' : 'all' }}
           </BButton>
         </div>
@@ -103,7 +103,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(e, i) in shownTimeline" :key="e.id ?? `n${i}`">
+              <tr v-for="({ e, plain }, i) in shownTimeline" :key="e.id ?? `n${i}`">
                 <td class="sev__time tabular" :title="timeTitle(e)">
                   <span v-if="multiDay" class="sev__day">{{ formatDay(e.time) }}</span>{{ formatClock(e.time) }}
                 </td>
@@ -111,11 +111,13 @@
                   <button
                     type="button"
                     class="sev__name"
+                    :class="toneClass(e.name)"
                     :title="`Show only “${e.name}” events`"
                     @click="nameFilter = e.name"
                   >
                     {{ e.name }}
                   </button>
+                  <span v-if="plain" class="sev__plain">{{ plain }}</span>
                 </td>
                 <td class="sev__data">
                   <span v-for="(d, j) in e.data" :key="j" class="sev__kv">
@@ -144,7 +146,7 @@
               @click="toggleGroup(g.name)"
             >
               <ChevronRight class="sev__chev" :size="16" aria-hidden="true" />
-              <span class="sev__gname">{{ g.name }}</span>
+              <span class="sev__gname" :class="toneClass(g.name)">{{ g.name }}</span>
               <BBadge>{{ g.events.length.toLocaleString() }}</BBadge>
               <span class="sev__gtime">{{ groupTime(g) }}</span>
               <span v-if="g.keys.length" class="sev__gkeys">{{ g.keys.join(' · ') }}</span>
@@ -152,7 +154,7 @@
             <div v-if="openGroups.has(g.name)" :id="groupId(g.name)" class="sev__gbody">
               <div class="sev__gtools">
                 <BButton size="sm" variant="ghost" :icon="ListFilter" @click="showInTimeline(g.name)">Show in timeline</BButton>
-                <BButton size="sm" :icon="Sheet" :disabled="loading" :loading="exporting" title="One row per event, one column per data name" @click="exportGroup(g.name)">Export as table</BButton>
+                <BButton size="sm" :icon="Sheet" :disabled="loading" :loading="exporting" :title="`One row per event, one column per data name${csvForExcel ? ' (for Excel)' : ''}`" @click="exportGroup(g.name)">Export as table</BButton>
               </div>
               <div class="sev__gscroll">
                 <table class="sev__table is-wide">
@@ -193,7 +195,7 @@ import {
   ArrowDownUp, ChevronRight, CircleAlert, Download, ListFilter, RotateCw, ScrollText, Search, SearchX, Sheet,
 } from 'lucide-vue-next'
 import { BBadge, BButton, BDialog, BEmpty, BInput, BSelect, BSpinner, BTabs, notify, type TabItem } from '@/ui'
-import { saveText } from '@/lib/http'
+import { csvForExcel, saveCsv } from '@/lib/csvFiles'
 import { admin } from '@/store/admin'
 import type { Instance } from '@/store/types'
 import {
@@ -201,6 +203,7 @@ import {
   groupEvents, liveEventOf, mergeEvents, normalizeEvent, safeFileName, sameDay, sortEvents, type EventGroup, type SessionEvent,
 } from './sessionData'
 import { loadSessionEvents } from './eventsLoader'
+import { describeEvent, eventTone } from '../session/events'
 
 const props = defineProps<{ open: boolean, session: Instance | null }>()
 const emit = defineEmits<{ 'update:open': [value: boolean], download: [session: Instance] }>()
@@ -232,10 +235,24 @@ const events = computed(() => sortEvents(mergeEvents(loaded.value, live.value)))
 
 const isFiltered = computed(() => !!query.value.trim() || !!nameFilter.value)
 const filtered = computed(() => filterEvents(events.value, { query: query.value, name: nameFilter.value }))
+/**
+ * The rows shown, each with what it means in plain words, from its data as Live session's list says
+ * it: the step and line of a failure, whether the game started again, how long a connection dropped.
+ */
 const shownTimeline = computed(() => {
   const list = newestFirst.value ? [...filtered.value].reverse() : filtered.value
-  return list.slice(0, limit.value)
+  return list.slice(0, limit.value).map(e => ({ e, plain: plainWords(e) }))
 })
+function plainWords (e: SessionEvent): string {
+  const data: Record<string, unknown> = {}
+  for (const d of e.data) data[d.name] = d.value
+  return describeEvent(e.name, data)
+}
+/** Failures in red and warnings in amber, as Live session's list shows them; other events as they are. */
+function toneClass (name: string): string | undefined {
+  const tone = eventTone(name)
+  return tone === 'danger' || tone === 'warning' ? `is-${tone}` : undefined
+}
 const groups = computed(() => groupEvents(filtered.value))
 const multiDay = computed(() => {
   const list = events.value
@@ -363,7 +380,7 @@ async function exportView () {
   const list = filtered.value
   if (!list.length) return
   const file = `${baseName()}_events${isFiltered.value ? '_filtered' : ''}.csv`
-  saveText(file, eventsToCsv(list))
+  saveCsv(file, eventsToCsv(list))
   notify.success(`Saved ${file}`, `${list.length.toLocaleString()} ${list.length === 1 ? 'event' : 'events'}, one row per data item. Times are in UTC.`)
 }
 async function exportGroup (name: string) {
@@ -371,7 +388,7 @@ async function exportGroup (name: string) {
   const g = groups.value.find(x => x.name === name)
   if (!g) return
   const file = `${baseName()}_${safeFileName(g.name, 'event')}.csv`
-  saveText(file, eventsToWideCsv(g.events, g.keys))
+  saveCsv(file, eventsToWideCsv(g.events, g.keys))
   notify.success(`Saved ${file}`, `${g.events.length.toLocaleString()} “${g.name}” events, one column per data name.`)
 }
 </script>
@@ -428,6 +445,7 @@ async function exportGroup (name: string) {
 .sev__col-name { width: 1%; }
 .sev__time { white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--text-soft); }
 .sev__day { color: var(--muted); margin-right: 6px; font-family: var(--font); }
+.sev__plain { display: block; margin-top: 2px; font-size: var(--text-xs); color: var(--muted); line-height: 1.35; }
 .sev__name {
   max-width: 220px;
   padding: 1px 7px;
@@ -444,6 +462,9 @@ async function exportGroup (name: string) {
   cursor: pointer;
 }
 .sev__name:hover { border-color: var(--accent); color: var(--accent); }
+.sev__name.is-danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); color: var(--danger-soft-text); }
+.sev__name.is-warning { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); color: var(--warning-soft-text); }
+.sev__name.is-danger:hover, .sev__name.is-warning:hover { border-color: var(--accent); }
 .sev__data { min-width: 180px; }
 .sev__kv {
   display: inline-flex;
@@ -486,6 +507,8 @@ async function exportGroup (name: string) {
 .sev__chev { color: var(--muted); transition: transform var(--duration) var(--ease); flex: none; }
 .sev__group.is-open .sev__chev { transform: rotate(90deg); }
 .sev__gname { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; }
+.sev__gname.is-danger { color: var(--danger); }
+.sev__gname.is-warning { color: var(--warning-soft-text); }
 .sev__gtime { font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .sev__gkeys {
   flex-basis: 100%;

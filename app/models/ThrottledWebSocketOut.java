@@ -54,6 +54,15 @@ public class ThrottledWebSocketOut {
     out.write(message);
   }
 
+  /**
+   * A normal console frame, accepted only while the socket is still current. Revocation marks it
+   * closed without taking this monitor; a frame already in the underlying write is in flight.
+   * The final unauthorized notice deliberately uses write(), which is allowed after markClosed().
+   */
+  public synchronized void writeIfOpen(JsonNode message) {
+    if (!closed) write(message);
+  }
+
   public void close () {
     this.out.close();
   }

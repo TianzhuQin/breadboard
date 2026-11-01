@@ -1,14 +1,14 @@
 import { computed, reactive } from 'vue'
 import { admin, actions, connectionState } from '@/store/admin'
 import { REBUILD_PAUSES_AUTOPILOT, engineUse } from '@/store/engineGuard'
-import { http, saveText } from '@/lib/http'
+import { downloadCsv } from '@/lib/csvFiles'
 import { confirm, notify, toast } from '@/ui'
 import { openOutput } from '@/shell/output'
 import type { Experiment, Instance } from '@/store/types'
 import { STOP_PAUSES_AUTOPILOT, autopilotNow, stopPausesAutopilot } from '../autopilot/autopilot'
 import { canDelete, canResume, canStop, csvDataRows, describeError, safeFileName, waitUntil } from './sessionData'
 
-type Job = 'resume' | 'stop' | 'delete' | 'data' | 'list'
+type Job = 'resume' | 'stop' | 'delete' | 'data' | 'list' | 'all'
 
 /**
  * What the Sessions page can do to a session, each with its confirmation, progress and outcome.
@@ -94,7 +94,7 @@ export function useSessionActions () {
     if (!connected()) return false
     // Stopping the autopilot's session pauses the autopilot (the server's Autopilot.sessionStopped).
     // The sessions listed here are the selected experiment's.
-    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: s.id, experimentId: admin.experiment?.id }, admin.user?.engine?.sessionId)
+    const pausesAutopilot = stopPausesAutopilot(await autopilotNow(), { id: s.id })
     const ok = await confirm({
       title: `Stop “${s.name}”?`,
       message: (admin.instance?.id === s.id
@@ -107,7 +107,14 @@ export function useSessionActions () {
     })
     if (!ok) return false
     return !!await run('stop', s.id, async () => {
-      await actions.stopInstance(s.id)
+      const askedAt = Date.now()
+      const m = await actions.stopInstance(s.id)
+      // refused, e.g. it had finished meanwhile: the server says so (and its status follows)
+      const refusal = admin.requestError
+      if (!m && refusal && refusal.request === 'StopGame' && refusal.at >= askedAt) {
+        notify.info(`“${s.name}” was not stopped`, refusal.text)
+        return false
+      }
       const stopped = await waitUntil(() => {
         const now = find(s.id)
         return !now || !canStop(now)
@@ -155,13 +162,12 @@ export function useSessionActions () {
     })
   }
 
-  /** The session's events as the server's CSV (one row per data item). */
+  /** The session's events as the server's CSV (one row per data item), for Excel when that is chosen. */
   async function downloadData (s: Pick<Instance, 'id' | 'name'>): Promise<boolean> {
     return !!await run('data', s.id, async () => {
       try {
-        const text = await http.get<string>(`/csv/data/${s.id}`, { raw: true })
         const file = `${safeFileName(s.name)}_${s.id}.csv`
-        saveText(file, text)
+        const text = await downloadCsv(`/csv/data/${s.id}`, file)
         const rows = csvDataRows(text)
         if (rows) notify.success(`Downloaded ${file}`, `${rows.toLocaleString()} data ${rows === 1 ? 'row' : 'rows'}.`)
         else notify.info(`Downloaded ${file}`, 'No events with data have been recorded in this session yet, so the file has only the header row.')
@@ -177,9 +183,8 @@ export function useSessionActions () {
   async function downloadList (exp: Pick<Experiment, 'id' | 'name'>): Promise<boolean> {
     return !!await run('list', exp.id, async () => {
       try {
-        const text = await http.get<string>(`/csv/instances/${exp.id}`, { raw: true })
         const file = `${safeFileName(exp.name, 'sessions')}.csv`
-        saveText(file, text)
+        await downloadCsv(`/csv/instances/${exp.id}`, file)
         notify.success(`Downloaded ${file}`, 'One row per session, with its status, start time (UTC) and launch parameters.')
         return true
       } catch (e) {
@@ -189,5 +194,24 @@ export function useSessionActions () {
     })
   }
 
-  return { isBusy, lifecycleBusy, resume, stop, remove, downloadData, downloadList }
+  /**
+   * Every listed session's events in one file (GET /csv/experiment/:id/data): each row starts with
+   * the session's id, name, status and launch parameters, then the columns of a session's own file.
+   */
+  async function downloadAllData (exp: Pick<Experiment, 'id' | 'name'>, sessionIds: number[]): Promise<boolean> {
+    return !!await run('all', exp.id, async () => {
+      try {
+        const file = `${safeFileName(exp.name, 'experiment')}_data.csv`
+        const text = await downloadCsv(`/csv/experiment/${exp.id}/data?ids=${sessionIds.join(',')}`, file)
+        const rows = csvDataRows(text)
+        notify.success(`Downloaded ${file}`, `${sessionIds.length.toLocaleString()} ${sessionIds.length === 1 ? 'session' : 'sessions'}, ${(rows || 0).toLocaleString()} data ${rows === 1 ? 'row' : 'rows'}.`)
+        return true
+      } catch (e) {
+        notify.error('Could not download the data', describeError(e))
+        return false
+      }
+    })
+  }
+
+  return { isBusy, lifecycleBusy, resume, stop, remove, downloadData, downloadList, downloadAllData }
 }

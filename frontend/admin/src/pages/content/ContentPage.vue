@@ -65,7 +65,7 @@ import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { ArrowRight, Check, CircleAlert, FileLock2, Info, RotateCw, Save } from 'lucide-vue-next'
 import { BButton, confirm, notify } from '@/ui'
 import { actions, admin, ensureConnected } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { confirmSwitch } from '@/store/engineGuard'
 import { CONTENT, dropKeptDrafts, useContent } from './useContent'
 import LanguageBar from './LanguageBar.vue'
 import ContentList from './ContentList.vue'
@@ -117,10 +117,13 @@ function onCreated () {
   setTimeout(() => editor.value?.focus(), 350)
 }
 
-/** Switching rebuilds the shared engine, so ask first while anyone is using it. */
+/**
+ * Switching rebuilds the shared engine when no session is live there, so ask first while anyone is
+ * using it.
+ */
 async function switchTo (id: number, name: string) {
   if (switching.value !== null || !ensureConnected()) return
-  if (!await confirmEngineRebuild({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
+  if (!await confirmSwitch({ title: `Switch to “${name}”?`, action: 'Switching experiments', confirmLabel: 'Switch anyway' })) return
   switching.value = id
   const asked = Date.now()
   try {

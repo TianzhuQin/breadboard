@@ -1,6 +1,6 @@
 {
   "name": "@human-nature-lab/breadboard-admin",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "description": "The researcher's console for Breadboard",
   "type": "module",

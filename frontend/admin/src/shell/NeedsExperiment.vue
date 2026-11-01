@@ -1,10 +1,13 @@
 <template>
   <div class="needs-exp">
-    <BEmpty
-      :icon="FlaskConical"
-      :title="experiments.length ? 'Choose an experiment' : 'Create your first experiment'"
-      :text="experiments.length ? 'This page works on one experiment. Pick it in the switcher at the top left, or here.' : 'An experiment holds the steps, content and settings that run a study.'"
-    >
+    <BEmpty :icon="FlaskConical" :title="experiments.length ? 'Choose an experiment' : 'Create your first experiment'">
+      <template v-if="experiments.length">This page works on one experiment. Pick it in the switcher at the top left, or here.</template>
+      <!-- (where a newcomer lands after the first account: the Experiments page's words, which point to the example) -->
+      <template v-else>
+        An experiment holds the steps, content and settings that run a study. To see Breadboard at work,
+        start from <strong>Example: network game</strong>, a complete study that runs as it is. Or start
+        from Breadboard's template, or import a .zip exported from another server.
+      </template>
       <template #actions>
         <template v-if="experiments.length">
           <BButton v-for="e in experiments.slice(0, 6)" :key="e.id" :loading="picking === e.id" :disabled="picking !== null && picking !== e.id" @click="pick(e)">{{ e.name }}</BButton>
@@ -22,15 +25,15 @@ import { useRouter } from 'vue-router'
 import { FlaskConical, Plus, Upload } from 'lucide-vue-next'
 import { BButton, BEmpty, notify } from '@/ui'
 import { admin, actions, ensureConnected, experiments } from '@/store/admin'
-import { confirmEngineRebuild } from '@/store/engineGuard'
+import { confirmSwitch } from '@/store/engineGuard'
 import type { Experiment } from '@/store/types'
 const router = useRouter()
 
 const picking = ref<number | null>(null)
 async function pick (e: Experiment) {
   if (picking.value !== null || !ensureConnected()) return
-  // the engine is shared: another researcher's session (or the autopilot's) may be live on it
-  if (!await confirmEngineRebuild({ title: `Open “${e.name}”?`, action: 'Opening an experiment', confirmLabel: 'Open anyway' })) return
+  // the engine is shared: a live session there is left running; otherwise the engine loads this one
+  if (!await confirmSwitch({ title: `Open “${e.name}”?`, action: 'Opening an experiment', confirmLabel: 'Open anyway' })) return
   picking.value = e.id
   try {
     await actions.selectExperiment(e.id)

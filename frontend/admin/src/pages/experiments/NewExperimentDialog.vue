@@ -64,10 +64,9 @@
         </template>
       </BField>
 
-      <BCheckbox v-model="switchTo" :disabled="!!running">
+      <BCheckbox v-model="switchTo">
         Work on it right away
       </BCheckbox>
-      <p v-if="running" class="xnew__note">A session is running, so you'll stay on the current experiment. Switch once the session ends.</p>
     </form>
 
     <template #footer>
@@ -83,15 +82,17 @@ import { Copy, Share2, Sparkles } from 'lucide-vue-next'
 import { BButton, BCheckbox, BDialog, BField, BInput, BSelect, notify } from '@/ui'
 import { uid } from '@/ui/uid'
 import { http } from '@/lib/http'
-import { admin, actions, experiments, running } from '@/store/admin'
+import { admin, actions, experiments } from '@/store/admin'
 import type { Experiment } from '@/store/types'
 import { describeError, validateExperimentName } from './experiments'
+import { useRouter } from 'vue-router'
 import { switchToNew } from './switchTo'
 
 const props = defineProps<{ open: boolean, copyFrom?: number | null }>()
 const emit = defineEmits<{ 'update:open': [v: boolean], created: [exp: Experiment] }>()
 
 const formId = uid('xnew')
+const router = useRouter()
 const from = ref<'template' | 'example' | 'copy'>('template')
 const EXAMPLE_NAME = 'Network game'
 const copyId = ref<number | null>(null)
@@ -111,12 +112,15 @@ const nameError = computed(() => (tried.value || (touched.value && name.value.tr
 watch(() => props.open, (open) => {
   if (!open) return
   const source = props.copyFrom != null ? experiments.value.find(e => e.id === props.copyFrom) : null
-  from.value = source ? 'copy' : 'template'
+  // (A first experiment: the ready-to-run example is the quickest way to see Breadboard work.)
+  from.value = source ? 'copy' : experiments.value.length ? 'template' : 'example'
   copyId.value = source ? source.id : (admin.experiment?.id ?? experiments.value[0]?.id ?? null)
-  name.value = source ? suggestCopyName(source.name) : ''
+  // (named here: the watch below sees no change when the example was chosen last time too, nor at
+  // all when the dialog opens with the page, from the switcher's New)
+  name.value = source ? suggestCopyName(source.name) : from.value === 'example' ? suggestCopyName(EXAMPLE_NAME, '') : ''
   touched.value = false
   tried.value = false
-  switchTo.value = !running.value
+  switchTo.value = true
   error.value = ''
   busy.value = false
 }, { immediate: true })
@@ -161,8 +165,11 @@ async function submit () {
     })
     // PUT /experiment doesn't push the researcher's state, so ask for it
     await actions.refresh()
-    if (switchTo.value && !running.value && created && typeof created.id === 'number') {
-      await switchToNew(created.id, finalName, `Created “${finalName}”`)
+    if (switchTo.value && created && typeof created.id === 'number') {
+      // (the example runs as it is: the next step is a session to try it)
+      await switchToNew(created.id, finalName, `Created “${finalName}”`, from.value === 'example'
+        ? { label: 'Open a session', detail: 'It runs as it is: open a session, then join it from two tabs with its sign-in link, typing an ID in each (any name or number; one seat per ID).', run: () => { void router.push('/session?new=1') } }
+        : undefined)
     } else {
       notify.success(`Created “${finalName}”`)
     }
@@ -203,6 +210,5 @@ async function submit () {
 .xnew__choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .xnew__choice-title { font-weight: 600; color: var(--text); }
 .xnew__choice-hint { font-size: var(--text-sm); color: var(--muted); line-height: 1.45; }
-.xnew__note { margin-top: -10px; font-size: var(--text-xs); color: var(--muted); }
 .xnew__tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--success-soft); color: var(--success-soft-text); font-size: var(--text-xs); font-weight: 600; vertical-align: 1px; }
 </style>

@@ -150,7 +150,7 @@ describe('BBWaiting', () => {
   it('says how many people are here and how many are needed', () => {
     const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 2, min: 3, max: 5 } } } } })
     expect(w.find('.bb-waiting__title').text()).toBe('Waiting for the others')
-    expect(w.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. The session starts when 3–5 people are here.')
+    expect(w.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. The session starts when at least 3 people are here (up to 5 can take part).')
     expect(w.findAll('.bb-waiting__dot.is-here').length).toBe(2)
   })
 
@@ -162,6 +162,17 @@ describe('BBWaiting', () => {
     expect(w.find('.bb-waiting__bar span').attributes('style')).toContain('width: 60%')
     const timed = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 2, min: 2, max: 8, startsIn: 18 } } } } })
     expect(timed.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. That\'s enough to begin: the session starts in about 18 s, or as soon as 8 are here.')
+  })
+
+  it('does not add a second when the clock ticks while the page is set up', () => {
+    let t = 1_000_000
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => t++)
+    try {
+      const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 2, min: 2, max: 8, startsIn: 18 } } } } })
+      expect(w.find('.bb-waiting__count').text()).toContain('in about 18 s')
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('counts down before the start', () => {

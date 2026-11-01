@@ -6,25 +6,28 @@ import com.tinkerpop.blueprints.util.wrappers.event.EventEdge
 import com.tinkerpop.blueprints.util.wrappers.event.EventGraph
 import com.tinkerpop.blueprints.util.wrappers.event.listener.GraphChangedListener
 import java.beans.PropertyChangeListener
-
-// player._system. The participant's socket thread, the autopilot's timers and scripts write to it
-// while the consoles' and pages' updates read it on other threads; a plain map could throw
-// ConcurrentModificationException half-way through such an update. Setting a key to null removes
-// it, as a ConcurrentHashMap can't hold null.
-class SystemMap extends java.util.concurrent.ConcurrentHashMap<String, Object> {
-  Object put(String key, Object value) {
-    return value == null ? remove(key) : super.put(key, value)
-  }
-
-  void putAll(Map<? extends String, ?> values) {
-    values.each { k, v -> put(k, v) }
-  }
-}
+// player._system: a map that several threads use at once (see models.SystemMap). A Java class, so
+// that no class of this engine reaches Jackson's caches, which kept every rebuilt engine in memory.
+import models.SystemMap
 
 class BreadboardGraph extends EventGraph<TinkerGraph> {
   //TODO: consider tracking number of edges and number of vertices to avoid iterating over graph to count number of edges or vertices
 
   def eventTracker
+
+  // Held while a player or a tie is added or removed. TinkerGraph keeps them in plain HashMaps, and
+  // participants join on their own socket threads: two joining at the same moment could lose one of
+  // them for good.
+  //
+  // The lock order, kept by all of the server's code: this lock first, a participant's Client after
+  // it (the monitor of models.Client, which its updateGraph, showTo and end hold, and
+  // ScriptBoard.endParticipant). A change made under this lock calls the graph's listeners right
+  // there, on the same thread: the consoles' updates and, with event-based updates
+  // (breadboard.clientUpdateRate=0), the pages of the players it touches (Client.updateGraph). So
+  // nothing may wait for this lock while it holds a Client's monitor, or a socket's, which those
+  // listeners take too: a player is looked up first (getPlayer below, ScriptBoard.playerVertex), and
+  // the monitor taken after. Blueprints' TinkerGraph and EventGraph take no lock of their own.
+  private final Object structureLock = new Object()
 
   public BreadboardGraph(baseGraph, eventTracker) {
     super(baseGraph)
@@ -185,15 +188,18 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
   }
 
   def addVertices(n) {
-    int startId = 1;
-    def added = []
-    for (i in 0..n - 1) {
-      while (hasVertex(startId)) {
-        startId++;
+    // Free ids are found and taken in one go, so no other thread takes one in between.
+    synchronized (structureLock) {
+      int startId = 1;
+      def added = []
+      for (i in 0..n - 1) {
+        while (hasVertex(startId)) {
+          startId++;
+        }
+        added << addVertex(startId)
       }
-      added << addVertex(startId)
+      return added
     }
-    return added
   }
 
   def addPlayers(n) {
@@ -209,28 +215,43 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
   }
 
   public Edge addEdge(Object id, Vertex v1, Vertex v2, String label) {
-    // EventGraph already returns an EventEdge. It used to be wrapped in a second EventEdge, and
-    // removing that double-wrapped edge threw a ClassCastException inside TinkerGraph.
-    Edge edge = super.addEdge(id, v1, v2, label)
+    synchronized (structureLock) {
+      // EventGraph already returns an EventEdge. It used to be wrapped in a second EventEdge, and
+      // removing that double-wrapped edge threw a ClassCastException inside TinkerGraph.
+      Edge edge = super.addEdge(id, v1, v2, label)
 
-    def inProps = [:] as ObservableMap
-    inProps.addPropertyChangeListener({ evt ->
-      edge.onEdgePropertyChanged(edge, "inProps", evt.oldValue, evt.newValue)
-    } as PropertyChangeListener)
-    edge.setProperty("inProps", inProps);
+      def inProps = [:] as ObservableMap
+      inProps.addPropertyChangeListener({ evt ->
+        edge.onEdgePropertyChanged(edge, "inProps", evt.oldValue, evt.newValue)
+      } as PropertyChangeListener)
+      edge.setProperty("inProps", inProps);
 
-    def outProps = [:] as ObservableMap
-    outProps.addPropertyChangeListener({ evt ->
-      edge.onEdgePropertyChanged(edge, "outProps", evt.oldValue, evt.newValue)
-    } as PropertyChangeListener)
-    edge.setProperty("outProps", outProps);
+      def outProps = [:] as ObservableMap
+      outProps.addPropertyChangeListener({ evt ->
+        edge.onEdgePropertyChanged(edge, "outProps", evt.oldValue, evt.newValue)
+      } as PropertyChangeListener)
+      edge.setProperty("outProps", outProps);
 
-    return edge
+      return edge
+    }
   }
 
   public Vertex addVertex(Object id) {
-    //TODO probably can just remove this method
-    return super.addVertex(id)
+    synchronized (structureLock) {
+      return super.addVertex(id)
+    }
+  }
+
+  public void removeVertex(Vertex vertex) {
+    synchronized (structureLock) {
+      super.removeVertex(vertex)
+    }
+  }
+
+  public void removeEdge(Edge edge) {
+    synchronized (structureLock) {
+      super.removeEdge(edge)
+    }
   }
 
   def addTrackedEdge(v1, v2, label, track = true) {
@@ -252,10 +273,12 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
     def added = []
     if (n > 0) {
       for (i in 0..n - 1) {
-        while (hasVertex("_" + startId))
-          startId++
-
-        def v = addVertex("_" + startId)
+        def v
+        synchronized (structureLock) {
+          while (hasVertex("_" + startId))
+            startId++
+          v = addVertex("_" + startId)
+        }
         added << v
         if (behavior == null)
           a.ai.add(v)
@@ -274,16 +297,30 @@ class BreadboardGraph extends EventGraph<TinkerGraph> {
       a.ai.add(v, behavior)
   }
 
+  // The new player's vertex, or null when the id is in the network already. Checked and added in
+  // one go, so the same id joining twice at once (two tabs) is added once.
   def addPlayer(id) {
-    if (!hasVertex(id))
-      addVertex(id)
+    synchronized (structureLock) {
+      return hasVertex(id) ? null : addVertex(id)
+    }
+  }
+
+  // The player's vertex, or null: looked up under the same lock, as the server does for someone
+  // joining (ScriptBoard.playerVertex). A lookup while another participant joining resized the map
+  // of vertices could miss one that is there.
+  def getPlayer(id) {
+    synchronized (structureLock) {
+      return getVertex(id)
+    }
   }
 
   def removePlayer(id) {
-    if (hasVertex(id)) {
-      def v = getVertex(id)
-      v.getEdges(Direction.BOTH, "connected").each { removeEdge(it) }
-      removeVertex(v)
+    synchronized (structureLock) {
+      if (hasVertex(id)) {
+        def v = getVertex(id)
+        v.getEdges(Direction.BOTH, "connected").each { removeEdge(it) }
+        removeVertex(v)
+      }
     }
   }
 

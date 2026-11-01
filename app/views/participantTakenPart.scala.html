@@ -1,0 +1,29 @@
+@(completionCode: String, prolificUrl: String, texts: models.SystemTexts.Page)
+<!DOCTYPE html>
+<html lang="@texts.lang()">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>@texts.t("takenPart.title")</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/assets/img/favicon.ico">
+    <link rel="stylesheet" href="/assets/css/participant.css?v=@models.AssetVersion.VALUE">
+  </head>
+  <body class="bb-page">
+    <main class="bb-panel">
+      @participantMark()
+      <h1>@texts.t("takenPart.title")</h1>
+      @if(completionCode != null) {
+        <p>@texts.t("takenPart.withCode")</p>
+        <div class="bb-code">
+          <span class="bb-code__label">@texts.t("takenPart.codeLabel")</span>
+          <code>@completionCode</code>
+        </div>
+        <a class="bb-button" href="@prolificUrl">@texts.t("takenPart.return")</a>
+        <p class="bb-note">@texts.t("takenPart.orEnter")</p>
+      } else {
+        <p class="bb-lead">@texts.t("takenPart.noCode")</p>
+        <a class="bb-button" href="@prolificUrl">@texts.t("takenPart.goTo")</a>
+      }
+    </main>
+  </body>
+</html>

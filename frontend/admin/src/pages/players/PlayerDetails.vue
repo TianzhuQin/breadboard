@@ -31,7 +31,9 @@
     <template v-else>
       <div class="pd__badges">
         <BBadge v-if="ai" tone="accent"><Bot :size="13" aria-hidden="true" />AI player</BBadge>
+        <BBadge v-else-if="connection === 'connected' && previewHolds" tone="info" dot title="A researcher’s preview plays their seat: their own page hasn’t been in this session (a test player)">Preview connected</BBadge>
         <BBadge v-else-if="connection === 'connected'" tone="success" dot>Connected</BBadge>
+        <BBadge v-else-if="connection === 'disconnected' && previewHolds" tone="warning" dot title="Their own page isn’t connected, and a researcher’s preview has their seat: the preview can answer for them, but they count as away">Away: preview standing in</BBadge>
         <BBadge v-else-if="connection === 'disconnected'" tone="warning" dot>Disconnected</BBadge>
         <BBadge v-if="choices.length" tone="info">Has a choice to make</BBadge>
         <BBadge v-if="autopilot" tone="info">{{ autopilotLabel }}</BBadge>
@@ -48,7 +50,7 @@
       </div>
 
       <div class="pd__actions">
-        <BButton size="sm" :icon="MonitorSmartphone" :href="`#/preview?player=${encodeURIComponent(id)}`">Preview their screen</BButton>
+        <BButton size="sm" :icon="MonitorSmartphone" :href="`#/preview?player=${encodeURIComponent(id)}`" :title="previewTitle">Preview their screen</BButton>
         <BButton v-if="context === 'players'" size="sm" :icon="Share2" @click="emit('locate', id)">Show on network</BButton>
         <BButton v-else size="sm" :icon="Crosshair" @click="emit('locate', id)">Centre on them</BButton>
       </div>
@@ -178,7 +180,7 @@ import { uid } from '@/ui/uid'
 import { admin, engineElsewhere, ensureConnected, graph, NOT_CONNECTED } from '@/store/admin'
 import { openOutput } from '@/shell/output'
 import {
-  NOISY_LINK_KEYS, autopilotOf, choicesOf, compareIds, connectionOf, isAi, isTie, labelOf, recruitmentOf, type Choice,
+  NOISY_LINK_KEYS, aiName, autopilotOf, choicesOf, compareIds, connectionOf, displayName, isAi, isTie, labelOf, recruitmentOf, type Choice,
 } from '@/network/players'
 import { editTie, isPending, tieEditsBlocked } from '@/network/tieEdits'
 import ParticipantScreen from './ParticipantScreen.vue'
@@ -219,10 +221,32 @@ const node = computed(() => {
   const n = graph.nodes.get(props.id)
   return n ? { id: n.id, data: n.data } : null
 })
-const nameFor = (id: string) => labelOf(graph.nodes.get(id) || { id, data: {} }, props.labelBy)
+// A computer player is "AI 6" here, with its id beside it as for anyone with a name ("AI 6 (_6)" in
+// one line elsewhere); people with no name are their id.
+const nameFor = (id: string) => {
+  const label = labelOf(graph.nodes.get(id) || { id, data: {} }, props.labelBy)
+  return (label === id && aiName(id)) || label
+}
+// people first, then computer players (as compareIds puts their ids), each by the name shown
+const byName = (a: { id: string, label: string }, b: { id: string, label: string }) =>
+  (Number(a.id.startsWith('_')) - Number(b.id.startsWith('_'))) || compareIds(a.label, b.label)
 const name = computed(() => { void graph.version.value; return nameFor(props.id) })
 const ai = computed(() => isAi(node.value))
 const connection = computed(() => connectionOf(node.value))
+// A researcher's preview holds their seat (_system.preview): their own page isn't connected. Connected,
+// it plays the seat of a test player (one whose own page hasn't been in this session); otherwise it
+// stands in for them, and they count as away.
+const previewHolds = computed(() => node.value?.data?._system?.preview === true)
+// A preview of someone whose own page is connected, or of a computer player, only watches; anyone
+// else's acts for them. Someone whose own page has been in the session still counts as away (the
+// console can't tell them from a test player whose preview closed, so both get that line).
+const previewTitle = computed(() => props.id.startsWith('_')
+  ? 'Opens its page on the Preview page, read-only: the computer plays this seat, and goes on playing.'
+  : connection.value === 'connected' && !previewHolds.value
+    ? 'Opens their page on the Preview page, read-only: their own page is connected, and is left alone.'
+    : connection.value === 'disconnected'
+      ? 'Opens their page on the Preview page. Choices made in the preview count as theirs, but someone whose own page has been in this session still counts as away.'
+      : 'Opens their page on the Preview page. Choices made in the preview count as theirs.')
 const recruitment = computed(() => recruitmentOf(node.value))
 const autopilot = computed(() => autopilotOf(node.value))
 const group = computed(() => {
@@ -295,7 +319,7 @@ const neighbors = computed<Neighbor[]>(() => {
     nb.props += data.length
     nb.links[tie ? 'unshift' : 'push']({ id: l.id, kind, data })
   }
-  return Array.from(byId.values()).sort((a, b) => compareIds(a.label, b.label))
+  return Array.from(byId.values()).sort(byName)
 })
 const openTies = ref(new Set<string>())
 function toggleTie (other: string) {
@@ -312,7 +336,7 @@ const candidates = computed<TieCandidate[]>(() => {
     if (other === props.id || tied.has(other)) continue
     out.push({ id: other, label: nameFor(other), tone: toneOf(other) })
   }
-  return out.sort((a, b) => compareIds(a.label, b.label))
+  return out.sort(byName)
 })
 
 // ---- properties ----------------------------------------------------------------------------------
@@ -391,11 +415,13 @@ async function choose (c: Choice) {
 const canEdit = computed(() => !tieEditsBlocked.value)
 const editBlockedReason = tieEditsBlocked
 
+// (what the edit says once done, away from this panel: names in one line, as on the network)
+const lineName = (id: string) => displayName(graph.nodes.get(id) || { id, data: {} }, props.labelBy)
 function cut (other: string) {
-  void editTie('remove', props.id, other, { name: nameFor })
+  void editTie('remove', props.id, other, { name: lineName })
 }
 function tieTo (other: string) {
-  void editTie('add', props.id, other, { name: nameFor })
+  void editTie('add', props.id, other, { name: lineName })
 }
 
 // a different player: start from the top, without the old search

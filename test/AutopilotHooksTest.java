@@ -9,18 +9,22 @@ import static org.junit.Assert.*;
 /**
  * AutopilotHooks.afterStepsLoaded: settings saved in the console override the experiment's own
  * autopilot.waitingRoom / autopilot.replaceDisconnected calls (groovy/autopilot.groovy), keeping what
- * the console can't set (callbacks, a custom waiting text, the AI behavior). Runs on the real Groovy
- * scripts (ScriptTestHarness).
+ * the console can't set (callbacks, a custom waiting text, the AI behavior), in the autopilot's own
+ * session only. Runs on the real Groovy scripts (ScriptTestHarness).
  */
 public class AutopilotHooksTest extends BaseTest {
+
+    // The session the steps are loaded for here: the autopilot's own (it opened it).
+    private static final Long ITS_SESSION = 424242L;
 
     private ScriptTestHarness harness;
     private Experiment experiment;
 
     @Before
-    public void engine() {
+    public void engine() throws Exception {
         harness = new ScriptTestHarness();
         experiment = createExperiment("Hooked up");
+        openedSession(ITS_SESSION);
     }
 
     @After
@@ -28,6 +32,13 @@ public class AutopilotHooksTest extends BaseTest {
         harness.eval("autopilot.stop(); null");
         harness.close();
         Ebean.createSqlUpdate("delete from autopilot_settings").execute();
+        openedSession(null);
+    }
+
+    private static void openedSession(Long id) throws Exception {
+        java.lang.reflect.Field f = Autopilot.class.getDeclaredField("openedSession");
+        f.setAccessible(true);
+        f.set(null, id);
     }
 
     private AutopilotSettings saved(boolean enabled) {
@@ -52,7 +63,7 @@ public class AutopilotHooksTest extends BaseTest {
     /** The experiment's own setup, as a step would do it. */
     private void scriptSetsItsOwnAutopilot() throws Exception {
         eval("autopilot.waitingRoom([minPlayers: 9, maxPlayers: 20, waitSeconds: 1, countdownSeconds: 2,\n"
-            + "  waitingText: { here, min, max -> 'custom ' + here },\n"
+            + "  departureGraceSeconds: 4, waitingText: { here, min, max -> 'custom ' + here },\n"
             + "  onStart: { players -> }, onCancel: { players -> }])\n"
             + "autopilot.replaceDisconnected([afterSeconds: 99, returnToHuman: true, behavior: { p -> }]); null");
     }
@@ -62,7 +73,7 @@ public class AutopilotHooksTest extends BaseTest {
         scriptSetsItsOwnAutopilot();
         saved(true);
 
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
 
         assertEquals(3, eval("autopilot.room.minPlayers"));
         assertEquals(5, eval("autopilot.room.maxPlayers"));
@@ -72,13 +83,14 @@ public class AutopilotHooksTest extends BaseTest {
         assertEquals(true, eval("autopilot.room.onStart != null && autopilot.room.onCancel != null"));
         assertEquals(true, eval("autopilot.room.customText"));
         assertEquals("custom 0", eval("autopilot.room.waitingText(0, 3, 5)"));
+        assertEquals("the console has no setting for it", 4, eval("autopilot.room.departureGraceSeconds"));
 
         assertEquals(12, eval("autopilot.replace.afterSeconds"));
         assertEquals(false, eval("autopilot.replace.returnToHuman"));
         assertEquals(true, eval("autopilot.replace.behavior != null"));
 
         // Applying again (every load of the steps does) changes nothing.
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
         assertEquals(3, eval("autopilot.room.minPlayers"));
         assertEquals(true, eval("autopilot.room.customText"));
     }
@@ -90,12 +102,13 @@ public class AutopilotHooksTest extends BaseTest {
         s.maxWaitSeconds = null;
         s.save();
 
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
 
         assertEquals(3, eval("autopilot.room.minPlayers"));
         assertNull("no upper limit", eval("autopilot.room.maxPlayers"));
         assertNull("never gives up", eval("autopilot.room.maxWaitSeconds"));
         assertEquals(false, eval("autopilot.room.customText"));
+        assertEquals(15, eval("autopilot.room.departureGraceSeconds"));
         assertTrue(eval("autopilot.room.waitingText(1, 3, null)").toString().contains("Waiting for other participants"));
         assertEquals(12, eval("autopilot.replace.afterSeconds"));
         assertNull(eval("autopilot.replace.behavior"));
@@ -108,7 +121,7 @@ public class AutopilotHooksTest extends BaseTest {
         s.waitingRoomEnabled = false;
         s.save();
 
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
         assertEquals(9, eval("autopilot.room.minPlayers"));
         assertEquals(12, eval("autopilot.replace.afterSeconds"));
 
@@ -116,7 +129,7 @@ public class AutopilotHooksTest extends BaseTest {
         s.replaceEnabled = false;
         s.save();
         eval("autopilot.replaceDisconnected([afterSeconds: 99]); null");
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
         assertEquals(3, eval("autopilot.room.minPlayers"));
         assertEquals(99, eval("autopilot.replace.afterSeconds"));
     }
@@ -127,21 +140,54 @@ public class AutopilotHooksTest extends BaseTest {
         Experiment other = createExperiment("Not on autopilot");
 
         // Nothing saved: the experiment's own setup stays.
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
         assertEquals(9, eval("autopilot.room.minPlayers"));
 
         saved(false);
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
         assertEquals("switched off", 9, eval("autopilot.room.minPlayers"));
 
         saved(true);
-        AutopilotHooks.afterStepsLoaded(other, harness.engine);
+        AutopilotHooks.afterStepsLoaded(other, harness.engine, ITS_SESSION);
         assertEquals("another experiment", 9, eval("autopilot.room.minPlayers"));
-        AutopilotHooks.afterStepsLoaded(null, harness.engine);
+        AutopilotHooks.afterStepsLoaded(null, harness.engine, ITS_SESSION);
         assertEquals("no experiment loaded", 9, eval("autopilot.room.minPlayers"));
 
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
         assertEquals(3, eval("autopilot.room.minPlayers"));
+    }
+
+    @Test
+    public void onlyInTheAutopilotsOwnSession() throws Exception {
+        scriptSetsItsOwnAutopilot();
+        saved(true);
+
+        // A session a researcher opened by hand, the test session, no session: the steps' own setup.
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION + 1);
+        assertEquals("a session opened by hand", 9, eval("autopilot.room.minPlayers"));
+        assertEquals(99, eval("autopilot.replace.afterSeconds"));
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, Experiment.TEST_INSTANCE_ID);
+        assertEquals("the test session", 9, eval("autopilot.room.minPlayers"));
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, null);
+        assertEquals("no session", 9, eval("autopilot.room.minPlayers"));
+
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
+        assertEquals(3, eval("autopilot.room.minPlayers"));
+        assertEquals(12, eval("autopilot.replace.afterSeconds"));
+    }
+
+    @Test
+    public void someoneAlreadyWaitingGetsTheConsolesGiveUp() throws Exception {
+        // The steps' own room never gives up, and someone came in before the console's settings
+        // (which do give up) were applied: the session gives up all the same.
+        eval("autopilot.waitingRoom([minPlayers: 5]); null");
+        eval("def v = g.addPlayer('p1'); v._system.connected = true; autopilot.onConnection('p1', true); null");
+        assertEquals(true, eval("autopilot.firstArrivalAt != null && autopilot.giveUpTimer == null"));
+
+        saved(true);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
+        assertEquals(300, eval("autopilot.room.maxWaitSeconds"));
+        assertEquals(true, eval("autopilot.giveUpTimer != null"));
     }
 
     @Test
@@ -157,7 +203,7 @@ public class AutopilotHooksTest extends BaseTest {
         s.minPlayers = 2;
         s.maxPlayers = 2;
         s.save();
-        AutopilotHooks.afterStepsLoaded(experiment, harness.engine);
+        AutopilotHooks.afterStepsLoaded(experiment, harness.engine, ITS_SESSION);
         assertEquals(1, eval("startCount"));
     }
 }

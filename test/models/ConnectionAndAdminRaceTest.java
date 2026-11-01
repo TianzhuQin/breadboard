@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Two races around the engine's listeners: a participant's connection change is announced to the
@@ -94,14 +96,19 @@ public class ConnectionAndAdminRaceTest {
         ThrottledWebSocketOut closed = socket();
         closed.markClosed();
         ScriptBoard.removeAdmin(closed);           // what the socket's close did, before the AddAdmin
-        ScriptBoard.registerAdmin(null, null, closed);
+        assertNull(ScriptBoard.registerAdmin(null, null, closed));
+        assertTrue(closed.isClosed());
         assertEquals(before, ScriptBoard.adminCount());
+    }
 
+    @Test
+    public void anOpenSocketWithoutAnAccountCannotRegisterEither() {
+        int before = ScriptBoard.adminCount();
         ThrottledWebSocketOut open = socket();
-        ScriptBoard.registerAdmin(null, null, open);
-        assertEquals(before + 1, ScriptBoard.adminCount());
-        open.markClosed();
-        ScriptBoard.removeAdmin(open);
+        // This unit test has no database. Successful registration with a real account is covered
+        // by QueuedConsoleLoginTest and AdminSocketsTest; null must not bypass that authentication.
+        assertNull(ScriptBoard.registerAdmin(null, null, open));
+        assertTrue("an unauthenticated output is closed", open.isClosed());
         assertEquals(before, ScriptBoard.adminCount());
     }
 }

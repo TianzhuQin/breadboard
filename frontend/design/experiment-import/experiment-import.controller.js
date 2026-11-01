@@ -1,5 +1,14 @@
 ExperimentImportCtrl.$inject = ['$scope', 'Upload', '$timeout'];
 
+/**
+ * Where an exported experiment is imported under {@code name}: one path segment, encoded. Unencoded,
+ * a name with a "/", "?" or "#" in it went to another address, or none, and got a 404 instead of
+ * the server's reason for refusing it.
+ */
+export function importUrl(path, name) {
+  return path + '/' + encodeURIComponent(name);
+}
+
 export default function ExperimentImportCtrl($scope, Upload, $timeout){
 
   $scope.import = {
@@ -23,10 +32,12 @@ export default function ExperimentImportCtrl($scope, Upload, $timeout){
 
   $scope.importExperiment = function(){
     if(!$scope.import.file) return;
+    // (a retry: the last refusal no longer stands)
+    $scope.import.error = '';
     let name = $scope.import.name.length ? $scope.import.name : $scope.import.file.name;
     name = name.replace('.zip', '');
     Upload.upload({
-      url: $scope.import.path + `/${name}`,
+      url: importUrl($scope.import.path, name),
       data: {
         file: $scope.import.file
       }
@@ -54,11 +65,11 @@ export default function ExperimentImportCtrl($scope, Upload, $timeout){
     });
   };
 
+  // The file and the name stay, so a refused name is all that needs changing: both used to be
+  // emptied, and the file chosen again.
   function errorOnUpload(err) {
     console.error(err);
     $scope.import.error = (err.data) ? err.data : err;
-    $scope.import.file = null;
-    $scope.import.name = '';
   }
 
 }

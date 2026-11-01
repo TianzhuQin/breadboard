@@ -45,10 +45,7 @@
                 <a :href="link" target="_blank" rel="noopener" class="sd__link-text mono" :title="link">{{ link }}</a>
                 <BButton size="sm" variant="ghost" :icon="copied ? Check : Copy" :aria-label="copied ? 'Copied' : 'Copy the participant link'" title="Copy link" @click="copy" />
               </div>
-              <p v-if="localOnly" class="sd__warn">
-                <TriangleAlert :size="14" aria-hidden="true" />
-                This link names this computer (“{{ hostname }}”), so it only works here. Participants elsewhere need your server’s public address.
-              </p>
+              <LocalOnlyNote what="This link uses" compact />
             </dd>
             <dd v-else class="sd__quiet">Works only while the session is running.</dd>
           </div>
@@ -103,10 +100,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Activity, Check, Copy, Download, Play, ScrollText, Square, Trash2, TriangleAlert } from 'lucide-vue-next'
+import { Activity, Check, Copy, Download, Play, ScrollText, Square, Trash2 } from 'lucide-vue-next'
 import { BBadge, BButton, notify } from '@/ui'
 import type { Instance } from '@/store/types'
-import { canDelete, canResume, canStop, formatDateTime, isLocalHost, parseServerTime, participantLink, statusMeta } from './sessionData'
+import { canDelete, canResume, canStop, formatDateTime, parseServerTime, participantLink, statusMeta } from './sessionData'
+import LocalOnlyNote from '../session/LocalOnlyNote.vue'
 
 const props = defineProps<{
   session: Instance
@@ -124,8 +122,6 @@ const meta = computed(() => statusMeta(props.session.status))
 const created = computed(() => parseServerTime(props.session.creationTime))
 const params = computed(() => [...(props.session.data || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })))
 const link = computed(() => participantLink(props.experimentId, props.session.id))
-const hostname = window.location.hostname
-const localOnly = isLocalHost(hostname)
 
 const resumeHint = computed(() => {
   if (canResume(props.session) || canStop(props.session)) return ''
@@ -186,8 +182,6 @@ async function copy () {
 .sd__link-dd { flex-direction: column; align-items: stretch !important; }
 .sd__link { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .sd__link-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.sd__warn { display: flex; gap: 6px; align-items: flex-start; font-size: var(--text-xs); color: var(--warning-soft-text); line-height: 1.45; }
-.sd__warn svg { flex: none; margin-top: 1px; }
 .sd__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .sd__spacer { flex: 1; }
 .sd__note { font-size: var(--text-xs); }

@@ -5,6 +5,8 @@ import com.tinkerpop.blueprints.util.wrappers.event.listener.GraphChangedListene
 public interface BreadboardGraphInterface {
   void addListener(GraphChangedListener listener);
 
+  void removeListener(GraphChangedListener listener);
+
   void addPlayer(String id);
 
   void removePlayer(String id);

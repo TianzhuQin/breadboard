@@ -24,6 +24,10 @@ public final class JsonSetup {
     return mapper;
   }
 
+  /**
+   * Install a new mapper for Play's Json: at startup, and each time the script engine is replaced
+   * (EngineCleanup), so the serializers the old mapper kept for the old engine's classes go with it.
+   */
   public static void install() {
     Json.setObjectMapper(mapper());
   }

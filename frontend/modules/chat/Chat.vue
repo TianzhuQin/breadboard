@@ -24,7 +24,8 @@
       </div>
     </div>
     <v-spacer />
-    <v-form ref="form" @submit.prevent="() => {}" class="flex-grow-0">
+    <!-- (chat switched off with its messages kept: they stay, but nothing listens to what is sent) -->
+    <v-form v-if="enabled" ref="form" @submit.prevent="() => {}" class="flex-grow-0">
       <v-layout column class="chat-input">
         <v-text-field
           validate-on-blur
@@ -112,7 +113,7 @@
     methods: {
       send (): void {
         // @ts-ignore
-        if (!this.$refs.form.validate()) {
+        if (!this.enabled || !this.$refs.form.validate()) {
           return
         }
         window.Breadboard.send('chat', {
@@ -137,6 +138,11 @@
     computed: {
       chatState (): ChatState | null {
         return this.player && this.player[this.stateKey]
+      },
+      // Whether the participant may write: off once the chat is switched off (disableTextChat with
+      // its messages kept sets isEnabled to false).
+      enabled (): boolean {
+        return !!this.chatState && this.chatState.isEnabled !== false
       },
       myId (): string | null {
       	return this.player ? this.player.id : null

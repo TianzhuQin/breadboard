@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Build a release: target/release/breadboard-<version>.zip, which runs on any machine with Java 8.
+# bin/bundle-java then makes the ones that carry their own Java.
 #
 #   JAVA8_HOME=/path/to/jdk8 bin/make-dist
 #
 # It builds the front end (pnpm), packages the server (sbt dist), and adds the launchers
-# (release/breadboard.sh, release/breadboard.bat), the Groovy engine scripts, the production
-# settings and the docs. SKIP_FRONTEND=1 reuses the front end already in public/.
+# (release/breadboard.sh, release/breadboard.bat, with breadboard-task.xml for Task Scheduler), the
+# Groovy engine scripts, the production settings and the docs. SKIP_FRONTEND=1 reuses the front end
+# already in public/.
 # Check the result with bin/smoke-dist.
 set -euo pipefail
 
@@ -40,6 +42,12 @@ for built in public/admin/admin.js public/bundles/client.js public/bundles/desig
   fi
 done
 
+# Play's Assets serves file.gz instead of file, in production, to browsers that accept gzip: the
+# console and the participant page then download a third or less. (The front-end builds empty
+# public/admin and public/bundles, so these never outlive the files they were made from.)
+find public/admin public/bundles -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.json' \) \
+  -size +1k -print0 | xargs -0 gzip -kf9n
+
 echo "== Server"
 "$ROOT/bin/sbt8" dist
 
@@ -68,10 +76,16 @@ cp conf/application-prod.conf "$R/conf/"
 cp release/logger.xml "$R/conf/logger.xml"
 # The engine's Groovy scripts are read from <install>/groovy (tests excluded).
 find groovy -maxdepth 1 -name '*.groovy' ! -name '*_test.groovy' -exec cp {} "$R/groovy/" \;
-cp release/breadboard.sh "$R/"
-chmod +x "$R/breadboard.sh"
+cp release/breadboard.sh "release/Start Breadboard.command" "$R/"
+chmod +x "$R/breadboard.sh" "$R/Start Breadboard.command"
 # Windows line endings for cmd.exe, whatever the checkout has.
 perl -pe 's/\r?\n/\r\n/' release/breadboard.bat > "$R/breadboard.bat"
+# The Task Scheduler task, as Windows itself saves one (UTF-16 with a byte order mark, Windows line
+# endings), which is what schtasks /XML surely reads.
+{
+  printf '\377\376'
+  sed 's/encoding="UTF-8"/encoding="UTF-16"/' release/breadboard-task.xml | perl -pe 's/\r?\n/\r\n/' | iconv -f UTF-8 -t UTF-16LE
+} > "$R/breadboard-task.xml"
 cp release/README.md "$R/README.md"
 cp LICENSE.md CHANGELOG.md "$R/"
 # CHANGELOG.md and the README link to these.

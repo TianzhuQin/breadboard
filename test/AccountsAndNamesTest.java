@@ -1,3 +1,4 @@
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import models.*;
 import org.junit.Test;
@@ -10,7 +11,7 @@ import static play.test.Helpers.*;
 /**
  * Researcher accounts and experiment names: sign-in ignores the email's case and doesn't sign out
  * the account's other browsers; the first account needs a real email address; experiments can be
- * renamed.
+ * renamed; no experiment is created, imported or renamed with a "/" or "\" in its name.
  */
 public class AccountsAndNamesTest extends BaseTest {
 
@@ -77,6 +78,40 @@ public class AccountsAndNamesTest extends BaseTest {
         assertTrue(contentAsString(again).contains("Sign in instead"));
     }
 
+    /**
+     * A new server's first account, asked for before anything asked for the list of languages (a
+     * script, or the console's page loaded early): it used to be told the server was still setting up,
+     * for as long as no page had asked for the list, which is what added the languages. Now the
+     * server's start adds them (Global.onStart), and the request itself does when there are none.
+     */
+    @Test
+    public void theFirstAccountOfANewServerNeedsNoLanguageListFirst() {
+        assertEquals("a new database", 0, Language.findAll().size());
+        ObjectNode body = Json.newObject();
+        body.put("email", "first@test.org");
+        body.put("password", "password123");
+        Result made = route(fakeRequest(POST, "/createFirstUser").withJsonBody(body));
+        assertEquals(contentAsString(made), OK, status(made));
+        User first = User.findByEmail("first@test.org");
+        assertEquals("eng", Language.findById(first.defaultLanguage.id).code);
+        int added = Language.findAll().size();
+        assertTrue(String.valueOf(added), added > 10);
+        // added once, all of them: the list the console asks for next is the same
+        JsonNode list = Json.parse(contentAsString(route(fakeRequest(GET, "/languages")))).get("languages");
+        assertEquals(added, list.size());
+        assertEquals(added, Language.findAll().size());
+    }
+
+    @Test
+    public void theLanguagesAreAddedWhenThereAreNoneAndOnlyThen() {
+        assertEquals(0, Language.findAll().size());
+        int added = controllers.LanguageController.languages().size();
+        assertTrue(added > 10);
+        assertNotNull(Language.findByIso3("eng"));
+        assertEquals("not again when there are some", added, controllers.LanguageController.languages().size());
+        assertEquals(added, Language.findAll().size());
+    }
+
     @Test
     public void theDefaultLanguageCanBeChanged() {
         Language english = createLanguage("eng", "English");
@@ -116,5 +151,106 @@ public class AccountsAndNamesTest extends BaseTest {
 
         body.put("name", "Not mine");
         assertEquals(UNAUTHORIZED, status(route(fakeRequest(POST, "/experiment/" + a.id + "/name").withJsonBody(body))));
+    }
+
+    @Test
+    public void aNameWithASlashIsRefusedWhereverAnExperimentIsNamed() {
+        Language lang = createLanguage("eng", "English");
+        User user = createUser("slashes@test.org", "Slashes", "password123", lang);
+        Experiment a = createExperiment("Pilot");
+        user.ownedExperiments.add(a);
+        user.update();
+        user.saveManyToManyAssociations("ownedExperiments");
+        final String why = "Names can't contain / or \\ or line breaks.";
+
+        // Created (from the template, as a copy, from an example), as renaming refuses them: the name
+        // makes folders in file mode, dev/Pilot-A/B_<id>/.
+        for (String name : new String[]{"Pilot A/B", "Pilot A\\B", "Two\nline\nbreaks"}) {
+            for (String copy : new String[]{null, String.valueOf(a.id)}) {
+                ObjectNode body = Json.newObject();
+                body.put("newExperimentName", name);
+                if (copy != null) body.put("copyExperimentId", Long.valueOf(copy));
+                Result made = route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(body, PUT));
+                assertEquals(name, BAD_REQUEST, status(made));
+                assertEquals(why, contentAsString(made));
+            }
+        }
+        ObjectNode example = Json.newObject();
+        example.put("newExperimentName", "Game 1/2");
+        example.put("example", "network-game");
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(example, PUT))));
+        // Imported (the name is a path segment, so a "/" in it comes encoded)
+        Result imported = route(fakeRequest(POST, "/experiment/import/Pilot%20A%2FB").withSession("uid", user.uid));
+        assertEquals(BAD_REQUEST, status(imported));
+        assertEquals(why, contentAsString(imported));
+        // Renamed: line breaks anywhere in it, not only one
+        ObjectNode rename = Json.newObject();
+        rename.put("name", "Two\nline\nbreaks");
+        Result renamed = route(fakeRequest(POST, "/experiment/" + a.id + "/name").withSession("uid", user.uid).withJsonBody(rename));
+        assertEquals(BAD_REQUEST, status(renamed));
+        assertEquals(why, contentAsString(renamed));
+        assertEquals("nothing was made", 1, Experiment.findAll().size());
+        assertEquals("Pilot", Experiment.findById(a.id).name);
+    }
+
+    @Test
+    public void aNameLongerThan120CharactersIsRefusedWhereverAnExperimentIsNamed() {
+        Language lang = createLanguage("eng", "English");
+        User user = createUser("long-names@test.org", "Long names", "password123", lang);
+        Experiment a = createExperiment("Pilot");
+        user.ownedExperiments.add(a);
+        user.update();
+        user.saveManyToManyAssociations("ownedExperiments");
+        final String why = "Keep the name to 120 characters or fewer.";
+        final String tooLong = new String(new char[121]).replace('\0', 'n');
+        final String longest = tooLong.substring(1);
+
+        ObjectNode body = Json.newObject();
+        body.put("newExperimentName", tooLong);
+        Result made = route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(body, PUT));
+        assertEquals(BAD_REQUEST, status(made));
+        assertEquals(why, contentAsString(made));
+        Result imported = route(fakeRequest(POST, "/experiment/import/" + tooLong).withSession("uid", user.uid));
+        assertEquals(BAD_REQUEST, status(imported));
+        assertEquals(why, contentAsString(imported));
+        ObjectNode rename = Json.newObject();
+        rename.put("name", tooLong);
+        Result renamed = route(fakeRequest(POST, "/experiment/" + a.id + "/name").withSession("uid", user.uid).withJsonBody(rename));
+        assertEquals(BAD_REQUEST, status(renamed));
+        assertEquals(why, contentAsString(renamed));
+        assertEquals("nothing was made", 1, Experiment.findAll().size());
+
+        // 120 is fine
+        body.put("newExperimentName", longest);
+        assertEquals(OK, status(route(fakeRequest(PUT, "/experiment").withSession("uid", user.uid).withJsonBody(body, PUT))));
+        assertNotNull(Experiment.findByName(longest));
+    }
+
+    @Test
+    public void fromAnotherComputerTheFirstAccountNeedsTheSetupCodeTheServerPrinted() {
+        Language lang = createLanguage("eng", "English");
+        ObjectNode body = Json.newObject();
+        body.put("email", "remote@test.org");
+        body.put("password", "password123");
+        body.put("defaultLanguageId", lang.getId());
+
+        // the console, opened through a proxy, is told before it asks
+        Result state = route(fakeRequest(GET, "/state").withHeader("X-Forwarded-For", "203.0.113.5"));
+        assertEquals(UNAUTHORIZED, status(state));
+        assertTrue(Json.parse(contentAsString(state)).get("setupCodeRequired").asBoolean());
+        Result local = route(fakeRequest(GET, "/state"));
+        assertFalse(Json.parse(contentAsString(local)).get("setupCodeRequired").asBoolean());
+
+        Result refused = route(fakeRequest(POST, "/createFirstUser").withHeader("X-Forwarded-For", "203.0.113.5").withJsonBody(body));
+        assertEquals(FORBIDDEN, status(refused));
+        assertEquals(0, User.findRowCount());
+        body.put("setupCode", "WRONG-CODE");
+        assertEquals(FORBIDDEN, status(route(fakeRequest(POST, "/createFirstUser").withHeader("X-Forwarded-For", "203.0.113.5").withJsonBody(body))));
+
+        // typed in lower case, with a space for the dash
+        body.put("setupCode", security.SetupCode.current().toLowerCase().replace("-", " "));
+        Result made = route(fakeRequest(POST, "/createFirstUser").withHeader("X-Forwarded-For", "203.0.113.5").withJsonBody(body));
+        assertEquals(contentAsString(made), OK, status(made));
+        assertNotNull(User.findByEmail("remote@test.org"));
     }
 }

@@ -31,13 +31,16 @@ if [ ! -s "$RUN/secret" ]; then
 fi
 # The server reads its Groovy engine scripts from <app path>/groovy.
 ln -sfn "$ROOT/groovy" "$STAGE/groovy"
+ln -sfn "$ROOT/docs" "$STAGE/docs"
 
 export JAVA_HOME="$JDK"
 export PATH="$JDK/bin:$PATH"
 cd "$RUN"
+# DB_CLOSE_ON_EXIT=FALSE, as a release has it (conf/application-prod.conf): the server closes the
+# database itself, at the end of its stop, after recording that a running session ended with it.
 exec "$STAGE/bin/breadboard" -J-Duser.timezone=UTC \
   -Dconfig.file="$ROOT/conf/application.conf" \
-  -Ddb.default.url="jdbc:h2:$RUN/db/breadboard;MODE=MYSQL" \
+  -Ddb.default.url="jdbc:h2:$RUN/db/breadboard;MODE=MYSQL;DB_CLOSE_ON_EXIT=FALSE" \
   -DapplyEvolutions.default=true \
   -Dhttp.port="$PORT" \
   -Dbreadboard.rootUrl="http://localhost:$PORT" \

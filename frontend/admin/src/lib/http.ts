@@ -13,7 +13,7 @@ type UnauthorizedHandler = (body: any) => void
 let unauthorized: UnauthorizedHandler = () => {}
 export function onUnauthorized (fn: UnauthorizedHandler) { unauthorized = fn }
 
-async function request<T> (method: string, url: string, body?: any, opts: { raw?: boolean, form?: boolean, quiet401?: boolean } = {}): Promise<T> {
+async function request<T> (method: string, url: string, body?: any, opts: { raw?: boolean, bytes?: boolean, form?: boolean, quiet401?: boolean } = {}): Promise<T> {
   const init: RequestInit = { method, credentials: 'same-origin', headers: {} }
   if (body instanceof FormData) {
     init.body = body
@@ -25,6 +25,8 @@ async function request<T> (method: string, url: string, body?: any, opts: { raw?
     ;(init.headers as any)['Content-Type'] = 'application/json'
   }
   const res = await fetch(url, init)
+  // (bytes: a file as the server sent it; text() would drop the byte-order mark a file starts with)
+  if (opts.bytes && res.ok) return (await res.arrayBuffer()) as T
   const text = await res.text()
   let data: any = text
   try { data = text ? JSON.parse(text) : null } catch (e) { /* plain text */ }
@@ -40,7 +42,7 @@ async function request<T> (method: string, url: string, body?: any, opts: { raw?
 }
 
 export const http = {
-  get: <T = any>(url: string, opts?: { raw?: boolean, quiet401?: boolean }) => request<T>('GET', url, undefined, opts),
+  get: <T = any>(url: string, opts?: { raw?: boolean, bytes?: boolean, quiet401?: boolean }) => request<T>('GET', url, undefined, opts),
   post: <T = any>(url: string, body?: any, opts?: { raw?: boolean, form?: boolean, quiet401?: boolean }) => request<T>('POST', url, body, opts),
   put: <T = any>(url: string, body?: any) => request<T>('PUT', url, body),
   del: <T = any>(url: string) => request<T>('DELETE', url),
@@ -48,7 +50,11 @@ export const http = {
 
 /** Save text as a file in the browser. */
 export function saveText (fileName: string, text: string, type = 'text/csv') {
-  const blob = new Blob([text], { type })
+  saveFile(fileName, new Blob([text], { type }))
+}
+
+/** Save a file in the browser. */
+export function saveFile (fileName: string, blob: Blob) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

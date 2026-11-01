@@ -27,7 +27,7 @@ public class Admin implements ClientListener {
   private final ThrottledWebSocketOut out;
 
   public Admin(User user, ActorRef scriptBoardController, ThrottledWebSocketOut out) {
-    this.user = user;
+    this.user = accountSnapshot(user);
     this.scriptBoardController = scriptBoardController;
     this.out = out;
   }
@@ -45,7 +45,7 @@ public class Admin implements ClientListener {
   /** Write one frame to this socket. A failing socket must not stop the others from being updated. */
   public void write(JsonNode frame) {
     try {
-      out.write(frame);
+      out.writeIfOpen(frame);
     } catch (Exception e) {
       Logger.debug("Could not write to an admin socket: " + e);
     }
@@ -211,7 +211,20 @@ public class Admin implements ClientListener {
 
   /** The account signed in on this socket, refreshed when it logs in again. */
   void setUser(User user) {
-    this.user = user;
+    this.user = accountSnapshot(user);
+  }
+
+  /**
+   * The request's User is also serialized for the console, loading its full session history. Keep a
+   * separate fully loaded account with lazy relations. Its uid must remain the one this socket
+   * signed in with, even if a password reset changed the database between the request and this copy.
+   */
+  private static User accountSnapshot(User signedIn) {
+    if (signedIn == null) return null;
+    User copy = User.findByEmail(signedIn.email);
+    if (copy == null) return signedIn;
+    copy.uid = signedIn.uid;
+    return copy;
   }
 
   public ActorRef getScriptBoardController() {

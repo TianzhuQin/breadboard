@@ -14,7 +14,8 @@
            in, whatever zoom and pan the Network page was left at -->
       <div class="live-net__view" inert>
         <AdminNetwork :graph="graph" mode="view" :controls="false" :remember-view="false">
-          <template #empty><p class="live-net__empty">No one has joined yet.</p></template>
+          <!-- (an ended session's network is gone once the engine restarts for the next one) -->
+          <template #empty><p class="live-net__empty">{{ ended ? 'This session has ended.' : 'No one has joined yet.' }}</p></template>
         </AdminNetwork>
       </div>
       <!-- the whole picture is a click target; keyboard users have the Open button above -->
@@ -32,8 +33,10 @@ import { BButton, BPanel } from '@/ui'
 import AdminNetwork from '@/network/AdminNetwork.vue'
 import { graph } from '@/store/admin'
 
-const props = defineProps<{ people: number, ties: number }>()
+/** `ended`: the session doesn't run any more (finished or stopped). */
+const props = defineProps<{ people: number, ties: number, ended?: boolean }>()
 const summary = computed(() => {
+  if (props.ended && !props.people && !props.ties) return 'The session has ended'
   const p = props.people === 1 ? '1 person' : `${props.people} people`
   const t = props.ties === 1 ? '1 tie' : `${props.ties} ties`
   return `${p} · ${t}`

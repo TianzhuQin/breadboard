@@ -21,6 +21,7 @@ window._ = _;
 
 import ClientCtrl from './client/client.controller';
 import ChoicesCtrl from './client/choices.controller';
+import { connectionNotice } from './client/connectionNotice';
 const clientHtmlCacheLocation = 'holy.cow.client.html';
 
 window.bbClientInit = function init () {
@@ -45,8 +46,21 @@ window.bbClientInit = function init () {
           scope.isLoaded = true;
           $templateCache.put(clientHtmlCacheLocation, html);
         });
+        scope.connectionNotice = connectionNotice(window.Breadboard);
+        function showConnection () {
+          scope.$applyAsync(function () {
+            scope.connectionNotice = connectionNotice(window.Breadboard);
+          });
+        }
+        if (window.Breadboard && window.Breadboard.on) {
+          window.Breadboard.on('bb:connection', showConnection);
+          scope.$on('$destroy', function () {
+            window.Breadboard.off('bb:connection', showConnection);
+          });
+        }
       },
       template: `<div class="main" ng-if="isLoaded">
+                    <p class="bb-connection-notice" ng-if="connectionNotice" role="status">{{ connectionNotice }}</p>
                     <ng-include src="'${clientHtmlCacheLocation}'">
                         Loading...
                     </ng-include>

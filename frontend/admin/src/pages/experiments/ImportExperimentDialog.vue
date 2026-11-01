@@ -72,8 +72,7 @@
         </template>
       </BField>
 
-      <BCheckbox v-model="switchTo" :disabled="!!running || busy">Work on it after importing</BCheckbox>
-      <p v-if="running" class="ximp__note">A session is running, so you'll stay on the current experiment.</p>
+      <BCheckbox v-model="switchTo" :disabled="busy">Work on it after importing</BCheckbox>
     </form>
 
     <template #footer>
@@ -90,7 +89,7 @@ import { CircleAlert, CircleCheck, FileArchive, TriangleAlert, Upload } from 'lu
 import { BButton, BCheckbox, BDialog, BField, BInput, BSpinner, notify } from '@/ui'
 import { uid } from '@/ui/uid'
 import { http } from '@/lib/http'
-import { actions, experiments, running } from '@/store/admin'
+import { actions, experiments } from '@/store/admin'
 import type { Experiment } from '@/store/types'
 import {
   checkExperimentZip, describeError, importNameFromFile, importUrl, manifestName, plural, readBytes, uniqueName, validateExperimentName,
@@ -142,7 +141,7 @@ function reset () {
   name.value = ''
   touched.value = false
   tried.value = false
-  switchTo.value = !running.value
+  switchTo.value = true
   busy.value = false
   error.value = ''
   over.value = false
@@ -221,7 +220,7 @@ async function submit () {
   try {
     const imported = await http.post<Experiment>(importUrl(finalName), body)
     const id = imported && typeof imported.id === 'number' ? imported.id : null
-    if (switchTo.value && !running.value && id != null) {
+    if (switchTo.value && id != null) {
       // (switching sends the new list too)
       if (!await switchToNew(id, finalName, `Imported “${finalName}”`)) await actions.refresh()
     } else {
@@ -279,6 +278,5 @@ async function submit () {
 .ximp__check.is-ok svg { color: var(--success); }
 .ximp__check.is-bad { color: var(--danger-soft-text); }
 .ximp__check.is-warn { color: var(--warning-soft-text); }
-.ximp__note { margin-top: -8px; font-size: var(--text-xs); color: var(--muted); }
 .ximp__progress { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; font-size: var(--text-sm); color: var(--muted); }
 </style>

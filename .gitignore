@@ -9,6 +9,7 @@ archive
 logo
 logs
 db
+backups
 dev
 project/project
 project/target

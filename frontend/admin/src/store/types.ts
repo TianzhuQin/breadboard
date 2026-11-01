@@ -72,6 +72,19 @@ export interface EngineInfo {
    * start that threw. Null when the server does not say (older servers leave it out).
    */
   gameStarted?: boolean | null
+  /**
+   * Whether steps of that experiment were saved (or deleted) since the engine loaded them, so the
+   * session running there doesn't use them yet: "Reload needed". The server keeps it (EngineSteps),
+   * so every console says the same. Null when the server does not say (older servers leave it out).
+   */
+  stepsChanged?: boolean | null
+  /**
+   * Whether that session is the autopilot's own, which it runs now: it opened it (or was handed it on
+   * Resume or a save), and is on, neither paused nor done. Steps saved meanwhile go into its next
+   * session. Every console hears when it changes, also when the autopilot is switched off and leaves
+   * its session running. Null when the server does not say (older servers leave it out).
+   */
+  autopilotSession?: boolean | null
 }
 
 export interface User {
@@ -84,6 +97,23 @@ export interface User {
   engine: EngineInfo | null
 }
 
+/**
+ * A line of an engine error as newer servers name it ({"frames": [...]} beside the error's text,
+ * ScriptBoard.putFrames): the step whose code it is, the failing step's own line ("own"), and where it
+ * went wrong in another step's code, with the function it called there ("name"). See groovyError.
+ */
+export interface ErrorFrame {
+  /** As the error's text names it: "Script649.groovy". */
+  file: string
+  line: number
+  /** The step whose code it is; none when it is no step's (a script typed in the console, or the start of the game). */
+  step?: string
+  /** The failing step's own line: the innermost one in its code. */
+  own?: boolean
+  /** The function of another step that the failing step's own line called, where it went wrong (e.g. isHuman). */
+  name?: string
+}
+
 export interface OutputEntry {
   id: number
   kind: 'output' | 'error' | 'info' | 'input'
@@ -91,6 +121,10 @@ export interface OutputEntry {
   source?: string
   /** The id of the request it answers, when the request carried one and the server echoed it (SendScript, SendStep). */
   requestId?: string
+  /** The step an engine error happened in (e.g. RoundStep), when the server knows it. */
+  step?: string
+  /** An engine error's lines named by the step whose code each is (newer servers), see groovyError. */
+  frames?: ErrorFrame[]
   at: number
 }
 

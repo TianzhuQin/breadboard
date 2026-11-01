@@ -1,6 +1,6 @@
-@(assetsRoot: String)
+@(assetsRoot: String, texts: models.SystemTexts.Page)
 <!DOCTYPE html>
-<html lang="en">
+<html lang="@texts.lang()">
 <head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -11,7 +11,7 @@
 </head>
 <body>
     <div id="app">
-        <div class="bb-page"><div class="bb-loading"><div class="bb-spinner"></div>Loading…</div></div>
+        <div class="bb-page"><div class="bb-loading"><div class="bb-spinner"></div>@texts.t("page.loading")</div></div>
     </div>
     <style id="style"></style>
     <script type="text/javascript" src="@assetsRoot/bundles/client.js?v=@models.AssetVersion.VALUE" charset="utf-8"></script>

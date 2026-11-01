@@ -1,5 +1,6 @@
 import _ from 'underscore';
 import '../../vue-design/main'
+import { keepScriptDraft } from './scriptDraft';
 
 /* Controllers */
 angular.module('breadboard.controllers', []).controller('AppCtrl', ['$scope', 'breadboardFactory', '$timeout', '$http', '$state', 'csvService', 'configService', 'downloadService',
@@ -15,6 +16,8 @@ function ($scope, $breadboardFactory, $timeout, $http, $state, csvService, confi
       if ($scope.breadboard === undefined) {
         $scope.breadboard = {};
       }
+      // (the Script panel's unsaved draft stays when the server sends the account's User JSON)
+      keepScriptDraft($scope.breadboard.user, data);
       $scope.breadboard = _.extend($scope.breadboard, data);
 
       if ($scope.breadboard.experiment != undefined) {

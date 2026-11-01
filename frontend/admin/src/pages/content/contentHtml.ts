@@ -22,12 +22,21 @@ export function hasText (html: string | null | undefined): boolean {
   return plainText(s) !== ''
 }
 
-/** The words of an HTML string, for list snippets and search (tags and scripts dropped). */
+// Tags that sit inside a line of text, as <strong>{0}</strong>. does: dropped without a space, as a
+// browser shows them ("You picked {0}.", not "You picked {0} ."). Any other tag (a paragraph, a
+// line break, a list item, an image …) separates words.
+const INLINE_TAGS = new Set([
+  'a', 'abbr', 'b', 'bdi', 'bdo', 'big', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'font', 'i', 'ins', 'kbd', 'mark',
+  'q', 's', 'samp', 'small', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'tt', 'u', 'var', 'wbr',
+])
+
+/** The words of an HTML string as a browser shows them, for list snippets and search (tags and scripts dropped). */
 export function plainText (html: string | null | undefined): string {
   if (!html) return ''
   const s = html
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<(script|style|template)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<\/?([a-zA-Z][^\s/>]*)[^>]*>/g, (_tag, name: string) => (INLINE_TAGS.has(name.toLowerCase()) ? '' : ' '))
     .replace(/<[^>]*>/g, ' ')
   return decodeEntities(s).replace(/[\s ]+/g, ' ').trim()
 }

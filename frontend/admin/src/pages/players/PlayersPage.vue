@@ -4,7 +4,7 @@
       Everyone in the session, live. Find people by id, or filter by any property, e.g. <code>score&gt;5</code>. Click someone to see their screen, choices, ties and properties.
     </template>
     <template #actions>
-      <BButton :icon="Download" :disabled="!rows.length" title="The players shown, with every property" @click="downloadCsv">Download CSV</BButton>
+      <BButton :icon="Download" :disabled="!rows.length" :title="`The players shown, with every property${csvForExcel ? ', for Excel (as chosen on Sessions & data)' : ''}`" @click="downloadCsv">Download CSV</BButton>
     </template>
 
     <BEmpty
@@ -140,7 +140,7 @@
                     @click.stop="toggle(r.id)"
                   >
                     <span class="plist__dot" :class="`is-${r.tone}`" aria-hidden="true" />
-                    <span class="plist__id-text">{{ r.id }}</span>
+                    <span class="plist__id-text">{{ r.name }}</span>
                   </button>
                 </td>
                 <td><span v-if="r.status" class="plist__status-text" :class="`is-${r.tone}`">{{ r.status }}</span><span v-else class="plist__none" aria-label="unknown">—</span></td>
@@ -159,7 +159,7 @@
         </nav>
       </div>
 
-      <PlayerPanel v-if="selectedPlayer" v-model:width="prefs.panelWidth" variant="sticky" :label="`Details of ${selectedPlayer}`">
+      <PlayerPanel v-if="selectedPlayer" v-model:width="prefs.panelWidth" variant="sticky" :label="`Details of ${playerName(selectedPlayer)}`">
         <PlayerDetails
           :id="selectedPlayer"
           context="players"
@@ -183,9 +183,9 @@ import { uid } from '@/ui/uid'
 import { admin, graph, running } from '@/store/admin'
 import { selectedPlayer, selectPlayer, networkPrefs as prefs, loadColumns, saveColumns } from '@/network/selection'
 import { parseFilter, matchFilter, describeFilter } from '@/network/filter'
-import { columnProperties, connectionOf, discoverProperties, formatValue, isAi, statusOf, choicesOf, valueOf } from '@/network/players'
+import { columnProperties, connectionOf, discoverProperties, formatValue, isAi, playerName, statusOf, choicesOf, valueOf } from '@/network/players'
 import { undoLast } from '@/network/tieEdits'
-import { download } from '@/network/exporters'
+import { csvForExcel, saveCsv } from '@/lib/csvFiles'
 import PlayerPanel from './PlayerPanel.vue'
 import PlayerDetails from './PlayerDetails.vue'
 import { BASE_COLUMNS, QUICK_FILTERS, csvKeys, quickMatch, sortNodes, toCsv, type Column, type QuickFilter, type Sort } from './table'
@@ -296,6 +296,8 @@ function sortBy (key: string) {
 
 interface Row {
   id: string
+  /** As the network and the Preview page name them: "AI 6 (_6)" for a computer player. */
+  name: string
   tone: 'ai' | 'on' | 'off' | 'none'
   status: string
   ties: number
@@ -317,6 +319,7 @@ const rows = computed<Row[]>(() => sorted.value.map(n => {
   const conn = connectionOf(n)
   return {
     id: n.id,
+    name: playerName(n.id),
     tone: isAi(n) ? 'ai' : conn === 'connected' ? 'on' : conn === 'disconnected' ? 'off' : 'none',
     status: statusOf(n),
     ties: degree(n.id),
@@ -403,8 +406,10 @@ function downloadCsv () {
     // every property anyone has (not only the ones a table column can show), plus Prolific ids
     const keys = csvKeys(nodes.value)
     const name = [admin.experiment?.name, admin.instance?.name].filter(Boolean).join('-').replace(/[^\w-]+/g, '-') || 'players'
-    download(toCsv(sorted.value, keys, degree), `players-${name}.csv`, 'text/csv;charset=utf-8')
-    notify.success('Players downloaded', `${rows.value.length} ${rows.value.length === 1 ? 'row' : 'rows'}, with every property the experiment set as a column.`)
+    // with the byte-order mark when For Excel is chosen on Sessions & data, as the console's other CSV files
+    saveCsv(`players-${name}.csv`, toCsv(sorted.value, keys, degree))
+    const n = rows.value.length
+    notify.success('Players downloaded', `${n} ${n === 1 ? 'row' : 'rows'}, with every property the experiment set as a column${csvForExcel.value ? '; for Excel, as chosen on Sessions & data' : ''}.`)
   } catch (e: any) {
     notify.error('Couldn\'t download the players', e?.message || String(e))
   }
@@ -420,7 +425,8 @@ function onKey (e: KeyboardEvent) {
   if (e.defaultPrevented || typing(e) || document.querySelector('.b-dialog')) return
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
     e.preventDefault()
-    void undoLast()
+    // (its notice names the players as the table does: "AI 6 (_6)", not "_6")
+    void undoLast(playerName)
     return
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return

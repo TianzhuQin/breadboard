@@ -99,6 +99,9 @@ public class ExperimentInstance extends Model {
     }
     events.clear();
     super.delete();
+    // Its participants' seat tokens go with it: a stopped session's are kept until then, as it
+    // could be resumed (see ScriptBoard.releaseSeatsIfOver).
+    security.ParticipantAuth.releaseInstance(String.valueOf(id));
   }
 
   public void start() {

@@ -110,10 +110,10 @@
     </form>
 
     <template #footer>
-      <p class="nsd-foot-note">Starts right away.</p>
-      <BButton variant="ghost" :disabled="busy || checking" @click="close">Cancel</BButton>
-      <BButton type="submit" :form="formId" :variant="replacing ? 'danger' : 'primary'" :loading="busy || checking">
-        {{ busy ? 'Creating…' : replacing ? 'Stop it and create' : 'Create session' }}
+      <p class="nsd-foot-note">Opens right away. Its game starts when you, or its waiting room, start it.</p>
+      <BButton variant="ghost" :disabled="busy || checking || created" @click="close">Cancel</BButton>
+      <BButton type="submit" :form="formId" :variant="replacing ? 'danger' : 'primary'" :loading="busy || checking || created">
+        {{ busy || created ? 'Creating…' : replacing ? 'Stop it and create' : 'Create session' }}
       </BButton>
     </template>
   </BDialog>
@@ -127,6 +127,7 @@ import { uid } from '@/ui/uid'
 import { admin, actions, ensureConnected, instances } from '@/store/admin'
 import { confirmEngineRebuild } from '@/store/engineGuard'
 import { openOutput } from '@/shell/output'
+import type { Instance } from '@/store/types'
 import { stepsCall } from '../autopilot/autopilot'
 import {
   TYPE_LABEL, buildFields, buildLaunchParams, checkParam, checkSessionName, fieldErrors, rangeText, suggestName,
@@ -157,13 +158,25 @@ const announce = ref('')
 /** The experiment whose parameters the form shows: the one selected when the dialog opened. */
 let openedFor: number | undefined
 
-const existingNames = computed(() => instances.value.map(i => i.name))
+/**
+ * The running session and the names taken when the session was asked for. The server's answer puts
+ * the new session in the store, running and with the name just given, before the dialog has faded
+ * out: worked out live, the form then warned that it stops that very session and that its name was
+ * taken. Kept until the dialog opens again; a launch that didn't happen shows the live state again.
+ */
+const frozen = ref<{ replacing: Instance | null, names: string[] } | null>(null)
+/** The session was made: the dialog closes as it was, still saying Creating…. */
+const created = ref(false)
+const existingNames = computed(() => frozen.value ? frozen.value.names : instances.value.map(i => i.name))
 const replacing = computed(() => {
+  if (frozen.value) return frozen.value.replacing
   const i = admin.instance
   return i && (i.status === 'RUNNING' || i.status === 'TESTING') ? i : null
 })
 
 function reset () {
+  frozen.value = null
+  created.value = false
   openedFor = admin.experiment?.id
   fields.value = buildFields(admin.experiment?.parameters)
   for (const k of Object.keys(values)) delete values[k]
@@ -279,6 +292,7 @@ async function submit () {
   // closed meanwhile (another experiment was selected), or the connection dropped while the question was open
   if (!go || !props.open || admin.experiment?.id !== experimentId || !ensureConnected()) return
   busy.value = true
+  frozen.value = { replacing: replacing.value, names: [...existingNames.value] }
   announce.value = 'Creating the session…'
   try {
     const askedAt = Date.now()
@@ -291,6 +305,7 @@ async function submit () {
       announce.value = failure.value
       return
     }
+    created.value = true
     busy.value = false
     emit('update:open', false)
     emit('created', sessionName)
@@ -299,6 +314,8 @@ async function submit () {
       : 'People can join with its links now. Start the game when everyone is here.')
   } finally {
     busy.value = false
+    // (not made: the form shows what is running, and the names taken, as they are now)
+    if (!created.value) frozen.value = null
   }
 }
 </script>

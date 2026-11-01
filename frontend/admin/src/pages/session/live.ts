@@ -23,7 +23,12 @@ export interface NetworkStats {
   ties: number
 }
 
-export function networkStats (nodes: Iterable<GraphNode>, ties: number): NetworkStats {
+/**
+ * Who is in the network. `live`: whether the session runs; one that has stopped or finished has nobody
+ * connected (its participants' pages closed as it ended), though its players keep the
+ * `_system.connected` they had then.
+ */
+export function networkStats (nodes: Iterable<GraphNode>, ties: number, live = true): NetworkStats {
   let people = 0
   let connected = 0
   let bots = 0
@@ -32,7 +37,7 @@ export function networkStats (nodes: Iterable<GraphNode>, ties: number): Network
     if (isAiId(n.id)) { bots++; continue }
     people++
     const sys = n.data && n.data._system
-    if (sys && typeof sys === 'object' && sys.connected === true) connected++
+    if (live && sys && typeof sys === 'object' && sys.connected === true) connected++
     if (aiFlag(n.data && n.data.ai)) takenOver++
   }
   return { people, connected, aiSeats: bots + takenOver, bots, takenOver, ties }
@@ -117,6 +122,22 @@ export function isLocalOrigin (origin: string): boolean {
   try {
     const h = new URL(origin).hostname
     return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1' || h.endsWith('.localhost')
+  } catch (e) {
+    return false
+  }
+}
+
+/**
+ * An address on a private network (a lab's, say: 192.168.…, 10.…, a .local name): computers on that
+ * network reach it, but nobody on the internet does.
+ */
+export function isPrivateOrigin (origin: string): boolean {
+  try {
+    const h = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    if (/^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h) || h.endsWith('.local')) return true
+    const b = /^172\.(\d+)\./.exec(h)
+    if (b && Number(b[1]) >= 16 && Number(b[1]) <= 31) return true
+    return /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h)
   } catch (e) {
     return false
   }
@@ -317,7 +338,8 @@ export function formatWhen (at: number, now = Date.now()): string {
 
 /** A file name the browser and every OS accept. */
 export function safeFileName (s: string): string {
-  // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only)
-  const cleaned = (s || '').replace(/[,;]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
+  // (as Sessions & data names its downloads: letters, digits, spaces and . _ ( ) - only, any space a
+  // plain one first, as the autopilot's names before 3.1 have no-break spaces)
+  const cleaned = (s || '').replace(/\s+/gu, ' ').replace(/[,;#]/g, '').replace(/[^\p{L}\p{N} ._()-]+/gu, '-').replace(/\s+/g, ' ').trim()
   return (cleaned || 'session').slice(0, 120)
 }

@@ -4,10 +4,19 @@ import { Socket } from '@human-nature-lab/breadboard-core/src/socket'
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'retrying' | 'closed'
 
 /**
+ * The longest the console waits between two attempts to reconnect. The core socket backs off to 30 s,
+ * for a server that many participants' pages knock on at once; a lab has a few consoles, and a
+ * researcher waiting for theirs to come back after a restart of the server waited up to 20 s or more.
+ */
+export const MAX_RETRY_MS = 5000
+
+/**
  * The console's websocket (/connect, app/models/Breadboard.java). Every message carries the
  * admin's uid; the server answers with a stream of JSON messages, sometimes batched as
- * {queuedMessages: [...]}. Reconnects by itself with back-off; on every (re)connect it logs in
- * again, which makes the server send the full state.
+ * {queuedMessages: [...]}. Reconnects by itself with back-off, waiting at most MAX_RETRY_MS, and at
+ * once when the window gets the focus, the page is shown again or the network comes back (the core
+ * socket sees to the last two), or with tryNow; on every (re)connect it logs in again, which makes
+ * the server send the full state.
  */
 export class AdminConnection {
   state = ref<ConnectionState>('idle')
@@ -15,6 +24,9 @@ export class AdminConnection {
   private socket: Socket | null = null
   private listeners: ((m: any) => void)[] = []
   private uid = ''
+  /** The attempt this console makes sooner than the core socket's back-off would (MAX_RETRY_MS) */
+  private soonTimer: ReturnType<typeof setTimeout> | null = null
+  private onFocus = () => { if (this.state.value !== 'open') this.tryNow() }
 
   start (uid: string, configured: string | undefined) {
     this.stop()
@@ -24,6 +36,7 @@ export class AdminConnection {
     this.socket = socket
     socket.on('connect', () => { this.state.value = this.state.value === 'idle' ? 'connecting' : this.state.value })
     socket.on('open', () => {
+      this.clearSoon()
       this.state.value = 'open'
       this.retryInMs.value = 0
       // Logging in on every open: after a reconnect the server sends everything again.
@@ -31,7 +44,11 @@ export class AdminConnection {
     })
     socket.on('retry', (wait: number) => {
       this.state.value = 'retrying'
-      this.retryInMs.value = wait
+      const soon = Math.min(wait, MAX_RETRY_MS)
+      this.retryInMs.value = soon
+      this.clearSoon()
+      // (tryNow gives up the core socket's own, later attempt)
+      if (soon < wait) this.soonTimer = setTimeout(() => { this.soonTimer = null; this.tryNow() }, soon)
     })
     socket.on('message', (text: string) => {
       let data: any
@@ -44,14 +61,33 @@ export class AdminConnection {
     })
     this.state.value = 'connecting'
     socket.connect()
+    if (typeof window !== 'undefined') window.addEventListener('focus', this.onFocus)
   }
 
   stop () {
+    this.clearSoon()
+    if (typeof window !== 'undefined') window.removeEventListener('focus', this.onFocus)
     if (this.socket) {
       this.socket.close()
       this.socket = null
     }
     this.state.value = 'closed'
+  }
+
+  /**
+   * Try to connect now instead of at the next attempt (the researcher pressed Try now, or came back to
+   * the window). Nothing while the connection is open, or an attempt has only just started.
+   */
+  tryNow () {
+    this.clearSoon()
+    this.socket?.reconnectNow()
+  }
+
+  private clearSoon () {
+    if (this.soonTimer !== null) {
+      clearTimeout(this.soonTimer)
+      this.soonTimer = null
+    }
   }
 
   onMessage (fn: (m: any) => void) {

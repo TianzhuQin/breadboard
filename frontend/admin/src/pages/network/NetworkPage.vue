@@ -135,7 +135,7 @@ import { selectedPlayer, selectPlayer, networkPrefs as prefs, viewPrefs, setView
 import { editTie, pendingEdits, tieEditsBlocked, undoLast, undoShortcut } from '@/network/tieEdits'
 import { parseFilter, matchFilter } from '@/network/filter'
 import {
-  colorableProperties, compareIds, connectionOf, discoverProperties, isAi, labelOf, labelableProperties, propertyTitle, valueOf,
+  colorableProperties, compareIds, connectionOf, discoverProperties, displayName, isAi, labelableProperties, propertyTitle, valueOf,
 } from '@/network/players'
 import { download, exportFileName, networkGraphml, networkJson } from '@/network/exporters'
 import PlayerPanel from '@/pages/players/PlayerPanel.vue'
@@ -198,7 +198,7 @@ const labelBy = computed<string | null>({
   get: () => viewPrefs(admin.experiment?.id).labelBy ?? null,
   set: (v) => setViewPref(admin.experiment?.id, 'labelBy', v),
 })
-const nameFor = (id: string) => labelOf(graph.nodes.get(id) || { id, data: {} }, labelBy.value)
+const nameFor = (id: string) => displayName(graph.nodes.get(id) || { id, data: {} }, labelBy.value)
 
 const colorOptions = computed<SelectOption[]>(() => {
   const opts: SelectOption[] = [
@@ -245,7 +245,8 @@ const matches = computed<string[]>(() => {
   if (!f.conditions.length) return []
   const text = (n: { id: string, data: Record<string, any> }, t: string) => {
     const q = t.toLowerCase()
-    return n.id.toLowerCase().includes(q) || (!!labelBy.value && labelOf(n, labelBy.value).toLowerCase().includes(q))
+    // (the name it shows: "AI 6" finds _6 too)
+    return n.id.toLowerCase().includes(q) || displayName(n, labelBy.value).toLowerCase().includes(q)
   }
   return nodes.value.filter(n => matchFilter(f, n, { text })).map(n => n.id).sort(compareIds)
 })

@@ -80,7 +80,7 @@
           </div>
         </fieldset>
 
-        <BField v-else-if="draft.type === 'Text'" label="Default" optional :error="shown('defaultVal')" hint="Pre-filled when a session is created. Leave empty to start blank.">
+        <BField v-else-if="draft.type === 'Text'" label="Default" optional :error="shown('defaultVal')" hint="What sessions get: the autopilot’s, and the first one you create (later ones fill in the last session’s value). Leave empty to start blank.">
           <template #default="{ id, describedby }">
             <BInput :id="id" v-model="draft.defaultVal" data-field="defaultVal" autocomplete="off" placeholder="e.g. control" :aria-describedby="describedby" :aria-invalid="!!shown('defaultVal')" @blur="touch('defaultVal')" />
           </template>

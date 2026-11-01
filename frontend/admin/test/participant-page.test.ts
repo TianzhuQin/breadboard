@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import {
   canSave, isCustomClientGraph, isDirty, isLegacyPage, javaHashCode, newPart, readPart, serverDiffers,
 } from '../src/pages/participant-page/participantPage'
-import { DEFAULT_CLIENT_GRAPH, DEFAULT_CLIENT_HTML } from '../src/pages/participant-page/templates'
+import { DEFAULT_CLIENT_GRAPH, DEFAULT_CLIENT_HTML, isNewParticipantPage } from '../src/pages/participant-page/templates'
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }))
 vi.mock('@/lib/http', () => ({
@@ -36,6 +36,21 @@ describe('templates', () => {
   it('match the server’s defaults for new experiments', () => {
     expect(DEFAULT_CLIENT_HTML).toBe(conf('default-client-html.html'))
     expect(DEFAULT_CLIENT_GRAPH).toBe(conf('default-client-graph.js'))
+  })
+  // A release has no conf/defaults folder (the file is inside a jar), so the comment named a file
+  // nobody could open.
+  it('point to the previous default page where a researcher can open it', () => {
+    expect(DEFAULT_CLIENT_HTML).not.toMatch(/see conf\/defaults/)
+    expect(DEFAULT_CLIENT_HTML).toContain('https://github.com/TianzhuQin/breadboard/blob/main/conf/defaults/legacy-client-html.html')
+  })
+  it('know the new page whatever its comments say, as experiments made before 3.1 have it', () => {
+    const before31 = DEFAULT_CLIENT_HTML.replace(/ {6}The previous default page[\s\S]*?legacy-client-html\.html\n/,
+      '      The previous default page (SVGGraph) still works: see conf/defaults/legacy-client-html.html.\n')
+    expect(before31).not.toBe(DEFAULT_CLIENT_HTML)
+    expect(isNewParticipantPage(before31)).toBe(true)
+    expect(isNewParticipantPage(DEFAULT_CLIENT_HTML.replace(/\n/g, '\r\n'))).toBe(true)
+    expect(isNewParticipantPage(DEFAULT_CLIENT_HTML.replace('<BBGame', '<BBGame layout="force"'))).toBe(false)
+    expect(isNewParticipantPage(conf('legacy-client-html.html'))).toBe(false)
   })
   it('tell the old layout from the new one', () => {
     expect(isLegacyPage(conf('legacy-client-html.html'))).toBe(true)
