@@ -5378,13 +5378,16 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
       Vertex completed = completed(player);
-      boolean ownFinished = player != null && Boolean.TRUE.equals(player.getProperty("finished"));
+      Object privateValues = player == null ? null : player.getProperty("private");
+      Object finished = privateValues instanceof Map && ((Map<?, ?>) privateValues).containsKey("finished")
+          ? ((Map<?, ?>) privateValues).get("finished") : player == null ? null : player.getProperty("finished");
+      boolean ownFinished = Boolean.TRUE.equals(finished);
       boolean keep = completed != null || ownFinished || ownEnd(client.lastFrame);
       if (completed != null || ownFinished) {
         try {
           // Their screen as it is, with the code: a change inside _system alone isn't sent by itself,
           // so a code given a moment ago may not have reached the page (or its last screen) yet.
-          client.updateGraph(completed);
+          client.updateGraph(player);
         } catch (Exception e) {
           Logger.debug("Could not show " + client.id + " their screen as the session ended: " + e);
         }

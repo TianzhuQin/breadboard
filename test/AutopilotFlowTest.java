@@ -238,7 +238,7 @@ public class AutopilotFlowTest extends BaseTest {
         Recruitment.prolificEntry("from-prolific", "PID-CANCEL", "STUDY-CANCEL", "SESSION-CANCEL");
         Page prolific = connect(experiment, session, "from-prolific");
         Page ownEnd = connect(experiment, session, "own-end");
-        engine().eval("autopilot.room.onCancel = { players -> def v=g.getVertex('own-end'); v.text='Custom waiting credit'; v.finished=true }; autopilot.giveUp(); null");
+        engine().eval("autopilot.room.onCancel = { players -> def v=g.getVertex('own-end'); v.private.text='Custom waiting credit'; v.private.finished=true }; autopilot.giveUp(); null");
         assertTrue("the cancelled room's pages end instead of keeping the waiting animation",
             within(1500, () -> manual.closed && prolific.closed && ownEnd.closed));
         JsonNode player = manual.lastPlayer();

@@ -468,10 +468,7 @@ class Autopilot {
     } finally {
       // Everyone's page says so, also of those who are away right now and see it when they
       // return, even if onCancel failed.
-      participants().each { v ->
-        boolean ownEnd = v.getProperty("finished") == true || v.getProperty("_system")?.recruitment?.completed == true
-        status(v, ownEnd ? null : [state: "cancelled"])
-      }
+      participants().each { cancelledStatus(it) }
       try {
         if (waitingCancelled != null) waitingCancelled()
       } finally {
@@ -490,8 +487,17 @@ class Autopilot {
     try {
       runCancel([v])
     } finally {
-      status(v, [state: "cancelled"])
+      cancelledStatus(v)
     }
+  }
+
+  // private.finished is the documented participant-only end. As in the participant view, a
+  // private value overrides the public one; neither kind of own end keeps the waiting animation.
+  private void cancelledStatus(Vertex v) {
+    def own = v.getProperty("private")
+    def finished = own instanceof Map && own.containsKey("finished") ? own.finished : v.getProperty("finished")
+    boolean ended = finished == true || v.getProperty("_system")?.recruitment?.completed == true
+    status(v, ended ? null : [state: "cancelled"])
   }
 
   // The default notice replaces the autopilot's own waiting text first, so a page that onCancel
