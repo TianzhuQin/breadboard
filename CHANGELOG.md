@@ -167,6 +167,7 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   accounts (shown once; **Copy sign-in details** gives the server's address on the lab's network
   when the console is open at localhost). Every account works on every experiment on the server.
   Someone whose password was reset is signed out with the reason and told to ask for the new one.
+  A password reset or account removal also closes a sign-in still waiting for the console to load.
 - Work on any experiment while the autopilot or a colleague runs another: its Build pages and data
   are there, and the Run pages say what the engine runs and how to run yours. Every console (the
   previous one too) hears when a session opens or ends and follows the sessions of the experiment it
