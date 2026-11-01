@@ -77,7 +77,7 @@ public class StepErrorLinesTest extends BaseTest {
     private User user(String prefix) {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
-        return createUser(prefix + "-" + UUID.randomUUID() + "@test.org", prefix, "secret-1", lang);
+        return createUser(prefix + "-" + UUID.randomUUID() + "@example.org", prefix, "secret-1", lang);
     }
 
     private Experiment experiment(User researcher, String name, String... steps) {
