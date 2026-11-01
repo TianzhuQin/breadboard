@@ -1289,21 +1289,51 @@ public class ScriptBoard extends UntypedActor {
    * of the console (and may send LogIn twice); it keeps one Admin, with the account refreshed.
    */
   static Admin registerAdmin(User user, ActorRef scriptBoardController, ThrottledWebSocketOut out) {
+    Admin registered = null;
     synchronized (ADMIN_LOCK) {
-      for (Admin admin : admins) {
-        if (admin.getOut() == out) {
-          admin.setUser(user);
-          return admin;
+      // Recheck at registration too: revocation and the two actor hops of LogIn may interleave.
+      // With this lock, a later revocation sees the new Admin, and an earlier one invalidates it.
+      if (consoleSignInIsCurrent(user, out)) {
+        for (Admin admin : admins) {
+          if (admin.getOut() == out) {
+            admin.setUser(user);
+            registered = admin;
+            break;
+          }
+        }
+        if (registered == null) {
+          registered = new Admin(user, scriptBoardController, out);
+          addAdmin(registered);
         }
       }
-      Admin admin = new Admin(user, scriptBoardController, out);
-      // The socket closed before this ran (e.g. a tab reloaded while the engine was busy): its
-      // removeAdmin has come and gone, so registering it now would keep a dead Admin for good.
-      // (removeAdmin takes the same lock, after the socket is marked closed.)
-      if (!out.isClosed()) {
-        addAdmin(admin);
-      }
-      return admin;
+    }
+    // No socket I/O under the admin-list lock (a close's callback removes its Admin).
+    if (registered == null) closeExpiredConsole(user, out);
+    return registered;
+  }
+
+  /** A queued console sign-in still has the account token authenticated by its incoming frame. */
+  static boolean consoleSignInIsCurrent(User user, ThrottledWebSocketOut out) {
+    if (out == null || out.isClosed() || user == null || user.uid == null) return false;
+    User current = User.findByEmail(user.email);
+    return current != null && user.uid.equals(current.uid);
+  }
+
+  static void closeExpiredConsole(User user, ThrottledWebSocketOut out) {
+    if (out == null || out.isClosed()) return;
+    User current = user == null ? null : User.findByEmail(user.email);
+    ObjectNode reply = Json.newObject();
+    reply.put("error", current == null
+        ? "This account was removed by another researcher. Ask them for a new one if you still need it."
+        : "This sign-in has ended or the account's password changed. Sign in again with its current password.");
+    reply.put("status", "unauthorized");
+    out.markClosed();
+    removeAdmin(out);
+    try {
+      out.write(reply);
+      out.close();
+    } catch (Exception e) {
+      Logger.debug("Could not close an expired console sign-in: " + e);
     }
   }
 
@@ -1433,6 +1463,7 @@ public class ScriptBoard extends UntypedActor {
    * reconnects no longer makes every other console receive the graph again.
    */
   static void replayGraph(Admin admin) {
+    if (admin == null || admin.getOut().isClosed()) return;
     ScriptEngine current = engine;
     if (current == null) {
       return;

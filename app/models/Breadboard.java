@@ -772,6 +772,12 @@ public class Breadboard extends UntypedActor {
    * running.
    */
   private void logIn(User user, ThrottledWebSocketOut out) {
+    // The frame was authenticated before it waited in this actor's mailbox. A password reset,
+    // sign-out or removal can overtake it while no Admin exists for revocation to close yet.
+    if (!ScriptBoard.consoleSignInIsCurrent(user, out)) {
+      ScriptBoard.closeExpiredConsole(user, out);
+      return;
+    }
     ActorRef scriptBoard = instances.get(user.email);
     boolean firstIntoEngine = false;
     boolean firstSinceStart = scriptBoard == null;
@@ -799,7 +805,7 @@ public class Breadboard extends UntypedActor {
     out.write(userJson);
     // Registered now, not only when the engine actor gets to it (it may be busy for seconds), so
     // this tab already hears of changes made in the account's other tabs.
-    ScriptBoard.registerAdmin(user, scriptBoard, out);
+    if (ScriptBoard.registerAdmin(user, scriptBoard, out) == null) return;
     if (followed) {
       // The account's other tabs show the session it follows now too, not the one it had.
       ScriptBoard.toOtherTabs(user.email, userJson, out);
