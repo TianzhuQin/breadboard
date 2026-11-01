@@ -3,6 +3,7 @@ package launcher;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
@@ -43,9 +44,11 @@ public final class Main {
     QueuedOutput err = new QueuedOutput(new FileOutputStream(FileDescriptor.err), "breadboard-stderr", startErrors);
     // As Java makes them (System.initializeSystemClass): the console's encoding, when it has one
     System.setOut(printStream(out, System.getProperty("sun.stdout.encoding")));
-    System.setErr(printStream(err, System.getProperty("sun.stderr.encoding")));
+    OutputStream errors = connectionErrors(err, () -> play.Logger.debug("A participant WebSocket closed while a reply was being sent."));
+    System.setErr(printStream(errors, System.getProperty("sun.stderr.encoding")));
     // What is printed just before the process ends (why the server can't start) still goes out.
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      try { errors.flush(); } catch (IOException ignored) { }
       startErrors.writeIfTheServerNeverListened();
       long until = System.nanoTime() + DRAIN_AT_EXIT_MS * 1000000L;
       err.drain(until);
@@ -65,6 +68,11 @@ public final class Main {
     } else {
       System.exit(-1);
     }
+  }
+
+  /** The stderr path used by the launcher; kept separate so its actual wiring can be tested. */
+  static OutputStream connectionErrors(OutputStream out, Runnable note) {
+    return new DisconnectedOutput(out, note);
   }
 
   /**

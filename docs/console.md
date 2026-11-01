@@ -223,6 +223,9 @@ Tick players in the list, or pick **Test players** (those your steps marked with
 you have clicked inside the participant's page. **Join as a new participant** opens the session's
 sign-in page in a new tab.
 
+Ordinary dropped WebSocket connections no longer print Java stack traces in a release's server
+window. A DEBUG note can appear in the application log; unrelated errors keep their full details.
+
 **Previews are live.** A click in a preview is a real choice, recorded with the session's data. A
 player whose own page is connected is shown read-only: you see their screen as it changes, but can't
 answer for them, and their page is left alone. So is a computer player: you see what the computer
