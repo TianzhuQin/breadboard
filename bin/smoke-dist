@@ -142,6 +142,65 @@ use_proxy () {
   fi
 }
 
+# Stand-ins for what the launcher asks about the networks this computer is on (ifconfig and route on
+# macOS, ip on Linux), first on its PATH when NETWORKS is set: Wi-Fi (the default route's, 10.20.30.40)
+# and an Ethernet adapter (192.168.1.20), which "On this network" lists, in that order, and networks
+# only this computer is on, which it leaves out: two virtual machines' (macOS: Parallels' vnic0, UTM's
+# bridge100; Linux: Docker's docker0, libvirt's virbr0) and a VPN's (point-to-point).
+NETWORKS=""
+FAKE_NETWORKS="$WORK/networks"
+mkdir -p "$FAKE_NETWORKS"
+if [ "$(uname)" = Darwin ]; then
+  cat > "$FAKE_NETWORKS/ifconfig" <<'EOF'
+#!/bin/sh
+cat <<'END'
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+	inet 127.0.0.1 netmask 0xff000000
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 10.20.30.40 netmask 0xffffff00 broadcast 10.20.30.255
+	status: active
+en7: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 192.168.1.20 netmask 0xffffff00 broadcast 192.168.1.255
+	status: active
+utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380
+	inet 100.64.0.2 --> 100.64.0.2 netmask 0xffffffff
+vnic0: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	inet 10.211.55.2 netmask 0xffffff00 broadcast 10.211.55.255
+	status: active
+bridge100: flags=8a63<UP,BROADCAST,SMART,RUNNING,ALLMULTI,SIMPLEX,MULTICAST> mtu 1500
+	inet 192.168.64.1 netmask 0xffffff00 broadcast 192.168.64.255
+	status: active
+END
+EOF
+  printf '#!/bin/sh\necho "  interface: en0"\n' > "$FAKE_NETWORKS/route"
+else
+  cat > "$FAKE_NETWORKS/ip" <<'EOF'
+#!/bin/sh
+case "$*" in
+  "-4 route show default") echo "default via 10.20.30.1 dev eth0 proto dhcp metric 100" ;;
+  "-o link show up")
+    echo '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN'
+    echo '2: docker0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP'
+    echo '3: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP'
+    echo '4: virbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP'
+    echo '5: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN'
+    echo '6: enx00e04c680001: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP' ;;
+  "-4 -o addr show dev lo") echo '1: lo    inet 127.0.0.1/8 scope host lo' ;;
+  "-4 -o addr show dev docker0") echo '2: docker0    inet 172.17.0.1/16 scope global docker0' ;;
+  "-4 -o addr show dev eth0") echo '3: eth0    inet 10.20.30.40/24 scope global dynamic eth0' ;;
+  "-4 -o addr show dev virbr0") echo '4: virbr0    inet 192.168.122.1/24 scope global virbr0' ;;
+  "-4 -o addr show dev tun0") echo '5: tun0    inet 100.64.0.2/32 scope global tun0' ;;
+  "-4 -o addr show dev enx00e04c680001") echo '6: enx00e04c680001    inet 192.168.1.20/24 scope global enx00e04c680001' ;;
+esac
+EOF
+fi
+chmod +x "$FAKE_NETWORKS"/*
+use_networks () {
+  if [ -n "$NETWORKS" ]; then
+    export PATH="$NETWORKS:$PATH"
+  fi
+}
+
 # The caffeinate that keeps this Mac awake for the process $1, if one does
 awake_for () {
   pgrep -f "^caffeinate -i -s -w $1\$" 2>/dev/null || true
@@ -150,13 +209,16 @@ awake_for () {
 # start "what this start is" [more settings for the server]
 # (on the port given as -Dhttp.port, or, with PORT_IN_LOCAL_CONF set, on the one conf/local.conf gives)
 PORT_IN_LOCAL_CONF=""
+# (FROM: the first line of the server's output that is this start's)
+FROM=1
 start () {
   local what="$1" from port_arg="-Dhttp.port=$PORT"
   shift
   [ -z "$PORT_IN_LOCAL_CONF" ] || port_arg=""
   touch "$WORK/server.log"
   from=$(( $(wc -l < "$WORK/server.log") + 1 ))
-  (cd "$APP" && use_proxy && exec ./breadboard.sh ${port_arg:+"$port_arg"} "$@") >> "$WORK/server.log" 2>&1 &
+  FROM=$from
+  (cd "$APP" && use_proxy && use_networks && exec ./breadboard.sh ${port_arg:+"$port_arg"} "$@") >> "$WORK/server.log" 2>&1 &
   SERVER=$!
   for _ in $(seq 1 180); do
     if ! kill -0 "$SERVER" 2>/dev/null; then fail "the server stopped while starting"; fi

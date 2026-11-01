@@ -215,12 +215,17 @@ IF /I "%BREADBOARD_KEEP_RUNNING%"=="no" SET "KEEP_RUNNING="
 IF /I "%BREADBOARD_KEEP_RUNNING%"=="off" SET "KEEP_RUNNING="
 
 REM Where it is reached: here, and from the other computers on this network (a lab's), at this
-REM computer's IPv4 addresses: first those of the network it reaches the internet through (its
-REM default route), then those of every other connected adapter (a second network; a lab's network
-REM may hand out public addresses). Only loopback (127.x) and link-local (169.254.x) ones are left out.
+REM computer's IPv4 addresses: first the one it reaches the internet from (Find-NetRoute: the address
+REM it would send from to one outside its networks, 192.0.2.1, which is never used), and its adapter's
+REM others, then those of every other connected adapter, by the adapters' order (a second network; a
+REM lab's network may hand out public addresses). Left out are loopback (127.x) and link-local
+REM (169.254.x) addresses, and adapters of networks only this computer is on, by what they are:
+REM Hyper-V's (WSL's too), VMware's, VirtualBox's and other virtual adapters, VPNs', loopback and
+REM Bluetooth ones, whose addresses reach nothing but this computer; unless it reaches the internet
+REM through one (a server on Hyper-V). The console lists the same (app/controllers/LanAddresses.java).
 ECHO Starting Breadboard. Once it says "Listening for HTTP", it is ready at:
 ECHO   On this computer: http://localhost:%PORT%
-FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$default = @(Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue | Sort-Object RouteMetric | ForEach-Object { $_.InterfaceIndex }); $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { $_.ifIndex }); Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '\A(127|169\.254)\.' -and ($default -contains $_.InterfaceIndex -or $up -contains $_.InterfaceIndex) } | Sort-Object { if ($default -contains $_.InterfaceIndex) { 0 } else { 1 } } | Select-Object -ExpandProperty IPAddress -Unique" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
+FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$out = Find-NetRoute -RemoteIPAddress 192.0.2.1 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress } | Select-Object -First 1; $routed = $null; if ($out) { $routed = $out.InterfaceIndex }; $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription + ' ' + $_.Name) -notmatch 'virtual|vmware|virtualbox|hyper-v|vethernet|tap-|wintun|wireguard|zerotier|tailscale|loopback|bluetooth' } | ForEach-Object { $_.ifIndex }); Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '\A(127|169\.254)\.' -and (($routed -ne $null -and $_.InterfaceIndex -eq $routed) -or $up -contains $_.InterfaceIndex) } | Sort-Object { if ($out -and $_.IPAddress -eq $out.IPAddress) { 0 } elseif ($routed -ne $null -and $_.InterfaceIndex -eq $routed) { 1 } else { 2 } }, InterfaceIndex | Select-Object -ExpandProperty IPAddress -Unique" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
 IF DEFINED KEEP_RUNNING ECHO If it stops by itself, it is started again. Close this window to stop it.
 
 REM Open the console once the server answers (for up to 3 minutes), from a helper in the background.

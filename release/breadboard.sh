@@ -415,7 +415,13 @@ esac
 # This computer's IPv4 addresses, where the other computers on its network (a lab's) reach it, one
 # per line: first those of the interface its default route goes through, then those of every other
 # active interface (an Ethernet adapter, a second network; a lab's network may hand out public
-# addresses). Only loopback (127.x) and link-local (169.254.x) addresses are left out.
+# addresses), in the order of their interfaces. Left out are loopback (127.x) and link-local
+# (169.254.x) addresses, and the networks only this computer is on: VPNs (point-to-point, below),
+# and those of virtual machines, containers and the like, by their interfaces' names (Parallels'
+# vnic0, UTM's, Apple's and Internet Sharing's bridge100, VMware's vmnet8, AirDrop's awdl0, Docker's
+# docker0 and br-..., libvirt's virbr0), whose addresses reach nothing but this computer, unless the
+# default route goes through one (a Linux server whose network is on a bridge). The console lists the
+# same (app/controllers/LanAddresses.java).
 lan_addresses() {
   if [ "$(uname)" = Darwin ]; then
     DEFAULT_IF="$(route -n get default 2>/dev/null | awk '/interface:/ { print $2 }')"
@@ -425,21 +431,26 @@ lan_addresses() {
     DEFAULT_IF=""
   fi
   interface_addresses \
-    | awk -v d="$DEFAULT_IF" '$1 == d { print $2; next } { rest[++n] = $2 } END { for (i = 1; i <= n; i++) print rest[i] }' \
+    | awk -v d="$DEFAULT_IF" '
+      $1 == d { print $2; next }
+      $1 ~ /^(bridge|vnic|vmnet|vmenet|feth|utun|awdl|llw|anpi|ap|gif|stf|ipsec|ppp|docker|br-|virbr|veth|vboxnet|lxc|lxdbr|cni|flannel|cali|podman|tun|tap|wg|zt|tailscale)/ { next }
+      { rest[++n] = $2 }
+      END { for (i = 1; i <= n; i++) print rest[i] }' \
     | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -vE '^(127|169\.254)\.' | awk '!seen[$0]++'
 }
 # "interface address", one per line, for the interfaces that are up and connected (macOS: not
-# "status: inactive"; Linux: LOWER_UP)
+# "status: inactive"; Linux: LOWER_UP), in their order, other than point-to-point ones (VPNs: utun,
+# tun, wg)
 interface_addresses() {
   if [ "$(uname)" = Darwin ]; then
     ifconfig 2>/dev/null | awk '
       function flush() { if (up && !inactive) for (i = 0; i < n; i++) print name, addr[i]; n = 0 }
-      /^[^ \t]/ { flush(); name = $1; sub(/:$/, "", name); up = /[<,]UP[,>]/ && /[<,]RUNNING[,>]/; inactive = 0; next }
+      /^[^ \t]/ { flush(); name = $1; sub(/:$/, "", name); up = /[<,]UP[,>]/ && /[<,]RUNNING[,>]/ && !/[<,]POINTOPOINT[,>]/; inactive = 0; next }
       /^[ \t]+inet / { addr[n++] = $2 }
       /^[ \t]+status: inactive/ { inactive = 1 }
       END { flush() }'
   elif command -v ip >/dev/null 2>&1; then
-    ip -o link show up 2>/dev/null | awk -F': ' '/LOWER_UP/ { sub(/@.*/, "", $2); print $2 }' | while read -r NAME; do
+    ip -o link show up 2>/dev/null | awk -F': ' '/LOWER_UP/ && !/[<,]POINTOPOINT[,>]/ { sub(/@.*/, "", $2); print $2 }' | while read -r NAME; do
       ip -4 -o addr show dev "$NAME" 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $2, $4 }'
     done
   else
