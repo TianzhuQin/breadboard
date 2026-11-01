@@ -59,6 +59,26 @@ public class LauncherJavaOptionsTest {
     return memoryOptions("release/breadboard.bat", "SET \"MEMORY_OPTS=", true);
   }
 
+  private static String oomCommand(List<String> options) {
+    for (String option : options) {
+      if (option.startsWith("-XX:OnOutOfMemoryError=")) {
+        return option.substring("-XX:OnOutOfMemoryError=".length());
+      }
+    }
+    throw new AssertionError("no out-of-memory command in " + options);
+  }
+
+  private static List<String> withoutOomCommand(List<String> options) {
+    List<String> nativeOptions = new ArrayList<>(options);
+    nativeOptions.removeIf(option -> option.startsWith("-XX:OnOutOfMemoryError="));
+    return nativeOptions;
+  }
+
+  private static String commandAfterCmd(String command) {
+    Matcher shell = Pattern.compile("(?i)^cmd\\.exe(?: /[^ ]+)* /C (.+)$").matcher(command);
+    return shell.matches() ? shell.group(1) : command;
+  }
+
   private static String java() {
     return new File(new File(System.getProperty("java.home"), "bin"), "java").getPath();
   }
@@ -131,7 +151,45 @@ public class LauncherJavaOptionsTest {
 
   @Test(timeout = 300000)
   public void withBreadboardBatsOptionsJavaThatRunsOutOfMemoryEndsThoughNobodyReadsItsWindow() throws Exception {
+    // Windows HotSpot executes the hook directly, unlike Unix's implicit sh -c. Running this on
+    // Unix made a bare echo appear to work even though Windows just printed the literal redirect.
+    Assume.assumeTrue("the native Windows hook is exercised by Windows CI's package smoke test",
+        File.separatorChar == '\\');
     endsThoughNobodyReadsTheWindow(batOptions());
+  }
+
+  /**
+   * Model the distinction between Windows' direct process launch and an explicit command shell.
+   * On Unix, a direct echo reproduces the failure (it prints > rather than redirecting). Only when
+   * the actual hook requests cmd.exe do we dispatch its fixed body through this host's shell. This
+   * is a portable regression for the command boundary, not native Windows quoting verification;
+   * bin/smoke-dist.ps1 still forces a real JVM OOM on Windows.
+   */
+  @Test(timeout = 60000)
+  public void theWindowsOomHookRequestsAShellToInterpretItsRedirect() throws Exception {
+    Assume.assumeTrue("portable direct-exec model; the native OOM case runs on Windows",
+        File.separatorChar != '\\');
+    String command = oomCommand(batOptions()).replace("%p", "4242");
+    String body = commandAfterCmd(command);
+    List<String> execution = command.equals(body)
+        ? Arrays.asList(command.split(" +")) : Arrays.asList("/bin/sh", "-c", body);
+    File home = Files.createTempDirectory("bb oom (R&D)! ").toFile();
+    assertTrue(new File(home, "logs").mkdir());
+    File window = new File(home, "window.txt");
+    try {
+      Process child = new ProcessBuilder(execution).directory(home).redirectErrorStream(true)
+          .redirectOutput(window).start();
+      assertTrue(child.waitFor(10, TimeUnit.SECONDS));
+      assertEquals(0, child.exitValue());
+      File note = new File(home, "logs/jvm-pid4242.log");
+      assertTrue("a direct echo prints the redirection instead of creating the diagnostic", note.isFile());
+      String text = new String(Files.readAllBytes(note.toPath()), StandardCharsets.UTF_8);
+      assertTrue(text, text.contains("java.lang.OutOfMemoryError: Java memory exhausted."));
+      assertTrue("the bounded diagnostic", text.length() < 1024);
+      assertEquals("the diagnostic must not be written to the server window", 0, window.length());
+    } finally {
+      delete(home);
+    }
   }
 
   @Test(timeout = 60000)
@@ -158,6 +216,8 @@ public class LauncherJavaOptionsTest {
     List<String> sh = shOptions();
     assertFalse(sh.isEmpty());
     assertTrue(sh.toString(), sh.contains("-XX:-DisplayVMOutput"));
-    assertEquals(sh, batOptions());
+    List<String> bat = batOptions();
+    assertEquals(withoutOomCommand(sh), withoutOomCommand(bat));
+    assertEquals("the diagnostic's text and relative destination", oomCommand(sh), commandAfterCmd(oomCommand(bat)));
   }
 }

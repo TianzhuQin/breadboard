@@ -66,7 +66,9 @@ REM Native Java output must not wait for a paused window. LogVMOutput's dependen
 REM grows on each engine rebuild, so leave it off and write only a short OOM diagnostic with its
 REM native hook. Heap dumps and hs_err_pid crash reports stay. The percent signs are Java's pid.
 SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput -XX:-LogVMOutput"
-SET "OOM_NOTE=-XX:OnOutOfMemoryError=echo java.lang.OutOfMemoryError: Java memory exhausted. See logs/out-of-memory.hprof and raise breadboard.memory. > logs/jvm-pid%%p.log"
+REM Windows HotSpot starts the hook directly: cmd must interpret the redirect. Its relative path
+REM uses the inherited folder, so a space, bracket, ampersand or exclamation mark there is not parsed.
+SET "OOM_NOTE=-XX:OnOutOfMemoryError=cmd.exe /D /V:OFF /C echo java.lang.OutOfMemoryError: Java memory exhausted. See logs/out-of-memory.hprof and raise breadboard.memory. > logs/jvm-pid%%p.log"
 "%JAVA%" %MEMORY_OPTS% "%OOM_NOTE%" -version >NUL 2>&1
 IF ERRORLEVEL 1 (
   SET "MEMORY_OPTS="
