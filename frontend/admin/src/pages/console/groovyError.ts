@@ -180,11 +180,11 @@ function explain (type: string, message: string, compileMessage: string | null):
       cleaned: msg,
     }
   }
-  if (compileMessage !== null) {
+  if (compileMessage !== null || /^(?:unexpected (?:token|char(?:acter)?):|expecting\s|unable to resolve class\s|Constructor call must be the first statement)/i.test(msg)) {
     return {
       title: 'Syntax error',
       hint: 'Groovy could not read the script. Check the brackets, quotes and commas around the line shown.',
-      cleaned: compileMessage,
+      cleaned: compileMessage ?? msg,
     }
   }
   // (the server's brief words for an error leave the type out: "No such property: five")

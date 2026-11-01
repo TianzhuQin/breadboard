@@ -343,6 +343,16 @@ describe('engine errors', () => {
     expect(e.places).toEqual([])
   })
 
+  it('explains the brief compiler messages kept in an autopilot load failure', () => {
+    for (const brief of ['unexpected token: ;', 'unexpected char: @', 'unable to resolve class MissingType', 'expecting EOF, found )']) {
+      const e = parseGroovyError(brief)
+      expect(e.title).toBe('Syntax error')
+      expect(e.hint).toContain('Check the brackets')
+      expect(e.message).toBe(brief)
+    }
+    expect(parseGroovyError('No such property: five').title).toBe('Unknown name “five”')
+  })
+
   it('passes Breadboard\'s own refusals through as they are written', () => {
     const e = parseGroovyError('Caught error: ScriptException: java.lang.IllegalStateException: They are already connected.\n  at edge_edits.groovy:108\n  at Script30.groovy:1')
     expect(e.title).toBe('They are already connected.')
