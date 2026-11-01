@@ -115,6 +115,6 @@ async function load () {
   /* The whole line beside the icon (16px and the 12px gap), so the buttons wrap below the text: with
      flex: 1 alone its basis was 0, so it stayed on the buttons' line and shrank to a letter's width. */
   .engine-notice__text { flex: 1 1 calc(100% - 28px); }
-  .engine-notice__actions { max-width: 100%; margin-left: 28px; justify-content: flex-start; }
+  .engine-notice__actions { max-width: calc(100% - 28px); margin-left: 28px; justify-content: flex-start; }
 }
 </style>
