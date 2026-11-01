@@ -150,7 +150,7 @@ describe('BBWaiting', () => {
   it('says how many people are here and how many are needed', () => {
     const w = mount(BBWaiting, { propsData: { player: { _system: { autopilot: { state: 'waiting', here: 2, min: 3, max: 5 } } } } })
     expect(w.find('.bb-waiting__title').text()).toBe('Waiting for the others')
-    expect(w.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. The session starts when 3–5 people are here.')
+    expect(w.find('.bb-waiting__count').text().replace(/\s+/g, ' ')).toBe('2 people are here. The session starts when at least 3 people are here (up to 5 can take part).')
     expect(w.findAll('.bb-waiting__dot.is-here').length).toBe(2)
   })
 

@@ -26,6 +26,8 @@ public class ExampleExperimentTest extends BaseTest {
     public static class ExampleTexts {
         /** The language the steps chose (setDefaultLanguage). */
         public String language;
+        /** Texts as a researcher rewrote or translated them on the Content page, in place of the folder's. */
+        public final java.util.Map<String, String> edited = new java.util.HashMap<String, String>();
 
         public void setDefaultLanguage(String language) {
             this.language = language;
@@ -37,7 +39,8 @@ public class ExampleExperimentTest extends BaseTest {
         }
 
         public String get(String name, Object... parameters) throws java.io.IOException {
-            String html = FileUtils.readFileToString(new File(EXAMPLE, "Content/" + name + ".html")).trim();
+            String html = edited.containsKey(name) ? edited.get(name)
+                : FileUtils.readFileToString(new File(EXAMPLE, "Content/" + name + ".html")).trim();
             for (int i = 0; i < parameters.length; i++) {
                 html = html.replace("{" + i + "}", String.valueOf(parameters[i]));
             }
@@ -78,12 +81,15 @@ public class ExampleExperimentTest extends BaseTest {
         List<String> texts = new ArrayList<String>();
         for (Content c : saved.getContent()) texts.add(c.name);
         assertTrue(texts.toString(), texts.containsAll(java.util.Arrays.asList("RoundPrompt", "Finished", "RoundTimer")));
-        assertEquals(15, texts.size());
+        assertEquals(17, texts.size());
         for (Content c : saved.getContent()) {
             assertEquals(c.name, 1, c.translations.size());
             assertEquals("eng", c.translations.get(0).language.getCode());
             assertFalse(c.name, c.translations.get(0).getHtml().trim().isEmpty());
         }
+        // the colours' names too, to translate like the rest
+        assertEquals("Blue", saved.contentFetcher.get("ColorBlue"));
+        assertEquals("Orange", saved.contentFetcher.get("ColorOrange"));
         assertEquals(Experiment.defaultClientHTML(), saved.getClientHtml());
         assertEquals(1, saved.languages.size());
 
@@ -107,7 +113,7 @@ public class ExampleExperimentTest extends BaseTest {
         experiment.save();
 
         Experiment saved = Experiment.findById(experiment.id);
-        assertEquals(15, saved.getContent().size());
+        assertEquals(17, saved.getContent().size());
         for (Content c : saved.getContent()) {
             assertEquals(c.name, 1, c.translations.size());
             assertEquals(c.name, "eng", c.translations.get(0).language.getCode());
@@ -191,7 +197,7 @@ public class ExampleExperimentTest extends BaseTest {
             + "  def v = g.addPlayer('zh-1')\n"
             + "  v._system.connected = true\n"
             + "  autopilot.onConnection('zh-1', true)\n"
-            + "  assert v.text == '<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。人数达到 3–8 人后，实验就会开始。</p><p>请保持这个页面打开。</p>'\n"
+            + "  assert v.text == '<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。至少 3 人到齐后，实验就会开始（最多 8 人）。</p><p>请保持这个页面打开。</p>'\n"
             + "  assert v._system.autopilot.state == 'waiting'\n"
             + "}");
     }
@@ -261,17 +267,124 @@ public class ExampleExperimentTest extends BaseTest {
             + "}");
     }
 
+    /**
+     * The colours' names are texts on the Content page (ColorBlue, ColorOrange): translated, they are what
+     * the buttons and the texts say, while scoring, the network's colours and the data keep Blue and
+     * Orange. The names used to be in the steps, and translating them there, as the Chinese guide hinted,
+     * scored no one and turned the network grey, without an error: every pick counted as Orange's.
+     */
+    @Test
+    public void itsColoursTranslatedOnTheContentPageScoreAndColourAsInEnglish() throws Exception {
+        ExampleTexts texts = new ExampleTexts();
+        // as the Content page's Visual editor saves a text (in a paragraph), and as its HTML editor does
+        texts.edited.put("ColorBlue", "<p>蓝色</p>");
+        texts.edited.put("ColorOrange", "橙色");
+        texts.edited.put("Picked", "<p>你选了 <strong>{0}</strong>。正在等待其他人…</p>");
+        texts.edited.put("ResultPoint", "上一轮你选了 {0}，大多数邻居也选了 {1}：<strong>得 1 分</strong>。");
+        texts.edited.put("ResultNoPoint", "上一轮你选了 {0}，大多数邻居选了 {1}，不得分。");
+        texts.edited.put("ResultTie", "上一轮你选了 {0}，邻居们选两种颜色的人一样多，不得分。");
+        // three people, each tied to the other two, and no computer players
+        harness = loadedGame(600, 3, 3, "zho", texts);
+        harness.runSync("{ ->\n"
+            + "  def tracked = []\n"
+            + "  eventTracker = [track: { name, data -> tracked << [name: name, data: data] }]\n"
+            + "  def people = ['p1', 'p2', 'p3'].collect { g.addPlayer(it) }\n"
+            + "  initStep.start()\n"
+            + "  assert g.V.count() == 3\n"
+            + "  def choose = { p, String name -> a.choose(p.choices.find { it.name == name }.uid) }\n"
+            // the buttons: named as translated, in the colours of the code
+            + "  people.each { p ->\n"
+            + "    assert p.choices*.name == ['蓝色', '橙色']\n"
+            + "    assert p.choices*.color == [COLORS.Blue, COLORS.Orange]\n"
+            + "  }\n"
+            // round 1: everyone picks 蓝色, and scores
+            + "  choose(people[0], '蓝色')\n"
+            + "  assert people[0].text.contains('<p>你选了 <strong>蓝色</strong>。正在等待其他人…</p>')\n"
+            + "  choose(people[1], '蓝色')\n"
+            + "  choose(people[2], '蓝色')\n"
+            + "  assert round == 2\n"
+            + "  people.each { p ->\n"
+            + "    assert p.score == 1\n"
+            + "    assert p.color == COLORS.Blue\n"
+            + "    assert p.private.lastResult == '上一轮你选了 蓝色，大多数邻居也选了 蓝色：<strong>得 1 分</strong>。'\n"
+            + "    assert p.text.contains(p.private.lastResult)\n"
+            + "  }\n"
+            // round 2: p3 picks 橙色; p1 and p2 see their neighbors split
+            + "  choose(people[0], '蓝色')\n"
+            + "  choose(people[1], '蓝色')\n"
+            + "  choose(people[2], '橙色')\n"
+            + "  assert round == 3\n"
+            + "  assert people*.score == [1, 1, 1]\n"
+            + "  assert people*.color == [COLORS.Blue, COLORS.Blue, COLORS.Orange]\n"
+            + "  assert people[2].private.lastResult == '上一轮你选了 橙色，大多数邻居选了 蓝色，不得分。'\n"
+            + "  assert people[0].private.lastResult == '上一轮你选了 蓝色，邻居们选两种颜色的人一样多，不得分。'\n"
+            // the data has Blue and Orange
+            + "  assert tracked.findAll { it.name == 'ColourPick' }*.data*.colour == ['Blue', 'Blue', 'Blue', 'Blue', 'Blue', 'Orange']\n"
+            + "  def results = tracked.findAll { it.name == 'RoundResult' }*.data\n"
+            + "  assert results.findAll { it.round == 1 }.every { it.pick == 'Blue' && it.neighborsMajority == 'Blue' && it.score == 1 }\n"
+            + "  assert results.find { it.round == 2 && it.player == 'p3' } == [player: 'p3', round: 2, pick: 'Orange', neighborsMajority: 'Blue', score: 1]\n"
+            + "  assert results.find { it.round == 2 && it.player == 'p1' }.neighborsMajority == 'tie'\n"
+            // the computer picks for someone who left: they read its name too
+            + "  people[0].ai = 1\n"
+            + "  pick(people[0], 'Orange')\n"
+            + "  assert people[0].text.contains('the computer picked <strong>橙色</strong> for you')\n"
+            + "}");
+    }
+
+    @Test
+    public void colourNamesWithHtmlEntitiesLookTheSameOnButtonsAndInText() throws Exception {
+        ExampleTexts texts = new ExampleTexts();
+        texts.edited.put("ColorBlue", "<p>Blue &amp; white &lt;dark&gt;</p>");
+        texts.edited.put("ColorOrange", "<p>&#27225;&#33394;</p>");
+        harness = loadedGame(600, 3, 3, "eng", texts);
+        harness.runSync("{ ->\n"
+            + "  def people = ['p1', 'p2', 'p3'].collect { g.addPlayer(it) }\n"
+            + "  initStep.start()\n"
+            + "  people.each { assert it.choices*.name == ['Blue & white <dark>', '橙色'] }\n"
+            + "  a.choose(people[0].choices.find { it.name == 'Blue & white <dark>' }.uid)\n"
+            + "  assert people[0].pick == 'Blue'\n"
+            + "  assert people[0].text.contains('<strong>Blue &amp; white &lt;dark&gt;</strong>')\n"
+            + "  assert !people[0].text.contains('<dark>')\n"
+            + "  a.choose(people[1].choices.find { it.name == 'Blue & white <dark>' }.uid)\n"
+            + "  a.choose(people[2].choices.find { it.name == 'Blue & white <dark>' }.uid)\n"
+            + "  assert people.every { it.score == 1 && it.color == COLORS.Blue }\n"
+            + "  assert people.every { it.private.lastResult.contains('Blue &amp; white &lt;dark&gt;') }\n"
+            + "}");
+    }
+
+    /** A colour whose text is gone or empty (a step copied into an experiment without it) is named as in the code. */
+    @Test
+    public void aColourWithoutItsTextIsNamedAsInTheCode() throws Exception {
+        ExampleTexts texts = new ExampleTexts();
+        // (ContentFetcher gives "" for a text the experiment doesn't have)
+        texts.edited.put("ColorBlue", "");
+        texts.edited.put("ColorOrange", "<p>&nbsp;</p>");
+        harness = loadedGame(600, 3, 2, "eng", texts);
+        harness.runSync("{ ->\n"
+            + "  ['p1', 'p2', 'p3'].each { g.addPlayer(it) }\n"
+            + "  initStep.start()\n"
+            + "  assert g.getVertex('p1').choices*.name == ['Blue', 'Orange']\n"
+            + "  assert colorName('Blue') == 'Blue'\n"
+            + "}");
+    }
+
     /** The example's steps in the engine with a session's launch parameters (rounds of {@code roundSeconds}). */
     private ScriptTestHarness loadedGame(int roundSeconds) throws Exception {
+        return loadedGame(roundSeconds, 5, 2, "eng", new ExampleTexts());
+    }
+
+    /** loadedGame, on a network of {@code networkSize}, for {@code rounds}, in {@code language}, with these texts. */
+    private ScriptTestHarness loadedGame(int roundSeconds, int networkSize, int rounds, String language, ExampleTexts texts)
+            throws Exception {
         ScriptTestHarness h = new ScriptTestHarness(false);
-        h.put("c", new ExampleTexts());
-        h.put("networkSize", 5);
+        h.put("c", texts);
+        h.put("networkSize", networkSize);
         h.put("minPlayers", 2);
         h.put("waitSeconds", 20);
-        h.put("rounds", 2);
+        h.put("rounds", rounds);
         h.put("roundSeconds", roundSeconds);
         h.put("prolificCode", "");
-        h.put("language", "eng");
+        h.put("language", language);
         for (String name : stepNames()) {
             h.eval(FileUtils.readFileToString(new File(EXAMPLE, "Steps/" + name + ".groovy")) + "\n;null;");
         }

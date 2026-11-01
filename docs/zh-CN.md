@@ -48,9 +48,9 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 - **新建或导入**：在 **Experiments** 页点 **New experiment**，从 **Breadboard's template**（带 OnJoinStep、OnLeaveStep、InitStep 三个空步骤和标准的参与者页面）开始，从 **Example: network game**（一个可以直接运行的网络小游戏）开始，或复制一个已有的实验。Breadboard 导出的 .zip（比如别人给你的）用 **Import** 导入，它会成为一个新实验，不会改动你已有的东西。**Export .zip** 可以把实验导出，用来备份或搬到另一台服务器。
 - **Steps**：实验的程序，用 Groovy 写。**Save**（Ctrl+S，Mac 上是 ⌘S）只是保存，引擎还在用原来的代码。要让引擎用上新代码，点 **Reload engine**；新建一场时引擎也会重新加载。
-  - 重新加载会让网络里的所有人断开。你自己开的那一场（或者自动运行用你的账号开的那一场）会接着进行：游戏从头开始，里面的人会自己重新连上，新来的人也能加入。如果游戏已经开始或有人在线，控制台会先问你，再重新加载。别的研究者正在运行的场次会被停止：确认框会写明这一点，那一场的参与者会看到这一场已被停止，以后还可以恢复。
+  - 重新加载会让网络里的所有人断开。你自己开的那一场（或者自动运行用你的账号开的那一场）仍然保留，但游戏从头开始；里面的人会自己重新连上，新来的人也能加入。重新加载前，控制台会先问你；游戏已经开始或有人在线时，还会说明会怎样。别的研究者正在运行的场次会被停止：确认框会写明这一点，那一场的参与者会看到这一场已被停止，以后还可以恢复。
   - 重新加载大约要半秒。这期间参与者点的选项和对连接的修改都不算数，他们重新连上后看到的是从头开始的游戏。数据里会记一条 `engineReloaded`，旧游戏的记录都在它前面。
-  - 有场次在运行时，保存后、重新加载前，顶栏会显示 **Reload needed**，所有研究者的控制台都一样，刷新页面也还在。没有场次在运行时显示 **Steps saved**：下一场会自动用上保存的代码。
+  - 有场次在运行时，保存后、重新加载前，顶栏会显示 **Reload needed**，所有研究者的控制台都一样，刷新页面也还在（同事要先在侧栏顶部选中这个实验）。没有场次在运行时显示 **Steps saved**：下一场会自动用上保存的代码。
   - 自动运行自己的那一场开着时，顶栏也显示 **Steps saved**，Steps 页只提示已保存：自动运行的下一场会用上，不用重新加载。这时重新加载会让这一场的游戏从头开始；如果自动运行用的不是你的账号，重新加载会结束这一场并让自动运行暂停，页面会先提醒你。
 - **Content**：参与者读到的文字，比如说明和知情同意书。每段文字有一个名字，程序里用 `c.get("名字")` 显示。每种语言各写一份；实验有几种语言时，参与者读哪一种由步骤决定，比如 `c.setDefaultLanguage("zho")`（`zho` 是语言的代码，Content 页面上写在语言名字旁边）。某段文字还没有这种语言的版本时，参与者看到的是英文版；有这种语言的版本但内容是空的，参与者就什么也看不到（Content 页面也会这样提醒）。
 - **Participant page**：参与者页面的 HTML、JavaScript 和 CSS。新实验已经带了一个现成的页面。
@@ -64,7 +64,15 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
   - 测试玩家（他自己的页面从没在这一场连上过）由预览来玩：预览算他在线，预览里的选择就是他的选择。
   - 预览不会把人加进游戏：不在网络里的人（比如恢复场次后还没回来的人），预览上写着 **Not in the game right now**，等他回来后自动显示他的页面。恢复场次或重新加载引擎以后，这些规则照样适用。
 
-**第一次用，建议从 Example: network game 开始**：建好后开一场（或打开 Autopilot），在两个标签页里打开登录链接（同一个浏览器里，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else** 换一个身份加入），就能看到完整流程：等候室凑够 2 人后，再等 20 秒看还有没有人来（满 8 人就不再等），倒数 5 秒后游戏自动开始，电脑玩家把网络补到 8 人；每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图上能看到邻居上一轮的选择和邻居之间的连接，每轮可以点自己的一条连接把它切断；几轮之后显示得分。网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数，不用改代码：在 **Parameters** 页面改它们的默认值，或者新建一场时只改这一场的；游戏里的说明、提示和得分文字都在 **Content** 页面，可以直接改写或翻译。每次选择、每轮得分和每次切断连接会记成 `ColourPick`、`RoundResult` 和 `TieCut` 事件，导出数据里就有。它的步骤代码也是写自己实验时很好的参考。
+**第一次用，建议从 Example: network game 开始**：
+
+1. 建好实验后开一场，或打开 Autopilot。
+2. 在两个标签页里打开登录链接。用同一个浏览器时，第二个标签页会问你是以第一个人的身份继续，还是 **Join as someone else**；点后者，再输入另一个 ID。也可以用无痕窗口。
+3. 等候室默认要 2 人到齐，再等 20 秒看还有没有人来；满 8 人就不再等。倒数 5 秒后游戏开始，电脑玩家把网络补到 8 人。也可以在 Live session 点 **Start the game**。
+4. 每轮选蓝色或橙色，和多数邻居相同就得 1 分；网络图显示邻居上一轮的选择和邻居之间的连接。每轮可以点自己的一条连接把它切断，几轮后显示总得分。
+5. 网络人数、最少开场人数、等待时间、轮数和每轮时长都是启动参数。在 **Parameters** 页改默认值，或新建一场时只改这一场，不用改代码。
+6. 在 **Content** 页改写或翻译参与者读到的文字，包括 `ColorBlue` 和 `ColorOrange`。程序里的内部值 `Blue`、`Orange` 保留原样，计分和数据就仍然正常。
+7. 数据里的 `ColourPick`、`RoundResult` 和 `TieCut` 分别记下选择、每轮得分和切断连接。例子的步骤代码也可以作为写自己实验的参考。
 
 例子的文字是英文写的，放在 Content 页面代码为 `eng` 的语言下。如果你的 Default language 不是英文（比如中文，代码 `zho`），新建的例子里还会有这种语言，参与者读的就是它：
 
@@ -78,7 +86,9 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 这些文字跟着这一场的内容语言走，也就是实验步骤用 `c.setDefaultLanguage(...)` 选的语言：选了中文（`zho`），参与者从登录到结束看到的都是中文；选了英文、别的语言，或者没有选，就是英文。Breadboard 自带的只有英文和简体中文。
 
-- **用 Example: network game**：把启动参数 `language` 设成 `zho`（见上面），这些文字就都是中文；再把 **Content** 页面上的文字翻译成中文，整个页面就是中文了。只有颜色的名字 **Blue**、**Orange** 写在步骤代码 RoundStep 里，不在 **Content** 页面上：按钮上的字，和“你选了 Blue”这类文字里的颜色都是它，要换成中文得改代码。
+- **用 Example: network game**：把启动参数 `language` 设成 `zho`（见上面），这些文字就都是中文；再把 **Content** 页面上的文字翻译成中文，整个页面就是中文了。
+  - 颜色的名字也在 **Content** 页面上：`ColorBlue`（Blue）和 `ColorOrange`（Orange）。按钮上的字，和“你选了 Blue”这类文字里的颜色，用的都是这两段文字。程序计分、给网络图上色和记录数据时仍然用 Blue 和 Orange，翻译不会影响它们。
+  - 用 3.0 版建的例子没有这些文字：它的文字和颜色的名字都写在步骤代码里。要翻译，请在 **Experiments** 页新建一个例子。不要改旧例子代码里的 "Blue"、"Orange"：程序用它们计分、给网络图上色，改了以后分数和颜色就会出错（比如选这种颜色的人永远不得分），而且不会报错。
 - **自己写的实验**：在 InitStep 里、`run` 外面写上 `c.setDefaultLanguage("zho")`，这样每一场的步骤一加载，就定下了这一场的语言。游戏进行中再调用一次（比如换成 `eng`），参与者开着的页面也会跟着换。`a.add` 里没写 `name` 的选项，按钮上显示为“选项 1”“选项 2”……，也跟着这一场的语言。
 - 开场前和两场之间看到的页面（等下一场的等待页、“现在没有开放的实验”、“你已经参加过这项研究了”），用的是它们要带人进入的那一场的语言；那一场还没开时，用这个实验最近一场的语言。这个实验还从没开过场时，是英文。链接被截断或打错时显示的“链接无效”页面也一样：跟着链接里还看得出的那一场或那个实验。
 - 这份指南里引用的参与者页面上的英文（比如 "No session is open right now"、**Finish and return to Prolific**），在中文的场次里都是对应的中文。
@@ -107,15 +117,22 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 | 设置 | 默认 | 作用 |
 |---|---|---|
-| **Run this experiment unattended** | 关 | 总开关。在 **Experiment** 里选要运行的实验。 |
+| **Run this experiment unattended** | 关 | 总开关。在 **Experiment** 里选要运行的实验，打开开关，点 **Save**，再在确认框里点 **Turn on and save**。 |
 | **Open the next session when one finishes** | 开 | 一场结束（或被取消）后，过 **Pause before the next session**（10 秒）再开下一场；重启实验脚本还要再花一秒左右。 |
-| **Longest session** | 120 分钟 | 从游戏开始算起。游戏一到这个时间就会被结束：参与者看到这一场时间已用完（从 Prolific 来的人会被告知在 Prolific 上给你发消息，说明自己的提交；已经拿到完成码的人仍然看到完成码），数据里记一条 `sessionTooLong` 事件，过了暂停时间再开下一场，Autopilot 页会写明是哪一场。连续 3 场都超时，自动运行就暂停。留空表示不限。新的设置默认 120 分钟；用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。 |
+| **Longest session** | 120 分钟 | 游戏的最长运行时间，从游戏开始算起。超时后结束这一场并记录，连续 3 场超时就暂停自动运行。留空表示不限；详情见表下。 |
 | **Use the waiting room set here** | 开；实验步骤自己设了等候室时为关 | 等候室：先到的人看到等待页面，人够了游戏自己开始。打开时用下面四项设置。关着时，如果实验步骤自己设了等候室，就用步骤里的（点 **Show what the steps say** 可以看到），下面四项也不显示；如果步骤没设，要有人点 **Start the game**，游戏才会开始。 |
 | **Minimum players** / **Maximum players** | 2 / 不限 | 只在上面的开关打开时有效。到了最少人数就可以开始。最多人数是真正的上限：人数一到（暂时掉线、还保留座位的人也算），马上开始倒计时，链接也不再把新来的人带进这一场；名额满后才到的人会立即看到这一场已满，并知道怎么参加下一场。 |
 | **Wait for more people** | 60 秒 | 只在上面的开关打开时有效。最少人数到齐后，再等迟到的人多久。 |
 | **Give up after** | 600 秒 | 只在上面的开关打开时有效。从第一个人到达算起，到时人数还不够，这一场就取消。自动运行还会继续开下一场时，等待的人可以点“加入下一场”；从 Prolific 来的人也会看到对应说明。没有安排下一场时，页面会明确告知。留空表示一直等。打开上面的开关时，如果这一项是空的，会自动填上实验步骤里等候室的放弃时间，步骤里没写的话就填 600 秒。 |
 | **Countdown** | 5 秒 | 只在上面的开关打开时有效。开始前参与者看到的倒计时。 |
 | **Let the computer play for people who leave, as set here** | 开；实验步骤自己设了时为关 | 有人中途关掉页面，过了 **Take over after**（30 秒）由电脑替他玩；勾选 **Give the seat back when they return**，他回来后可以接着玩。关着时用实验步骤里的设置。 |
+
+**最长运行时间（Longest session）**：
+
+- 到时就结束这一场，数据里记一条 `sessionTooLong`，Autopilot 页会写明是哪一场。过了场间暂停时间，再开下一场。
+- 参与者看到这一场时间已用完；从 Prolific 来的人会被告知在 Prolific 上给你发消息，说明自己的提交。已经拿到完成码的人仍然看到完成码。
+- 连续 3 场都超时，自动运行就暂停。请先检查实验代码和设置。
+- 新设置默认 120 分钟。用旧版本保存过的设置升级后仍然不限时，需要的话自己填上。
 
 这一页的等候室和电脑接管设置，只用在自动运行自己开的场次上（还有你点 **Resume** 或保存设置时交给它的、这个实验正开着的那一场）。你在 Live session 自己开的场次（包括测试场次）用步骤里写的设置，也不会标成 **Opened by Autopilot**。
 
@@ -161,7 +178,9 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
    - **用 Example: network game（或复制它的实验）**：不用改代码，它自己会把完成码给从 Prolific 来的人，**Recruitment** 页的 **When a participant finishes** 会写明现在用的是哪个码。在 **Parameters** 页点 `prolificCode` 右边的铅笔，把 **Default** 填成这个码，点 **Save changes**。最好在开场和打开自动运行之前做：已经开着的那一场仍用开场时的值。
      - 自动运行开的场次用的就是这个 Default。自动运行已经开着时：趁还没有人进来，在 **Live session** 点 **Stop session**（自动运行会因此暂停），再到 **Autopilot** 页点 **Resume**，新开的那一场就用新的完成码。
      - 自己新建一场时要注意：**New session** 会照上一场填好启动参数（对话框里写着 Filled in as in “Session 1”, the last session），不会自动换成新的 Default。在 `prolificCode` 下点 **Use default**（或点 **Reset to defaults**），确认是你的完成码，再点 **Create session**。已经有一场开着时，这个按钮是 **Stop it and create**（确认框里再点一次），它会先停掉开着的那一场。
-   - **自己写的实验**：在 **Recruitment** 页 **When a participant finishes** 的 **Your completion code** 里填上这个码，点 **Copy code**，把代码放进参与者结束的那一步（比如最后一步）。复制的代码只对从 Prolific 来的人调用 `completeProlific`；代码里的 `p` 要换成那一步里代表参与者的变量（常见的是 `player`，例子游戏的 FinishStep 里就是 `p`）。它的核心是这几行（把 `C1A2B3C4` 换成你的完成码）：
+   - **自己写的实验**：在 **Recruitment** 页 **When a participant finishes** 的 **Your completion code** 里填上这个码，点 **Copy code**，把代码放进参与者结束的那一步（比如最后一步）。
+     - 复制的代码用 `p` 代表参与者；如果你那一步用的是别的名字（常见的是 `player`），把代码里的 `p` 都换成它。
+     - 代码只对从 Prolific 来的人调用 `completeProlific`。下面是它的核心（把 `C1A2B3C4` 换成你的完成码）：
 
      ```groovy
      if (p._system?.recruitment?.source == "prolific") {
@@ -175,7 +194,8 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 完成以后：
 
 - **完成页面**：参与者会看到完成码和 **Finish and return to Prolific** 按钮，点了就回到 Prolific。
-- **参与者的留言**：他们在完成页面的 **Comments for the researcher** 框里写的话，会存进各自那一场的数据（`participantComment` 事件，记下 `player` 和 `text`），游戏结束、下一场已经开了也一样；在 **Sessions & data** 点 **View events**，或者在下载的数据里都能看到。完成页面一直开着的话，一周之内都能把留言存下来，服务器重启过也一样。存不下来时，页面会告诉参与者，给出 **Try again** 和 **Return to Prolific without it**，不会悄悄丢掉留言；服务器 10 秒内没有回音时，页面说留言还没确认存下（按钮是 **Try again** 和 **Return to Prolific without waiting**），存好后自己回到 Prolific。同一个参与者的同一句留言只存一次。
+- **留言存在哪里**：完成页面 **Comments for the researcher** 框里的话，存进参与者自己那一场的数据，事件名是 `participantComment`，记下 `player` 和 `text`。在 **Sessions & data → View events** 或下载的数据里都能看到。游戏结束、下一场已经开了也一样；完成页面一直开着的话，一周之内都能保存，服务器重启过也一样。同一个参与者的同一句留言只存一次。
+- **留言没存好时**：页面会说明情况，给出 **Try again** 和 **Return to Prolific without it**，不会悄悄丢掉留言。服务器 10 秒内没回音时，页面说还没确认存好，按钮改为 **Try again** 和 **Return to Prolific without waiting**；确认存好后才自动回到 Prolific。
 - **谁来了、谁完成了，以前各场的名单**：**From Prolific in this session** 列出这一场从 Prolific 来的人。开着自动运行时，一场结束十几秒后就开下一场，这一栏就换成新的一场，所以付费时请看 **From Prolific in every session**：它按场次列出这个实验每一场从 Prolific 来的人（最新的一场在最上面），什么时候加入的、有没有完成、完成码和奖金。如果你在 `completeProlific` 里给了 `bonus` 金额，两个列表的 **Copy bonus list** 都能复制奖金名单（后一个是所有场次的），用于 Prolific 的批量发奖金。游戏结束时没拿到完成码的人（比如例子的 `prolificCode` 还空着时）也算完成，标成 **No code**。
 - 等候室因为人不够被取消时，可以在实验步骤的 `onCancel` 里给等待的人另一个完成码，例子见 [whats-new.md](whats-new.md#running-without-anyone-at-the-admin-console-autopilot)。
 
@@ -219,7 +239,15 @@ breadboard.example.org {
 
 ## 常见问题
 
-**服务器重启后，正在进行的实验怎么样了？** 一场实验的状态保存在服务器内存里，所以停止或重启服务器会结束正在进行的场次：参与者的页面会说明这一场因为研究服务器停止或重启而结束，并告诉他们几分钟后可以重新打开研究链接，加入那时开着的一场（从 Prolific 来的人：从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码）。重启后，这样的场次会被标成 Stopped，数据里记一条 `sessionInterrupted` 事件；在 **Sessions & data** 里点 **Resume** 可以让它的游戏从头再来。之后回来的参与者（服务器崩溃后也一样）看到的也是这个说明；开着自动运行时，研究链接会带他们进入重启后新开的那一场。请在两场之间再重启。用 `Start Breadboard.command`（Mac）、`breadboard.bat`（Windows）或在终端里启动时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长，10 分钟内重启 5 次后就不再重启；原因会写在窗口里和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。要开机自动启动，见 [install.md](install.md#running-it-for-good)（Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序：发布包里附有现成的 `breadboard-task.xml`）。`/health` 地址可以给监控服务用：服务器正常时返回状态码 200 和 `{"status":"ok", "database":"ok", "diskFreeMb": …, "version": …, "uptimeSeconds": …}`，出问题时返回 503、`"status":"failing"` 和原因 `"reason"`；用 GET 或 HEAD 请求都可以。
+**服务器重启后，正在进行的实验怎么样了？**
+
+- 停止或重启服务器会结束正在进行的场次，因为游戏状态在服务器内存里。参与者页面会说明是服务器停止或重启了，几分钟后可以重新打开研究链接。
+- 从 Prolific 来的人可以从 Prolific 重新打开研究，或者退回研究；已经拿到完成码的人仍然看到完成码。
+- 重启后，原场次标为 **Stopped**，数据里记一条 `sessionInterrupted`。在 **Sessions & data** 点 **Resume**，可以让这一场的游戏从头再来。
+- 之后回来的参与者（服务器崩溃后也一样）也会看到结束说明。开着自动运行时，研究链接会带他们进入重启后新开的那一场。请尽量在两场之间重启。
+- 用启动脚本运行时，服务器意外退出（例如内存耗尽）会自动重新启动，等待时间逐次加长；10 分钟内重启 5 次后就停止重试。原因写在窗口和 `logs/application.log` 里。按 Ctrl+C 或关掉窗口则是真正停止。
+- 要开机自动启动，见 [install.md](install.md#running-it-for-good)：Linux 用 systemd，Mac 用 launchd，Windows 用任务计划程序，发布包附有 `breadboard-task.xml`。
+- `/health` 可以给监控服务用。正常时，GET 或 HEAD 返回状态码 200；GET 的内容含 `status`、`database`、`diskFreeMb`、`version` 和 `uptimeSeconds`。出问题时返回 503，GET 的内容含 `"status":"failing"` 和原因 `reason`。
 
 **控制台提示 "Not connected to the server"**：控制台和服务器断开了。每个页面的顶栏下面都会这样提示，顶栏上写着 **Reconnecting…**（手机上是 **Offline**），页面上显示的是断开前最后知道的情况。如果 Breadboard 被停止了，重新启动它就行：服务器恢复后几秒内，控制台会自己重新连上，不用刷新页面；也可以点提示里的 **Try now** 马上重连。
 
@@ -229,7 +257,16 @@ breadboard.example.org {
 
 **参与者看到 "This session isn't running right now"**：这一场已经结束或被停止，或控制台把引擎换到了另一场（被服务器重启打断的那一场会直接说是服务器停止或重启了）。新开一场，或打开自动运行，再把研究链接发给参与者。
 
-**忘记了登录密码怎么办？** 先停止服务器，再用这个账号的邮箱启动一次：`./breadboard.sh -Dbreadboard.resetPassword=你的邮箱`（Windows 上是 `breadboard.bat -Dbreadboard.resetPassword=你的邮箱`）。服务器会在它的窗口里打印一个新密码（不会写进日志），并让这个账号在所有浏览器里退出。用新密码登录后，在 **Settings** 里改成你自己的密码，以后正常启动、不要再带这个参数。登录时邮箱不区分大小写；同一个账号可以同时在几个浏览器里登录（比如笔记本和实验室的电脑）。
+**忘记了登录密码怎么办？**
+
+1. 先停止服务器，再用这个账号的邮箱启动一次。
+   - **Mac**：在“终端”里输入 `sh` 和一个空格，把 `breadboard.sh` 拖进终端，再输入 ` -Dbreadboard.resetPassword=你的邮箱`（前面有一个空格），按回车。
+   - **Windows**：在 Breadboard 的文件夹里打开命令提示符，运行 `breadboard.bat -Dbreadboard.resetPassword=你的邮箱`。
+   - **Linux**：在 Breadboard 的文件夹里运行 `sh breadboard.sh -Dbreadboard.resetPassword=你的邮箱`。
+2. 服务器会在窗口里打印新密码（不会写进日志），并让这个账号在所有浏览器里退出。
+3. 用新密码登录，在 **Settings** 里改成自己的密码。以后正常启动，不再带这个参数。
+
+登录时邮箱不区分大小写；同一个账号可以同时在几个浏览器里登录（比如笔记本和实验室的电脑）。
 
 **实验名字写错了能改吗？** 能。在 **Experiments** 页，实验卡片的菜单里有 **Rename…**，当前实验旁边也有 **Rename**。改名不影响它的场次、数据和链接。文件模式下不能改名（它的文件夹是按名字起的），先退出文件模式再改。
 
@@ -237,7 +274,14 @@ breadboard.example.org {
 
 **数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），不用停服务器；每天的、手动做的、升级前做的备份各保留最近 14 份。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：先停止服务器，双击备份 zip（Windows 上选“全部解压缩”），把解压出的 `breadboard.h2.db` 拖到 Breadboard 的 `db` 文件夹，选“替换”，再启动。文件名必须正好是 `breadboard.h2.db`，不能多出空格、数字或一个 `.db` 后缀；恢复后，备份之后的改动会消失。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传。从 3.x 升级时，把它和 `conf/local.conf`（你的设置）跟数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
 
-**设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的“文本编辑”，Windows 上的“记事本”）打开就能改。引号要用英文的直引号（`"`）。中文输入法的标点，和 Mac 上“文本编辑”默认打开的智能引号，都会把它打成弯引号（`“ ”`），服务器就读不了这个文件：启动脚本会提示 "Line … of conf/local.conf has curly quotes"，指出是哪一行，并且不启动服务器。遇到这种情况，切换到英文输入法，把那一行的引号重新输入一遍，保存后再启动。用“文本编辑”的话，最好先在 **编辑 → 替换** 里关掉 **智能引号** 再输入。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。Windows 上的路径要用正斜杠，例如 `breadboard.backup.dir="D:/Breadboard backups"`，或者把每个反斜杠写两遍（`"D:\\Breadboard backups"`）：引号里的单个反斜杠是转义符，会让服务器启动不了，或者悄悄变成别的路径。运行服务器的账号必须能读这个文件：读不了的话（比如用 `sudo` 复制过来的，属于 root），启动脚本会提示 "conf/local.conf can't be read by …" 并拒绝启动，免得服务器不带你的设置就跑起来；按提示把文件的所有者改成那个账号就行。
+**设置写在哪里？**
+
+- 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`。保存后重启服务器。
+- 这个文件第一次启动时自动生成，里面只有说明。用 Mac 的“文本编辑”或 Windows 的“记事本”打开就能改。
+- 引号要用英文直引号（`"`）。中文输入法或“文本编辑”的智能引号可能打成 `“ ”`，启动脚本就会提示 **Line … of conf/local.conf has curly quotes** 并指出行号。切换到英文输入法，重新输入那一行的引号。“文本编辑”里最好先在 **编辑 → 替换** 关掉 **智能引号**。
+- `conf/application-prod.conf` 列出了所有设置，但不要直接改它。升级时，把自己的 `conf/local.conf` 复制到新版本的 `conf` 文件夹。从 3.0 升级、还没有这个文件时，把旧 `application-prod.conf` 里自己改过的几行写进去。
+- Windows 路径用正斜杠，例如 `breadboard.backup.dir="D:/Breadboard backups"`。也可以把每个反斜杠写两遍（`"D:\\Breadboard backups"`）；引号里的单个反斜杠是转义符，可能让服务器启动不了或读成别的路径。
+- 引号没配对等设置错误会让服务器拒绝启动，并指出 `conf/local.conf` 的行号。运行服务器的账号也必须能读这个文件；读不了时会提示 **conf/local.conf can't be read by …**，按提示调整文件的所有者。
 
 **实验室几个人怎么一起用？** 每人一个账号：在 **Settings → Researchers** 里添加、删除，或给别人重置密码（**New password**）。被重置密码或被删除的人会在所有浏览器里退出，登录页上会写明原因。所有研究者共用这台服务器上的全部实验（谁都能打开、修改、运行）。要和别的课题组分开，就各用一台服务器。
 

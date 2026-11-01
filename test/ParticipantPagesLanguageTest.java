@@ -369,7 +369,7 @@ public class ParticipantPagesLanguageTest extends BaseTest {
         engineSession.set(null, null);
         String page = page("/game/" + e + "/" + chinese.id + "/login");
         assertTrue(page, page.contains("<h1>本场实验已结束</h1>"));
-        assertTrue(page, page.contains("研究的服务器停止或重启了，所以本场实验结束了。"));
+        assertTrue(page, page.contains("实验服务器停止或重启了，本场实验因此结束。"));
         // and the page left open is told the same as it reconnects
         assertTrue(page, page.contains("<html lang=\"zh-CN\">"));
     }

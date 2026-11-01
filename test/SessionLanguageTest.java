@@ -200,7 +200,7 @@ public class SessionLanguageTest extends BaseTest {
         final Page p1 = connect(chinese, "p1");
         assertTrue(p1.frames.toString(), p1.got(f -> "zho".equals(f.path("bbLanguage").asText())));
         await("the waiting room", () -> p1.lastText() != null && p1.lastText().contains("正在等待其他参与者"));
-        assertEquals("<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。人数达到 3 人后，实验就会开始。</p><p>请保持这个页面打开。</p>", p1.lastText());
+        assertEquals("<h3>正在等待其他参与者</h3><p>目前已有 1 人加入。3 人到齐后，实验就会开始。</p><p>请保持这个页面打开。</p>", p1.lastText());
 
         // The researcher stops it: they are told in Chinese.
         console.send("StopGame", "id", chinese.id);

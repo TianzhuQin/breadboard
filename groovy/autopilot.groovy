@@ -131,9 +131,11 @@ class Autopilot {
       countdownSeconds: opts.countdownSeconds == null ? 5 : opts.countdownSeconds,
       departureGraceSeconds: opts.departureGraceSeconds == null ? 15 : opts.departureGraceSeconds,
       waitingText     : opts.containsKey("waitingText") ? opts.waitingText : { here, min, max ->
-        def target = max ? "${min}–${max}" : "${min}"
-        // (in the language of the session's texts, as the page's own waiting screen, BBWaiting)
-        String count = sentences(texts('waiting.joinedSoFar', [n: here]), texts('waiting.startsWhen', [target: target, n: max ?: min]))
+        // (in the language of the session's texts, as the page's own waiting screen, BBWaiting): the
+        // least and the most it takes, not a range ("3–8"), which read as either
+        String starts = max && max != min ? texts('waiting.startsWhen', [min: min, max: max, n: min])
+            : texts('waiting.startsWhenMin', [min: min, n: min])
+        String count = sentences(texts('waiting.joinedSoFar', [n: here]), starts)
         "<h3>${texts('waiting.otherParticipants')}</h3><p>${count}</p><p>${texts('waiting.keepPageOpen')}</p>"
       },
       onStart         : opts.onStart,
