@@ -389,7 +389,7 @@ page suggests the experiment you're working on and leaves to its steps whatever 
 | **Minimum players** | 2 | The game can start once this many people are here. |
 | **Maximum players** | none | At most this many play, the first to arrive. When this many are here (or away for a moment, keeping their seat), the countdown starts at once and the links send nobody more; anyone who arrives after the last seat is taken is told at once that the session is full and how to join the next one (a `sessionFull` event). |
 | **Wait for more people** | 60 seconds | Once the minimum is here, how long to wait for latecomers. |
-| **Give up after** | 600 seconds | Counted from the first arrival. If the minimum isn't reached by then, the session is called off and everyone waiting is told. Empty: wait as long as it takes. |
+| **Give up after** | 600 seconds | Counted from the first arrival. If the minimum isn't reached by then, the session is called off. Its own continuous session offers **Join the next session**, with Prolific instructions where needed; otherwise the page says no next session is scheduled. Empty: wait as long as it takes. |
 | **Countdown** | 5 seconds | Participants see "Starting in … seconds" before the game begins. |
 | **Let the computer play for people who leave, as set here** | on (off when the steps set it) | The computer plays the seat of someone who closes their page during the game. |
 | **Take over after** | 30 seconds | A grace period, so a page reload or a short network drop doesn't hand the seat over. |
@@ -419,7 +419,7 @@ waiting room counts down, or the next one is about to open), they show a page th
 in progress and the next one opens when it ends (or, just before the next one opens, that it opens
 in a moment); it checks every second between sessions, or every four seconds during a game, and takes people in once a session opens (Prolific
 participants read that they can keep it open, or return the study if they can't wait).
-The next-session link on a full-room screen carries the ID already entered; after the holding
+The next-session link on a full-room or cancelled waiting-room screen carries the ID already entered; after the holding
 page it joins the next session with that ID. If that session requires a password, the ID is
 filled in and the password is still required. When the
 autopilot is off, paused or done, doesn't open the next session by itself (**Open the next session

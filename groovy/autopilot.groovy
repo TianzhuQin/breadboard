@@ -54,6 +54,7 @@ class Autopilot {
   def startFailed  // closure, given what went wrong: the session is dealt with (ScriptBoard.gameStartFailed)
   def leftOut      // closure, given the id of someone launch() takes out: their page is told so when it
                    // comes back, even after the engine was rebuilt (ScriptBoard.leftOutAtStart)
+  def waitingCancelled // closure: settles the server's end screens when the room gives up
   def sessionFull  // closure, given the id of someone launch() takes out as the room is full: their page
                    // is told so now, and when it comes back (ScriptBoard.sessionFullAtStart)
   // closures: Breadboard's own words to participants, in the language of the session's texts
@@ -467,8 +468,15 @@ class Autopilot {
     } finally {
       // Everyone's page says so, also of those who are away right now and see it when they
       // return, even if onCancel failed.
-      participants().each { status(it, [state: "cancelled"]) }
-      gameListener?.finish()
+      participants().each { v ->
+        boolean ownEnd = v.getProperty("finished") == true || v.getProperty("_system")?.recruitment?.completed == true
+        status(v, ownEnd ? null : [state: "cancelled"])
+      }
+      try {
+        if (waitingCancelled != null) waitingCancelled()
+      } finally {
+        gameListener?.finish()
+      }
     }
   }
 
@@ -646,6 +654,7 @@ autopilot = new Autopilot(g: g, a: a, gameListener: gameListener, eventTracker: 
     texts: bbText, sentences: bbSentences,
     startGame: { models.ScriptBoard.processScript("initStep.start()", null, "autopilot") },
     startFailed: { String failed -> gameListener.gameStartFailed(failed) },
+    waitingCancelled: { models.ScriptBoard.waitingRoomCancelled(gameListener) },
     leftOut: { String clientId -> models.ScriptBoard.leftOutAtStart(clientId) },
     sessionFull: { String clientId -> models.ScriptBoard.sessionFullAtStart(clientId) })
 

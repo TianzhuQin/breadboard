@@ -33,6 +33,12 @@ public final class Recruitment {
     pending.put(clientId, details);
   }
 
+  /** The participant's entry details, for their own next-session link on a cancelled waiting room. */
+  static Map<String, Object> entryDetails(String clientId) {
+    Map<String, Object> details = pending.get(clientId);
+    return details == null ? null : new LinkedHashMap<String, Object>(details);
+  }
+
   /** Copy any recruitment details waiting for this vertex onto its _system map. */
   @SuppressWarnings("unchecked")
   public static void applyTo(Vertex v) {

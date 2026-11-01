@@ -2188,6 +2188,78 @@ public class ScriptBoard extends UntypedActor {
   }
 
   /**
+   * A waiting room gave up. Remember its end before finish() can open a new session, then close its
+   * pages outside the waiting room's monitor, as for a full room (closeTurnedAway). Its own session
+   * may offer the next one only while the autopilot will open it; a manually run room promises none.
+   */
+  public static void waitingRoomCancelled(GameListener listener) {
+    if (listener == null || listener.experimentInstance == null
+        || (listener.engine != null && !inService(listener.engine))) {
+      return;
+    }
+    final ExperimentInstance session = listener.experimentInstance;
+    final Long id = session.id;
+    final Long experimentId = session.experiment == null ? null : session.experiment.id;
+    if (id == null || session.isTestInstance()) return;
+    final String lang = SessionLanguage.of(id);
+    final boolean next = Autopilot.isAutopilotsSession(id) && Autopilot.opensNextSoon(experimentId);
+    // Strings only: the remembered ends must hold no player, listener or script engine after a reload.
+    final Map<String, String> prolificLinks = new HashMap<String, String>();
+    for (Client client : clients.values()) {
+      if (client.experimentInstance != null && id.equals(client.experimentInstance.id)) {
+        Map<String, Object> details = Recruitment.entryDetails(client.id);
+        if (details != null && details.get("prolificPid") != null) {
+          String url = "/play/" + experimentId + "/prolific?PROLIFIC_PID=" + entryEncode(details.get("prolificPid").toString());
+          for (String[] field : new String[][]{{"studyId", "STUDY_ID"}, {"sessionId", "SESSION_ID"}}) {
+            if (details.get(field[0]) != null) url += "&" + field[1] + "=" + entryEncode(details.get(field[0]).toString());
+          }
+          prolificLinks.put(client.id, "<a href=\"" + org.apache.commons.lang3.StringEscapeUtils.escapeHtml4(url)
+              + "\">" + SystemTexts.html(lang, "end.fullNextLink") + "</a>");
+        }
+      }
+    }
+    final java.util.function.Function<Client, ObjectNode> screens = new java.util.function.Function<Client, ObjectNode>() {
+      public ObjectNode apply(Client client) {
+        boolean prolific = fromProlific(client, id);
+        String link = prolific ? prolificLinks.get(client.id) : nextSessionLink(experimentId, client.id, lang);
+        return waitingCancelledScreen(prolific, next, link, lang);
+      }
+    };
+    sessionEnded(id, screens);
+    Thread end = new Thread(new Runnable() {
+      public void run() {
+        try {
+          endParticipants(id, screens);
+        } catch (Throwable failure) {
+          Logger.error("Could not close the pages of a cancelled waiting room", failure);
+        }
+      }
+    }, "breadboard-waiting-cancelled");
+    end.setDaemon(true);
+    end.start();
+  }
+
+  static ObjectNode waitingCancelledScreen(boolean prolific, boolean next, String link, String lang) {
+    String what;
+    if (next && link != null) {
+      what = SystemTexts.html(lang, prolific ? "end.cancelledNextProlific" : "end.cancelledNext",
+          "link", new SystemTexts.Html(link));
+    } else if (next && prolific) {
+      what = SystemTexts.html(lang, "end.fullNextProlific");
+    } else {
+      what = SystemTexts.html(lang, prolific ? "end.cancelledProlific" : "end.cancelledOther");
+    }
+    ObjectNode frame = Json.newObject();
+    ObjectNode player = frame.putObject("player");
+    player.putObject("_system");
+    player.put("finished", true);
+    player.put("ended", "waitingCancelled");
+    player.put("text", SystemTexts.screen(SystemTexts.html(lang, "waiting.cancelledTitle"),
+        SystemTexts.sentences(lang, SystemTexts.html(lang, "end.cancelled"), what)));
+    return frame;
+  }
+
+  /**
    * Whether the game of this session left this participant out (leftOutAtStart, sessionFullAtStart):
    * the study's link then treats them as someone new (ClientLogin.toOpenSession), rather than sending
    * them back to the seat that only says so. Known while the engine runs that session's game.
@@ -5306,8 +5378,9 @@ public class ScriptBoard extends UntypedActor {
         return;
       }
       Vertex completed = completed(player);
-      boolean keep = completed != null || ownEnd(client.lastFrame);
-      if (completed != null) {
+      boolean ownFinished = player != null && Boolean.TRUE.equals(player.getProperty("finished"));
+      boolean keep = completed != null || ownFinished || ownEnd(client.lastFrame);
+      if (completed != null || ownFinished) {
         try {
           // Their screen as it is, with the code: a change inside _system alone isn't sent by itself,
           // so a code given a moment ago may not have reached the page (or its last screen) yet.

@@ -225,6 +225,78 @@ public class AutopilotFlowTest extends BaseTest {
         return experiment;
     }
 
+    @Test
+    public void aGivenUpWaitingRoomEndsPagesWithTheWayToTheNextSessionAndProlificInstructions() throws Exception {
+        User researcher = user("cancelled");
+        Experiment experiment = experimentOf(researcher, "Cancelled room");
+        ObjectNode saved = settings(experiment, 4, 4, 30);
+        saved.put("nextSessionDelaySeconds", 30);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        SessionLanguage.record(session.id, "zho");
+        Page manual = connect(experiment, session, "same-id");
+        Recruitment.prolificEntry("from-prolific", "PID-CANCEL", "STUDY-CANCEL", "SESSION-CANCEL");
+        Page prolific = connect(experiment, session, "from-prolific");
+        Page ownEnd = connect(experiment, session, "own-end");
+        engine().eval("autopilot.room.onCancel = { players -> def v=g.getVertex('own-end'); v.text='Custom waiting credit'; v.finished=true }; autopilot.giveUp(); null");
+        assertTrue("the cancelled room's pages end instead of keeping the waiting animation",
+            within(1500, () -> manual.closed && prolific.closed && ownEnd.closed));
+        JsonNode player = manual.lastPlayer();
+        assertEquals("waitingCancelled", player.get("ended").asText());
+        assertTrue(player.get("finished").asBoolean());
+        assertFalse(player.get("_system").has("autopilot"));
+        String text = player.get("text").asText();
+        assertTrue(text, text.contains("人数不足，本场实验未能开始。"));
+        assertTrue(text, text.contains("/play/" + experiment.id + "/login?id=same-id"));
+        String prolificText = prolific.lastPlayer().get("text").asText();
+        assertTrue(prolificText, prolificText.contains("Prolific"));
+        assertTrue(prolificText, prolificText.contains("PID-CANCEL"));
+        assertEquals("Custom waiting credit", ownEnd.lastPlayer().get("text").asText());
+        assertFalse(ownEnd.lastPlayer().get("_system").has("autopilot"));
+        assertEquals(1, events(session, "autopilotCancelled").size());
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
+        // A page coming back retains its end after the cancellation, even before the next session opens.
+        assertEquals("waitingCancelled", connect(experiment, session, "same-id").lastPlayer().get("ended").asText());
+    }
+
+    @Test
+    public void aGivenUpWaitingRoomPromisesNoNextSessionWhenContinuousIsOff() throws Exception {
+        User researcher = user("cancelledonce");
+        Experiment experiment = experimentOf(researcher, "One cancelled room");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("continuous", false);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        Page participant = connect(experiment, session, "waiting-alone");
+        engine().eval("autopilot.giveUp(); null");
+        assertTrue(within(1500, () -> participant.closed));
+        String text = participant.lastPlayer().get("text").asText();
+        assertTrue(text, text.contains("No next session is scheduled"));
+        assertFalse(text, text.contains("Join the next session"));
+    }
+
+    @Test
+    public void aGivenUpWaitingRoomPromisesNoNextSessionWhilePausedOrRunByHand() throws Exception {
+        User researcher = user("cancelledpaused");
+        Experiment experiment = experimentOf(researcher, "No next room");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("nextSessionDelaySeconds", 600);
+        for (String mode : new String[]{"paused", "manual", "off"}) {
+            assertEquals(OK, status(post(researcher, saved)));
+            ExperimentInstance session = openSession(experiment);
+            Page participant = connect(experiment, session, mode + "-alone");
+            if ("paused".equals(mode)) setAutopilot("pausedBecause", "test pause");
+            if ("manual".equals(mode)) setAutopilot("openedSession", null);
+            if ("off".equals(mode)) Ebean.createSqlUpdate("update autopilot_settings set enabled = false").execute();
+            engine().eval("autopilot.giveUp(); null");
+            assertTrue(mode, within(1500, () -> participant.closed));
+            String text = participant.lastPlayer().get("text").asText();
+            assertTrue(text, text.contains("No next session is scheduled"));
+            assertFalse(text, text.contains("Join the next session"));
+            setAutopilot("pausedBecause", null);
+        }
+    }
+
     // ---- Maximum players --------------------------------------------------------------------------
 
     @Test
