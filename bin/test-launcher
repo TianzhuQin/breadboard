@@ -23,6 +23,7 @@ class LauncherPreflight(unittest.TestCase):
         self.script('fakejdk/bin/java', '''#!/bin/sh
 case "$*" in *-version*) echo 'java version "1.8.0_test"' >&2; exit 0 ;; esac
 printf 'started\\n' >> starts
+if [ -n "$FAKE_START_ERROR" ]; then printf '%s\\n' "$FAKE_START_ERROR" > logs/start-errors.log; fi
 sleep "${FAKE_START_SECONDS:-0}"
 exit 255
 ''')
@@ -99,6 +100,19 @@ exit 255
         said = self.result()
         self.assertIn('Another program is using port', said)
         self.assertIn('Another program is using port', (self.home / 'logs/start-errors.log').read_text())
+
+    def test_the_last_start_failure_message_names_its_cause(self):
+        cause = 'Configuration error: conf/local.conf: 9: expected a comma'
+        said = self.result(FAKE_START_ERROR=cause)
+        last = said.strip().splitlines()[-1]
+        self.assertIn(cause, last)
+        self.assertIn('logs/start-errors.log', last)
+        self.assertNotIn('The lines above', last)
+
+    def test_a_database_lock_names_the_other_breadboard(self):
+        said = self.result(FAKE_START_ERROR='org.h2.jdbc.JdbcSQLException: Locked by another process')
+        self.assertIn('another Breadboard from this folder has the database open', said)
+        self.assertNotIn('Fix that', said)
 
 
 if __name__ == '__main__':

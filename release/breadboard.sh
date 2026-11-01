@@ -765,7 +765,14 @@ while :; do
       note "Breadboard could not start: another Breadboard from this folder has the database open. Stop that one before starting this one; logs/start-errors.log keeps the details."
       exit "$CODE"
     fi
-    note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs/start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+    CAUSE="$(awk '
+      /^[[:space:]]*$/ || /^Breadboard/ || /^Once it listens/ || /^if nothing else/ || /^newest logs/ || /^[[:space:]]+at / { next }
+      { sub(/^[[:space:]]+/, ""); print; exit }' logs/start-errors.log)"
+    if [ -n "$CAUSE" ]; then
+      note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)): $CAUSE. Full details are in logs/start-errors.log; correct the cause, then start Breadboard again."
+    else
+      note "Breadboard stopped before the server started ($(stop_reason "$CODE" start)), so it is left stopped. Read logs/start-errors.log and the newest logs/jvm-pid*.log for the cause before starting it again."
+    fi
     exit "$CODE"
   fi
 

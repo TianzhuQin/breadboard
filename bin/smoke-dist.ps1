@@ -252,7 +252,10 @@ if ($sixth.ExitCode -eq 0 -or -not $said.Contains('(it could not start, exit cod
   Fail "a server that couldn't start was started again, or that wasn't said, or logs\start-errors.log doesn't say why (exit code $($sixth.ExitCode)): $said / $kept"
 }
 Remove-Item -LiteralPath $localConf
-Pass "a server that can't start isn't started again, and logs\start-errors.log says why"
+if (-not $said.Contains('Start failed: Configuration error')) {
+  Fail 'the final launcher message does not name the configuration error'
+}
+Pass "a server that can't start isn't started again, and its final message names the cause"
 
 # With no -Dhttp.port, it starts on the port its conf\local.conf gives (http.port), with the memory it
 # gives (breadboard.memory). (Keep running is on, for the check after this one.)

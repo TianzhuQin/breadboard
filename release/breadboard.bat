@@ -361,7 +361,8 @@ IF "%EXIT_CODE%"=="-1" SET "WHY=it could not start, exit code -1"
 IF "%EXIT_CODE%"=="3" CALL :outofmemory
 findstr /L /C:"Locked by another process" "logs\start-errors.log" >NUL 2>&1
 IF NOT ERRORLEVEL 1 GOTO databasealreadyopen
-CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again."
+CALL :startcause
 GOTO failed
 
 :databasealreadyopen
@@ -661,4 +662,9 @@ GOTO :EOF
 
 :say_livepid
 ECHO RUNNING_PID names a live process ^(%LIVE_PID%^), so it is left in place. Another Breadboard from this folder may have the database open; stop it before starting this one.
+GOTO :EOF
+
+:startcause
+REM Keep error text out of CALL's command parsing: it can contain quotes, ampersands or brackets.
+powershell -NoProfile -Command "$cause = Get-Content -LiteralPath 'logs\start-errors.log' -ErrorAction SilentlyContinue | Where-Object { $_.Trim() -and $_ -notmatch '\A(Breadboard|Once it listens|if nothing else|newest logs|\s+at )' } | Select-Object -First 1; if ($cause) { $message = 'Start failed: ' + $cause.Trim() + '. Full details are in logs\start-errors.log; correct the cause, then start Breadboard again.' } else { $message = 'Read logs\start-errors.log and the newest logs\jvm-pid*.log for the cause before starting it again.' }; [IO.File]::AppendAllText((Join-Path (Get-Location) 'logs\application.log'), $message + [Environment]::NewLine); [Console]::WriteLine($message)"
 GOTO :EOF
