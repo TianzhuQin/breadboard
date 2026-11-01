@@ -139,6 +139,13 @@ public class ClientLogin extends Controller {
     return invalidLink(lang);
   }
 
+  /** Friendly participant response for a malformed query, without exposing Play's parser details. */
+  public static play.api.templates.Html badRequestPage(String experimentId, String instanceId, boolean prolific) {
+    String lang = instanceId != null && sessionExists(experimentId, instanceId)
+        ? SessionLanguage.of(instanceId) : SessionLanguage.ofExperiment(experimentId);
+    return prolific ? message(lang, "prolific.missingIdTitle", "prolific.missingId") : invalidLink(lang);
+  }
+
   static play.api.templates.Html invalidLink(String lang) {
     return message(lang, "link.invalidTitle", "link.invalid");
   }
@@ -333,7 +340,7 @@ public class ClientLogin extends Controller {
     String sessionId = request().getQueryString("SESSION_ID");
     // (the language of the session's texts, which Breadboard's own words here follow)
     String lang = SessionLanguage.of(experimentInstanceId);
-    if (pid == null || pid.trim().isEmpty()) {
+    if (pid == null || pid.trim().isEmpty() || pid.trim().startsWith("{{")) {
       return badRequest(message(lang, "prolific.missingIdTitle", "prolific.missingId"));
     }
     pid = pid.trim();

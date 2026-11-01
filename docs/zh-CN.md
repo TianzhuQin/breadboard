@@ -140,7 +140,7 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 ## 用 Prolific 招募
 
 1. 先确保有一场开放、还没开始的场次：在 Live session 新建一场，或打开自动运行。最好先做完下面第 5 步再开场：已经开着的那一场不会自动用上之后设的完成码。
-2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 研究设置的 Data collection 部分，记录 Prolific ID 的方式选 **I'll use URL parameters**；链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。Prolific 的参与者都是从互联网来的，所以这个网址必须用服务器的公开网址：用公开网址打开控制台，再复制。如果你是用 localhost 或实验室内网的地址打开控制台的，页面会提醒你。
+2. 在 **Recruitment** 页的 **Prolific** 标签下，点 **Copy URL** 复制 **Study URL**，粘贴到 Prolific 的研究设置里。在 Prolific 研究设置的 Data collection 部分，记录 Prolific ID 的方式选 **I'll use URL parameters**；链接里 `{{%PROLIFIC_PID%}}` 这样的部分保持原样。这些占位符要由 Prolific 填上，直接在浏览器里打开会提示缺少 Prolific ID；自己试用请点 **Try it as a test participant**。Prolific 的参与者都是从互联网来的，所以这个网址必须用服务器的公开网址：用公开网址打开控制台，再复制。如果你是用 localhost 或实验室内网的地址打开控制台的，页面会提醒你。
 3. 这个链接总是把人带到这个实验当前开放、还没开始的那一场。没有这样的场次时，如果自动运行开着、会自己开下一场，而且没有什么让它开不了，参与者会看到一个等待页，下一场一开就自动进入（他们也可以选择退回研究）；否则会看到 "No session is open right now"。Study URL 下面会写明现在是哪种情况；如果它提醒链接会显示 "No session is open right now"（比如引擎里正跑着别的实验的场次），就先在 Prolific 上暂停招募。**Try it as a test participant** 用一个假的 Prolific ID 让你自己试一遍，它会像真实参与者一样占一个位置。
 
    **请分批放出名额**：一场的游戏开始后（例子游戏一场大约 2–3 分钟），Prolific 再送来的人只能在等待页上等下一场，等不及的就会退回研究。所以在 Prolific 上不要一次放出所有名额（places），每批不超过一场最多能容纳的人数（例子游戏是 `networkSize`，默认 8 人；用 Autopilot 页的等候室时，是那里的 **Maximum players**），等这一批开始玩、下一场开放了，再放下一批。

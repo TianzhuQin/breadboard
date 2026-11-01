@@ -295,6 +295,35 @@ public class ParticipantPagesLanguageTest extends BaseTest {
     }
 
     @Test
+    public void badParticipantRequestsGetFriendlyPagesInTheStudyLanguage() throws Exception {
+        ExperimentInstance chinese = openSession("中文", "zho");
+        String raw = "?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}";
+        for (String path : new String[]{"/play/" + e + "/prolific", "/game/" + e + "/" + chinese.id + "/prolific"}) {
+            Http.RequestHeader request = play.core.j.JavaHelpers$.MODULE$.createJavaRequest(fakeRequest(GET, path + raw).getWrappedRequest());
+            Result result = new Global().onBadRequest(request, "invalid escape sequence %PR").get(10000);
+            String page = contentAsString(result);
+            assertEquals(BAD_REQUEST, status(result));
+            assertTrue(page, page.contains("<html lang=\"zh-CN\">"));
+            assertTrue(page, page.contains("<h1>缺少 Prolific ID</h1>"));
+            assertFalse(page, page.contains("invalid escape sequence"));
+        }
+        Http.RequestHeader request = play.core.j.JavaHelpers$.MODULE$.createJavaRequest(
+            fakeRequest(GET, "/game/" + e + "/" + chinese.id + "/login?x=%XX").getWrappedRequest());
+        String invalid = contentAsString(new Global().onBadRequest(request, "invalid escape").get(10000));
+        assertTrue(invalid, invalid.contains(SystemTexts.text("zho", "link.invalidTitle")));
+        assertFalse(invalid, invalid.contains("invalid escape"));
+    }
+
+    @Test
+    public void aUrlEncodedProlificPlaceholderIsStillAMissingId() throws Exception {
+        ExperimentInstance chinese = openSession("中文", "zho");
+        Result result = route(fakeRequest(GET, "/game/" + e + "/" + chinese.id
+            + "/prolific?PROLIFIC_PID=%7B%7B%25PROLIFIC_PID%25%7D%7D"));
+        assertEquals(BAD_REQUEST, status(result));
+        assertTrue(contentAsString(result).contains("<h1>缺少 Prolific ID</h1>"));
+    }
+
+    @Test
     public void theNoticeOfASessionCutShortByARestartIsInItsLanguage() throws Exception {
         ExperimentInstance chinese = openSession("中文", "zho");
         chinese.stop();
