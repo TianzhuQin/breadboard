@@ -418,7 +418,10 @@ working from one session to the next. While none takes participants (its game is
 waiting room counts down, or the next one is about to open), they show a page that says a session is
 in progress and the next one opens when it ends (or, just before the next one opens, that it opens
 in a moment); it checks every second between sessions, or every four seconds during a game, and takes people in once a session opens (Prolific
-participants read that they can keep it open, or return the study if they can't wait). When the
+participants read that they can keep it open, or return the study if they can't wait).
+The next-session link on a full-room screen carries the ID already entered; after the holding
+page it joins the next session with that ID. If that session requires a password, the ID is
+filled in and the password is still required. When the
 autopilot is off, paused or done, doesn't open the next session by itself (**Open the next session
 when one finishes** is off), or something keeps it from opening the next session (another
 experiment's session is running, a researcher has another experiment loaded, the disk is almost

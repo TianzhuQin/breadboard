@@ -132,7 +132,7 @@ public class AutopilotFlowTest extends BaseTest {
     private User user(String prefix) {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
-        return createUser(prefix + "-" + UUID.randomUUID() + "@test.org", prefix, "secret-1", lang);
+        return createUser(prefix + "-" + UUID.randomUUID() + "@example.org", prefix, "secret-1", lang);
     }
 
     private static Result post(User user, JsonNode body) {
@@ -253,7 +253,7 @@ public class AutopilotFlowTest extends BaseTest {
         assertEquals("sessionFull", screen.get("ended").asText());
         String text = screen.get("text").asText();
         assertTrue(text, text.contains("This session is full"));
-        assertTrue("it leads to the next session: " + text, text.contains("href=\"/play/" + experiment.id + "/login\""));
+        assertTrue("it leads to the next session: " + text, text.contains("href=\"/play/" + experiment.id + "/login?id=f-3\""));
         List<Event> full = events(session, "sessionFull");
         assertEquals(1, full.size());
         assertEquals("f-3", value(full.get(0), "clientId"));

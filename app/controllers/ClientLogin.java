@@ -65,7 +65,18 @@ public class ClientLogin extends Controller {
       // Say so before anyone types their ID in (e.g. a participant sent here after a restart).
       return ok(notRunning(experimentId, experimentInstanceId));
     }
-    return ok(signInPage(experimentId, experimentInstanceId, Form.form(CLogin.class)));
+    Form<CLogin> form = Form.form(CLogin.class);
+    String carried = request().getQueryString("id");
+    if (carried != null) {
+      CLogin values = new CLogin();
+      values.id = carried;
+      form = form.fill(values);
+      // A password belongs to the experiment's current session: never carry it in a URL or skip it.
+      if (!ScriptBoard.hasPassword()) {
+        return joinSession(experimentId, experimentInstanceId, form);
+      }
+    }
+    return ok(signInPage(experimentId, experimentInstanceId, form));
   }
 
   /**
@@ -276,8 +287,12 @@ public class ClientLogin extends Controller {
     if (loginForm.hasErrors()) {
       Logger.debug("loginForm.hasErrors()");
       return badRequest(signInPage(experimentId, experimentInstanceId, loginForm));
-    } else {
-      Logger.debug("! loginForm.hasErrors()");
+    }
+    return joinSession(experimentId, experimentInstanceId, loginForm);
+  }
+
+  /** Shared entry checks for a submitted ID and one carried from a full or cancelled session. */
+  private static Result joinSession(String experimentId, String experimentInstanceId, Form<CLogin> loginForm) {
       // (Pasted ids often bring a space along: " p1 " would be another seat that looks like p1.)
       String clientId = loginForm.get().id == null ? null : loginForm.get().id.trim();
       // (the errors are the keys of their words, which the page shows in the session's language)
@@ -320,7 +335,6 @@ public class ClientLogin extends Controller {
         return forbidden(signInPage(experimentId, experimentInstanceId, loginForm));
       }
       return enterGame(experimentId, experimentInstanceId, clientId, token, null);
-    }
   }
 
   /**

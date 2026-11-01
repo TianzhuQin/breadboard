@@ -2095,7 +2095,7 @@ public class ScriptBoard extends UntypedActor {
     Long instanceId = session == null ? null : session.id;
     Long experimentId = session == null || session.experiment == null ? null : session.experiment.id;
     ObjectNode screen = sessionFullScreen(fromProlific(client, instanceId), experimentId, SessionLanguage.of(instanceId),
-        session != null && !Boolean.TRUE.equals(session.hasStarted));
+        session != null && !Boolean.TRUE.equals(session.hasStarted), clientId);
     client.leftOut = true;
     client.end(screen);
     rememberLastScreens(Collections.singletonList(client));
@@ -2148,12 +2148,16 @@ public class ScriptBoard extends UntypedActor {
   }
 
   static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang, boolean beforeStart) {
+    return sessionFullScreen(prolific, experimentId, lang, beforeStart, null);
+  }
+
+  static ObjectNode sessionFullScreen(boolean prolific, Long experimentId, String lang, boolean beforeStart, String clientId) {
     boolean next = experimentId != null && Autopilot.opensNextSoon(experimentId);
     String what;
     if (prolific) {
       what = SystemTexts.html(lang, next ? "end.fullNextProlific" : "end.fullProlific");
     } else if (next) {
-      String link = "<a href=\"/play/" + experimentId + "/login\">" + SystemTexts.html(lang, "end.fullNextLink") + "</a>";
+      String link = nextSessionLink(experimentId, clientId, lang);
       what = SystemTexts.html(lang, "end.fullNext", "link", new SystemTexts.Html(link));
     } else {
       what = SystemTexts.html(lang, "end.fullOther");
@@ -2166,6 +2170,21 @@ public class ScriptBoard extends UntypedActor {
     player.put("text", SystemTexts.screen(SystemTexts.html(lang, "end.fullTitle"),
         SystemTexts.sentences(lang, SystemTexts.html(lang, beforeStart ? "end.fullWaiting" : "end.full"), what)));
     return frame;
+  }
+
+  /** A participant's ID follows them through the holding page into the next session. */
+  private static String nextSessionLink(Long experimentId, String clientId, String lang) {
+    String query = clientId == null ? "" : "?id=" + entryEncode(clientId);
+    return "<a href=\"/play/" + experimentId + "/login" + query + "\">"
+        + SystemTexts.html(lang, "end.fullNextLink") + "</a>";
+  }
+
+  private static String entryEncode(String value) {
+    try {
+      return java.net.URLEncoder.encode(value, "UTF-8");
+    } catch (java.io.UnsupportedEncodingException impossible) {
+      throw new IllegalStateException(impossible);
+    }
   }
 
   /**

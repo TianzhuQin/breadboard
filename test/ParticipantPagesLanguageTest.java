@@ -127,6 +127,43 @@ public class ParticipantPagesLanguageTest extends BaseTest {
     }
 
     @Test
+    public void aCarriedIdJoinsTheNextSessionWithoutAskingForItAgain() throws Exception {
+        ExperimentInstance next = openSession("Next", "zho");
+        String id = "participant & 中文";
+        String query = "?id=" + java.net.URLEncoder.encode(id, "UTF-8");
+        Result stable = route(fakeRequest(GET, "/play/" + e + "/login" + query));
+        assertEquals("/game/" + e + "/" + next.id + "/login" + query, header("Location", stable));
+        Result joined = route(fakeRequest(GET, header("Location", stable)));
+        assertEquals(SEE_OTHER, status(joined));
+        assertTrue(ParticipantAuth.isClaimed(next.id.toString(), id));
+        assertNotNull(cookie(ParticipantAuth.cookieName(next.id.toString()), joined));
+        // Carrying an ID does not take a seat another browser already holds, nor a reserved AI seat.
+        assertEquals(FORBIDDEN, status(route(fakeRequest(GET, "/game/" + e + "/" + next.id + "/login" + query))));
+        assertEquals(BAD_REQUEST, status(route(fakeRequest(GET, "/game/" + e + "/" + next.id + "/login?id=_2"))));
+    }
+
+    @Test
+    public void aCarriedIdDoesNotBypassAParticipantPassword() throws Exception {
+        ExperimentInstance next = openSession("Password", "eng");
+        Field field = ScriptBoard.class.getDeclaredField("engine");
+        field.setAccessible(true);
+        Object previous = field.get(null);
+        javax.script.ScriptEngine temporary = new javax.script.ScriptEngineManager().getEngineByName("groovy");
+        temporary.put("password", "test-fixture");
+        field.set(null, temporary);
+        try {
+            Result result = route(fakeRequest(GET, "/game/" + e + "/" + next.id + "/login?id=carried-id"));
+            assertEquals(OK, status(result));
+            String page = contentAsString(result);
+            assertTrue(page, page.contains("value=\"carried-id\""));
+            assertTrue(page, page.contains("type=\"password\""));
+            assertFalse(ParticipantAuth.isClaimed(next.id.toString(), "carried-id"));
+        } finally {
+            field.set(null, previous);
+        }
+    }
+
+    @Test
     public void aSessionInALanguageBreadboardHasNoWordsInOrNoneGetsEnglish() throws Exception {
         ExperimentInstance spanish = openSession("Español", "spa");
         assertTrue(page("/game/" + e + "/" + spanish.id + "/login").contains("<h1>Join the session</h1>"));
