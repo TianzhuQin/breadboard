@@ -297,6 +297,31 @@ public class AutopilotFlowTest extends BaseTest {
         }
     }
 
+    @Test
+    public void aGivenUpWaitingRoomRunsAnAwayParticipantsOnCancelOnceWhenTheyReturn() throws Throwable {
+        User researcher = user("cancelledaway");
+        Experiment experiment = experimentOf(researcher, "Cancelled with someone away");
+        ObjectNode saved = settings(experiment, 2, 2, 30);
+        saved.put("continuous", false);
+        assertEquals(OK, status(post(researcher, saved)));
+        ExperimentInstance session = openSession(experiment);
+        Page away = connect(experiment, session, "away-end");
+        engine().eval("cancelledIds=[]; autopilot.room.onCancel={ players -> cancelledIds.addAll(players*.id); players.each { it.private.text='Away waiting credit'; it.private.finished=true } }; null");
+        for (F.Callback0 close : away.in.closeCallbacks) close.invoke();
+        engine().eval("autopilot.giveUp(); null");
+        assertEquals(0, engineValue("cancelledIds.size()"));
+        assertEquals(ExperimentInstance.Status.FINISHED, ExperimentInstance.findById(session.id).status);
+        Page back = connect(experiment, session, "away-end");
+        assertTrue(within(1500, () -> back.closed));
+        assertEquals(1, engineValue("cancelledIds.size()"));
+        assertEquals("Away waiting credit", back.lastPlayer().get("text").asText());
+        assertTrue(back.lastPlayer().get("finished").asBoolean());
+        assertFalse(back.lastPlayer().get("_system").has("autopilot"));
+        Page again = connect(experiment, session, "away-end");
+        assertEquals(1, engineValue("cancelledIds.size()"));
+        assertEquals("Away waiting credit", again.lastPlayer().get("text").asText());
+    }
+
     // ---- Maximum players --------------------------------------------------------------------------
 
     @Test

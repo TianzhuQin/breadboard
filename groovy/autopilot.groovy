@@ -470,7 +470,7 @@ class Autopilot {
       // return, even if onCancel failed.
       participants().each { cancelledStatus(it) }
       try {
-        if (waitingCancelled != null) waitingCancelled()
+        if (waitingCancelled != null) waitingCancelled(cancelHandled.toList())
       } finally {
         gameListener?.finish()
       }
@@ -488,6 +488,7 @@ class Autopilot {
       runCancel([v])
     } finally {
       cancelledStatus(v)
+      if (waitingCancelled != null) waitingCancelled([clientId])
     }
   }
 
@@ -660,7 +661,7 @@ autopilot = new Autopilot(g: g, a: a, gameListener: gameListener, eventTracker: 
     texts: bbText, sentences: bbSentences,
     startGame: { models.ScriptBoard.processScript("initStep.start()", null, "autopilot") },
     startFailed: { String failed -> gameListener.gameStartFailed(failed) },
-    waitingCancelled: { models.ScriptBoard.waitingRoomCancelled(gameListener) },
+    waitingCancelled: { Collection<String> handled -> models.ScriptBoard.waitingRoomCancelled(gameListener, handled) },
     leftOut: { String clientId -> models.ScriptBoard.leftOutAtStart(clientId) },
     sessionFull: { String clientId -> models.ScriptBoard.sessionFullAtStart(clientId) })
 

@@ -2192,7 +2192,7 @@ public class ScriptBoard extends UntypedActor {
    * pages outside the waiting room's monitor, as for a full room (closeTurnedAway). Its own session
    * may offer the next one only while the autopilot will open it; a manually run room promises none.
    */
-  public static void waitingRoomCancelled(GameListener listener) {
+  public static void waitingRoomCancelled(GameListener listener, Collection<String> handled) {
     if (listener == null || listener.experimentInstance == null
         || (listener.engine != null && !inService(listener.engine))) {
       return;
@@ -2225,13 +2225,25 @@ public class ScriptBoard extends UntypedActor {
         return waitingCancelledScreen(prolific, next, link, lang);
       }
     };
-    sessionEnded(id, screens);
+    // Keep the first factory: its links belong to this cancelled session, even after an offline
+    // participant returns. Only the participants whose onCancel has run may be ended/removed now.
+    // An offline Client stays until cancelLate runs their callback once, then calls back with its ID.
+    java.util.function.Function<Client, ObjectNode> previous = sessionEnds.get(id);
+    final java.util.function.Function<Client, ObjectNode> use = previous == null ? screens : previous;
+    if (previous == null) sessionEnded(id, use);
+    final List<Client> ready = new ArrayList<Client>();
+    Set<String> ids = handled == null ? Collections.<String>emptySet() : new HashSet<String>(handled);
+    for (Client client : clients.values()) {
+      if (client.experimentInstance != null && id.equals(client.experimentInstance.id) && ids.contains(client.id)) ready.add(client);
+    }
     Thread end = new Thread(new Runnable() {
       public void run() {
-        try {
-          endParticipants(id, screens);
-        } catch (Throwable failure) {
-          Logger.error("Could not close the pages of a cancelled waiting room", failure);
+        for (Client client : ready) {
+          try {
+            endParticipant(client, use);
+          } catch (Throwable failure) {
+            Logger.error("Could not close a page of a cancelled waiting room", failure);
+          }
         }
       }
     }, "breadboard-waiting-cancelled");
