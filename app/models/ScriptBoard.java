@@ -991,6 +991,7 @@ public class ScriptBoard extends UntypedActor {
     boolean experimental = Play.application().configuration().getBoolean("breadboard.experimental", false);
     File groovyDir = new File(Play.application().path().toString(), "groovy");
     ScriptLoader.loadAll(engine, groovyDir, experimental);
+    EngineCleanup.afterScriptsLoaded();
 
     // get script object on which we want to implement the interface with
     Object a = engine.get("a");
