@@ -114,6 +114,13 @@ exit 255
         self.assertIn('another Breadboard from this folder has the database open', said)
         self.assertNotIn('Fix that', said)
 
+    def test_a_breadboard_in_another_folder_is_named_with_its_version(self):
+        self.script('fakebin/curl', "#!/bin/sh\necho '{\"status\":\"ok\",\"database\":\"ok\",\"version\":\"v3.0.0\"}'\n")
+        said = self.result()
+        self.assertIn('Breadboard v3.0.0 is already running from another folder on port 9000', said)
+        self.assertIn('stop that Breadboard first', said)
+        self.assertFalse((self.home / 'starts').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

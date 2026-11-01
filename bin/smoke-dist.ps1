@@ -188,7 +188,7 @@ $other = Expand-Release (Join-Path $work 'another copy! (2)')
 $third = Start-Breadboard $other $Port 'third.log' 'third-err.log' -Wait
 $said = Get-Said 'third.log'
 # (with a command for another port that works from any Command Prompt: breadboard.bat's full path)
-if ($third.ExitCode -ne 1 -or -not $said.Contains("Port $Port is in use") -or -not $said.Contains("\breadboard.bat`" -Dhttp.port=$($Port + 1)")) {
+if ($third.ExitCode -ne 1 -or -not $said.Contains("is already running from another folder on port $Port") -or -not $said.Contains("\breadboard.bat`" -Dhttp.port=$($Port + 1)")) {
   Fail "another copy started on the same port didn't say the port is in use, with a command for another one (exit code $($third.ExitCode)): $said"
 }
 Pass 'another copy on the same port says the port is in use (from a folder whose path has a "!")'

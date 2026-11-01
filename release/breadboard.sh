@@ -347,6 +347,7 @@ fi
 # 127.0.0.1. -g: the brackets are the address's, not a range.)
 port_taken() {
   TAKEN=""
+  OTHER_BREADBOARD=""
   command -v curl >/dev/null 2>&1 || return 1
   for HOST in 127.0.0.1 '[::1]'; do
     if ANSWER="$(curl -g -s --noproxy '*' --max-time 8 "http://$HOST:$PORT/health" 2>/dev/null)"; then
@@ -362,7 +363,9 @@ port_taken() {
   done
   [ "$CURL" -ne 7 ] || return 1
   if printf '%s' "$ANSWER" | grep -q '"database"'; then
-    TAKEN="Breadboard is already running on port $PORT: open $URL"
+    OTHER_BREADBOARD=1
+    VERSION="$(printf '%s' "$ANSWER" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')"
+    TAKEN="Breadboard${VERSION:+ $VERSION} is already running from another folder on port $PORT: open $URL. To start this copy, stop that Breadboard first (close its window, or stop its service)."
   elif [ -n "$PORT_OPT" ]; then
     TAKEN="Another program is using port $PORT (http.port in conf/local.conf). Stop it, or change that
 line to another port, e.g.  http.port=$((PORT + 1))"
@@ -375,6 +378,9 @@ start, with the line  http.port=$((PORT + 1))  in conf/local.conf, or once, with
 }
 if port_taken; then
   refuse "$TAKEN"
+  if [ -n "$OTHER_BREADBOARD" ] && [ -n "$OPENER" ]; then
+    (trap '' HUP; open_console "$PORT" &)
+  fi
   exit 1
 fi
 

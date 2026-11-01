@@ -462,7 +462,7 @@ if (cd "$APP" && use_proxy && exec ./breadboard.sh -Dhttp.port="$PORT" -Dpidfile
     > "$WORK/same-port.log" 2>&1 < /dev/null; then
   fail "another Breadboard started on the port this one uses"
 fi
-grep -qF "Breadboard is already running on port $PORT" "$WORK/same-port.log" \
+grep -qF "is already running from another folder on port $PORT" "$WORK/same-port.log" \
   || fail "another Breadboard on the same port, with a proxy set, wasn't told this one runs there: $(cat "$WORK/same-port.log")"
 pass "another Breadboard on the same port, with a proxy set, is told this one runs there"
 PROXY=""

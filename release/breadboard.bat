@@ -160,6 +160,7 @@ REM instead of a stack trace (here, and again before the server is started again
 REM by itself).
 CALL :porttaken
 IF DEFINED PORT_TAKEN (
+  IF DEFINED OTHER_BREADBOARD CALL :openother
   CALL :refuse say_port
   EXIT /B 1
 )
@@ -436,6 +437,7 @@ ECHO Breadboard is already running from this folder ^(process %RUNNING%^): its c
 GOTO :EOF
 
 :say_port
+IF DEFINED OTHER_BREADBOARD GOTO say_otherbreadboard
 SET /A "NEXT_PORT=PORT+1"
 ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
 IF DEFINED PORT_OPT GOTO say_port_local
@@ -446,6 +448,15 @@ GOTO :EOF
 :say_port_local
 ECHO To start another one, change the line http.port=%PORT% in conf\local.conf to another port, e.g.
 ECHO   http.port=%NEXT_PORT%
+GOTO :EOF
+
+:say_otherbreadboard
+ECHO Breadboard %OTHER_BREADBOARD% is already running from another folder on port %PORT%: open http://localhost:%PORT%. To start this copy, stop that Breadboard first ^(close its window, or stop its task in Task Scheduler^).
+GOTO :EOF
+
+:openother
+SET "RUNNING_PORT=%PORT%"
+CALL :openrunning
 GOTO :EOF
 
 :say_curly
@@ -572,8 +583,11 @@ REM PORT_TAKEN: 1 when something answers on the port, at 127.0.0.1 or at its IPv
 REM program there leaves the server free to start, and the browser, which tries ::1 first for
 REM localhost, would then open that program).
 SET "PORT_TAKEN="
+SET "OTHER_BREADBOARD="
 powershell -NoProfile -Command "foreach ($a in @('127.0.0.1', '::1')) { try { $ip = [Net.IPAddress]::Parse($a); $c = New-Object Net.Sockets.TcpClient($ip.AddressFamily); $c.Connect($ip, %PORT%); $c.Close(); exit 0 } catch { } }; exit 1" >NUL 2>&1
 IF NOT ERRORLEVEL 1 SET "PORT_TAKEN=1"
+IF NOT DEFINED PORT_TAKEN GOTO :EOF
+FOR /F "delims=" %%V IN ('powershell -NoProfile -Command "foreach ($a in @('127.0.0.1', '[::1]')) { try { $r = [Net.HttpWebRequest]::Create('http://' + $a + ':%PORT%/health'); $r.Proxy = $null; $r.Timeout = 2000; $response = $r.GetResponse(); $reader = New-Object IO.StreamReader($response.GetResponseStream()); $h = $reader.ReadToEnd() | ConvertFrom-Json; $reader.Close(); $response.Close(); if ($h.database -and $h.version -match '\A[A-Za-z0-9._-]+\z') { $h.version; break } } catch {} }" 2^>NUL') DO SET "OTHER_BREADBOARD=%%V"
 GOTO :EOF
 
 :runninghere
