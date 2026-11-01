@@ -10,7 +10,9 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   Azul Zulu 8 build, with its licence files in `jre/`): nothing else to install. On a Mac,
   `Start Breadboard.command` starts it with a double-click. The launchers open the console in the
   browser once the server is up (and again when Breadboard is started a second time while it runs),
-  and print the addresses it is reached at: on this computer, and on each network it is on.
+  and print its addresses on real networks, with the default network first and virtual or VPN
+  adapters left out. Two simultaneous starts from one folder share a start lock; a Breadboard
+  from another folder is named with its version.
 - Your settings go in `conf/local.conf`, which the launchers create and which you copy into each new
   release, the port (`http.port`) and memory (`breadboard.memory`) included; a release replaces
   `conf/application-prod.conf`. Curly quotes in it (TextEdit's Smart Quotes, a Chinese input
@@ -21,12 +23,14 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   a `JAVA8_HOME` without Java 8; a folder they can't write; the Windows launcher opened inside the
   zip. They work behind a proxy set in `http_proxy` (common in China), and accept as `JAVA8_HOME` the
   folder Finder shows for a JDK. A server window that stops taking output (a click in a Windows
-  console, Ctrl+S, a pipe nobody reads) no longer holds the server up.
+  console, Ctrl+S, a pipe nobody reads) no longer holds the server up. Startup refusals go to
+  `logs/start-errors.log` too, and the final message names the cause rather than leaving a stack trace.
 - Keep-running mode: the launcher starts the server again after a crash or when it runs out of
   memory, says why in its window and in `logs/application.log`, checks the port first, and gives up
   after 5 restarts in 10 minutes. A server that never started (a mistake in `conf/local.conf`, its
   port taken) isn't started again, and `logs/start-errors.log` keeps what Java printed. Out of
-  memory, it leaves `logs/out-of-memory.hprof`, and what Java said in `logs/jvm-pid<N>.log`.
+  memory, it leaves `logs/out-of-memory.hprof` and a short `logs/jvm-pid<N>.log` note. Only the newest
+  three JVM notes are kept; routine engine rebuilds no longer grow them.
 - Ready-made recipes for starting it with the computer: launchd (macOS), a Task Scheduler task
   (`breadboard-task.xml`, Windows; Java's own errors go to `logs/service-errors.log`) and systemd
   (Linux). `/health` (GET or HEAD) for uptime monitors.
@@ -40,7 +44,8 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
 - Automatic backups of the database while the server runs, every day and before an upgrade: the
   newest 14 of each kind (daily, made by hand, before an upgrade) are kept in `backups/`.
   Settings → Backups lists them, backs up on request and downloads them;
-  [docs/install.md](docs/install.md#backups) says how to go back to one.
+  [docs/install.md](docs/install.md#backups) says how to extract the backup and replace exactly
+  `db/breadboard.h2.db`; a differently named database file is warned about at startup.
 - Stopping the server: a stop that hangs ends after 20 seconds, and the database is always closed
   properly, so nothing committed in its last moments is lost. The running session's game ends first,
   and its participants' pages say what to do (open the study's link again in a few minutes; from
@@ -57,7 +62,8 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   When a step fails during the game in a way that keeps the next step from getting going, the
   session ends, its participants are told, and the data records `sessionFailed` (`step`, `line`,
   `error`). Either way the autopilot pauses, and its page names the step and line, with a link that
-  opens the step there. A failure the game goes on after is recorded (`stepFailed`) and shown. A
+  opens the step there. A failure the game goes on after is recorded (`stepFailed`); the Autopilot
+  page keeps its step, line and session even after the next session opens, until Save or Resume. A
   session a researcher runs by hand is never ended this way: a start that didn't get going is taken
   back, so Start works again.
 - **Longest session** (Autopilot page) ends the autopilot's own session when its game has run that
@@ -70,11 +76,13 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   stopped it, it ran out of time, had to stop because of a problem with the study, was full, or
   ended because the server stopped or restarted, with what to do on Prolific for those who came from
   there. A completion code on screen stays. Ending a session never holds up the engine.
-- **Maximum players** is a real maximum: the first to arrive are seated, and anyone else there as the
-  game starts is told the session is full, with a link to the next one (`sessionFull`). While a full
-  room counts down, the study's links send nobody more to it.
+- **Maximum players** is a real maximum: the first to arrive are seated, and later arrivals are told
+  at once that the session is full, also during its countdown (`sessionFull`). A full or cancelled
+  waiting room offers the next session only when one is coming, retaining the participant's typed
+  ID; Prolific participants get the instructions for their study.
 - Between sessions and while a game runs, the study's links (sign-in and Prolific) show a page that
-  waits for the autopilot's next session, checking every few seconds, and takes people in once it
+  waits for the autopilot's next session, checking about every second just before it opens and every
+  four seconds while a game runs, and takes people in once it
   opens; Prolific participants read that they can keep it open or return the study. When the
   autopilot won't open one (it is off, paused or done, doesn't open the next session by itself, or
   something holds it up, which the Autopilot page reports), the links say no session is open.
@@ -97,7 +105,8 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   Prolific does nothing (the server's log says why); it used to stop the step, so the game stalled.
 - The autopilot opens no new session while the disk that holds the database is almost full.
 - Long unattended runs: memory stays level (replaced script engines and their classes are freed,
-  computer players share one timer, seats of finished sessions are released), and rebuilding the
+  computer players share one timer, seats and records of finished sessions are released, including
+  after signing in again), and rebuilding the
   engine, as every new session and **Reload engine** do, takes about half a second instead of two
   or more.
 - The Autopilot page leaves the waiting room and takeover to the steps of an experiment that sets
@@ -106,9 +115,9 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   its session. A setting that needs fixing is scrolled into view, clear of the save bar. While its
   own session is open, Steps and the top bar say that its next session uses what you save, instead
   of asking for a reload.
-- Autopilot sessions are named like "Autopilot · 2026-10-30 13:20:47 UTC", which Sessions & data
-  shows and finds as typed, and their data files download as
-  `Autopilot - 2026-10-30 13-20-47 UTC_14.csv`.
+- New autopilot sessions are named "Autopilot #1", "Autopilot #2", …, with local times beside them
+  in the console. Existing names stay; names in data and CSV files use plain spaces. Settings-file
+  autopilots open the next session by default, as settings saved in the console do.
 
 #### Participants' connections
 - A page reconnects within a second after a short drop, backs off up to 30 seconds while the network
@@ -117,7 +126,8 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   participant as gone after 30, so the computer takes over after the usual delay.
 - Two tabs of one participant no longer take the seat from each other: the older one says the study
   is open elsewhere, with **Use it here**, and a tab that reconnects by itself leaves the seat to the
-  page the participant opened or chose last. A network that blocks the live connection is named.
+  page the participant opened or chose last. A network that blocks the live connection is named
+  after about 30–45 seconds, also when it silently swallows reconnection attempts.
 - While the page reconnects, a note at the top moves the page down rather than covering it, and its
   buttons are disabled. Answers that waited too long are dropped rather than sent late, and the
   server drops a choice or tie change that reaches it more than 10 seconds after it was given
@@ -131,7 +141,9 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
 - A researcher's preview of a participant only watches: it never disturbs their page, never counts
   as them being there, and in a real session adds nobody to the game (a preview of someone who isn't
   in it says "Not in the game"). If they leave, the computer takes over as usual. Previews of the
-  test players a researcher creates still play them.
+  test players a researcher creates still play them. When another preview stands in for someone
+  away, watching previews say so. Escape closes a full-size preview even after a click inside it.
+  Ordinary dropped connections no longer print Java stack traces in the server window.
 - The study's shared link asks a browser that already has a seat whether to continue as that person
   or join as someone else, so a study can be tried in several tabs of one browser.
 - Identical updates are no longer sent again, which helps weak connections keep up. The network
@@ -154,17 +166,20 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
 - Researcher accounts: Settings → Researchers adds, removes and gives new passwords to the lab's
   accounts (shown once; **Copy sign-in details** gives the server's address on the lab's network
   when the console is open at localhost). Every account works on every experiment on the server.
+  Someone whose password was reset is signed out with the reason and told to ask for the new one.
 - Work on any experiment while the autopilot or a colleague runs another: its Build pages and data
   are there, and the Run pages say what the engine runs and how to run yours. Every console (the
   previous one too) hears when a session opens or ends and follows the sessions of the experiment it
   works on. Before anything that would end a running session, the console says whose it is: the
-  autopilot's, a colleague's, or yours.
+  autopilot's, a colleague's, or yours. Every way of stopping someone else's session records
+  `sessionStopped` with who did it and why; its owner keeps a dismissible notice across pages and
+  the automatic move to a replacement session.
 - Sessions & data: **Download all data** gives every listed session's events in one file, each row
   with its session and launch parameters. **For Excel** (remembered in this browser) adds the
   byte-order mark Excel and WPS need to show Chinese, also to Live session's **Download data** and
   the Players page's **Download CSV** (`excel=true` on the server's CSV addresses); without it the
   files are as before. The files saved from **View events** write times as the server's do
-  (`2026-10-28T13:24:23:757Z`).
+  (`2026-10-28T13:24:23:757Z`). Stopped sessions count no participants as connected.
 - Recruitment → Prolific: **From Prolific in every session** lists who joined and who finished in
   every session, with their codes and bonuses and **Copy bonus list**, so a session the autopilot has
   moved on from can still be paid; someone the game ended for without a code is marked **No code**.
@@ -185,7 +200,9 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   it goes wrong there, the console, the data (`stepFailed`, `sessionFailed`) and the log say both,
   "line 14 of RoundStep, in isHuman (InitStep line 30)", and each opens its own step. The events
   lists say what the well-known events mean, name the step and line of a failure, say when a
-  researcher's preview signed in, and show failures in red and warnings in amber.
+  researcher's preview signed in, connected or disconnected, and show failures in red and warnings
+  in amber, also in the Sessions & data drawer. Internal script names stay under **Full error**;
+  steps without an explicit name use their saved step name. A refused Reload engine gives a toast.
 - Preview shows the session's test players as soon as it opens, also after a reload. Its tiles and
   player list say **Watching** where a preview only watches and **Away** where it stands in for
   someone who left, with what that means now; on a phone the player list folds away. The list counts
@@ -204,7 +221,8 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   is no experiment yet. Its first round no longer shows "Your score: 0 of 0", a cut tie is recorded
   as `TieCut` (who cut it, whom, in which round) instead of `Disconnected`, and for an account whose
   Default language isn't English its texts stay English, with that language added next to them to
-  translate.
+  translate. Colour names are Content texts too: translating them changes what participants read
+  without changing scores, network colours or the Blue/Orange values in the data.
 - The first-account form says what **Default language** does (the language participants' texts are
   written in; the console stays in English). A new server names the languages in English, also on a
   computer set to another language.
@@ -212,13 +230,14 @@ experiments keep working; to upgrade from 3.0, see [docs/install.md](docs/instal
   `\`; every open console updates its list when anyone makes, imports, renames or deletes an
   experiment. Import fills in the experiment's own name from the zip, with "(copy)" when it is taken;
   the previous console's Import keeps the chosen file and name when a name is refused.
-- Help in the menu under your email: the console's guide, the Chinese quick start (which follows the
-  console's names step by step, including Prolific's completion code with the example, the Autopilot
-  settings and opening the CSV files in Excel or WPS), and troubleshooting.
+- Help in the menu under your email opens this release's own guides inside the console, including
+  the Chinese quick start, install and troubleshooting, with working links and anchors even without
+  GitHub. A link to the same version on GitHub remains available.
 - The sidebar fits laptop screens, every page says when the console isn't connected, and the sign-in
   page says how to get a new password; on a phone, the sidebar closes after you switch experiments,
-  Parameters shows each parameter as a card, and stat cards wrap. The previous console opens in a new
-  tab.
+  Parameters shows each parameter as a card, stat cards wrap, and the notice about another running
+  experiment keeps its text readable. After a server restart the console reconnects within a few
+  seconds, with **Try now** to retry immediately. The previous console opens in a new tab.
 - Smaller things: computer players are named alike everywhere ("AI 6 (_6)"); events recorded in the
   same millisecond keep their order in the data; a finished or stopped session's Network card says
   the session has ended; Content's list previews no longer put a space before punctuation;
@@ -249,7 +268,8 @@ Details are in [docs/whats-new.md](docs/whats-new.md).
   `completionCode`, `bonus`), `participantComment` (`player`, `text`), `aiChoice` (the computer's
   picks), `connectionGap` (`player`, `awayMs`) and `answerDropped` (`player`, `ageMs`);
   `clientConnected` and `clientDisconnected` only on real changes, marked when a preview caused
-  them. New on the player: `_system.disconnectedAt`; on the waiting room: `departureGraceSeconds`.
+  them; `sessionStopped` includes `by` and `reason` for every way a session is stopped. New on the
+  player: `_system.disconnectedAt`; on the waiting room: `departureGraceSeconds`.
 - A tie change an experiment's `onEdit` makes itself is answered as made (`applied: true`): the
   participant's page says "Tie cut.", not "Your change was sent."
 - The new participant page's comment links to the previous default page (SVGGraph) on GitHub, since
