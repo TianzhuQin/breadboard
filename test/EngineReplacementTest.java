@@ -10,6 +10,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.security.AccessControlContext;
+import java.security.ProtectionDomain;
+import com.avaje.ebean.Ebean;
+import com.avaje.ebean.BackgroundExecutor;
+import com.avaje.ebean.event.BeanPersistListener;
+import com.avaje.ebeaninternal.api.SpiEbeanServer;
+import com.avaje.ebeaninternal.server.deploy.BeanDescriptor;
+import com.avaje.ebeaninternal.server.lib.thread.ThreadPool;
 
 import static org.junit.Assert.*;
 
@@ -184,6 +195,108 @@ public class EngineReplacementTest extends BaseTest {
         assertTrue("the task at work during the reload: " + result, result.matches("made \\d+, failed 0"));
     }
 
+    @Test
+    public void anEventSavedOnAScriptTimerDoesNotKeepThatEnginesClassesInEbeansThreads() throws Exception {
+        databaseTaskDoesNotKeepEngine(Event.class, "eventTracker.track('background-write', [source: 'timer'])");
+    }
+
+    @Test
+    public void dataSavedOnAScriptTimerDoesNotKeepThatEnginesClassesInEbeansThreads() throws Exception {
+        databaseTaskDoesNotKeepEngine(Data.class, "d['background-write'] = 'timer'");
+    }
+
+    @Test
+    public void aSessionFinishedOnAScriptTimerDoesNotKeepThatEnginesClassesInEbeansThreads() throws Exception {
+        databaseTaskDoesNotKeepEngine(ExperimentInstance.class, "gameListener.finish()");
+    }
+
+    /**
+     * Make the real Ebean pool grow while a script timer saves through one of the server's APIs.
+     * A pool worker used to inherit that timer's script protection domains, keeping its whole engine
+     * loaded for the worker's lifetime, even once the task had finished and all caches were emptied.
+     */
+    private <T> void databaseTaskDoesNotKeepEngine(Class<T> model, String write) throws Exception {
+        User user = user("database-task");
+        AdminSocketsTest.Tab t = loggedIn(user);
+        Experiment experiment = createExperiment("Database task");
+        user.ownedExperiments.add(experiment);
+        user.saveManyToManyAssociations("ownedExperiments");
+        t.send("SelectExperiment", "experimentId", experiment.id);
+        await("selected", () -> experiment.id.equals(engineExperimentId()));
+        play(t);
+        reload(t);
+        t.send("LaunchGame", "name", "Background write", "parameters", play.libs.Json.newObject());
+        await("a running session", () -> ExperimentInstance.find.where().eq("name", "Background write")
+            .eq("status", ExperimentInstance.Status.RUNNING).findRowCount() == 1);
+        play(t);
+        WeakReference<ClassLoader> scripts = new WeakReference<ClassLoader>(EngineCleanup.scriptLoader(engine()));
+        BackgroundExecutor executor = Ebean.getServer("default").getBackgroundExecutor();
+        Field poolField = executor.getClass().getDeclaredField("pool");
+        poolField.setAccessible(true);
+        ThreadPool pool = (ThreadPool) poolField.get(executor);
+        CountDownLatch release = new CountDownLatch(1);
+        BeanDescriptor<T> descriptor = ((SpiEbeanServer) Ebean.getServer("default")).getBeanDescriptor(model);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        BeanPersistListener<T> listener = new BeanPersistListener<T>() {
+            public boolean inserted(T bean) { worker.set(Thread.currentThread()); return false; }
+            public boolean updated(T bean, java.util.Set<String> properties) { worker.set(Thread.currentThread()); return false; }
+            public boolean deleted(T bean) { return false; }
+            public void remoteInsert(Object id) {}
+            public void remoteUpdate(Object id) {}
+            public void remoteDelete(Object id) {}
+        };
+        // Ebean 3.2 registers listeners by a concrete generic argument; this helper exercises three
+        // model types, so install its listener directly and restore the descriptor in finally.
+        Field persistListener = BeanDescriptor.class.getDeclaredField("persistListener");
+        persistListener.setAccessible(true);
+        Object originalListener = persistListener.get(descriptor);
+        try {
+            // Keep every existing worker busy, forcing this save to create one. Their tasks are
+            // server/test code only, never closures loaded by the script engine under test.
+            do {
+                CountDownLatch started = new CountDownLatch(1);
+                executor.execute(() -> {
+                    started.countDown();
+                    try { release.await(30, TimeUnit.SECONDS); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                });
+                assertTrue("an Ebean worker started", started.await(5, TimeUnit.SECONDS));
+            } while (pool.getBusyCount() < pool.size());
+            int before = pool.size();
+            persistListener.set(descriptor, listener);
+            // Evaluate directly: SendScript also saves the researcher's buffer before the timer
+            // runs, which would grow the pool from its actor and hide the timer's inherited context.
+            engine().eval("timers.newTimer().runAfter(50) { " + write + " }; null");
+            await("the saved bean's real background notification", () -> worker.get() != null);
+            assertTrue("the script's save grew Ebean's pool", pool.size() > before);
+            assertTrue("the notification ran in Ebean's worker", worker.get().getName().startsWith("Ebean-default."));
+            assertNoScriptDomains(worker.get(), scripts.get());
+        } finally {
+            persistListener.set(descriptor, originalListener);
+            release.countDown();
+        }
+        for (int rebuild = 0; rebuild < 3; rebuild++) { reload(t); play(t); }
+        assertTrue("the engine whose timer grew Ebean's pool is still loaded",
+            EngineCleanupTest.collected(scripts, 20000));
+    }
+
+    private static void assertNoScriptDomains(Thread worker, ClassLoader scripts) throws Exception {
+        Field inherited = Thread.class.getDeclaredField("inheritedAccessControlContext");
+        inherited.setAccessible(true);
+        AccessControlContext context = (AccessControlContext) inherited.get(worker);
+        if (context == null) return;
+        Field domains = AccessControlContext.class.getDeclaredField("context");
+        domains.setAccessible(true);
+        ProtectionDomain[] values = (ProtectionDomain[]) domains.get(context);
+        if (values == null) return;
+        for (ProtectionDomain domain : values) {
+            if (domain == null) continue;
+            for (ClassLoader loader = domain.getClassLoader(); loader != null; loader = loader.getParent()) {
+                assertNotSame("Ebean's idle worker inherited the replaced engine's script domain", scripts, loader);
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------
 
     /** What the busy task of aTimerTaskAtWorkDuringTheReloadGoesOnWorking and the test tell each other. */
@@ -228,7 +341,7 @@ public class EngineReplacementTest extends BaseTest {
     private User user(String prefix) {
         Language lang = Language.find.where().eq("code", "eng").findUnique();
         if (lang == null) lang = createLanguage("eng", "English");
-        return createUser(prefix + "-" + UUID.randomUUID() + "@test.org", prefix, "secret-1", lang);
+        return createUser(prefix + "-" + UUID.randomUUID() + "@example.org", prefix, "secret-1", lang);
     }
 
     private static void await(String what, Callable<Boolean> condition) throws Exception {

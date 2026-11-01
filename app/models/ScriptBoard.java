@@ -3219,14 +3219,15 @@ public class ScriptBoard extends UntypedActor {
       return;
     }
     try {
-      play.libs.Akka.system().scheduler().scheduleOnce(
+      // A step finishing on its script timer may be the first to need another dispatcher thread.
+      ServerContext.run(() -> play.libs.Akka.system().scheduler().scheduleOnce(
           scala.concurrent.duration.Duration.create(50, java.util.concurrent.TimeUnit.MILLISECONDS),
           new Runnable() {
             public void run() {
               tellEngineNews();
             }
           },
-          play.libs.Akka.system().dispatcher());
+          play.libs.Akka.system().dispatcher()));
     } catch (Exception e) {
       engineNewsDue.set(false);
       Logger.warn("Could not tell the consoles what the engine runs: " + e);
@@ -5441,6 +5442,10 @@ public class ScriptBoard extends UntypedActor {
 
     @Override
     public void propertyChange(PropertyChangeEvent evt) {
+      ServerContext.run(() -> changedInServerContext(evt));
+    }
+
+    private void changedInServerContext(PropertyChangeEvent evt) {
       List<Data> dataList = experimentInstance.data;
       Data foundData = null;
       if (evt.getPropertyName() != null) {
