@@ -188,7 +188,7 @@ $other = Expand-Release (Join-Path $work 'another copy! (2)')
 $third = Start-Breadboard $other $Port 'third.log' 'third-err.log' -Wait
 $said = Get-Said 'third.log'
 # (with a command for another port that works from any Command Prompt: breadboard.bat's full path)
-if ($third.ExitCode -ne 1 -or -not $said.Contains("is already running from another folder on port $Port") -or -not $said.Contains("\breadboard.bat`" -Dhttp.port=$($Port + 1)")) {
+if ($third.ExitCode -ne 1 -or -not $said.Contains("is already running from another folder on port $Port") -or -not $said.Contains('stop that Breadboard first')) {
   Fail "another copy started on the same port didn't say the port is in use, with a command for another one (exit code $($third.ExitCode)): $said"
 }
 Pass 'another copy on the same port says the port is in use (from a folder whose path has a "!")'
@@ -201,10 +201,25 @@ Remove-Item Env:BREADBOARD_SERVICE
 $otherLog = Join-Path $other 'logs\application.log'
 $logged = ''
 if (Test-Path -LiteralPath $otherLog) { $logged = "$(Get-Content -LiteralPath $otherLog -Raw)" }
-if ($fourth.ExitCode -ne 1 -or -not $logged.Contains("Port $Port is in use") -or -not $logged.Contains('from breadboard.bat in launcher')) {
+if ($fourth.ExitCode -ne 1 -or -not $logged.Contains("is already running from another folder on port $Port") -or -not $logged.Contains('from breadboard.bat in launcher')) {
   Fail "as a service, a start turned away didn't say why in logs\application.log (exit code $($fourth.ExitCode)): $logged"
 }
 Pass 'as a service, why a start was turned away is in logs\application.log'
+
+# A failed start-lock mkdir is a folder problem, not another server. A file at that name
+# exercises the refusal without needing administrator privileges to change Windows ACLs.
+$brokenLock = Join-Path $other 'logs\start.lock'
+Set-Content -LiteralPath $brokenLock -Value 'not a directory'
+$badLock = Start-Breadboard $other ($Port + 9) 'bad-lock.log' 'bad-lock-err.log' -Wait
+$said = Get-Said 'bad-lock.log'
+Remove-Item -LiteralPath $brokenLock
+if ($badLock.ExitCode -ne 1 -or -not $said.Contains("logs\start.lock can't be written") -or
+    $said.Contains('starting or running from this folder')) {
+  Fail "a start-lock folder failure was called another running server: $said"
+}
+$kept = Get-Content -LiteralPath (Join-Path $other 'logs\start-errors.log') -Raw
+if (-not $kept.Contains("logs\start.lock can't be written")) { Fail 'the start-lock refusal was not kept' }
+Pass 'a failed start-lock directory is reported as a folder problem and kept in start-errors.log'
 
 # As a service, what Java prints as errors itself goes into logs\service-errors.log: a mistake in
 # conf\local.conf (here a Windows path with single backslashes) is said only there, before the

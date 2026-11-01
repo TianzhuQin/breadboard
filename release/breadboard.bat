@@ -135,6 +135,10 @@ IF DEFINED LOCAL_MEMORY SET "MEMORY=%LOCAL_MEMORY%"
 
 REM Claim the start before reading RUNNING_PID: mkdir is atomic even with two double-clicks.
 CALL :claimstart
+IF DEFINED START_LOCK_ERROR (
+  CALL :refuse say_unwritable
+  EXIT /B 1
+)
 IF NOT DEFINED START_CLAIMED (
   CALL :openrunning
   CALL :say_starting
@@ -339,6 +343,10 @@ IF DEFINED RUNNING (
   EXIT /B %EXIT_CODE%
 )
 CALL :claimstart
+IF DEFINED START_LOCK_ERROR (
+  CALL :refuse say_unwritable
+  EXIT /B 1
+)
 IF NOT DEFINED START_CLAIMED EXIT /B %EXIT_CODE%
 CALL :removepid
 IF DEFINED LIVE_PID (
@@ -640,19 +648,31 @@ START "" /B CMD /D /C ECHO(%~1
 GOTO :EOF
 
 :claimstart
+SET "START_LOCK_ERROR="
 SET "START_CLAIMED="
 SET "BREADBOARD_START_LOCK_PID="
 FOR /F "delims=" %%P IN ('powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID); $p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p.ParentProcessId); while ($p.Name -eq 'cmd.exe' -and $p.CommandLine.Contains('powershell -NoProfile -Command')) { $p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p.ParentProcessId) }; $p.ProcessId"') DO SET "BREADBOARD_START_LOCK_PID=%%P"
-IF NOT DEFINED BREADBOARD_START_LOCK_PID GOTO :EOF
+IF NOT DEFINED BREADBOARD_START_LOCK_PID GOTO claimstart_unwritable
+REM A failed mkdir is another start only when the lock really is a directory. Test logs' write
+REM access separately, before trying to recover it, so a read-only folder is not called a running server.
+SET "LOCK_WRITE_CHECK=logs\start-write-%BREADBOARD_START_LOCK_PID%.tmp"
+(TYPE NUL >"%LOCK_WRITE_CHECK%") 2>NUL || GOTO claimstart_unwritable
+DEL /Q "%LOCK_WRITE_CHECK%" 2>NUL
 :claimstart_try
 MKDIR "logs\start.lock" 2>NUL
 IF NOT ERRORLEVEL 1 GOTO claimstart_owned
+IF NOT EXIST "logs\start.lock\" GOTO claimstart_unwritable
 REM Recover a lock only after its owner's process has gone; an empty recent lock may still be
 REM between mkdir and its pid write. A recovery subfolder keeps contenders from deleting each other.
 powershell -NoProfile -Command "$d = Join-Path (Get-Location) 'logs\start.lock'; $f = Join-Path $d 'pid'; if (Test-Path -LiteralPath $f) { $owner = (Get-Content -LiteralPath $f -TotalCount 1).Trim(); if ($owner -match '\A[0-9]+\z' -and -not (Get-Process -Id ([int]$owner) -ErrorAction SilentlyContinue)) { try { $r = Join-Path $d 'recover'; New-Item -ItemType Directory -Path $r -ErrorAction Stop | Out-Null; if ((Get-Content -LiteralPath $f -TotalCount 1).Trim() -eq $owner -and -not (Get-Process -Id ([int]$owner) -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $f; Remove-Item -LiteralPath $r; Remove-Item -LiteralPath $d; exit 0 }; Remove-Item -LiteralPath $r } catch {} } } elseif ((Get-Item -LiteralPath $d).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-1)) { try { [IO.Directory]::Delete($d); exit 0 } catch {} }; exit 1" >NUL 2>&1
 IF NOT ERRORLEVEL 1 GOTO claimstart_try
 SET "RUNNING_PORT=%PORT%"
 GOTO :EOF
+:claimstart_unwritable
+SET "START_LOCK_ERROR=1"
+SET "UNWRITABLE=logs\start.lock"
+GOTO :EOF
+
 :claimstart_owned
 >"logs\start.lock\pid" ECHO %BREADBOARD_START_LOCK_PID%
 SET "START_CLAIMED=1"
