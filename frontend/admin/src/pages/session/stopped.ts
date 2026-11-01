@@ -1,4 +1,5 @@
 import type { FeedEvent } from './events'
+import { sessionStoppedText } from '@/store/sessionStopped'
 
 /**
  * Who stopped a session, and how, in words for the Live session page, from what its data says last
@@ -15,9 +16,8 @@ export function stoppedByText (events: FeedEvent[], me: string): string {
   if (!last || last.name !== 'sessionStopped') return ''
   const by = typeof last.data.by === 'string' ? last.data.by.trim() : ''
   if (!by) return ''
-  const who = me && by.toLowerCase() === me.toLowerCase() ? 'You' : by
   const reason = typeof last.data.reason === 'string' ? last.data.reason : ''
-  return (HOW[reason] || HOW.stopSession)(who)
+  return sessionStoppedText(by, reason, me)
 }
 
 // The events after which a session's earlier sessionStopped no longer says how it ended now.
@@ -25,11 +25,3 @@ const ENDS = new Set([
   'sessionStopped', 'sessionResumed', 'sessionInterrupted', 'serverStopping', 'engineReloaded',
   'sessionFailed', 'sessionStalled', 'sessionTooLong', 'stepsFailedToLoad',
 ])
-
-const HOW: Record<string, (who: string) => string> = {
-  stopSession: who => `${who} stopped this session.`,
-  reloadEngine: who => `${who} reloaded the engine, which stopped this session.`,
-  newSession: who => `${who} created a new session, which stopped this one.`,
-  otherSession: who => `${who} resumed or selected another session, which stopped this one.`,
-  autopilot: who => `${who} let the autopilot take over the engine for its session, which stopped this one.`,
-}

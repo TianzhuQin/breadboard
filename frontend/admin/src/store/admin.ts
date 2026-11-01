@@ -22,6 +22,8 @@ import type {
 const conn = new AdminConnection()
 const graph = new LiveGraph()
 
+interface SessionEndNotice { sessionId: number, sessionName: string, by: string, reason: string }
+
 const state = reactive({
   auth: 'checking' as AuthState,
   email: '',
@@ -60,6 +62,8 @@ const state = reactive({
   unseenErrors: 0,
   /** Events as they are recorded during the session (pushed by the server), newest last. */
   events: [] as LiveEvent[],
+  /** The latest other-account action that ended this account's session; stays until dismissed. */
+  sessionEndNotice: null as SessionEndNotice | null,
   /** The last tie edit's outcome, for the network page. */
   lastTieEdit: null as TieEditResult | null,
   /** The newest error the server sent in reply to a request ({"error", "request"}). */
@@ -71,6 +75,8 @@ const EVENTS_CAP = 1000
 /** What a request says when the connection is down (it is not sent at all). */
 export const NOT_CONNECTED = 'Not connected to the server'
 let outputSeq = 0
+// A repeated live event must not reopen a dismissed notice. Bounded and cleared with the account.
+const sessionEndKeys: string[] = []
 
 function pushOutput (kind: OutputEntry['kind'], text: string, source?: string, requestId?: string, step?: string) {
   if (!text) return
@@ -172,11 +178,37 @@ function handle (m: any) {
   // An experiment was made, imported, renamed or deleted, maybe by another researcher: every
   // researcher works on every experiment, so ask for the newest list.
   if (m.experimentsChanged === true) askUserJsonSoon()
-  if (m.event && typeof m.event === 'object' && isSelectedSessionEvent(m.event)) {
-    state.events.push({ ...m.event, receivedAt: Date.now() })
-    if (state.events.length > EVENTS_CAP) state.events.splice(0, state.events.length - EVENTS_CAP)
+  if (m.event && typeof m.event === 'object') {
+    rememberSessionEnd(m.event)
+    if (isSelectedSessionEvent(m.event)) {
+      state.events.push({ ...m.event, receivedAt: Date.now() })
+      if (state.events.length > EVENTS_CAP) state.events.splice(0, state.events.length - EVENTS_CAP)
+    }
   }
 }
+
+/**
+ * Only a newly pushed event, never the historical events in a User JSON. Remember it before the
+ * server moves this account to the replacement session and discards the old feed. The engine's
+ * owner also identifies whose session ended while they were looking at another experiment/page.
+ * Keep just the notice's words/ID, without retaining the old session, its events or its participants.
+ */
+function rememberSessionEnd (ev: any) {
+  if (state.auth !== 'signedIn' || ev.name !== 'sessionStopped' || !state.email) return
+  const engine = state.user?.engine
+  const id = Number(ev.experimentInstanceId)
+  const by = typeof ev.data?.by === 'string' ? ev.data.by.trim() : ''
+  const reason = typeof ev.data?.reason === 'string' ? ev.data.reason : ''
+  if (!engine || !engine.owner || engine.owner.toLowerCase() !== state.email.toLowerCase() ||
+      !Number.isFinite(id) || id !== engine.sessionId || !by || by.toLowerCase() === state.email.toLowerCase()) return
+  const key = `${id}:${ev.id ?? ev.datetime}:${by}:${reason}`
+  if (sessionEndKeys.includes(key)) return
+  sessionEndKeys.push(key)
+  if (sessionEndKeys.length > 50) sessionEndKeys.shift()
+  state.sessionEndNotice = { sessionId: id, sessionName: engine.sessionName || `Session ${id}`, by, reason }
+}
+
+export function dismissSessionEndNotice () { state.sessionEndNotice = null }
 
 let askTimer: ReturnType<typeof setTimeout> | null = null
 /** Ask for the newest User JSON once, a moment after the last of a burst of changes. */
@@ -446,6 +478,8 @@ function resetState () {
   state.ready = false
   state.output = []
   state.events = []
+  state.sessionEndNotice = null
+  sessionEndKeys.length = 0
   state.unseenErrors = 0
   state.requestError = null
   state.lastTieEdit = null

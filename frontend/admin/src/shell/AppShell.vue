@@ -15,6 +15,7 @@
     <div class="shell__main">
       <TopBar ref="topBar" :output-open="outputOpen" :nav-open="navOpen" @menu="openNav" @toggle-output="toggleOutput" />
       <ConnectionNotice />
+      <SessionEndNotice />
       <EngineNotice v-if="route.meta.usesEngine" />
       <main id="main" ref="mainEl" class="shell__content" :class="{ 'is-bleed': bleed }" tabindex="-1">
         <div v-if="!admin.ready" class="shell__loading" role="status">
@@ -40,6 +41,7 @@ import OutputDrawer from './OutputDrawer.vue'
 import NeedsExperiment from './NeedsExperiment.vue'
 import EngineNotice from './EngineNotice.vue'
 import ConnectionNotice from './ConnectionNotice.vue'
+import SessionEndNotice from './SessionEndNotice.vue'
 import { BSpinner } from '@/ui'
 import { admin, actions } from '@/store/admin'
 import { openOutput } from './output'
