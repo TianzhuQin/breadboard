@@ -43,8 +43,10 @@
             </ul>
             <p class="set__note">
               Kept in <span class="mono">{{ status.folder }}</span> on the server. To go back to one: stop
-              Breadboard, unzip it into the <span class="mono">db</span> folder (replacing the file there), and
-              start Breadboard again. Copy them to another disk now and then.
+              Breadboard, double-click the backup zip (on Windows, choose Extract All), then drag its
+              <span class="mono">breadboard.h2.db</span> into the <span class="mono">db</span> folder
+              and choose Replace. The file must be named exactly <span class="mono">breadboard.h2.db</span>.
+              Start Breadboard again. Copy them to another disk now and then.
             </p>
           </template>
         </template>

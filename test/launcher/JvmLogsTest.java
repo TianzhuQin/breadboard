@@ -113,6 +113,17 @@ public class JvmLogsTest {
   }
 
   @Test
+  public void shortNativeOomDiagnosticsAreKeptAndOnlyTheLatestTwoEarlierOnesStay() throws Exception {
+    File logs = Files.createTempDirectory("bb-logs").toFile();
+    long now = System.currentTimeMillis();
+    for (int i = 1; i <= 8; i++) {
+      file(logs, "jvm-pid" + i + ".log", "java.lang.OutOfMemoryError: Java memory exhausted.\n", now + i);
+    }
+    JvmLogs.prune(logs, JvmLogs.KEEP - 1, "jvm-pid999.log");
+    assertEquals(new TreeSet<>(Arrays.asList("jvm-pid7.log", "jvm-pid8.log")), names(logs));
+  }
+
+  @Test
   public void aMissingFolderIsNoProblem() {
     JvmLogs.prune(new File("no-such-folder-" + System.nanoTime()), 10, "jvm-pid1.log");
   }

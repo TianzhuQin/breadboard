@@ -370,6 +370,8 @@ describe('backups', () => {
     expect(section.text()).toMatch(/A new one every day; the newest 14 of each kind are kept: these, those made by hand, and those made before an upgrade\./)
     expect(section.text()).toMatch(/Made by hand/)
     expect(section.text()).toMatch(/\/srv\/breadboard\/backups/)
+    expect(section.text()).toContain('choose Replace')
+    expect(section.text()).toContain('named exactly breadboard.h2.db')
     expect(section.findAll('a').map(a => a.attributes('href'))).toContain('/backups/breadboard-2026-10-27-120000.zip')
     w.unmount()
   })

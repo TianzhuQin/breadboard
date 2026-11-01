@@ -189,36 +189,23 @@ public class Application extends Controller {
   }
 
   /**
-   * http://<address>:<port> for each IPv4 address of this computer on a private network (10.x,
-   * 172.16-31.x, 192.168.x), with the port of {@code host} (the address the console was opened at).
+   * http://<address>:<port> for each address of this computer that the other computers on its
+   * networks reach it at, the default route's first, as the launchers' "On this network" lines list
+   * them (LanAddresses), with the port of {@code host} (the address the console was opened at).
    */
   static List<String> lanAddresses(String host) {
-    String port = "";
+    return LanAddresses.urls(portOf(host));
+  }
+
+  /** ":9000" for "localhost:9000" (or "[::1]:9000"), "" for a host without a port */
+  static String portOf(String host) {
     if (host != null) {
       int colon = host.lastIndexOf(':');
       if (colon > 0 && host.indexOf(']') < colon) {
-        port = host.substring(colon);
+        return host.substring(colon);
       }
     }
-    List<String> found = new ArrayList<String>();
-    try {
-      for (java.net.NetworkInterface nic : Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
-        if (!nic.isUp() || nic.isLoopback() || nic.isVirtual() || nic.isPointToPoint()) {
-          continue;
-        }
-        for (java.net.InetAddress address : Collections.list(nic.getInetAddresses())) {
-          if (address instanceof java.net.Inet4Address && address.isSiteLocalAddress()) {
-            String url = "http://" + address.getHostAddress() + port;
-            if (!found.contains(url)) {
-              found.add(url);
-            }
-          }
-        }
-      }
-    } catch (Exception e) {
-      Logger.debug("Could not list this computer's network addresses: " + e);
-    }
-    return found;
+    return "";
   }
 
   /**

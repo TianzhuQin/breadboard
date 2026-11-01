@@ -12,20 +12,15 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * What Java itself says, in logs/jvm-pid&lt;its process id&gt;.log: that the server ran out of memory,
- * and of what; the heap dump; a thread dump (kill -3). Java writes that straight to the window, past
- * System.out, so the launchers send it into this file instead (-XX:-DisplayVMOutput -XX:+LogVMOutput
- * -XX:LogFile=logs/jvm-%p.log): a window that took no output held Java up for good as it ran out of
- * memory, before it ended, so that keep-running never started the server again.
- *
- * Each start of Java makes a file of its own (one name for all would be emptied by the next start,
- * the one after the stop it tells of). Java also writes some markup of its own into each, so most
- * say nothing: those of earlier starts go, and of the others, the newest are kept.
+ * Short out-of-memory diagnostics from the native JVM hook, logs/jvm-pid&lt;N&gt;.log. HotSpot's
+ * LogVMOutput also grows internal dependency XML at every engine replacement, so the launchers
+ * disable it. Old XML logs remain readable here while earlier releases' empty ones are removed.
+ * Main keeps two earlier diagnostics, leaving room for this process's (at most three altogether).
  */
 final class JvmLogs {
 
   /** How many of these files are kept at most, this start's among them. */
-  static final int KEEP = 10;
+  static final int KEEP = 3;
 
   private static final Pattern NAME = Pattern.compile("jvm-pid[0-9]+\\.log");
 
@@ -81,8 +76,15 @@ final class JvmLogs {
   static boolean saysSomething(File file) {
     try (BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
       boolean tty = false;
+      boolean xml = false;
       String line;
       while ((line = in.readLine()) != null) {
+        if (line.startsWith("<?xml") || line.startsWith("<hotspot_log")) {
+          xml = true;
+        }
+        if (!xml && !line.trim().isEmpty()) {
+          return true; // the short native OOM hook's plain text (older releases used XML)
+        }
         if (!tty) {
           tty = line.equals("<tty>");
         } else if (!line.trim().isEmpty() && !line.startsWith("<")) {

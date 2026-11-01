@@ -62,21 +62,18 @@ CALL :refuse say_nojava
 EXIT /B 1
 :havejava
 
-REM Out of memory (e.g. a script filling the heap), the server stops at once instead of limping on,
-REM and leaves a heap dump for whoever looks into it. Only the first dump is written (one per stop
-REM would fill the disk): delete logs\out-of-memory.hprof once it has been looked at. What Java itself
-REM says then (that it ran out of memory, and of what; the heap dump) goes into logs\jvm-pidN.log, N
-REM being its process id, not to this window: Java writes it to the window directly, and one that
-REM doesn't take output (a click into it starts selecting text, which pauses it) held it up there for
-REM good, before it ended, so that it was never started again (keep running, below). Each start has
-REM a file of its own: launcher.Main deletes the earlier ones in which Java said nothing, and keeps
-REM at most 10. These options need Java 8u92 or newer; an older Java 8 runs without them.
-SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput"
-"%JAVA%" %MEMORY_OPTS% -version >NUL 2>&1
-IF ERRORLEVEL 1 SET "MEMORY_OPTS="
-REM (Not in the check: there, Java would make such a file too. The doubled percent sign is one, for
-REM Java, which puts the process id in its place.)
-IF DEFINED MEMORY_OPTS SET "MEMORY_OPTS=%MEMORY_OPTS% -XX:+LogVMOutput -XX:LogFile=logs\jvm-%%p.log"
+REM Native Java output must not wait for a paused window. LogVMOutput's dependency_failed XML
+REM grows on each engine rebuild, so leave it off and write only a short OOM diagnostic with its
+REM native hook. Heap dumps and hs_err_pid crash reports stay. The percent signs are Java's pid.
+SET "MEMORY_OPTS=-XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=logs\out-of-memory.hprof -XX:+UnlockDiagnosticVMOptions -XX:-DisplayVMOutput -XX:-LogVMOutput"
+SET "OOM_NOTE=-XX:OnOutOfMemoryError=echo java.lang.OutOfMemoryError: Java memory exhausted. See logs/out-of-memory.hprof and raise breadboard.memory. > logs/jvm-pid%%p.log"
+"%JAVA%" %MEMORY_OPTS% "%OOM_NOTE%" -version >NUL 2>&1
+IF ERRORLEVEL 1 (
+  SET "MEMORY_OPTS="
+  SET "OOM_NOTE="
+)
+SET "OOM_OPT="
+IF DEFINED OOM_NOTE SET OOM_OPT="%OOM_NOTE%"
 
 REM conf\local.conf holds the settings changed for this Breadboard (see below). One the server can't
 REM read (made or copied by another account) would be left out without a word, as if there were
@@ -136,6 +133,19 @@ IF NOT DEFINED PORT IF DEFINED LOCAL_PORT SET "PORT=%LOCAL_PORT%"
 IF NOT DEFINED PORT SET "PORT=9000"
 IF DEFINED LOCAL_MEMORY SET "MEMORY=%LOCAL_MEMORY%"
 
+REM Claim the start before reading RUNNING_PID: mkdir is atomic even with two double-clicks.
+CALL :claimstart
+IF DEFINED START_LOCK_ERROR (
+  CALL :refuse say_unwritable
+  EXIT /B 1
+)
+IF NOT DEFINED START_CLAIMED (
+  CALL :openrunning
+  CALL :say_starting
+  CALL :pause
+  EXIT /B 1
+)
+
 REM One already running from this folder, on whatever port, has the database open: say so, instead
 REM of the database's stack trace. Started by someone (often a second double-click), its console is
 REM opened, as the first start did (:openrunning).
@@ -151,6 +161,7 @@ REM instead of a stack trace (here, and again before the server is started again
 REM by itself).
 CALL :porttaken
 IF DEFINED PORT_TAKEN (
+  IF DEFINED OTHER_BREADBOARD CALL :openother
   CALL :refuse say_port
   EXIT /B 1
 )
@@ -169,6 +180,9 @@ IF DEFINED UNWRITABLE (
   CALL :refuse say_unwritable
   EXIT /B 1
 )
+
+REM Only the exact database name is opened, even when Explorer gives a copy another name.
+FOR %%D IN ("db\*.h2.db") DO IF EXIST "%%~fD" IF /I NOT "%%~nxD"=="breadboard.h2.db" CALL :warnbackup "%%~nxD"
 
 REM application.secret must not be a published value. Use APPLICATION_SECRET if set; otherwise
 REM generate one on first start and keep it in conf\application.secret. The server reads it from
@@ -195,7 +209,11 @@ IF NOT EXIST "conf\local.conf" (
 ) 2>NUL >"conf\local.conf"
 
 REM Play refuses to start while RUNNING_PID exists: one left behind by a crash goes.
-IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
+CALL :removepid
+IF DEFINED LIVE_PID (
+  CALL :refuse say_livepid
+  EXIT /B 1
+)
 
 REM The jars in the order the build lists them (lib\classpath.txt): a few classes are in two of them.
 SET "CP="
@@ -215,12 +233,17 @@ IF /I "%BREADBOARD_KEEP_RUNNING%"=="no" SET "KEEP_RUNNING="
 IF /I "%BREADBOARD_KEEP_RUNNING%"=="off" SET "KEEP_RUNNING="
 
 REM Where it is reached: here, and from the other computers on this network (a lab's), at this
-REM computer's IPv4 addresses: first those of the network it reaches the internet through (its
-REM default route), then those of every other connected adapter (a second network; a lab's network
-REM may hand out public addresses). Only loopback (127.x) and link-local (169.254.x) ones are left out.
+REM computer's IPv4 addresses: first the one it reaches the internet from (Find-NetRoute: the address
+REM it would send from to one outside its networks, 192.0.2.1, which is never used), and its adapter's
+REM others, then those of every other connected adapter, by the adapters' order (a second network; a
+REM lab's network may hand out public addresses). Left out are loopback (127.x) and link-local
+REM (169.254.x) addresses, and adapters of networks only this computer is on, by what they are:
+REM Hyper-V's (WSL's too), VMware's, VirtualBox's and other virtual adapters, VPNs', loopback and
+REM Bluetooth ones, whose addresses reach nothing but this computer; unless it reaches the internet
+REM through one (a server on Hyper-V). The console lists the same (app/controllers/LanAddresses.java).
 ECHO Starting Breadboard. Once it says "Listening for HTTP", it is ready at:
 ECHO   On this computer: http://localhost:%PORT%
-FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$default = @(Get-NetRoute -DestinationPrefix 0.0.0.0/0 -ErrorAction SilentlyContinue | Sort-Object RouteMetric | ForEach-Object { $_.InterfaceIndex }); $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { $_.ifIndex }); Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '\A(127|169\.254)\.' -and ($default -contains $_.InterfaceIndex -or $up -contains $_.InterfaceIndex) } | Sort-Object { if ($default -contains $_.InterfaceIndex) { 0 } else { 1 } } | Select-Object -ExpandProperty IPAddress -Unique" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
+FOR /F "delims=" %%A IN ('powershell -NoProfile -Command "$out = Find-NetRoute -RemoteIPAddress 192.0.2.1 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress } | Select-Object -First 1; $routed = $null; if ($out) { $routed = $out.InterfaceIndex }; $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription + ' ' + $_.Name) -notmatch 'virtual|vmware|virtualbox|hyper-v|vethernet|tap-|wintun|wireguard|zerotier|tailscale|loopback|bluetooth' } | ForEach-Object { $_.ifIndex }); Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notmatch '\A(127|169\.254)\.' -and (($routed -ne $null -and $_.InterfaceIndex -eq $routed) -or $up -contains $_.InterfaceIndex) } | Sort-Object { if ($out -and $_.IPAddress -eq $out.IPAddress) { 0 } elseif ($routed -ne $null -and $_.InterfaceIndex -eq $routed) { 1 } else { 2 } }, InterfaceIndex | Select-Object -ExpandProperty IPAddress -Unique" 2^>NUL') DO ECHO   On this network: http://%%A:%PORT%
 IF DEFINED KEEP_RUNNING ECHO If it stops by itself, it is started again. Close this window to stop it.
 
 REM Open the console once the server answers (for up to 3 minutes), from a helper in the background.
@@ -276,7 +299,7 @@ REM ERRORLEVEL is 1 until Java sets it: if cmd can't open
 REM logs\service-errors.log (another program holds it), Java doesn't run, and that is no stop on
 REM purpose (0).
 CMD /D /C EXIT 1
-"%JAVA%" -Xmx%MEMORY% -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %PORT_OPT% %* launcher.Main "%CD%\." %JAVA_ERRORS%
+"%JAVA%" -Xmx%MEMORY% -XX:ReservedCodeCacheSize=128m -XX:MaxMetaspaceSize=512m %MEMORY_OPTS% %OOM_OPT% %JAVA_OPTS% -cp "%CP%" -Duser.timezone=UTC -Dconfig.file=conf\application-prod.conf -Dlogger.file=conf\logger.xml %PORT_OPT% %* launcher.Main "%CD%\." %JAVA_ERRORS%
 SET "EXIT_CODE=%ERRORLEVEL%"
 REM Stopped on purpose: Ctrl+C (130), or a stop asked of Java itself (143; also when such a stop
 REM took too long, a script being stuck, and the server cut it short: Global.stopIfShutdownHangs).
@@ -319,7 +342,17 @@ IF DEFINED RUNNING (
   CALL :note "Breadboard was started from this folder meanwhile (process %RUNNING%): leaving it to that one."
   EXIT /B %EXIT_CODE%
 )
-IF EXIST RUNNING_PID DEL RUNNING_PID 2>NUL
+CALL :claimstart
+IF DEFINED START_LOCK_ERROR (
+  CALL :refuse say_unwritable
+  EXIT /B 1
+)
+IF NOT DEFINED START_CLAIMED EXIT /B %EXIT_CODE%
+CALL :removepid
+IF DEFINED LIVE_PID (
+  CALL :refuse say_livepid
+  EXIT /B 1
+)
 REM (another program may have taken the port meanwhile: the server would only fail to start. As a
 REM service it is tried all the same, until the port is free again.)
 SET "PORT_TAKEN="
@@ -335,7 +368,14 @@ REM (-1: Play's, for a server that couldn't start; 3: out of memory)
 SET "WHY=exit code %EXIT_CODE%"
 IF "%EXIT_CODE%"=="-1" SET "WHY=it could not start, exit code -1"
 IF "%EXIT_CODE%"=="3" CALL :outofmemory
-CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again: a server that can't start would only fail the same way. The lines above say why, and logs\start-errors.log keeps what Java printed as errors. Fix that, then start Breadboard again."
+findstr /L /C:"Locked by another process" "logs\start-errors.log" >NUL 2>&1
+IF NOT ERRORLEVEL 1 GOTO databasealreadyopen
+CALL :note "Breadboard stopped before the server started (%WHY%), so it is not started again."
+CALL :startcause
+GOTO failed
+
+:databasealreadyopen
+CALL :note "Breadboard could not start: another Breadboard from this folder has the database open. Stop that one before starting this one; logs\start-errors.log keeps the details."
 GOTO failed
 
 :portnowtaken
@@ -366,7 +406,10 @@ EXIT /B %EXIT_CODE%
 REM Says why Breadboard can't start (what the subroutine %1 says) and keeps the window open (:pause).
 REM As a service nobody reads the window, so it goes into logs\application.log too, when that can be
 REM written (Task Scheduler itself shows only the exit code, 1, as the task's Last Run Result).
+REM Duplicate starts must not replace the start-errors file of the first, still-starting Java.
+IF /I NOT "%~1"=="say_running" CALL :%~1 >"logs\start-errors.log" 2>NUL
 CALL :%~1
+CALL :releasestart
 CALL :pause
 IF NOT DEFINED SERVICE GOTO :EOF
 (
@@ -402,6 +445,7 @@ ECHO Breadboard is already running from this folder ^(process %RUNNING%^): its c
 GOTO :EOF
 
 :say_port
+IF DEFINED OTHER_BREADBOARD GOTO say_otherbreadboard
 SET /A "NEXT_PORT=PORT+1"
 ECHO Port %PORT% is in use: Breadboard may be running already. If it is, open http://localhost:%PORT%
 IF DEFINED PORT_OPT GOTO say_port_local
@@ -412,6 +456,15 @@ GOTO :EOF
 :say_port_local
 ECHO To start another one, change the line http.port=%PORT% in conf\local.conf to another port, e.g.
 ECHO   http.port=%NEXT_PORT%
+GOTO :EOF
+
+:say_otherbreadboard
+ECHO Breadboard %OTHER_BREADBOARD% is already running from another folder on port %PORT%: open http://localhost:%PORT%. To start this copy, stop that Breadboard first ^(close its window, or stop its task in Task Scheduler^).
+GOTO :EOF
+
+:openother
+SET "RUNNING_PORT=%PORT%"
+CALL :openrunning
 GOTO :EOF
 
 :say_curly
@@ -538,8 +591,11 @@ REM PORT_TAKEN: 1 when something answers on the port, at 127.0.0.1 or at its IPv
 REM program there leaves the server free to start, and the browser, which tries ::1 first for
 REM localhost, would then open that program).
 SET "PORT_TAKEN="
+SET "OTHER_BREADBOARD="
 powershell -NoProfile -Command "foreach ($a in @('127.0.0.1', '::1')) { try { $ip = [Net.IPAddress]::Parse($a); $c = New-Object Net.Sockets.TcpClient($ip.AddressFamily); $c.Connect($ip, %PORT%); $c.Close(); exit 0 } catch { } }; exit 1" >NUL 2>&1
 IF NOT ERRORLEVEL 1 SET "PORT_TAKEN=1"
+IF NOT DEFINED PORT_TAKEN GOTO :EOF
+FOR /F "delims=" %%V IN ('powershell -NoProfile -Command "foreach ($a in @('127.0.0.1', '[::1]')) { try { $r = [Net.HttpWebRequest]::Create('http://' + $a + ':%PORT%/health'); $r.Proxy = $null; $r.Timeout = 2000; $response = $r.GetResponse(); $reader = New-Object IO.StreamReader($response.GetResponseStream()); $h = $reader.ReadToEnd() | ConvertFrom-Json; $reader.Close(); $response.Close(); if ($h.database -and $h.version -match '\A[A-Za-z0-9._-]+\z') { $h.version; break } } catch {} }" 2^>NUL') DO SET "OTHER_BREADBOARD=%%V"
 GOTO :EOF
 
 :runninghere
@@ -589,4 +645,64 @@ REM Shows %1 (given in quotes) in this window from a helper in the background, w
 REM the window: one that doesn't take output (a click into it starts selecting text, which pauses it
 REM until Esc) holds up only the helper.
 START "" /B CMD /D /C ECHO(%~1
+GOTO :EOF
+
+:claimstart
+SET "START_LOCK_ERROR="
+SET "START_CLAIMED="
+SET "BREADBOARD_START_LOCK_PID="
+FOR /F "delims=" %%P IN ('powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID); $p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p.ParentProcessId); while ($p.Name -eq 'cmd.exe' -and $p.CommandLine.Contains('powershell -NoProfile -Command')) { $p = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p.ParentProcessId) }; $p.ProcessId"') DO SET "BREADBOARD_START_LOCK_PID=%%P"
+IF NOT DEFINED BREADBOARD_START_LOCK_PID GOTO claimstart_unwritable
+REM A failed mkdir is another start only when the lock really is a directory. Test logs' write
+REM access separately, before trying to recover it, so a read-only folder is not called a running server.
+SET "LOCK_WRITE_CHECK=logs\start-write-%BREADBOARD_START_LOCK_PID%.tmp"
+(TYPE NUL >"%LOCK_WRITE_CHECK%") 2>NUL || GOTO claimstart_unwritable
+DEL /Q "%LOCK_WRITE_CHECK%" 2>NUL
+:claimstart_try
+MKDIR "logs\start.lock" 2>NUL
+IF NOT ERRORLEVEL 1 GOTO claimstart_owned
+IF NOT EXIST "logs\start.lock\" GOTO claimstart_unwritable
+REM Recover a lock only after its owner's process has gone; an empty recent lock may still be
+REM between mkdir and its pid write. A recovery subfolder keeps contenders from deleting each other.
+powershell -NoProfile -Command "$d = Join-Path (Get-Location) 'logs\start.lock'; $f = Join-Path $d 'pid'; if (Test-Path -LiteralPath $f) { $owner = (Get-Content -LiteralPath $f -TotalCount 1).Trim(); if ($owner -match '\A[0-9]+\z' -and -not (Get-Process -Id ([int]$owner) -ErrorAction SilentlyContinue)) { try { $r = Join-Path $d 'recover'; New-Item -ItemType Directory -Path $r -ErrorAction Stop | Out-Null; if ((Get-Content -LiteralPath $f -TotalCount 1).Trim() -eq $owner -and -not (Get-Process -Id ([int]$owner) -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $f; Remove-Item -LiteralPath $r; Remove-Item -LiteralPath $d; exit 0 }; Remove-Item -LiteralPath $r } catch {} } } elseif ((Get-Item -LiteralPath $d).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-1)) { try { [IO.Directory]::Delete($d); exit 0 } catch {} }; exit 1" >NUL 2>&1
+IF NOT ERRORLEVEL 1 GOTO claimstart_try
+SET "RUNNING_PORT=%PORT%"
+GOTO :EOF
+:claimstart_unwritable
+SET "START_LOCK_ERROR=1"
+SET "UNWRITABLE=logs\start.lock"
+GOTO :EOF
+
+:claimstart_owned
+>"logs\start.lock\pid" ECHO %BREADBOARD_START_LOCK_PID%
+SET "START_CLAIMED=1"
+GOTO :EOF
+
+:releasestart
+IF NOT DEFINED START_CLAIMED GOTO :EOF
+powershell -NoProfile -Command "$d = Join-Path (Get-Location) 'logs\start.lock'; $f = Join-Path $d 'pid'; if ((Get-Content -LiteralPath $f -TotalCount 1 -ErrorAction SilentlyContinue) -eq $env:BREADBOARD_START_LOCK_PID) { Remove-Item -LiteralPath $f -ErrorAction SilentlyContinue; [IO.Directory]::Delete($d) }" >NUL 2>&1
+SET "START_CLAIMED="
+GOTO :EOF
+
+:removepid
+SET "LIVE_PID="
+IF NOT EXIST RUNNING_PID GOTO :EOF
+FOR /F "delims=" %%P IN ('powershell -NoProfile -Command "$p = (Get-Content -LiteralPath 'RUNNING_PID' -TotalCount 1).Trim(); if ($p -match '\A[0-9]+\z' -and (Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue)) { $p } else { Remove-Item -LiteralPath 'RUNNING_PID' }" 2^>NUL') DO SET "LIVE_PID=%%P"
+GOTO :EOF
+
+:say_starting
+ECHO Breadboard is starting or running from this folder. Once it answers, open http://localhost:%PORT%. To start it again, stop it first.
+GOTO :EOF
+
+:say_livepid
+ECHO RUNNING_PID names a live process ^(%LIVE_PID%^), so it is left in place. Another Breadboard from this folder may have the database open; stop it before starting this one.
+GOTO :EOF
+
+:startcause
+REM Keep error text out of CALL's command parsing: it can contain quotes, ampersands or brackets.
+powershell -NoProfile -Command "$cause = Get-Content -LiteralPath 'logs\start-errors.log' -ErrorAction SilentlyContinue | Where-Object { $_.Trim() -and $_ -notmatch '\A(Breadboard|Once it listens|if nothing else|newest logs|\s+at )' } | Select-Object -First 1; if ($cause) { $message = 'Start failed: ' + $cause.Trim() + '. Full details are in logs\start-errors.log; correct the cause, then start Breadboard again.' } else { $message = 'Read logs\start-errors.log and the newest logs\jvm-pid*.log for the cause before starting it again.' }; [IO.File]::AppendAllText((Join-Path (Get-Location) 'logs\application.log'), $message + [Environment]::NewLine); [Console]::WriteLine($message)"
+GOTO :EOF
+
+:warnbackup
+ECHO "db\%~1" isn't used: rename it to breadboard.h2.db in db\ to restore it, replacing the existing file while Breadboard is stopped.
 GOTO :EOF

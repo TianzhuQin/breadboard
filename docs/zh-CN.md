@@ -28,7 +28,15 @@ Breadboard 用来做网络实验。参与者彼此相连，每个人能看到和
 
 服务器运行期间，Mac 和 Windows 电脑不会自己进入睡眠。在 Linux 上，如果是在图形桌面里启动的（不是通过 SSH 或作为服务），启动脚本会请求 systemd（在 GNOME 桌面上也会请求桌面环境）不让电脑睡眠；如果电脑仍然会自动睡眠（有些桌面会这样，比如 Linux Mint 的 Cinnamon），请在电源设置里关掉“自动挂起”。要长时间无人值守地跑实验：笔记本请插着电源，不要合上盖子（合上盖子，电脑仍会睡眠）；Mac 上还要打开 **系统设置 → 电池 → 选项…** 里“显示器关闭时防止自动进入睡眠”那一项（Mac mini、iMac 在 **系统设置 → 能源** 里）。
 
-启动时如果提示 "Breadboard is already running from this folder"，说明这个文件夹里的 Breadboard 已经在运行；从终端或双击启动时，它会直接在浏览器里打开正在运行的那个控制台。如果提示 "Breadboard is already running on port 9000"，是另一份 Breadboard 在用这个端口，打开提示里的网址就能用它。如果提示 "Another program is using port 9000"，是别的程序占了这个端口：关掉那个程序，或者换一个端口。Windows 上这两种情况的提示都是 "Port 9000 is in use"：先打开提示里的网址看看，打开的是 Breadboard 的话，说明它已经在运行，直接用就行；不是的话，就是别的程序占了这个端口。换端口的办法：在 `conf/local.conf` 里加一行 `http.port=9001`，以后每次启动都用这个端口；只想这一次换，就像上面那样在终端里启动，在拖进去的 `breadboard.sh` 后面加上 ` -Dhttp.port=9001` 再按回车（在 Breadboard 的文件夹里，就是 `sh breadboard.sh -Dhttp.port=9001`；Windows 上用提示里给出的命令）。同一个文件夹同时只能运行一个 Breadboard，因为它们共用一个数据库；要同时运行第二个，请把 zip 另外解压一份，在那一份里用另一个端口启动。
+启动时遇到提示，可以按下面处理：
+
+- **“Breadboard is already running from this folder”**：这个文件夹里的 Breadboard 已在运行；双击或从终端启动时，会打开现有控制台。
+- **“Breadboard is starting or running from this folder”**：第一次启动还没完成。等一会儿，控制台就会打开；不要同时再开一份。
+- **“Breadboard … is already running from another folder on port 9000”**：另一份 Breadboard 占着端口。提示会给出它的版本和网址；想用这份，先关闭另一份的窗口，或停止它的服务。
+- **“Another program is using port 9000”**（Windows 上是“Port 9000 is in use”）：别的程序占着端口。关闭那个程序，或换端口。
+- **以后每次都换端口**：在 `conf/local.conf` 里加一行 `http.port=9001`。
+- **只这一次换端口**：在 Breadboard 文件夹的终端里运行 `sh breadboard.sh -Dhttp.port=9001`；也可像前面那样把脚本拖进终端，再加上 ` -Dhttp.port=9001`。Windows 用提示给出的命令。
+- 同一个文件夹只能运行一个 Breadboard，因为它们共用数据库。要同时运行第二个，请把 zip 另解压一份，用另一个端口启动。
 
 更多见 [install.md](install.md)。
 
@@ -221,7 +229,7 @@ breadboard.example.org {
 
 **参与者关了网页还能回来吗？** 能。用同一个浏览器重新打开研究链接（或登录页再输入一次自己的 ID），就会回到原来的座位，即使游戏已经开始；离开超过设定时间时由电脑代玩，回来后交还给本人。换了浏览器或设备就不行，这是为了防止别人冒用 ID。
 
-**数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），不用停服务器；每天的、手动做的、升级前做的备份各保留最近 14 份。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：停止服务器，把备份 zip 解压到 `db` 文件夹（替换里面的 `breadboard.h2.db`），再启动。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传。从 3.x 升级时，把它和 `conf/local.conf`（你的设置）跟数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
+**数据库在哪里？怎么备份？** 实验、场次、事件和账号都在 `db/breadboard.h2.db` 这一个文件里。服务器**每天自动备份**一次到 `backups/` 文件夹（升级到新版本前也会先备份一次），不用停服务器；每天的、手动做的、升级前做的备份各保留最近 14 份。在 **Settings → Backups** 里可以看到这些备份，点 **Back up now** 立即备份，点 **Download** 下载。备份和数据库在同一块硬盘上，请不时复制到别的地方。**恢复**：先停止服务器，双击备份 zip（Windows 上选“全部解压缩”），把解压出的 `breadboard.h2.db` 拖到 Breadboard 的 `db` 文件夹，选“替换”，再启动。文件名必须正好是 `breadboard.h2.db`，不能多出空格、数字或一个 `.db` 后缀；恢复后，备份之后的改动会消失。也可以在 **Experiments** 页把每个实验导出为 .zip，并在 **Sessions & data** 下载每一场的数据。用文件模式（file mode）的实验，文件在 `dev/` 文件夹里，也要一起复制。`conf/application.secret` 也请保管好，不要外传。从 3.x 升级时，把它和 `conf/local.conf`（你的设置）跟数据库一起带到新版本（见 [install.md](install.md#upgrading)）。
 
 **设置写在哪里？** 写在 `conf/local.conf` 里，每行一项，例如 `breadboard.rootUrl="https://breadboard.example.org"`，改完后重启服务器。这个文件在第一次启动时自动生成（里面只有说明），用文本编辑器（Mac 上的“文本编辑”，Windows 上的“记事本”）打开就能改。引号要用英文的直引号（`"`）。中文输入法的标点，和 Mac 上“文本编辑”默认打开的智能引号，都会把它打成弯引号（`“ ”`），服务器就读不了这个文件：启动脚本会提示 "Line … of conf/local.conf has curly quotes"，指出是哪一行，并且不启动服务器。遇到这种情况，切换到英文输入法，把那一行的引号重新输入一遍，保存后再启动。用“文本编辑”的话，最好先在 **编辑 → 替换** 里关掉 **智能引号** 再输入。`conf/application-prod.conf` 列出了所有设置和说明，但不要直接改它：每个新版本都带着自己的 `application-prod.conf`，而 `conf/local.conf` 是你自己的，升级时把它复制到新版本的 `conf` 文件夹里就行。从 3.0 升级时还没有这个文件：把你在旧的 `application-prod.conf` 里改过的那几行写进新版本的 `conf/local.conf`。如果写错了（比如引号没配对），服务器会启动不了，并指出 `conf/local.conf` 的哪一行有问题。Windows 上的路径要用正斜杠，例如 `breadboard.backup.dir="D:/Breadboard backups"`，或者把每个反斜杠写两遍（`"D:\\Breadboard backups"`）：引号里的单个反斜杠是转义符，会让服务器启动不了，或者悄悄变成别的路径。运行服务器的账号必须能读这个文件：读不了的话（比如用 `sudo` 复制过来的，属于 root），启动脚本会提示 "conf/local.conf can't be read by …" 并拒绝启动，免得服务器不带你的设置就跑起来；按提示把文件的所有者改成那个账号就行。
 
