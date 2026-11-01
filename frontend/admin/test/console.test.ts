@@ -281,7 +281,8 @@ describe('engine errors', () => {
     const e = parseGroovyError('Caught error: ScriptException: groovy.lang.MissingPropertyException: No such property: foo for class: Script12\n  at Script5.groovy:9\n  at graph.groovy:120\n  at Script12.groovy:3')
     expect(e.type).toBe('MissingPropertyException')
     expect(e.title).toBe('Unknown name “foo”')
-    expect(e.message).toBe('No such property: foo for class: Script12')
+    expect(e.message).toBe('No such property: foo')
+    expect(e.raw).toContain('for class: Script12')
     expect(e.places[0]).toEqual({ file: 'Script12.groovy', line: 3, kind: 'own' })
     expect(e.places.map(p => p.kind)).toEqual(['own', 'library', 'other'])
   })
@@ -323,7 +324,7 @@ describe('engine errors', () => {
   it('keeps a frame without a line (a closure in Breadboard\'s own code) out of the message, as the others', () => {
     const raw = 'Caught error: MissingPropertyException: No such property: roundNoteText for class: Script53\n at Script53.groovy:76\n at step.groovy:200\n at step.groovy:-1\n at step.groovy:160'
     const e = parseGroovyError(raw)
-    expect(e.message).toBe('No such property: roundNoteText for class: Script53')
+    expect(e.message).toBe('No such property: roundNoteText')
     expect(e.places.map(p => `${p.file}:${p.line}`)).toEqual(['Script53.groovy:76', 'step.groovy:200', 'step.groovy:160'])
     // all of it under Full error
     expect(e.raw).toContain('at step.groovy:-1')
